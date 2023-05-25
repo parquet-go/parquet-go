@@ -4,6 +4,7 @@ package parquet
 
 import (
 	"io"
+	"runtime/debug"
 	"sort"
 )
 
@@ -222,5 +223,6 @@ func (w *SortingWriter[T]) sortAndWriteBufferedRows() error {
 	}
 
 	w.numRows += n
+	debug.PrintStack()
 	return nil
 }

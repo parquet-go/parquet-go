@@ -4,6 +4,7 @@ package parquet
 
 import (
 	"io"
+	"runtime/debug"
 	"sort"
 
 	"github.com/segmentio/parquet-go/deprecated"
@@ -149,6 +150,7 @@ func (buf *RowBuffer[T]) Rows() Rows {
 
 // Write writes rows to the buffer, returning the number of rows written.
 func (buf *RowBuffer[T]) Write(rows []T) (int, error) {
+	debug.PrintStack()
 	for i := range rows {
 		off := len(buf.values)
 		buf.values = buf.schema.Deconstruct(buf.values, &rows[i])
@@ -163,6 +165,7 @@ func (buf *RowBuffer[T]) Write(rows []T) (int, error) {
 // WriteRows writes parquet rows to the buffer, returing the number of rows
 // written.
 func (buf *RowBuffer[T]) WriteRows(rows []Row) (int, error) {
+	debug.PrintStack()
 	for i := range rows {
 		off := len(buf.values)
 		buf.values = append(buf.values, rows[i]...)

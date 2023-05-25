@@ -1,5 +1,7 @@
 package parquet
 
+import "runtime/debug"
+
 // DedupeRowReader constructs a row reader which drops duplicated consecutive
 // rows, according to the comparator function passed as argument.
 //
@@ -78,6 +80,7 @@ func (d *dedupe) reset() {
 }
 
 func (d *dedupe) deduplicate(rows []Row, compare func(Row, Row) int) int {
+	debug.PrintStack()
 	defer func() {
 		for i := range d.uniq {
 			d.uniq[i] = Row{}
