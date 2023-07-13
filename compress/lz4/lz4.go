@@ -25,6 +25,10 @@ const (
 	DefaultLevel = Fast
 )
 
+type blockCompressor interface {
+	CompressBlock(src, dst []byte) (int, error)
+}
+
 type Codec struct {
 	Level Level
 }
@@ -40,7 +44,12 @@ func (c *Codec) CompressionCodec() format.CompressionCodec {
 func (c *Codec) Encode(dst, src []byte) ([]byte, error) {
 	dst = reserveAtLeast(dst, len(src)/4)
 
-	compressor := lz4.CompressorHC{Level: c.Level}
+	var compressor blockCompressor
+	if c.Level == Fast {
+		compressor = &lz4.Compressor{}
+	} else {
+		compressor = &lz4.CompressorHC{Level: c.Level}
+	}
 	for {
 		n, err := compressor.CompressBlock(src, dst)
 		if err != nil { // see Decode for details about error handling
