@@ -2214,11 +2214,11 @@ func (t *nullType) LogicalType() *format.LogicalType {
 func (t *nullType) ConvertedType() *deprecated.ConvertedType { return nil }
 
 func (t *nullType) NewColumnIndexer(int) ColumnIndexer {
-	panic("create create column indexer from parquet NULL type")
+	return nil
 }
 
 func (t *nullType) NewDictionary(int, int, encoding.Values) Dictionary {
-	panic("cannot create dictionary from parquet NULL type")
+	return nil
 }
 
 func (t *nullType) NewColumnBuffer(int, int) ColumnBuffer {
