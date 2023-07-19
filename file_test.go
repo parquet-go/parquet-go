@@ -52,6 +52,35 @@ func TestOpenFile(t *testing.T) {
 	}
 }
 
+func TestIssue21(t *testing.T) {
+	f, err := os.Open("issue_21/green_tripdata_2023-01.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	s, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := parquet.OpenFile(f, s.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if size := p.Size(); size != s.Size() {
+		t.Errorf("file size mismatch: want=%d got=%d", s.Size(), size)
+	}
+
+	root := p.Root()
+	b := new(strings.Builder)
+	parquet.PrintSchema(b, root.Name(), root)
+	t.Log(b)
+
+	printColumns(t, p.Root(), "")
+}
+
 func printColumns(t *testing.T, col *parquet.Column, indent string) {
 	if t.Failed() {
 		return
