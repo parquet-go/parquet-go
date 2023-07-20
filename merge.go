@@ -345,7 +345,7 @@ func (c *chunk) release() {
 var chunkPool = &sync.Pool{
 	New: func() any {
 		return &chunk{
-			buf: make([]Row, 16),
+			buf: make([]Row, 1<<10),
 		}
 	},
 }
