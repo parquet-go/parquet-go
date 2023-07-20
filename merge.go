@@ -133,7 +133,7 @@ func (r *mergedRowGroupRows) ReadRows(rows []Row) (int, error) {
 		if n > len(rows) {
 			n = len(rows)
 		}
-		n, err := r.readInternal(rows[:n])
+		_, err := r.readInternal(rows[:n])
 		if err != nil {
 			return 0, err
 		}
@@ -265,7 +265,7 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 }
 
 func (m *mergedRowReader) Less(i, j int) bool {
-	return m.compare(m.readers()[i].head(), m.readers()[j].head()) < 0
+	return m.compare(m.readers()[i].peek(), m.readers()[j].peek()) < 0
 }
 
 func (m *mergedRowReader) Len() int {
@@ -289,14 +289,45 @@ func (m *mergedRowReader) Pop() interface{} {
 
 type bufferedRowReader struct {
 	rows    RowReader
-	off     int32
-	end     int32
 	discard []*chunk
 	buf     *chunk
 }
 
 type chunk struct {
-	buf []Row
+	head, tail int
+	buf        []Row
+}
+
+func (c *chunk) canPop() bool {
+	return c.head < c.tail
+}
+
+func (c *chunk) pop() Row {
+	if c.head < c.tail {
+		r := c.buf[c.head]
+		c.head++
+		return r
+	}
+	return nil
+}
+
+func (c *chunk) peek() Row {
+	if c.head < c.tail {
+		r := c.buf[c.head]
+		return r
+	}
+	return nil
+}
+
+func (c *chunk) write(n int) {
+	c.tail += n
+}
+
+func (c *chunk) writable() []Row {
+	if c.tail < len(c.buf)-1 {
+		return c.buf[c.tail:]
+	}
+	return nil
 }
 
 func newChunk() *chunk {
@@ -307,6 +338,7 @@ func (c *chunk) release() {
 	for i := range c.buf {
 		c.buf[i] = nil
 	}
+	c.head, c.tail = 0, 0
 	chunkPool.Put(c)
 }
 
@@ -331,13 +363,15 @@ var bufferedRowReaderPool = &sync.Pool{
 }
 
 func (r *bufferedRowReader) head() Row {
-	return r.buf.buf[r.off]
+	return r.buf.pop()
+}
+
+func (r *bufferedRowReader) peek() Row {
+	return r.buf.peek()
 }
 
 func (r *bufferedRowReader) next() error {
-	if r.off++; r.off == r.end {
-		r.off = 0
-		r.end = 0
+	if r.buf == nil || !r.buf.canPop() {
 		return r.read()
 	}
 	return nil
@@ -347,25 +381,24 @@ func (r *bufferedRowReader) read() error {
 	if r.rows == nil {
 		return io.EOF
 	}
-	if r.end == 0 {
-		c := newChunk()
-		n, err := r.rows.ReadRows(c.buf)
-		if err != nil && n == 0 {
-			c.release()
-			return err
-		}
-		if r.buf != nil {
-			r.discard = append(r.discard, r.buf)
-		}
-		r.buf = c
-		r.end += int32(n)
+	if r.buf == nil {
+		r.buf = newChunk()
+	}
+	if r.buf.canPop() {
+		// There is still data in the buffer
 		return nil
 	}
-	n, err := r.rows.ReadRows(r.buf.buf[r.end:])
+	w := r.buf.writable()
+	if len(w) == 0 {
+		r.discard = append(r.discard, r.buf)
+		r.buf = newChunk()
+		w = r.buf.writable()
+	}
+	n, err := r.rows.ReadRows(w)
 	if err != nil && n == 0 {
 		return err
 	}
-	r.end += int32(n)
+	r.buf.write(n)
 	return nil
 }
 
@@ -384,7 +417,6 @@ func (r *bufferedRowReader) close() {
 		r.buf.release()
 		r.buf = nil
 	}
-	r.off, r.end = 0, 0
 	bufferedRowReaderPool.Put(r)
 }
 
