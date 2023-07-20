@@ -163,14 +163,12 @@ func MergeRowReaders(readers []RowReader, compare func(Row, Row) int) RowReader 
 }
 
 func makeBufferedRowReaders(numReaders int, readerAt func(int) RowReader) []*bufferedRowReader {
-	buffers := make([]bufferedRowReader, numReaders)
 	readers := make([]*bufferedRowReader, numReaders)
-
 	for i := range readers {
-		buffers[i].rows = readerAt(i)
-		readers[i] = &buffers[i]
+		readers[i] = &bufferedRowReader{
+			rows: readerAt(i),
+		}
 	}
-
 	return readers
 }
 
