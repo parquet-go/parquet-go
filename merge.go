@@ -183,6 +183,12 @@ func (m *mergedRowReader) readers() []*bufferedRowReader {
 	return m.r[:m.len]
 }
 
+func (m *mergedRowReader) reset() {
+	for i := range m.r {
+		m.r[i].clear()
+	}
+}
+
 func (m *mergedRowReader) initialize() error {
 	m.len = len(m.r)
 	for i, r := range m.r {
@@ -231,6 +237,8 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 		if err := m.initialize(); err != nil {
 			return 0, err
 		}
+	} else {
+		m.reset()
 	}
 
 	for n < len(rows) && len(m.readers()) != 0 {
