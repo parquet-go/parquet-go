@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // MergeRowGroups constructs a row group which is a merged view of rowGroups. If
@@ -91,7 +92,7 @@ func (m *mergedRowGroup) Rows() Rows {
 	return &mergedRowGroupRows{
 		merge: mergedRowReader{
 			compare: m.compare,
-			readers: makeBufferedRowReaders(len(rows), func(i int) RowReader { return rows[i] }),
+			r:       makeBufferedRowReaders(len(rows), func(i int) RowReader { return rows[i] }),
 		},
 		rows:   rows,
 		schema: m.schema,
@@ -158,61 +159,69 @@ func (r *mergedRowGroupRows) Schema() *Schema {
 func MergeRowReaders(readers []RowReader, compare func(Row, Row) int) RowReader {
 	return &mergedRowReader{
 		compare: compare,
-		readers: makeBufferedRowReaders(len(readers), func(i int) RowReader { return readers[i] }),
+		r:       makeBufferedRowReaders(len(readers), func(i int) RowReader { return readers[i] }),
 	}
 }
 
 func makeBufferedRowReaders(numReaders int, readerAt func(int) RowReader) []*bufferedRowReader {
 	readers := make([]*bufferedRowReader, numReaders)
 	for i := range readers {
-		readers[i] = &bufferedRowReader{
-			rows: readerAt(i),
-		}
+		readers[i] = newBufferedRowReader()
+		readers[i].rows = readerAt(i)
 	}
 	return readers
 }
 
 type mergedRowReader struct {
 	compare     func(Row, Row) int
-	readers     []*bufferedRowReader
+	r           []*bufferedRowReader
+	len         int
 	initialized bool
 }
 
+func (m *mergedRowReader) readers() []*bufferedRowReader {
+	return m.r[:m.len]
+}
+
 func (m *mergedRowReader) initialize() error {
-	for i, r := range m.readers {
+	m.len = len(m.r)
+	for i, r := range m.r {
 		switch err := r.read(); err {
 		case nil:
 		case io.EOF:
-			m.readers[i] = nil
+			m.r[i].close()
+			m.r[i] = nil
 		default:
-			m.readers = nil
+			m.len = 0
 			return err
 		}
 	}
 
 	n := 0
-	for _, r := range m.readers {
+	for _, r := range m.r {
 		if r != nil {
-			m.readers[n] = r
+			m.r[n] = r
 			n++
 		}
 	}
-
-	clear := m.readers[n:]
+	clear := m.r[n:]
 	for i := range clear {
-		clear[i] = nil
+		if clear[i] != nil {
+			clear[i].close()
+			clear[i] = nil
+		}
 	}
-
-	m.readers = m.readers[:n]
+	m.len = n
+	m.r = m.r[:n]
 	heap.Init(m)
 	return nil
 }
 
 func (m *mergedRowReader) close() {
-	for _, r := range m.readers {
+	for _, r := range m.r {
 		r.close()
 	}
-	m.readers = nil
+	m.r = nil
 }
 
 func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
@@ -224,8 +233,8 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 		}
 	}
 
-	for n < len(rows) && len(m.readers) != 0 {
-		r := m.readers[0]
+	for n < len(rows) && len(m.readers()) != 0 {
+		r := m.readers()[0]
 
 		rows[n] = append(rows[n][:0], r.head()...)
 		n++
@@ -240,7 +249,7 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 		}
 	}
 
-	if len(m.readers) == 0 {
+	if len(m.readers()) == 0 {
 		err = io.EOF
 	}
 
@@ -248,15 +257,16 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 }
 
 func (m *mergedRowReader) Less(i, j int) bool {
-	return m.compare(m.readers[i].head(), m.readers[j].head()) < 0
+	return m.compare(m.readers()[i].head(), m.readers()[j].head()) < 0
 }
 
 func (m *mergedRowReader) Len() int {
-	return len(m.readers)
+	return m.len
 }
 
 func (m *mergedRowReader) Swap(i, j int) {
-	m.readers[i], m.readers[j] = m.readers[j], m.readers[i]
+	r := m.readers()
+	r[i], r[j] = r[j], r[i]
 }
 
 func (m *mergedRowReader) Push(x interface{}) {
@@ -264,9 +274,9 @@ func (m *mergedRowReader) Push(x interface{}) {
 }
 
 func (m *mergedRowReader) Pop() interface{} {
-	i := len(m.readers) - 1
-	r := m.readers[i]
-	m.readers = m.readers[:i]
+	i := m.len - 1
+	r := m.readers()[i]
+	m.len = i
 	return r
 }
 
@@ -275,6 +285,16 @@ type bufferedRowReader struct {
 	off  int32
 	end  int32
 	buf  [10]Row
+}
+
+func newBufferedRowReader() *bufferedRowReader {
+	return bufferedRowReaderPool.Get().(*bufferedRowReader)
+}
+
+var bufferedRowReaderPool = &sync.Pool{
+	New: func() any {
+		return &bufferedRowReader{}
+	},
 }
 
 func (r *bufferedRowReader) head() Row {
@@ -303,9 +323,8 @@ func (r *bufferedRowReader) read() error {
 }
 
 func (r *bufferedRowReader) close() {
-	r.rows = nil
-	r.off = 0
-	r.end = 0
+	*r = bufferedRowReader{}
+	bufferedRowReaderPool.Put(r)
 }
 
 var (
