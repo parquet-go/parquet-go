@@ -274,9 +274,8 @@ func (m *mergedRowReader) Push(x interface{}) {
 }
 
 func (m *mergedRowReader) Pop() interface{} {
-	i := m.len - 1
-	r := m.readers()[i]
-	m.len = i
+	r := m.r[m.len-1]
+	m.len--
 	return r
 }
 
