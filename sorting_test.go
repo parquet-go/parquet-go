@@ -2,7 +2,11 @@ package parquet_test
 
 import (
 	"bytes"
+	"encoding/binary"
+	"encoding/json"
 	"math/rand"
+	"os"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -106,4 +110,141 @@ func TestSortingWriterDropDuplicatedRows(t *testing.T) {
 	}
 
 	assertRowsEqual(t, rows[:n], read)
+}
+
+func TestSortingWriterCorruptedString(t *testing.T) {
+	type Row struct {
+		Tag string `parquet:"tag"`
+	}
+	var rowsWant []Row
+	f, err := os.ReadFile("testdata/issue23_string.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = json.Unmarshal(f, &rowsWant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := bytes.NewBuffer(nil)
+
+	writer := parquet.NewSortingWriter[Row](buffer, 2000,
+		&parquet.WriterConfig{
+			PageBufferSize: 2560,
+			Sorting: parquet.SortingConfig{
+				SortingColumns: []parquet.SortingColumn{
+					parquet.Ascending("tag"),
+				},
+			},
+		})
+
+	_, err = writer.Write(rowsWant)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rowsGot, err := parquet.Read[Row](bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sort.Slice(rowsWant, func(i, j int) bool {
+		return rowsWant[i].Tag < rowsWant[j].Tag
+	})
+
+	assertRowsEqualByRow(t, rowsGot, rowsWant)
+}
+
+func TestSortingWriterCorruptedFixedLenByteArray(t *testing.T) {
+	type Row struct {
+		ID [16]byte `parquet:"id,uuid"`
+	}
+	var rowsWant []Row
+	f, err := os.ReadFile("testdata/issue23_fixed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = json.Unmarshal(f, &rowsWant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := bytes.NewBuffer(nil)
+
+	writer := parquet.NewSortingWriter[Row](buffer, 2000,
+		&parquet.WriterConfig{
+			PageBufferSize: 2560,
+			Sorting: parquet.SortingConfig{
+				SortingColumns: []parquet.SortingColumn{
+					parquet.Ascending("id"),
+				},
+			},
+		})
+
+	_, err = writer.Write(rowsWant)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rowsGot, err := parquet.Read[Row](bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sort.Slice(rowsWant, func(i, j int) bool {
+		return idLess(rowsWant[i].ID, rowsWant[j].ID)
+	})
+
+	assertRowsEqualByRow(t, rowsGot, rowsWant)
+}
+
+func idLess(ID1, ID2 [16]byte) bool {
+	k1 := binary.BigEndian.Uint64(ID1[:8])
+	k2 := binary.BigEndian.Uint64(ID2[:8])
+	switch {
+	case k1 < k2:
+		return true
+	case k1 > k2:
+		return false
+	}
+	k1 = binary.BigEndian.Uint64(ID1[8:])
+	k2 = binary.BigEndian.Uint64(ID2[8:])
+	return k1 < k2
+}
+
+func assertRowsEqualByRow[T any](t *testing.T, rowsGot, rowsWant []T) {
+	if len(rowsGot) != len(rowsWant) {
+		t.Errorf("want rows length %d but got rows length %d", len(rowsWant), len(rowsGot))
+	}
+	count := 0
+	for i := range rowsGot {
+		if !reflect.DeepEqual(rowsGot[i], rowsWant[i]) {
+			t.Error("rows mismatch at index", i, ":")
+			t.Logf(" want: %#v\n", rowsWant[i])
+			t.Logf("  got: %#v\n", rowsGot[i])
+
+			// check if rowsGot[i] is even present in rowsWant
+			found := false
+			for j := range rowsWant {
+				if reflect.DeepEqual(rowsWant[j], rowsGot[i]) {
+					t.Log("  we found the row at index", j, "in want.")
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Log("  got row index", i, "isn't found in want rows, and is therefore corrupted data.")
+			}
+			count++
+		}
+	}
+	if count > 0 {
+		t.Error(count, "rows mismatched out of", len(rowsWant), "total")
+	}
 }
