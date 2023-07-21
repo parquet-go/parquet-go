@@ -3,12 +3,11 @@ package parquet_test
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"math/rand"
-	"os"
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -116,15 +115,11 @@ func TestSortingWriterCorruptedString(t *testing.T) {
 	type Row struct {
 		Tag string `parquet:"tag"`
 	}
-	var rowsWant []Row
-	f, err := os.ReadFile("testdata/issue23_string.json")
-	if err != nil {
-		t.Fatal(err)
+	rowsWant := make([]Row, 107) // passes at 106, but fails at 107+
+	for i := range rowsWant {
+		rowsWant[i].Tag = randString(100)
 	}
-	err = json.Unmarshal(f, &rowsWant)
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	buffer := bytes.NewBuffer(nil)
 
 	writer := parquet.NewSortingWriter[Row](buffer, 2000,
@@ -137,7 +132,7 @@ func TestSortingWriterCorruptedString(t *testing.T) {
 			},
 		})
 
-	_, err = writer.Write(rowsWant)
+	_, err := writer.Write(rowsWant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,15 +157,11 @@ func TestSortingWriterCorruptedFixedLenByteArray(t *testing.T) {
 	type Row struct {
 		ID [16]byte `parquet:"id,uuid"`
 	}
-	var rowsWant []Row
-	f, err := os.ReadFile("testdata/issue23_fixed.json")
-	if err != nil {
-		t.Fatal(err)
+	rowsWant := make([]Row, 700) // passes at 300, fails at 400+.
+	for i := range rowsWant {
+		rowsWant[i].ID = rand16bytes()
 	}
-	err = json.Unmarshal(f, &rowsWant)
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	buffer := bytes.NewBuffer(nil)
 
 	writer := parquet.NewSortingWriter[Row](buffer, 2000,
@@ -183,7 +174,7 @@ func TestSortingWriterCorruptedFixedLenByteArray(t *testing.T) {
 			},
 		})
 
-	_, err = writer.Write(rowsWant)
+	_, err := writer.Write(rowsWant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +193,24 @@ func TestSortingWriterCorruptedFixedLenByteArray(t *testing.T) {
 	})
 
 	assertRowsEqualByRow(t, rowsGot, rowsWant)
+}
+
+const letterRunes = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func randString(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letterRunes[rand.New(rand.NewSource(time.Now().UnixNano())).Intn(len(letterRunes))]
+	}
+	return string(b)
+}
+
+func rand16bytes() [16]byte {
+	var b [16]byte
+	for i := range b {
+		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+	}
+	return b
 }
 
 func idLess(ID1, ID2 [16]byte) bool {
