@@ -129,7 +129,6 @@ func (r *mergedRowGroupRows) Close() (lastErr error) {
 }
 
 func (r *mergedRowGroupRows) WriteRowsTo(w RowWriter) (n int64, err error) {
-	println("*mergedRowGroupRows.RowWriterTo")
 	n, err = r.merge.WriteRowsTo(w)
 	r.rowIndex += int64(n)
 	return n, err
@@ -296,6 +295,7 @@ func (m *mergedRowReader) canPop() bool {
 }
 
 func (m *mergedRowReader) fill() error {
+	m.len = len(m.r)
 	for _, r := range m.r {
 		err := r.fill()
 		if err != nil {
@@ -304,6 +304,7 @@ func (m *mergedRowReader) fill() error {
 			}
 		}
 	}
+	heap.Init(m)
 	return nil
 }
 
@@ -342,7 +343,14 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 }
 
 func (m *mergedRowReader) Less(i, j int) bool {
-	return m.compare(m.readers()[i].peek(), m.readers()[j].peek()) < 0
+	x, y := m.readers()[i].peek(), m.readers()[j].peek()
+	if len(x) == 0 {
+		return false
+	}
+	if len(y) == 0 {
+		return true
+	}
+	return m.compare(x, y) < 0
 }
 
 func (m *mergedRowReader) Len() int {
