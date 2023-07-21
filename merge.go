@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"container/heap"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -127,6 +128,13 @@ func (r *mergedRowGroupRows) Close() (lastErr error) {
 	return lastErr
 }
 
+func (r *mergedRowGroupRows) WriteRowsTo(w RowWriter) (n int64, err error) {
+	println("*mergedRowGroupRows.RowWriterTo")
+	n, err = r.merge.WriteRowsTo(w)
+	r.rowIndex += int64(n)
+	return n, err
+}
+
 func (r *mergedRowGroupRows) ReadRows(rows []Row) (int, error) {
 	for r.rowIndex < r.seekToRow {
 		n := int(r.seekToRow - r.rowIndex)
@@ -228,6 +236,75 @@ func (m *mergedRowReader) close() {
 		r.close()
 	}
 	m.r = nil
+}
+
+func (m *mergedRowReader) WriteRowsTo(w RowWriter) (n int64, err error) {
+	err = m.fill()
+	if err != nil {
+		return
+	}
+	b := newChunk()
+	rows := b.buf
+	m.len = len(m.r)
+	if !m.canPop() {
+		return 0, io.EOF
+	}
+	defer b.release()
+	// at least one row should be available
+	for m.canPop() {
+		count := m.writeTo(rows)
+		if count == 0 {
+			return
+		}
+		_, err = w.WriteRows(rows[:count])
+		if err != nil {
+			return
+		}
+		n += count
+		m.len = len(m.r)
+		err = m.fill()
+		if err != nil {
+			return
+		}
+		b.reset()
+	}
+	println(n)
+	return
+}
+
+func (m *mergedRowReader) writeTo(rows []Row) (n int64) {
+	for n < int64(len(rows)) && m.Len() != 0 {
+		r := m.readers()[0]
+		rows[n] = append(rows[n][:0], r.head()...)
+		n++
+		if !r.buf.canPop() {
+			heap.Pop(m)
+		} else {
+			heap.Fix(m, 0)
+		}
+	}
+	return
+}
+
+func (m *mergedRowReader) canPop() bool {
+	for _, r := range m.readers() {
+		if r.buf.canPop() {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *mergedRowReader) fill() error {
+	for _, r := range m.r {
+		err := r.fill()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
@@ -334,11 +411,15 @@ func newChunk() *chunk {
 	return chunkPool.Get().(*chunk)
 }
 
-func (c *chunk) release() {
+func (c *chunk) reset() {
 	for i := range c.buf {
-		c.buf[i] = nil
+		c.buf[i] = c.buf[i][:0]
 	}
 	c.head, c.tail = 0, 0
+}
+
+func (c *chunk) release() {
+	c.reset()
 	chunkPool.Put(c)
 }
 
@@ -374,6 +455,24 @@ func (r *bufferedRowReader) next() error {
 	if r.buf == nil || !r.buf.canPop() {
 		return r.read()
 	}
+	return nil
+}
+
+func (r *bufferedRowReader) fill() error {
+	if r.rows == nil {
+		return io.EOF
+	}
+	if r.buf == nil {
+		r.buf = newChunk()
+	} else {
+		r.buf.reset()
+	}
+	w := r.buf.writable()
+	n, err := r.rows.ReadRows(w)
+	if err != nil && n == 0 {
+		return err
+	}
+	r.buf.write(n)
 	return nil
 }
 
@@ -422,4 +521,5 @@ func (r *bufferedRowReader) close() {
 
 var (
 	_ RowReaderWithSchema = (*mergedRowGroupRows)(nil)
+	_ RowWriterTo         = (*mergedRowGroupRows)(nil)
 )
