@@ -17,6 +17,7 @@ import (
 
 func TestRowBuffer(t *testing.T) {
 	testRowBuffer[booleanColumn](t)
+	testRowBuffer[int8Column](t)
 	testRowBuffer[int32Column](t)
 	testRowBuffer[int64Column](t)
 	testRowBuffer[int96Column](t)

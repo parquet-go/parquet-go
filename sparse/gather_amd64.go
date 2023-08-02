@@ -35,6 +35,24 @@ func gatherBits(dst []byte, src Uint8Array) int {
 	return n
 }
 
+func gather8(dst []uint32, src Uint8Array, bigSignMask uint32) int {
+
+	signMasks := [...]uint32{0x00, bigSignMask}
+
+	n := min(len(dst), src.Len())
+	i := 0
+
+	for i < n {
+		v := src.Index(i)
+		maskIndex := v & 0x80 >> 7
+		signMask := signMasks[maskIndex]
+		dst[i] = uint32(v) | signMask
+		i++
+	}
+
+	return n
+}
+
 func gather32(dst []uint32, src Uint32Array) int {
 	n := min(len(dst), src.Len())
 	i := 0

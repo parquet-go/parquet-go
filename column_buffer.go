@@ -900,6 +900,95 @@ func (col *booleanColumnBuffer) ReadValuesAt(values []Value, offset int64) (n in
 	}
 }
 
+type int8ColumnBuffer struct{ int32Page }
+
+func newInt8ColumnBuffer(typ Type, columnIndex int16, numValues int32) *int8ColumnBuffer {
+	return &int8ColumnBuffer{
+		int32Page: int32Page{
+			typ:         typ,
+			values:      make([]int32, 0, numValues),
+			columnIndex: ^columnIndex,
+		},
+	}
+}
+
+func (col *int8ColumnBuffer) Clone() ColumnBuffer {
+	return &int8ColumnBuffer{
+		int32Page: int32Page{
+			typ:         col.typ,
+			values:      append([]int32{}, col.values...),
+			columnIndex: col.columnIndex,
+		},
+	}
+}
+
+func (col *int8ColumnBuffer) ColumnIndex() ColumnIndex { return int8ColumnIndex{&col.int32Page} }
+
+func (col *int8ColumnBuffer) OffsetIndex() OffsetIndex { return int8OffsetIndex{&col.int32Page} }
+
+func (col *int8ColumnBuffer) BloomFilter() BloomFilter { return nil }
+
+func (col *int8ColumnBuffer) Dictionary() Dictionary { return nil }
+
+func (col *int8ColumnBuffer) Pages() Pages { return onePage(col.Page()) }
+
+func (col *int8ColumnBuffer) Page() Page { return &col.int32Page }
+
+func (col *int8ColumnBuffer) Reset() { col.values = col.values[:0] }
+
+func (col *int8ColumnBuffer) Cap() int { return cap(col.values) }
+
+func (col *int8ColumnBuffer) Len() int { return len(col.values) }
+
+func (col *int8ColumnBuffer) Less(i, j int) bool { return col.values[i] < col.values[j] }
+
+func (col *int8ColumnBuffer) Swap(i, j int) {
+	col.values[i], col.values[j] = col.values[j], col.values[i]
+}
+
+func (col *int8ColumnBuffer) Write(b []byte) (int, error) {
+	if (len(b) % 4) != 0 {
+		return 0, fmt.Errorf("cannot write INT32 values from input of size %d", len(b))
+	}
+	col.values = append(col.values, unsafecast.BytesToInt32(b)...)
+	return len(b), nil
+}
+
+func (col *int8ColumnBuffer) WriteValues(values []Value) (int, error) {
+	var model Value
+	col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+	return len(values), nil
+}
+
+func (col *int8ColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+	if n := len(col.values) + rows.Len(); n > cap(col.values) {
+		col.values = append(make([]int32, 0, max(n, 2*cap(col.values))), col.values...)
+	}
+	n := len(col.values)
+	col.values = col.values[:n+rows.Len()]
+	sparse.GatherInt8(col.values[n:], rows.Int8Array())
+}
+
+func (col *int8ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
+	i := int(offset)
+	switch {
+	case i < 0:
+		return 0, errRowIndexOutOfBounds(offset, int64(len(col.values)))
+	case i >= len(col.values):
+		return 0, io.EOF
+	default:
+		for n < len(values) && i < len(col.values) {
+			values[n] = col.makeValue(col.values[i])
+			n++
+			i++
+		}
+		if n < len(values) {
+			err = io.EOF
+		}
+		return n, err
+	}
+}
+
 type int32ColumnBuffer struct{ int32Page }
 
 func newInt32ColumnBuffer(typ Type, columnIndex int16, numValues int32) *int32ColumnBuffer {
@@ -1664,6 +1753,95 @@ func (col *fixedLenByteArrayColumnBuffer) ReadValuesAt(values []Value, offset in
 	}
 }
 
+type uint8ColumnBuffer struct{ uint32Page }
+
+func newUint8ColumnBuffer(typ Type, columnIndex int16, numValues int32) *uint8ColumnBuffer {
+	return &uint8ColumnBuffer{
+		uint32Page: uint32Page{
+			typ:         typ,
+			values:      make([]uint32, 0, numValues),
+			columnIndex: ^columnIndex,
+		},
+	}
+}
+
+func (col *uint8ColumnBuffer) Clone() ColumnBuffer {
+	return &uint8ColumnBuffer{
+		uint32Page: uint32Page{
+			typ:         col.typ,
+			values:      append([]uint32{}, col.values...),
+			columnIndex: col.columnIndex,
+		},
+	}
+}
+
+func (col *uint8ColumnBuffer) ColumnIndex() ColumnIndex { return uint8ColumnIndex{&col.uint32Page} }
+
+func (col *uint8ColumnBuffer) OffsetIndex() OffsetIndex { return uint8OffsetIndex{&col.uint32Page} }
+
+func (col *uint8ColumnBuffer) BloomFilter() BloomFilter { return nil }
+
+func (col *uint8ColumnBuffer) Dictionary() Dictionary { return nil }
+
+func (col *uint8ColumnBuffer) Pages() Pages { return onePage(col.Page()) }
+
+func (col *uint8ColumnBuffer) Page() Page { return &col.uint32Page }
+
+func (col *uint8ColumnBuffer) Reset() { col.values = col.values[:0] }
+
+func (col *uint8ColumnBuffer) Cap() int { return cap(col.values) }
+
+func (col *uint8ColumnBuffer) Len() int { return len(col.values) }
+
+func (col *uint8ColumnBuffer) Less(i, j int) bool { return col.values[i] < col.values[j] }
+
+func (col *uint8ColumnBuffer) Swap(i, j int) {
+	col.values[i], col.values[j] = col.values[j], col.values[i]
+}
+
+func (col *uint8ColumnBuffer) Write(b []byte) (int, error) {
+	if (len(b) % 4) != 0 {
+		return 0, fmt.Errorf("cannot write INT32 values from input of size %d", len(b))
+	}
+	col.values = append(col.values, unsafecast.BytesToUint32(b)...)
+	return len(b), nil
+}
+
+func (col *uint8ColumnBuffer) WriteValues(values []Value) (int, error) {
+	var model Value
+	col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+	return len(values), nil
+}
+
+func (col *uint8ColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+	if n := len(col.values) + rows.Len(); n > cap(col.values) {
+		col.values = append(make([]uint32, 0, max(n, 2*cap(col.values))), col.values...)
+	}
+	n := len(col.values)
+	col.values = col.values[:n+rows.Len()]
+	sparse.GatherUint8(col.values[n:], rows.Uint8Array())
+}
+
+func (col *uint8ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
+	i := int(offset)
+	switch {
+	case i < 0:
+		return 0, errRowIndexOutOfBounds(offset, int64(len(col.values)))
+	case i >= len(col.values):
+		return 0, io.EOF
+	default:
+		for n < len(values) && i < len(col.values) {
+			values[n] = col.makeValue(col.values[i])
+			n++
+			i++
+		}
+		if n < len(values) {
+			err = io.EOF
+		}
+		return n, err
+	}
+}
+
 type uint32ColumnBuffer struct{ uint32Page }
 
 func newUint32ColumnBuffer(typ Type, columnIndex int16, numValues int32) *uint32ColumnBuffer {
@@ -1982,6 +2160,8 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsF
 	case reflect.Bool,
 		reflect.Int,
 		reflect.Uint,
+		reflect.Int8,
+		reflect.Uint8,
 		reflect.Int32,
 		reflect.Uint32,
 		reflect.Int64,

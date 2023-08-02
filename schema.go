@@ -779,7 +779,8 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 
 		case "delta":
 			switch t.Kind() {
-			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint32, reflect.Uint64:
+			case reflect.Int, reflect.Int8, reflect.Int32, reflect.Int64,
+				reflect.Uint, reflect.Uint8, reflect.Uint32, reflect.Uint64:
 				setEncoding(&DeltaBinaryPacked)
 			case reflect.String:
 				setEncoding(&DeltaByteArray)

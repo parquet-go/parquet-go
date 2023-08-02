@@ -181,6 +181,16 @@ func TestSchemaOf(t *testing.T) {
 	}
 }`,
 		},
+		{
+			value: new(struct {
+				UnsignedByte uint8 `parquet:"unsigned_byte"`
+				SignedByte   int8  `parquet:"signed_byte"`
+			}),
+			print: `message {
+	required int32 unsigned_byte (INT(8,false));
+	required int32 signed_byte (INT(8,true));
+}`,
+		},
 	}
 
 	for _, test := range tests {

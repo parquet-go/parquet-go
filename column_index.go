@@ -147,6 +147,16 @@ func (i booleanColumnIndex) MaxValue(int) Value  { return makeValueBoolean(i.pag
 func (i booleanColumnIndex) IsAscending() bool   { return false }
 func (i booleanColumnIndex) IsDescending() bool  { return false }
 
+type int8ColumnIndex struct{ page *int32Page }
+
+func (i int8ColumnIndex) NumPages() int       { return 1 }
+func (i int8ColumnIndex) NullCount(int) int64 { return 0 }
+func (i int8ColumnIndex) NullPage(int) bool   { return false }
+func (i int8ColumnIndex) MinValue(int) Value  { return makeValueInt32(i.page.min()) }
+func (i int8ColumnIndex) MaxValue(int) Value  { return makeValueInt32(i.page.max()) }
+func (i int8ColumnIndex) IsAscending() bool   { return false }
+func (i int8ColumnIndex) IsDescending() bool  { return false }
+
 type int32ColumnIndex struct{ page *int32Page }
 
 func (i int32ColumnIndex) NumPages() int       { return 1 }
@@ -220,6 +230,16 @@ func (i fixedLenByteArrayColumnIndex) MaxValue(int) Value {
 }
 func (i fixedLenByteArrayColumnIndex) IsAscending() bool  { return false }
 func (i fixedLenByteArrayColumnIndex) IsDescending() bool { return false }
+
+type uint8ColumnIndex struct{ page *uint32Page }
+
+func (i uint8ColumnIndex) NumPages() int       { return 1 }
+func (i uint8ColumnIndex) NullCount(int) int64 { return 0 }
+func (i uint8ColumnIndex) NullPage(int) bool   { return false }
+func (i uint8ColumnIndex) MinValue(int) Value  { return makeValueUint32(i.page.min()) }
+func (i uint8ColumnIndex) MaxValue(int) Value  { return makeValueUint32(i.page.max()) }
+func (i uint8ColumnIndex) IsAscending() bool   { return false }
+func (i uint8ColumnIndex) IsDescending() bool  { return false }
 
 type uint32ColumnIndex struct{ page *uint32Page }
 
