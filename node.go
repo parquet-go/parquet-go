@@ -292,6 +292,9 @@ type groupField struct {
 func (f *groupField) Name() string { return f.name }
 
 func (f *groupField) Value(base reflect.Value) reflect.Value {
+	if base.Kind() == reflect.Interface {
+		base = base.Elem()
+	}
 	return base.MapIndex(reflect.ValueOf(&f.name).Elem())
 }
 

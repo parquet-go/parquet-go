@@ -1026,3 +1026,158 @@ var quickCheckConfig = quick.Config{
 func quickCheck(f interface{}) error {
 	return quickCheckConfig.Check(f)
 }
+
+func TestParquetAnyValueConversions(t *testing.T) {
+	// This test runs conversions to/from any values with edge case schemas.
+
+	type obj = map[string]any
+	type arr = []any
+
+	for _, test := range []struct {
+		name   string
+		input  any
+		schema parquet.Group
+	}{
+		{
+			name: "simple strings",
+			input: obj{
+				"A": "foo",
+				"B": "bar",
+				"C": "baz",
+			},
+			schema: parquet.Group{
+				"A": parquet.String(),
+				"B": parquet.String(),
+				"C": parquet.String(),
+			},
+		},
+		{
+			name: "simple values",
+			input: obj{
+				"A": "foo",
+				"B": int64(5),
+				"C": 0.5,
+			},
+			schema: parquet.Group{
+				"A": parquet.String(),
+				"B": parquet.Int(64),
+				"C": parquet.Leaf(parquet.DoubleType),
+			},
+		},
+		{
+			name: "repeated values",
+			input: obj{
+				"A": arr{"foo", "bar", "baz"},
+				"B": arr{int64(5), int64(6)},
+				"C": arr{0.5},
+			},
+			schema: parquet.Group{
+				"A": parquet.Repeated(parquet.String()),
+				"B": parquet.Repeated(parquet.Int(64)),
+				"C": parquet.Repeated(parquet.Leaf(parquet.DoubleType)),
+			},
+		},
+		{
+			name: "nested groups",
+			input: obj{
+				"A": obj{
+					"B": obj{
+						"C": "here we are",
+					},
+				},
+			},
+			schema: parquet.Group{
+				"A": parquet.Group{
+					"B": parquet.Group{
+						"C": parquet.String(),
+					},
+				},
+			},
+		},
+		{
+			name: "nested repeated groups",
+			input: obj{
+				"A": arr{
+					obj{
+						"B": arr{
+							obj{"C": arr{"first", "second"}},
+							obj{"C": arr{"third", "fourth"}},
+							obj{"C": arr{"fifth"}},
+						},
+					},
+					obj{
+						"B": arr{
+							obj{"C": arr{"sixth"}},
+						},
+					},
+				},
+			},
+			schema: parquet.Group{
+				"A": parquet.Repeated(parquet.Group{
+					"B": parquet.Repeated(parquet.Group{
+						"C": parquet.Repeated(parquet.String()),
+					}),
+				}),
+			},
+		},
+		{
+			name: "optional values",
+			input: obj{
+				"A": "foo",
+				"B": nil,
+				"C": "baz",
+			},
+			schema: parquet.Group{
+				"A": parquet.Optional(parquet.String()),
+				"B": parquet.Optional(parquet.String()),
+				"C": parquet.Optional(parquet.String()),
+			},
+		},
+		{
+			name: "nested optional groups",
+			input: obj{
+				"A": obj{
+					"B": obj{
+						"C": "here we are",
+					},
+					"D": nil,
+				},
+			},
+			schema: parquet.Group{
+				"A": parquet.Group{
+					"B": parquet.Optional(parquet.Group{
+						"C": parquet.String(),
+					}),
+					"D": parquet.Optional(parquet.Group{
+						"E": parquet.String(),
+					}),
+				},
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			pWtr := parquet.NewGenericWriter[any](&buf, parquet.NewSchema("", test.schema))
+			if _, err := pWtr.Write([]any{test.input}); err != nil {
+				t.Fatal(err)
+			}
+			if err := pWtr.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			pRdr := parquet.NewGenericReader[any](bytes.NewReader(buf.Bytes()))
+			outRows := make([]any, 1)
+			if _, err := pRdr.Read(outRows); err != nil {
+				t.Fatal(err)
+			}
+			if err := pRdr.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			if value1, value2 := test.input, outRows[0]; !reflect.DeepEqual(value1, value2) {
+				t.Errorf("value mismatch: want=%+v got=%+v", value1, value2)
+			}
+		})
+	}
+}
