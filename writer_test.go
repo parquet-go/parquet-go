@@ -437,7 +437,10 @@ func generateParquetFile(rows rows, options ...parquet.WriterOption) (string, []
 	path := tmp.Name()
 	defer os.Remove(path)
 
-	writerOptions := []parquet.WriterOption{parquet.PageBufferSize(20)}
+	writerOptions := []parquet.WriterOption{
+		parquet.PageBufferSize(20),
+		parquet.DataPageStatistics(true),
+	}
 	writerOptions = append(writerOptions, options...)
 
 	if err := writeParquetFile(tmp, rows, writerOptions...); err != nil {
@@ -507,25 +510,25 @@ message firstAndLastName {
 }
 
 
-Row group 0:  count: 3  72.33 B records  start: 4  total(compressed): 217 B total(uncompressed):193 B
+Row group 0:  count: 3  107.67 B records  start: 4  total(compressed): 323 B total(uncompressed):299 B
 --------------------------------------------------------------------------------
             type      encodings count     avg size   nulls   min / max
-first_name  BINARY    Z _ R     3         30.00 B            "Han" / "Luke"
-last_name   BINARY    Z   D     3         42.33 B            "Skywalker" / "Skywalker"
+first_name  BINARY    Z _ R     3         38.00 B            "Han" / "Luke"
+last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Skywalker"
 
 
 Column: first_name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
   0-D    dict  Z _  3       7.67 B     23 B
-  0-1    data  Z R  3       2.33 B     7 B
+  0-1    data  Z R  3       2.33 B     7 B                         "Han" / "Luke"
 
 
 Column: last_name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       28.00 B    56 B
-  0-1    data  Z D  1       19.00 B    19 B
+  0-0    data  Z D  2       28.00 B    56 B                        "Skywalker" / "Solo"
+  0-1    data  Z D  1       19.00 B    19 B                        "Skywalker" / "Skywalker"
 
 `,
 	},
@@ -549,25 +552,25 @@ message firstAndLastName {
 }
 
 
-Row group 0:  count: 3  74.33 B records  start: 4  total(compressed): 223 B total(uncompressed):208 B
+Row group 0:  count: 3  109.67 B records  start: 4  total(compressed): 329 B total(uncompressed):314 B
 --------------------------------------------------------------------------------
             type      encodings count     avg size   nulls   min / max
-first_name  BINARY    Z _ R     3         28.67 B            "Han" / "Luke"
-last_name   BINARY    Z   D     3         45.67 B            "Skywalker" / "Skywalker"
+first_name  BINARY    Z _ R     3         36.67 B            "Han" / "Luke"
+last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Skywalker"
 
 
 Column: first_name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
   0-D    dict  Z _  3       7.67 B     23 B
-  0-1    data  _ R  3       2.33 B     7 B        3        0
+  0-1    data  _ R  3       2.33 B     7 B        3        0       "Han" / "Luke"
 
 
 Column: last_name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ D  2       28.00 B    56 B       2        0
-  0-1    data  _ D  1       19.00 B    19 B       1        0
+  0-0    data  _ D  2       28.00 B    56 B       2        0       "Skywalker" / "Solo"
+  0-1    data  _ D  1       19.00 B    19 B       1        0       "Skywalker" / "Skywalker"
 
 `,
 	},
@@ -600,38 +603,38 @@ message timeseries {
 }
 
 
-Row group 0:  count: 10  71.70 B records  start: 4  total(compressed): 717 B total(uncompressed):843 B
+Row group 0:  count: 10  121.70 B records  start: 4  total(compressed): 1.188 kB total(uncompressed):1.312 kB
 --------------------------------------------------------------------------------
            type      encodings count     avg size   nulls   min / max
-name       BINARY    G _ R     10        12.60 B            "http_request_total" / "http_request_total"
-timestamp  INT64     G   D     10        29.90 B            "1639444033" / "1639444144"
-value      DOUBLE    G   _     10        29.20 B            "-0.0" / "100.0"
+name       BINARY    G _ R     10        29.00 B            "http_request_total" / "http_request_total"
+timestamp  INT64     G   D     10        46.70 B            "1639444033" / "1639444144"
+value      DOUBLE    G   _     10        46.00 B            "-0.0" / "100.0"
 
 
 Column: name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
   0-D    dict  G _  1       22.00 B    22 B
-  0-1    data  _ R  5       0.40 B     2 B        5        0
-  0-2    data  _ R  5       0.40 B     2 B        5        0
+  0-1    data  _ R  5       0.40 B     2 B        5        0       "http_request_total" / "http_request_total"
+  0-2    data  _ R  5       0.40 B     2 B        5        0       "http_request_total" / "http_request_total"
 
 
 Column: timestamp
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ D  3       47.33 B    142 B      3        0
-  0-1    data  _ D  3       47.33 B    142 B      3        0
-  0-2    data  _ D  3       47.33 B    142 B      3        0
-  0-3    data  _ D  1       9.00 B     9 B        1        0
+  0-0    data  _ D  3       47.33 B    142 B      3        0       "1639444033" / "1639444085"
+  0-1    data  _ D  3       47.33 B    142 B      3        0       "1639444093" / "1639444108"
+  0-2    data  _ D  3       47.33 B    142 B      3        0       "1639444133" / "1639444141"
+  0-3    data  _ D  1       9.00 B     9 B        1        0       "1639444144" / "1639444144"
 
 
 Column: value
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ _  3       8.00 B     24 B       3        0
-  0-1    data  _ _  3       8.00 B     24 B       3        0
-  0-2    data  _ _  3       8.00 B     24 B       3        0
-  0-3    data  _ _  1       8.00 B     8 B        1        0
+  0-0    data  _ _  3       8.00 B     24 B       3        0       "-0.0" / "100.0"
+  0-1    data  _ _  3       8.00 B     24 B       3        0       "1.0" / "5.0"
+  0-2    data  _ _  3       8.00 B     24 B       3        0       "4.0" / "6.0"
+  0-3    data  _ _  1       8.00 B     8 B        1        0       "10.0" / "10.0"
 
 `,
 	},
@@ -676,40 +679,40 @@ message AddressBook {
 }
 
 
-Row group 0:  count: 2  256.00 B records  start: 4  total(compressed): 512 B total(uncompressed):435 B
+Row group 0:  count: 2  384.00 B records  start: 4  total(compressed): 768 B total(uncompressed):691 B
 --------------------------------------------------------------------------------
                       type      encodings count     avg size   nulls   min / max
-owner                 BINARY    Z         2         41.00 B            "A. Nonymous" / "Julien Le Dem"
-ownerPhoneNumbers     BINARY    G         3         59.67 B    1       "555 123 4567" / "555 666 1337"
-contacts.name         BINARY    _         3         46.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
-contacts.phoneNumber  BINARY    Z         3         37.67 B    2       "555 987 6543" / "555 987 6543"
+owner                 BINARY    Z         2         70.00 B            "A. Nonymous" / "Julien Le Dem"
+ownerPhoneNumbers     BINARY    G         3         80.33 B    1       "555 123 4567" / "555 666 1337"
+contacts.name         BINARY    _         3         70.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
 
 
 Column: owner
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       25.00 B    50 B
+  0-0    data  Z D  2       25.00 B    50 B                        "A. Nonymous" / "Julien Le Dem"
 
 
 Column: ownerPhoneNumbers
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       32.00 B    64 B
-  0-1    data  Z D  1       17.00 B    17 B
+  0-0    data  Z D  2       32.00 B    64 B                        "555 123 4567" / "555 666 1337"
+  0-1    data  Z D  1       17.00 B    17 B                1
 
 
 Column: contacts.name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       36.50 B    73 B
-  0-1    data  Z D  1       17.00 B    17 B
+  0-0    data  Z D  2       36.50 B    73 B                        "Chris Aniszczyk" / "Dmitriy Ryaboy"
+  0-1    data  Z D  1       17.00 B    17 B                1
 
 
 Column: contacts.phoneNumber
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       16.50 B    33 B
-  0-1    data  Z D  1       17.00 B    17 B
+  0-0    data  Z D  2       16.50 B    33 B                1       "555 987 6543" / "555 987 6543"
+  0-1    data  Z D  1       17.00 B    17 B                1
 
 `,
 	},
@@ -755,44 +758,43 @@ message AddressBook {
 }
 
 
-Row group 0:  count: 2  249.50 B records  start: 4  total(compressed): 499 B total(uncompressed):422 B
+Row group 0:  count: 2  377.50 B records  start: 4  total(compressed): 755 B total(uncompressed):678 B
 --------------------------------------------------------------------------------
                       type      encodings count     avg size   nulls   min / max
-owner                 BINARY    Z         2         43.50 B            "A. Nonymous" / "Julien Le Dem"
-ownerPhoneNumbers     BINARY    G         3         57.33 B    1       "555 123 4567" / "555 666 1337"
-contacts.name         BINARY    _         3         44.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
-contacts.phoneNumber  BINARY    Z         3         36.00 B    2       "555 987 6543" / "555 987 6543"
+owner                 BINARY    Z         2         72.50 B            "A. Nonymous" / "Julien Le Dem"
+ownerPhoneNumbers     BINARY    G         3         78.00 B    1       "555 123 4567" / "555 666 1337"
+contacts.name         BINARY    _         3         68.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
 
 
 Column: owner
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ D  2       25.00 B    50 B       2        0
+  0-0    data  _ D  2       25.00 B    50 B       2        0       "A. Nonymous" / "Julien Le Dem"
 
 
 Column: ownerPhoneNumbers
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ D  2       28.00 B    56 B       1        0
+  0-0    data  _ D  2       28.00 B    56 B       1        0       "555 123 4567" / "555 666 1337"
   0-1    data  _ D  1       9.00 B     9 B        1        1
 
 
 Column: contacts.name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ D  2       32.50 B    65 B       1        0
+  0-0    data  _ D  2       32.50 B    65 B       1        0       "Chris Aniszczyk" / "Dmitriy Ryaboy"
   0-1    data  _ D  1       9.00 B     9 B        1        1
 
 
 Column: contacts.phoneNumber
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ D  2       12.50 B    25 B       1        1
+  0-0    data  _ D  2       12.50 B    25 B       1        1       "555 987 6543" / "555 987 6543"
   0-1    data  _ D  1       9.00 B     9 B        1        1
 
 `,
 	},
-
 	{
 		scenario: "omit `-` fields",
 		version:  v1,
@@ -811,24 +813,24 @@ message event {
 }
 
 
-Row group 0:  count: 2  56.00 B records  start: 4  total(compressed): 112 B total(uncompressed):112 B
+Row group 0:  count: 2  100.00 B records  start: 4  total(compressed): 200 B total(uncompressed):200 B
 --------------------------------------------------------------------------------
        type      encodings count     avg size   nulls   min / max
-name   BINARY    _ _ R     2         36.50 B            "customer1" / "customer2"
-value  DOUBLE    _   _     2         19.50 B            "1.0" / "42.0"
+name   BINARY    _ _ R     2         59.50 B            "customer1" / "customer2"
+value  DOUBLE    _   _     2         40.50 B            "1.0" / "42.0"
 
 
 Column: name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
   0-D    dict  _ _  2       13.00 B    26 B
-  0-1    data  _ R  2       2.50 B     5 B
+  0-1    data  _ R  2       2.50 B     5 B                         "customer1" / "customer2"
 
 
 Column: value
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ _  2       8.00 B     16 B
+  0-0    data  _ _  2       8.00 B     16 B                        "1.0" / "42.0"
 
 `,
 	},
