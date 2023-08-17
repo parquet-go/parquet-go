@@ -514,7 +514,7 @@ Row group 0:  count: 3  107.67 B records  start: 4  total(compressed): 323 B tot
 --------------------------------------------------------------------------------
             type      encodings count     avg size   nulls   min / max
 first_name  BINARY    Z _ R     3         38.00 B            "Han" / "Luke"
-last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Skywalker"
+last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Solo"
 
 
 Column: first_name
@@ -556,7 +556,7 @@ Row group 0:  count: 3  109.67 B records  start: 4  total(compressed): 329 B tot
 --------------------------------------------------------------------------------
             type      encodings count     avg size   nulls   min / max
 first_name  BINARY    Z _ R     3         36.67 B            "Han" / "Luke"
-last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Skywalker"
+last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Solo"
 
 
 Column: first_name
