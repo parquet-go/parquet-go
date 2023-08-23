@@ -2,6 +2,8 @@ package compress_test
 
 import (
 	"bytes"
+	_ "embed"
+	"fmt"
 	"io"
 	"testing"
 
@@ -44,12 +46,42 @@ var tests = [...]struct {
 	},
 
 	{
-		scenario: "lz4",
-		codec:    new(lz4.Codec),
+		scenario: "lz4-fastest",
+		codec:    &lz4.Codec{Level: lz4.Fastest},
+	},
+	{
+		scenario: "lz4-fast",
+		codec:    &lz4.Codec{Level: lz4.Fast},
+	},
+	{
+		scenario: "lz4-l1",
+		codec:    &lz4.Codec{Level: lz4.Level1},
+	},
+	{
+		scenario: "lz4-l5",
+		codec:    &lz4.Codec{Level: lz4.Level5},
+	},
+	{
+		scenario: "lz4-l9",
+		codec:    &lz4.Codec{Level: lz4.Level9},
 	},
 }
 
-var testdata = bytes.Repeat([]byte("1234567890qwertyuiopasdfghjklzxcvbnm"), 10e3)
+var (
+	testdata = bytes.Repeat([]byte("1234567890qwertyuiopasdfghjklzxcvbnm"), 10e3)
+	//go:embed testdata/e.txt
+	testdataE []byte
+	//go:embed testdata/gettysburg.txt
+	testdataGettysburg []byte
+	//go:embed testdata/html.txt
+	testdataHTML []byte
+	//go:embed testdata/Mark.Twain-Tom.Sawyer.txt
+	testdataTomSawyer []byte
+	//go:embed testdata/pi.txt
+	testdataPi []byte
+	//go:embed testdata/pngdata.bin
+	testdataPNGData []byte
+)
 
 func TestCompressionCodec(t *testing.T) {
 	buffer := make([]byte, 0, len(testdata))
@@ -84,13 +116,27 @@ func TestCompressionCodec(t *testing.T) {
 func BenchmarkEncode(b *testing.B) {
 	buffer := make([]byte, 0, len(testdata))
 
-	for _, test := range tests {
-		b.Run(test.scenario, func(b *testing.B) {
-			b.SetBytes(int64(len(testdata)))
-			benchmarkZeroAllocsPerRun(b, func() {
-				buffer, _ = test.codec.Encode(buffer[:0], testdata)
+	for testdataName, testdataBytes := range map[string][]byte{
+		"e":          testdataE,
+		"gettysburg": testdataGettysburg,
+		"html":       testdataHTML,
+		"tom-sawyer": testdataTomSawyer,
+		"pi":         testdataPi,
+		"png":        testdataPNGData,
+	} {
+		for _, test := range tests {
+			testName := fmt.Sprintf("%s-%s", test.scenario, testdataName)
+
+			buffer, _ = test.codec.Encode(buffer[:0], testdataBytes)
+			b.Logf("%s | Compression ratio: %.2f%%", testName, float64(len(buffer))/float64(len(testdataBytes))*100)
+
+			b.Run(testName, func(b *testing.B) {
+				b.SetBytes(int64(len(testdataBytes)))
+				benchmarkZeroAllocsPerRun(b, func() {
+					buffer, _ = test.codec.Encode(buffer[:0], testdataBytes)
+				})
 			})
-		})
+		}
 	}
 }
 
