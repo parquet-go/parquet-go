@@ -428,28 +428,42 @@ func scanParquetValues(col *parquet.Column) error {
 	})
 }
 
-func generateParquetFile(rows rows, options ...parquet.WriterOption) ([]byte, error) {
+func generateParquetFile(rows rows, options ...parquet.WriterOption) (string, []byte, error) {
 	tmp, err := os.CreateTemp("/tmp", "*.parquet")
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	defer tmp.Close()
 	path := tmp.Name()
 	defer os.Remove(path)
-	// fmt.Println(path)
 
-	writerOptions := []parquet.WriterOption{parquet.PageBufferSize(20)}
+	writerOptions := []parquet.WriterOption{
+		parquet.PageBufferSize(20),
+		parquet.DataPageStatistics(true),
+	}
 	writerOptions = append(writerOptions, options...)
 
 	if err := writeParquetFile(tmp, rows, writerOptions...); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
 	if err := scanParquetFile(tmp); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
-	return parquetTools("dump", path)
+	var outputParts [][]byte
+	// Ideally, we could add the "cat" command here and validate each row in the parquet
+	// file using the parquet CLI tool. However, it seems to have a number of bugs related
+	// to reading repeated fields, so we cannot reliably do this validation for now.
+	// See https://issues.apache.org/jira/projects/PARQUET/issues/PARQUET-2181 and others.
+	for _, cmd := range []string{"meta", "pages"} {
+		out, err := parquetCLI(cmd, path)
+		if err != nil {
+			return "", nil, err
+		}
+		outputParts = append(outputParts, out)
+	}
+	return path, bytes.Join(outputParts, []byte("")), nil
 }
 
 type firstAndLastName struct {
@@ -485,33 +499,37 @@ var writerTests = []struct {
 			&firstAndLastName{FirstName: "Leia", LastName: "Skywalker"},
 			&firstAndLastName{FirstName: "Luke", LastName: "Skywalker"},
 		},
-		dump: `row group 0
+		dump: `
+File path:  {file-path}
+Created by: github.com/parquet-go/parquet-go
+Properties: (none)
+Schema:
+message firstAndLastName {
+  required binary first_name (STRING);
+  required binary last_name (STRING);
+}
+
+
+Row group 0:  count: 3  107.67 B records  start: 4  total(compressed): 323 B total(uncompressed):299 B
 --------------------------------------------------------------------------------
-first_name:  BINARY ZSTD DO:4 FPO:55 SZ:90/72/0.80 VC:3 ENC:RLE_DICTIONARY,PLAIN ST:[min: Han, max: Luke, num_nulls not defined]
-last_name:   BINARY ZSTD DO:0 FPO:94 SZ:127/121/0.95 VC:3 ENC:DELTA_BYTE_ARRAY ST:[min: Skywalker, max: Solo, num_nulls not defined]
+            type      encodings count     avg size   nulls   min / max
+first_name  BINARY    Z _ R     3         38.00 B            "Han" / "Luke"
+last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Solo"
 
-    first_name TV=3 RL=0 DL=0 DS: 3 DE:PLAIN
-    ----------------------------------------------------------------------------
-    page 0:                        DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[no stats for this column] CRC:[PAGE CORRUPT] SZ:7 VC:3
 
-    last_name TV=3 RL=0 DL=0
-    ----------------------------------------------------------------------------
-    page 0:                        DLE:RLE RLE:RLE VLE:DELTA_BYTE_ARRAY ST:[no stats for this column] CRC:[PAGE CORRUPT] SZ:56 VC:2
-    page 1:                        DLE:RLE RLE:RLE VLE:DELTA_BYTE_ARRAY ST:[no stats for this column] CRC:[PAGE CORRUPT] SZ:19 VC:1
-
-BINARY first_name
+Column: first_name
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:0 V:Han
-value 2: R:0 D:0 V:Leia
-value 3: R:0 D:0 V:Luke
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-D    dict  Z _  3       7.67 B     23 B
+  0-1    data  Z R  3       2.33 B     7 B                         "Han" / "Luke"
 
-BINARY last_name
+
+Column: last_name
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:0 V:Solo
-value 2: R:0 D:0 V:Skywalker
-value 3: R:0 D:0 V:Skywalker
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  Z D  2       28.00 B    56 B                        "Skywalker" / "Solo"
+  0-1    data  Z D  1       19.00 B    19 B                        "Skywalker" / "Skywalker"
+
 `,
 	},
 
@@ -523,33 +541,37 @@ value 3: R:0 D:0 V:Skywalker
 			&firstAndLastName{FirstName: "Leia", LastName: "Skywalker"},
 			&firstAndLastName{FirstName: "Luke", LastName: "Skywalker"},
 		},
-		dump: `row group 0
+		dump: `
+File path:  {file-path}
+Created by: github.com/parquet-go/parquet-go
+Properties: (none)
+Schema:
+message firstAndLastName {
+  required binary first_name (STRING);
+  required binary last_name (STRING);
+}
+
+
+Row group 0:  count: 3  109.67 B records  start: 4  total(compressed): 329 B total(uncompressed):314 B
 --------------------------------------------------------------------------------
-first_name:  BINARY ZSTD DO:4 FPO:55 SZ:86/77/0.90 VC:3 ENC:PLAIN,RLE_DICTIONARY ST:[min: Han, max: Luke, num_nulls not defined]
-last_name:   BINARY ZSTD DO:0 FPO:90 SZ:137/131/0.96 VC:3 ENC:DELTA_BYTE_ARRAY ST:[min: Skywalker, max: Solo, num_nulls not defined]
+            type      encodings count     avg size   nulls   min / max
+first_name  BINARY    Z _ R     3         36.67 B            "Han" / "Luke"
+last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Solo"
 
-    first_name TV=3 RL=0 DL=0 DS: 3 DE:PLAIN
-    ----------------------------------------------------------------------------
-    page 0:                        DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[no stats for this column] SZ:7 VC:3
 
-    last_name TV=3 RL=0 DL=0
-    ----------------------------------------------------------------------------
-    page 0:                        DLE:RLE RLE:RLE VLE:DELTA_BYTE_ARRAY ST:[no stats for this column] SZ:56 VC:2
-    page 1:                        DLE:RLE RLE:RLE VLE:DELTA_BYTE_ARRAY ST:[no stats for this column] SZ:19 VC:1
-
-BINARY first_name
+Column: first_name
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:0 V:Han
-value 2: R:0 D:0 V:Leia
-value 3: R:0 D:0 V:Luke
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-D    dict  Z _  3       7.67 B     23 B
+  0-1    data  _ R  3       2.33 B     7 B        3        0       "Han" / "Luke"
 
-BINARY last_name
+
+Column: last_name
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:0 V:Solo
-value 2: R:0 D:0 V:Skywalker
-value 3: R:0 D:0 V:Skywalker
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ D  2       28.00 B    56 B       2        0       "Skywalker" / "Solo"
+  0-1    data  _ D  1       19.00 B    19 B       1        0       "Skywalker" / "Skywalker"
+
 `,
 	},
 
@@ -569,72 +591,51 @@ value 3: R:0 D:0 V:Skywalker
 			timeseries{Name: "http_request_total", Timestamp: 1639444141, Value: 6},
 			timeseries{Name: "http_request_total", Timestamp: 1639444144, Value: 10},
 		},
-		dump: `row group 0
+		dump: `
+File path:  {file-path}
+Created by: github.com/parquet-go/parquet-go
+Properties: (none)
+Schema:
+message timeseries {
+  required binary name (STRING);
+  required int64 timestamp (INTEGER(64,true));
+  required double value;
+}
+
+
+Row group 0:  count: 10  121.70 B records  start: 4  total(compressed): 1.188 kB total(uncompressed):1.312 kB
 --------------------------------------------------------------------------------
-name:       BINARY GZIP DO:4 FPO:70 SZ:126/101/0.80 VC:10 ENC:PLAIN,RLE_DICTIONARY ST:[min: http_request_total, max: http_request_total, num_nulls not defined]
-timestamp:  INT64 GZIP DO:0 FPO:130 SZ:299/550/1.84 VC:10 ENC:DELTA_BINARY_PACKED ST:[min: 1639444033, max: 1639444144, num_nulls not defined]
-value:      DOUBLE GZIP DO:0 FPO:429 SZ:292/192/0.66 VC:10 ENC:PLAIN ST:[min: -0.0, max: 100.0, num_nulls not defined]
+           type      encodings count     avg size   nulls   min / max
+name       BINARY    G _ R     10        29.00 B            "http_request_total" / "http_request_total"
+timestamp  INT64     G   D     10        46.70 B            "1639444033" / "1639444144"
+value      DOUBLE    G   _     10        46.00 B            "-0.0" / "100.0"
 
-    name TV=10 RL=0 DL=0 DS: 1 DE:PLAIN
-    ----------------------------------------------------------------------------
-    page 0:                   DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[no stats for this column] SZ:2 VC:5
-    page 1:                   DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[no stats for this column] SZ:2 VC:5
 
-    timestamp TV=10 RL=0 DL=0
-    ----------------------------------------------------------------------------
-    page 0:                   DLE:RLE RLE:RLE VLE:DELTA_BINARY_PACKED ST:[no stats for this column] SZ:142 VC:3
-    page 1:                   DLE:RLE RLE:RLE VLE:DELTA_BINARY_PACKED ST:[no stats for this column] SZ:142 VC:3
-    page 2:                   DLE:RLE RLE:RLE VLE:DELTA_BINARY_PACKED ST:[no stats for this column] SZ:142 VC:3
-    page 3:                   DLE:RLE RLE:RLE VLE:DELTA_BINARY_PACKED ST:[no stats for this column] SZ:9 VC:1
-
-    value TV=10 RL=0 DL=0
-    ----------------------------------------------------------------------------
-    page 0:                   DLE:RLE RLE:RLE VLE:PLAIN ST:[no stats for this column] SZ:24 VC:3
-    page 1:                   DLE:RLE RLE:RLE VLE:PLAIN ST:[no stats for this column] SZ:24 VC:3
-    page 2:                   DLE:RLE RLE:RLE VLE:PLAIN ST:[no stats for this column] SZ:24 VC:3
-    page 3:                   DLE:RLE RLE:RLE VLE:PLAIN ST:[no stats for this column] SZ:8 VC:1
-
-BINARY name
+Column: name
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 10 ***
-value 1:  R:0 D:0 V:http_request_total
-value 2:  R:0 D:0 V:http_request_total
-value 3:  R:0 D:0 V:http_request_total
-value 4:  R:0 D:0 V:http_request_total
-value 5:  R:0 D:0 V:http_request_total
-value 6:  R:0 D:0 V:http_request_total
-value 7:  R:0 D:0 V:http_request_total
-value 8:  R:0 D:0 V:http_request_total
-value 9:  R:0 D:0 V:http_request_total
-value 10: R:0 D:0 V:http_request_total
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-D    dict  G _  1       22.00 B    22 B
+  0-1    data  _ R  5       0.40 B     2 B        5        0       "http_request_total" / "http_request_total"
+  0-2    data  _ R  5       0.40 B     2 B        5        0       "http_request_total" / "http_request_total"
 
-INT64 timestamp
---------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 10 ***
-value 1:  R:0 D:0 V:1639444033
-value 2:  R:0 D:0 V:1639444058
-value 3:  R:0 D:0 V:1639444085
-value 4:  R:0 D:0 V:1639444093
-value 5:  R:0 D:0 V:1639444101
-value 6:  R:0 D:0 V:1639444108
-value 7:  R:0 D:0 V:1639444133
-value 8:  R:0 D:0 V:1639444137
-value 9:  R:0 D:0 V:1639444141
-value 10: R:0 D:0 V:1639444144
 
-DOUBLE value
+Column: timestamp
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 10 ***
-value 1:  R:0 D:0 V:100.0
-value 2:  R:0 D:0 V:0.0
-value 3:  R:0 D:0 V:42.0
-value 4:  R:0 D:0 V:1.0
-value 5:  R:0 D:0 V:2.0
-value 6:  R:0 D:0 V:5.0
-value 7:  R:0 D:0 V:4.0
-value 8:  R:0 D:0 V:5.0
-value 9:  R:0 D:0 V:6.0
-value 10: R:0 D:0 V:10.0
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ D  3       47.33 B    142 B      3        0       "1639444033" / "1639444085"
+  0-1    data  _ D  3       47.33 B    142 B      3        0       "1639444093" / "1639444108"
+  0-2    data  _ D  3       47.33 B    142 B      3        0       "1639444133" / "1639444141"
+  0-3    data  _ D  1       9.00 B     9 B        1        0       "1639444144" / "1639444144"
+
+
+Column: value
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ _  3       8.00 B     24 B       3        0       "-0.0" / "100.0"
+  0-1    data  _ _  3       8.00 B     24 B       3        0       "1.0" / "5.0"
+  0-2    data  _ _  3       8.00 B     24 B       3        0       "4.0" / "6.0"
+  0-3    data  _ _  1       8.00 B     8 B        1        0       "10.0" / "10.0"
+
 `,
 	},
 
@@ -663,60 +664,56 @@ value 10: R:0 D:0 V:10.0
 				OwnerPhoneNumbers: nil,
 			},
 		},
+		dump: `
+File path:  {file-path}
+Created by: github.com/parquet-go/parquet-go
+Properties: (none)
+Schema:
+message AddressBook {
+  required binary owner (STRING);
+  repeated binary ownerPhoneNumbers (STRING);
+  repeated group contacts {
+    required binary name (STRING);
+    optional binary phoneNumber (STRING);
+  }
+}
 
-		dump: `row group 0
+
+Row group 0:  count: 2  384.00 B records  start: 4  total(compressed): 768 B total(uncompressed):691 B
 --------------------------------------------------------------------------------
-owner:              BINARY ZSTD DO:0 FPO:4 SZ:81/73/0.90 VC:2 ENC:DELTA_LENGTH_BYTE_ARRAY ST:[min: A. Nonymous, max: Julien Le Dem, num_nulls not defined]
-ownerPhoneNumbers:  BINARY GZIP DO:0 FPO:85 SZ:179/129/0.72 VC:3 ENC:RLE,DELTA_LENGTH_BYTE_ARRAY ST:[min: 555 123 4567, max: 555 666 1337, num_nulls: 1]
-contacts:
-.name:              BINARY UNCOMPRESSED DO:0 FPO:264 SZ:138/138/1.00 VC:3 ENC:RLE,DELTA_LENGTH_BYTE_ARRAY ST:[min: Chris Aniszczyk, max: Dmitriy Ryaboy, num_nulls: 1]
-.phoneNumber:       BINARY ZSTD DO:0 FPO:402 SZ:113/95/0.84 VC:3 ENC:RLE,DELTA_LENGTH_BYTE_ARRAY ST:[min: 555 987 6543, max: 555 987 6543, num_nulls: 2]
+                      type      encodings count     avg size   nulls   min / max
+owner                 BINARY    Z         2         70.00 B            "A. Nonymous" / "Julien Le Dem"
+ownerPhoneNumbers     BINARY    G         3         80.33 B    1       "555 123 4567" / "555 666 1337"
+contacts.name         BINARY    _         3         70.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
 
-    owner TV=2 RL=0 DL=0
-    ----------------------------------------------------------------------------
-    page 0:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] CRC:[PAGE CORRUPT] SZ:50 VC:2
 
-    ownerPhoneNumbers TV=3 RL=1 DL=1
-    ----------------------------------------------------------------------------
-    page 0:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] CRC:[PAGE CORRUPT] SZ:64 VC:2
-    page 1:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] CRC:[PAGE CORRUPT] SZ:17 VC:1
-
-    contacts.name TV=3 RL=1 DL=1
-    ----------------------------------------------------------------------------
-    page 0:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] CRC:[verified] SZ:73 VC:2
-    page 1:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] CRC:[verified] SZ:17 VC:1
-
-    contacts.phoneNumber TV=3 RL=1 DL=2
-    ----------------------------------------------------------------------------
-    page 0:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] CRC:[PAGE CORRUPT] SZ:33 VC:2
-    page 1:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] CRC:[PAGE CORRUPT] SZ:17 VC:1
-
-BINARY owner
+Column: owner
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 2 ***
-value 1: R:0 D:0 V:Julien Le Dem
-value 2: R:0 D:0 V:A. Nonymous
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  Z D  2       25.00 B    50 B                        "A. Nonymous" / "Julien Le Dem"
 
-BINARY ownerPhoneNumbers
---------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:1 V:555 123 4567
-value 2: R:1 D:1 V:555 666 1337
-value 3: R:0 D:0 V:<null>
 
-BINARY contacts.name
+Column: ownerPhoneNumbers
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:1 V:Dmitriy Ryaboy
-value 2: R:1 D:1 V:Chris Aniszczyk
-value 3: R:0 D:0 V:<null>
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  Z D  2       32.00 B    64 B                        "555 123 4567" / "555 666 1337"
+  0-1    data  Z D  1       17.00 B    17 B                1
 
-BINARY contacts.phoneNumber
+
+Column: contacts.name
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:2 V:555 987 6543
-value 2: R:1 D:1 V:<null>
-value 3: R:0 D:0 V:<null>
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  Z D  2       36.50 B    73 B                        "Chris Aniszczyk" / "Dmitriy Ryaboy"
+  0-1    data  Z D  1       17.00 B    17 B                1
+
+
+Column: contacts.phoneNumber
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  Z D  2       16.50 B    33 B                1       "555 987 6543" / "555 987 6543"
+  0-1    data  Z D  1       17.00 B    17 B                1
+
 `,
 	},
 
@@ -746,62 +743,58 @@ value 3: R:0 D:0 V:<null>
 			},
 		},
 
-		dump: `row group 0
+		dump: `
+File path:  {file-path}
+Created by: github.com/parquet-go/parquet-go
+Properties: (none)
+Schema:
+message AddressBook {
+  required binary owner (STRING);
+  repeated binary ownerPhoneNumbers (STRING);
+  repeated group contacts {
+    required binary name (STRING);
+    optional binary phoneNumber (STRING);
+  }
+}
+
+
+Row group 0:  count: 2  377.50 B records  start: 4  total(compressed): 755 B total(uncompressed):678 B
 --------------------------------------------------------------------------------
-owner:              BINARY ZSTD DO:0 FPO:4 SZ:86/78/0.91 VC:2 ENC:DELTA_LENGTH_BYTE_ARRAY ST:[min: A. Nonymous, max: Julien Le Dem, num_nulls not defined]
-ownerPhoneNumbers:  BINARY GZIP DO:0 FPO:90 SZ:172/122/0.71 VC:3 ENC:RLE,DELTA_LENGTH_BYTE_ARRAY ST:[min: 555 123 4567, max: 555 666 1337, num_nulls: 1]
-contacts:
-.name:              BINARY UNCOMPRESSED DO:0 FPO:262 SZ:132/132/1.00 VC:3 ENC:RLE,DELTA_LENGTH_BYTE_ARRAY ST:[min: Chris Aniszczyk, max: Dmitriy Ryaboy, num_nulls: 1]
-.phoneNumber:       BINARY ZSTD DO:0 FPO:394 SZ:108/90/0.83 VC:3 ENC:RLE,DELTA_LENGTH_BYTE_ARRAY ST:[min: 555 987 6543, max: 555 987 6543, num_nulls: 2]
+                      type      encodings count     avg size   nulls   min / max
+owner                 BINARY    Z         2         72.50 B            "A. Nonymous" / "Julien Le Dem"
+ownerPhoneNumbers     BINARY    G         3         78.00 B    1       "555 123 4567" / "555 666 1337"
+contacts.name         BINARY    _         3         68.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
 
-    owner TV=2 RL=0 DL=0
-    ----------------------------------------------------------------------------
-    page 0:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] SZ:50 VC:2
 
-    ownerPhoneNumbers TV=3 RL=1 DL=1
-    ----------------------------------------------------------------------------
-    page 0:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] SZ:56 VC:2
-    page 1:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] SZ:9 VC:1
-
-    contacts.name TV=3 RL=1 DL=1
-    ----------------------------------------------------------------------------
-    page 0:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] SZ:65 VC:2
-    page 1:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] SZ:9 VC:1
-
-    contacts.phoneNumber TV=3 RL=1 DL=2
-    ----------------------------------------------------------------------------
-    page 0:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] SZ:25 VC:2
-    page 1:  DLE:RLE RLE:RLE VLE:DELTA_LENGTH_BYTE_ARRAY ST:[no stats for this column] SZ:9 VC:1
-
-BINARY owner
+Column: owner
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 2 ***
-value 1: R:0 D:0 V:Julien Le Dem
-value 2: R:0 D:0 V:A. Nonymous
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ D  2       25.00 B    50 B       2        0       "A. Nonymous" / "Julien Le Dem"
 
-BINARY ownerPhoneNumbers
---------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:1 V:555 123 4567
-value 2: R:1 D:1 V:555 666 1337
-value 3: R:0 D:0 V:<null>
 
-BINARY contacts.name
+Column: ownerPhoneNumbers
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:1 V:Dmitriy Ryaboy
-value 2: R:1 D:1 V:Chris Aniszczyk
-value 3: R:0 D:0 V:<null>
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ D  2       28.00 B    56 B       1        0       "555 123 4567" / "555 666 1337"
+  0-1    data  _ D  1       9.00 B     9 B        1        1
 
-BINARY contacts.phoneNumber
+
+Column: contacts.name
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 3 ***
-value 1: R:0 D:2 V:555 987 6543
-value 2: R:1 D:1 V:<null>
-value 3: R:0 D:0 V:<null>
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ D  2       32.50 B    65 B       1        0       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+  0-1    data  _ D  1       9.00 B     9 B        1        1
+
+
+Column: contacts.phoneNumber
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ D  2       12.50 B    25 B       1        1       "555 987 6543" / "555 987 6543"
+  0-1    data  _ D  1       9.00 B     9 B        1        1
+
 `,
 	},
-
 	{
 		scenario: "omit `-` fields",
 		version:  v1,
@@ -809,37 +802,51 @@ value 3: R:0 D:0 V:<null>
 			&event{Name: "customer1", Type: "request", Value: 42.0},
 			&event{Name: "customer2", Type: "access", Value: 1.0},
 		},
-		dump: `row group 0
+		dump: `
+File path:  {file-path}
+Created by: github.com/parquet-go/parquet-go
+Properties: (none)
+Schema:
+message event {
+  required binary name (STRING);
+  required double value;
+}
+
+
+Row group 0:  count: 2  100.00 B records  start: 4  total(compressed): 200 B total(uncompressed):200 B
 --------------------------------------------------------------------------------
-name:   BINARY UNCOMPRESSED DO:4 FPO:49 SZ:73/73/1.00 VC:2 ENC:RLE_DICTIONARY,PLAIN ST:[min: customer1, max: customer2, num_nulls not defined]
-value:  DOUBLE UNCOMPRESSED DO:0 FPO:77 SZ:39/39/1.00 VC:2 ENC:PLAIN ST:[min: 1.0, max: 42.0, num_nulls not defined]
+       type      encodings count     avg size   nulls   min / max
+name   BINARY    _ _ R     2         59.50 B            "customer1" / "customer2"
+value  DOUBLE    _   _     2         40.50 B            "1.0" / "42.0"
 
-    name TV=2 RL=0 DL=0 DS: 2 DE:PLAIN
-    ----------------------------------------------------------------------------
-    page 0:                  DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[no stats for this column] CRC:[verified] SZ:5 VC:2
 
-    value TV=2 RL=0 DL=0
-    ----------------------------------------------------------------------------
-    page 0:                  DLE:RLE RLE:RLE VLE:PLAIN ST:[no stats for this column] CRC:[verified] SZ:16 VC:2
-
-BINARY name
+Column: name
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 2 ***
-value 1: R:0 D:0 V:customer1
-value 2: R:0 D:0 V:customer2
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-D    dict  _ _  2       13.00 B    26 B
+  0-1    data  _ R  2       2.50 B     5 B                         "customer1" / "customer2"
 
-DOUBLE value
+
+Column: value
 --------------------------------------------------------------------------------
-*** row group 1 of 1, values 1 to 2 ***
-value 1: R:0 D:0 V:42.0
-value 2: R:0 D:0 V:1.0
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ _  2       8.00 B     16 B                        "1.0" / "42.0"
+
 `,
 	},
 }
 
+// TestWriter uses the Apache parquet-cli tool to validate generated parquet files.
+// On MacOS systems using brew, this can be installed with `brew install parquet-cli`.
+// For more information on installing and running this tool, see:
+// https://github.com/apache/parquet-mr/blob/ef9929c130f8f2e24fca1c7b42b0742a4d9d5e61/parquet-cli/README.md
+// This test expects the parquet-cli command to exist in the environment path as `parquet`
+// and to require no additional arguments before the primary command. If you need to run
+// it in some other way on your system, you can configure the environment variable
+// `PARQUET_GO_TEST_CLI`.
 func TestWriter(t *testing.T) {
-	if !hasParquetTools() {
-		t.Skip("Skipping TestWriter writerTests because parquet-tools are not installed in Github CI. FIXME.") // TODO
+	if !hasParquetCli() {
+		t.Skip("Skipping TestWriter writerTests because parquet-cli is not installed in Github CI. FIXME.") // TODO
 	}
 
 	for _, test := range writerTests {
@@ -851,7 +858,7 @@ func TestWriter(t *testing.T) {
 		t.Run(test.scenario, func(t *testing.T) {
 			t.Parallel()
 
-			b, err := generateParquetFile(makeRows(rows),
+			path, b, err := generateParquetFile(makeRows(rows),
 				parquet.DataPageVersion(dataPageVersion),
 				parquet.Compression(codec),
 			)
@@ -860,6 +867,11 @@ func TestWriter(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			// The CLI output includes the file-path of the parquet file. Because the test
+			// uses a temp file, this value is not consistent between test runs and cannot
+			// be hard-coded. Therefore, the expected value includes a placeholder value
+			// and we replace it here.
+			dump = strings.Replace(dump, "{file-path}", path, 1)
 			if string(b) != dump {
 				edits := myers.ComputeEdits(span.URIFromPath("want.txt"), dump, string(b))
 				diff := fmt.Sprint(gotextdiff.ToUnified("want.txt", "got.txt", dump, edits))
@@ -869,20 +881,34 @@ func TestWriter(t *testing.T) {
 	}
 }
 
-func hasParquetTools() bool {
-	_, err := exec.LookPath("parquet-tools")
+func hasParquetCli() bool {
+	// If PARQUET_GO_TEST_CLI is defined, always attempt to run the test. If it's defined
+	// but the command cannot be called, the test itself should fail.
+	if os.Getenv("PARQUET_GO_TEST_CLI") != "" {
+		return true
+	}
+	_, err := exec.LookPath("parquet")
 	return err == nil
 }
 
-func parquetTools(cmd, path string) ([]byte, error) {
-	p := exec.Command("parquet-tools", cmd, "--debug", "--disable-crop", path)
+func parquetCLI(cmd, path string) ([]byte, error) {
+	execPath := "parquet"
+	envCmd := os.Getenv("PARQUET_GO_TEST_CLI")
+	var cmdArgs []string
+	if envCmd != "" {
+		envSplit := strings.Split(envCmd, " ")
+		execPath = envSplit[0]
+		cmdArgs = envSplit[1:]
+	}
+	cmdArgs = append(cmdArgs, cmd, path)
+	p := exec.Command(execPath, cmdArgs...)
 
 	output, err := p.CombinedOutput()
 	if err != nil {
 		return output, err
 	}
 
-	// parquet-tools has trailing spaces on some lines
+	// parquet-cli has trailing spaces on some lines.
 	lines := bytes.Split(output, []byte("\n"))
 
 	for i, line := range lines {

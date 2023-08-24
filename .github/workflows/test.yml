@@ -29,6 +29,21 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Setup Maven Action
+        uses: s4u/setup-maven-action@v1.2.1
+        with:
+          java-version: 17
+          maven-version: 3.9.2
+
+
+      - name: Setup Parquet CLI
+        run: |
+          set -ex
+          wget https://github.com/apache/parquet-mr/archive/refs/tags/apache-parquet-1.13.1.tar.gz
+          tar -xf apache-parquet-1.13.1.tar.gz
+          mvn --file parquet-mr-apache-parquet-1.13.1/parquet-cli/pom.xml install -DskipTests
+          mvn --file parquet-mr-apache-parquet-1.13.1/parquet-cli/pom.xml dependency:copy-dependencies
+
       - name: Setup Go ${{ matrix.go }}
         uses: actions/setup-go@v3
         with:
@@ -38,7 +53,11 @@ jobs:
         run: go mod download
 
       - name: Run Tests
-        run: go test -trimpath -race -tags=${{ matrix.tags }} ./...
+        env:
+          TARGET: parquet-mr-apache-parquet-1.13.1/parquet-cli/target
+        run: >
+          PARQUET_GO_TEST_CLI="java -cp $TARGET/parquet-cli-1.13.1.jar:$TARGET/dependency/* org.apache.parquet.cli.Main"
+          go test -trimpath -race -tags=${{ matrix.tags }} ./...
 
       - name: Run Benchmarks
         run: go test -trimpath -short -tags=${{ matrix.tags }} -run '^$' -bench . -benchtime 1x ./...
