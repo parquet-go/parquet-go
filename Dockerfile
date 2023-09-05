@@ -4,5 +4,6 @@ FROM  golang:1.20 as builder
 WORKDIR /workspace/parque
 ADD ./ ./
 
-RUN ls --recursive
-RUN make test
+RUN go env
+RUN go test -v -trimpath -tags=purego
+# RUN make test
