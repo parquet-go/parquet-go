@@ -1034,9 +1034,10 @@ func TestParquetAnyValueConversions(t *testing.T) {
 	type arr = []any
 
 	for _, test := range []struct {
-		name   string
-		input  any
-		schema parquet.Group
+		name           string
+		input          any
+		explicitOutput any // Only set if we expect a difference from the input
+		schema         parquet.Group
 	}{
 		{
 			name: "simple strings",
@@ -1049,6 +1050,65 @@ func TestParquetAnyValueConversions(t *testing.T) {
 				"A": parquet.String(),
 				"B": parquet.String(),
 				"C": parquet.String(),
+			},
+		},
+		{
+			name: "simple strings with nil",
+			input: obj{
+				"A": "foo",
+				"B": (*string)(nil),
+				"C": nil,
+			},
+			explicitOutput: obj{
+				"A": "foo",
+				"B": "",
+				"C": "",
+			},
+			schema: parquet.Group{
+				"A": parquet.String(),
+				"B": parquet.String(),
+				"C": parquet.String(),
+			},
+		},
+		{
+			name: "simple groups with nil",
+			input: obj{
+				"A": obj{
+					"AA": "foo",
+				},
+				"B": nil,
+				"C": (*obj)(nil),
+				"D": obj{
+					"DA": "bar",
+				},
+			},
+			explicitOutput: obj{
+				"A": obj{
+					"AA": "foo",
+				},
+				"B": obj{
+					"BA": "",
+				},
+				"C": obj{
+					"CA": "",
+				},
+				"D": obj{
+					"DA": "bar",
+				},
+			},
+			schema: parquet.Group{
+				"A": parquet.Group{
+					"AA": parquet.String(),
+				},
+				"B": parquet.Group{
+					"BA": parquet.String(),
+				},
+				"C": parquet.Group{
+					"CA": parquet.String(),
+				},
+				"D": parquet.Group{
+					"DA": parquet.String(),
+				},
 			},
 		},
 		{
@@ -1175,7 +1235,12 @@ func TestParquetAnyValueConversions(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if value1, value2 := test.input, outRows[0]; !reflect.DeepEqual(value1, value2) {
+			expected := test.input
+			if test.explicitOutput != nil {
+				expected = test.explicitOutput
+			}
+
+			if value1, value2 := expected, outRows[0]; !reflect.DeepEqual(value1, value2) {
 				t.Errorf("value mismatch: want=%+v got=%+v", value1, value2)
 			}
 		})

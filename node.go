@@ -293,7 +293,12 @@ func (f *groupField) Name() string { return f.name }
 
 func (f *groupField) Value(base reflect.Value) reflect.Value {
 	if base.Kind() == reflect.Interface {
-		base = base.Elem()
+		if base.IsNil() {
+			return reflect.ValueOf(nil)
+		}
+		if base = base.Elem(); base.Kind() == reflect.Pointer && base.IsNil() {
+			return reflect.ValueOf(nil)
+		}
 	}
 	return base.MapIndex(reflect.ValueOf(&f.name).Elem())
 }
