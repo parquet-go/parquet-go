@@ -10,6 +10,15 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
+func sortedRowGroupRows(options []parquet.RowGroupOption, row interface{}, numValues int) parquet.RowGroup {
+	buf := parquet.NewBuffer(options...)
+	for i := 0; i < numValues; i++ {
+		buf.Write(row)
+	}
+	sort.Stable(buf)
+	return buf
+}
+
 func sortedRowGroup(options []parquet.RowGroupOption, rows ...interface{}) parquet.RowGroup {
 	buf := parquet.NewBuffer(options...)
 	for _, row := range rows {
