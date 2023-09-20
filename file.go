@@ -471,7 +471,7 @@ func (c *fileColumnChunk) OffsetIndex() OffsetIndex {
 	if c.offsetIndex == nil {
 		return nil
 	}
-	return (*fileOffsetIndex)(c.offsetIndex)
+	return (*FileOffsetIndex)(c.offsetIndex)
 }
 
 func (c *fileColumnChunk) BloomFilter() BloomFilter {
