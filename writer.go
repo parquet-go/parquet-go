@@ -1236,8 +1236,10 @@ func (c *writerColumn) flushFilterPages() (err error) {
 	}
 
 	var pageReader io.Reader = c.pageBuffer
-	if _, err = c.pageBuffer.Seek(0, io.SeekStart); err != nil {
+	if offset, err := c.pageBuffer.Seek(0, io.SeekStart); err != nil {
 		return err
+	} else if offset != 0 {
+		return fmt.Errorf("resetting parquet page buffer to the start expected offset zero but got %d", offset)
 	}
 
 	if _, ok := pageReader.(*os.File); ok {
