@@ -351,6 +351,10 @@ func (a *allocMemoryBuffer) Write(p []byte) (n int, err error) {
 		panic("allocMemoryBuffer only supports appending to the end.")
 	}
 
+	if len(p) == 0 {
+		return 0, nil
+	}
+
 	buf := a.allocPool.Get().([]byte)[:0]
 	buf = append(buf, p...)
 	a.data = append(a.data, buf)
