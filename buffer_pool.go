@@ -143,45 +143,45 @@ type chunkMemoryBuffer struct {
 	off  int
 }
 
-func (p *chunkMemoryBuffer) Reset() {
+func (c *chunkMemoryBuffer) Reset() {
 	// Return the bytes to the bytesPool?
-	for i := range p.data {
-		p.bytesPool.Put(p.data[i])
+	for i := range c.data {
+		c.bytesPool.Put(c.data[i])
 	}
-	for i := range p.data {
-		p.data[i] = nil
+	for i := range c.data {
+		c.data[i] = nil
 	}
-	p.data, p.idx, p.off = p.data[:0], 0, 0
+	c.data, c.idx, c.off = c.data[:0], 0, 0
 }
 
-func (p *chunkMemoryBuffer) Read(b []byte) (n int, err error) {
+func (c *chunkMemoryBuffer) Read(b []byte) (n int, err error) {
 
 	if len(b) == 0 {
 		return 0, nil
 	}
 
-	if p.idx >= len(p.data) {
+	if c.idx >= len(c.data) {
 		return 0, io.EOF
 	}
 
-	curData := p.data[p.idx]
+	curData := c.data[c.idx]
 
-	if p.idx == len(p.data)-1 && p.off == len(curData) {
+	if c.idx == len(c.data)-1 && c.off == len(curData) {
 		return 0, io.EOF
 	}
 
-	n = copy(b, curData[p.off:])
-	p.off += n
+	n = copy(b, curData[c.off:])
+	c.off += n
 
-	if p.off == cap(curData) {
-		p.idx++
-		p.off = 0
+	if c.off == cap(curData) {
+		c.idx++
+		c.off = 0
 	}
 
 	return n, err
 }
 
-func (p *chunkMemoryBuffer) Write(b []byte) (int, error) {
+func (c *chunkMemoryBuffer) Write(b []byte) (int, error) {
 
 	lenB := len(b)
 
@@ -190,46 +190,52 @@ func (p *chunkMemoryBuffer) Write(b []byte) (int, error) {
 	}
 
 	for len(b) > 0 {
-		if p.idx == len(p.data) {
-			p.data = append(p.data, p.bytesPool.Get().([]byte)[:0])
+		if c.idx == len(c.data) {
+			c.data = append(c.data, c.bytesPool.Get().([]byte)[:0])
 		}
-		curData := p.data[p.idx]
-		n := copy(curData[p.off:cap(curData)], b)
-		p.data[p.idx] = curData[:p.off+n]
-		p.off += n
+		curData := c.data[c.idx]
+		n := copy(curData[c.off:cap(curData)], b)
+		c.data[c.idx] = curData[:c.off+n]
+		c.off += n
 		b = b[n:]
-		if p.off >= cap(curData) {
-			p.idx++
-			p.off = 0
+		if c.off >= cap(curData) {
+			c.idx++
+			c.off = 0
 		}
 	}
 
 	return lenB, nil
 }
 
-func (p *chunkMemoryBuffer) WriteTo(w io.Writer) (int64, error) {
+func (c *chunkMemoryBuffer) WriteTo(w io.Writer) (int64, error) {
 	var numWritten int64
 	var err error
 	for err == nil {
-		curData := p.data[p.idx]
-		n, e := w.Write(curData[p.off:])
+		curData := c.data[c.idx]
+		n, e := w.Write(curData[c.off:])
 		numWritten += int64(n)
 		err = e
-		if p.idx == len(p.data)-1 {
-			p.off = int(numWritten)
+		if c.idx == len(c.data)-1 {
+			c.off = int(numWritten)
 			break
 		}
-		p.idx++
-		p.off = 0
+		c.idx++
+		c.off = 0
 	}
 	return numWritten, err
 }
 
-func (p *chunkMemoryBuffer) Seek(offset int64, whence int) (int64, error) {
-	endOff := p.endOff()
+func (c *chunkMemoryBuffer) Seek(offset int64, whence int) (int64, error) {
+	// Because this is the common case, we check it first to avoid computing endOff.
+	if offset == 0 && whence == io.SeekStart {
+		c.idx = 0
+		c.off = 0
+		return offset, nil
+	}
+	endOff := c.endOff()
 	switch whence {
 	case io.SeekCurrent:
-		offset += p.currentOff()
+		offset += c.currentOff()
 	case io.SeekEnd:
 		offset += endOff
 	}
@@ -239,23 +245,34 @@ func (p *chunkMemoryBuffer) Seek(offset int64, whence int) (int64, error) {
 	if offset > endOff {
 		offset = endOff
 	}
-	p.off = int(offset)
+	// Repeat this case now that we know the absolute offset. This is a bit faster, but
+	// mainly protects us from an out-of-bounds if c.data is empty. (If the buffer is
+	// empty and the absolute offset isn't zero, we'd have errored (if negative) or
+	// clamped to zero (if positive) above.
+	if offset == 0 {
+		c.idx = 0
+		c.off = 0
+	} else {
+		stride := cap(c.data[0])
+		c.idx = int(offset) / stride
+		c.off = int(offset) % stride
+	}
 	return offset, nil
 }
 
-func (p *chunkMemoryBuffer) currentOff() int64 {
-	if p.idx == 0 {
-		return int64(p.off)
+func (c *chunkMemoryBuffer) currentOff() int64 {
+	if c.idx == 0 {
+		return int64(c.off)
 	}
-	return int64((p.idx-1)*cap(p.data[0]) + p.off)
+	return int64((c.idx-1)*cap(c.data[0]) + c.off)
 }
 
-func (p *chunkMemoryBuffer) endOff() int64 {
-	if len(p.data) == 0 {
+func (c *chunkMemoryBuffer) endOff() int64 {
+	if len(c.data) == 0 {
 		return 0
 	}
-	l := len(p.data)
-	last := p.data[l-1]
+	l := len(c.data)
+	last := c.data[l-1]
 	return int64(cap(last)*(l-1) + len(last))
 }
 
@@ -325,7 +342,7 @@ func (a *allocMemoryBuffer) Read(p []byte) (n int, err error) {
 	dataBuf := a.data[a.idx]
 	n = copy(p, dataBuf[a.off:])
 	a.off += n
-	if a.off == len(a.data) {
+	if a.off == len(dataBuf) {
 		a.idx++
 		a.off = 0
 	}
