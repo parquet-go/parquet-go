@@ -525,10 +525,8 @@ func (f *filePages) ReadPage() (Page, error) {
 		return nil, io.EOF
 	}
 
-	header := getPageHeader()
-	defer putPageHeader(header)
-
 	for {
+		header := new(format.PageHeader)
 		if err := f.decoder.Decode(header); err != nil {
 			return nil, err
 		}
@@ -591,8 +589,7 @@ func (f *filePages) readDictionary() error {
 
 	decoder := thrift.NewDecoder(f.protocol.NewReader(rbuf))
 
-	header := getPageHeader()
-	defer putPageHeader(header)
+	header := new(format.PageHeader)
 
 	if err := decoder.Decode(header); err != nil {
 		return err
@@ -763,21 +760,6 @@ func getBufioReaderPool(size int) *sync.Pool {
 	pool := &sync.Pool{}
 	bufioReaderPool[size] = pool
 	return pool
-}
-
-var pageHeaderPool = &sync.Pool{
-	New: func() interface{} {
-		return new(format.PageHeader)
-	},
-}
-
-func getPageHeader() *format.PageHeader {
-	return pageHeaderPool.Get().(*format.PageHeader)
-}
-
-func putPageHeader(h *format.PageHeader) {
-	*h = format.PageHeader{}
-	pageHeaderPool.Put(h)
 }
 
 func (f *File) readAt(p []byte, off int64) (int, error) {
