@@ -526,6 +526,18 @@ func (f *filePages) ReadPage() (Page, error) {
 	}
 
 	for {
+		// Instantiate a new format.PageHeader for each page.
+		//
+		// A previous implementation reused page headers to save allocations.
+		// https://github.com/segmentio/parquet-go/pull/484
+		// The optimization turned out to be less effective than expected,
+		// because all the values referenced by pointers in the page header
+		// are lost when the header is reset and put back in the pool.
+		// https://github.com/parquet-go/parquet-go/pull/11
+		//
+		// Even after being reset, reusing page headers still produced instability
+		// issues.
+		// https://github.com/parquet-go/parquet-go/issues/70
 		header := new(format.PageHeader)
 		if err := f.decoder.Decode(header); err != nil {
 			return nil, err
