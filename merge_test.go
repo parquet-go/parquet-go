@@ -135,7 +135,41 @@ func TestMergeRowGroups(t *testing.T) {
 				Person{FirstName: "Han", LastName: "Solo"},
 			),
 		},
-
+		{
+			scenario: "reproduce issue #66, merging rows with an empty row group",
+			options: []parquet.RowGroupOption{
+				parquet.SortingRowGroupConfig(
+					parquet.SortingColumns(
+						parquet.Ascending("LastName"),
+					),
+				),
+			},
+			input: []parquet.RowGroup{
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("LastName"),
+							),
+						),
+					},
+					Person{FirstName: "Han", LastName: "Solo"},
+				),
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SchemaOf(Person{}),
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("LastName"),
+							),
+						),
+					},
+				),
+			},
+			output: sortedRowGroup(nil,
+				Person{FirstName: "Han", LastName: "Solo"},
+			),
+		},
 		{
 			scenario: "row groups sorted by descending last name",
 			options: []parquet.RowGroupOption{

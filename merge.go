@@ -378,6 +378,7 @@ func (m *mergeBuffer) release() {
 
 func (m *mergeBuffer) fill() error {
 	m.len = len(m.rows)
+	var emptyRowGroups int
 	for i := range m.rows {
 		m.head[i] = 0
 		m.buffer[i] = m.buffer[i][:mergeBufferSize]
@@ -387,9 +388,18 @@ func (m *mergeBuffer) fill() error {
 				return err
 			}
 		}
+		if n == 0 {
+			emptyRowGroups++
+		}
 		m.buffer[i] = m.buffer[i][:n]
 	}
 	heap.Init(m)
+	// heap.Init sorts m.rows pushing empty row groups at the end of the slice.
+	//
+	// We can call heap.Pop(m) n times where n is emptyRowGroups. But it has the same
+	// effect as decrementing m.len while doing extra work. We are avoiding extra
+	// work by directly decrementing m.len by emptyRowGroups.
+	m.len -= emptyRowGroups
 	return nil
 }
 
