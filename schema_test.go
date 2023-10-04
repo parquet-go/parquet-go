@@ -181,6 +181,35 @@ func TestSchemaOf(t *testing.T) {
 	}
 }`,
 		},
+
+		{
+			value: new(struct {
+				Name *string `parquet:""`
+				Age  *int64  `parquet:""`
+			}),
+			print: `message {
+	optional binary Name (STRING);
+	optional int64 Age (INT(64,true));
+}`,
+		},
+
+		{
+			value: new(struct {
+				DatePointer *int32 `parquet:"date_pointer,date,optional"`
+			}),
+			print: `message {
+	optional int32 date_pointer (DATE);
+}`,
+		},
+
+		{
+			value: new(struct {
+				TimestampPointer *int64 `parquet:"timestamp_pointer,timestamp,optional"`
+			}),
+			print: `message {
+	optional int64 timestamp_pointer (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
+}`,
+		},
 	}
 
 	for _, test := range tests {

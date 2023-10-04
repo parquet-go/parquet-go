@@ -744,6 +744,10 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			node = nodeOf(t, tag)
 			return
 		}
+		ft := t
+		if t.Kind() == reflect.Ptr {
+			ft = t.Elem()
+		}
 		switch option {
 		case "":
 			return
@@ -778,70 +782,70 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			setNode(JSON())
 
 		case "delta":
-			switch t.Kind() {
+			switch ft.Kind() {
 			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint32, reflect.Uint64:
 				setEncoding(&DeltaBinaryPacked)
 			case reflect.String:
 				setEncoding(&DeltaByteArray)
 			case reflect.Slice:
-				if t.Elem().Kind() == reflect.Uint8 { // []byte?
+				if ft.Elem().Kind() == reflect.Uint8 { // []byte?
 					setEncoding(&DeltaByteArray)
 				} else {
-					throwInvalidTag(t, name, option)
+					throwInvalidTag(ft, name, option)
 				}
 			case reflect.Array:
-				if t.Elem().Kind() == reflect.Uint8 { // [N]byte?
+				if ft.Elem().Kind() == reflect.Uint8 { // [N]byte?
 					setEncoding(&DeltaByteArray)
 				} else {
-					throwInvalidTag(t, name, option)
+					throwInvalidTag(ft, name, option)
 				}
 			default:
-				throwInvalidTag(t, name, option)
+				throwInvalidTag(ft, name, option)
 			}
 
 		case "split":
-			switch t.Kind() {
+			switch ft.Kind() {
 			case reflect.Float32, reflect.Float64:
 				setEncoding(&ByteStreamSplit)
 			default:
-				throwInvalidTag(t, name, option)
+				throwInvalidTag(ft, name, option)
 			}
 
 		case "list":
-			switch t.Kind() {
+			switch ft.Kind() {
 			case reflect.Slice:
-				element := nodeOf(t.Elem(), nil)
+				element := nodeOf(ft.Elem(), nil)
 				setNode(element)
 				setList()
 			default:
-				throwInvalidTag(t, name, option)
+				throwInvalidTag(ft, name, option)
 			}
 
 		case "enum":
-			switch t.Kind() {
+			switch ft.Kind() {
 			case reflect.String:
 				setNode(Enum())
 			default:
-				throwInvalidTag(t, name, option)
+				throwInvalidTag(ft, name, option)
 			}
 
 		case "uuid":
-			switch t.Kind() {
+			switch ft.Kind() {
 			case reflect.Array:
-				if t.Elem().Kind() != reflect.Uint8 || t.Len() != 16 {
-					throwInvalidTag(t, name, option)
+				if ft.Elem().Kind() != reflect.Uint8 || ft.Len() != 16 {
+					throwInvalidTag(ft, name, option)
 				}
 			default:
-				throwInvalidTag(t, name, option)
+				throwInvalidTag(ft, name, option)
 			}
 
 		case "decimal":
 			scale, precision, err := parseDecimalArgs(args)
 			if err != nil {
-				throwInvalidTag(t, name, option+args)
+				throwInvalidTag(ft, name, option+args)
 			}
 			var baseType Type
-			switch t.Kind() {
+			switch ft.Kind() {
 			case reflect.Int32:
 				baseType = Int32Type
 			case reflect.Int64:
@@ -849,39 +853,39 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			case reflect.Array, reflect.Slice:
 				baseType = FixedLenByteArrayType(decimalFixedLenByteArraySize(precision))
 			default:
-				throwInvalidTag(t, name, option)
+				throwInvalidTag(ft, name, option)
 			}
 
 			setNode(Decimal(scale, precision, baseType))
 		case "date":
-			switch t.Kind() {
+			switch ft.Kind() {
 			case reflect.Int32:
 				setNode(Date())
 			default:
-				throwInvalidTag(t, name, option)
+				throwInvalidTag(ft, name, option)
 			}
 		case "timestamp":
-			switch t.Kind() {
+			switch ft.Kind() {
 			case reflect.Int64:
 				timeUnit, err := parseTimestampArgs(args)
 				if err != nil {
-					throwInvalidTag(t, name, option)
+					throwInvalidTag(ft, name, option)
 				}
 				setNode(Timestamp(timeUnit))
 			default:
-				switch t {
+				switch ft {
 				case reflect.TypeOf(time.Time{}):
 					timeUnit, err := parseTimestampArgs(args)
 					if err != nil {
-						throwInvalidTag(t, name, option)
+						throwInvalidTag(ft, name, option)
 					}
 					setNode(Timestamp(timeUnit))
 				default:
-					throwInvalidTag(t, name, option)
+					throwInvalidTag(ft, name, option)
 				}
 			}
 		default:
-			throwUnknownTag(t, name, option)
+			throwUnknownTag(ft, name, option)
 		}
 	})
 
