@@ -120,7 +120,18 @@ func fileRowGroup(rowGroup parquet.RowGroup) parquet.RowGroup {
 	if err != nil {
 		panic(err)
 	}
-	return f.RowGroups()[0]
+	g := f.RowGroups()
+	if len(g) > 0 {
+		return g[0]
+	}
+	// There is a test checking for a panic when merging empty row groups. One of
+	// the input is an empty row group which leads to this path.
+	//
+	// It is unnecessary to also return an empty row group here because the
+	// behavior is triggered by custom row group implementation.
+	//
+	// buffer  scenario check  should be sufficient to cover for the issue.
+	return nil
 }
 
 func TestWriteRowGroupClosesRows(t *testing.T) {
