@@ -181,6 +181,14 @@ func TestSchemaOf(t *testing.T) {
 	}
 }`,
 		},
+		{
+			value: new(struct {
+				A string `parquet:"a,id=2"`
+			}),
+			print: `message {
+	required binary a = 2 (STRING);
+}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -188,7 +196,7 @@ func TestSchemaOf(t *testing.T) {
 			schema := parquet.SchemaOf(test.value)
 
 			if s := schema.String(); s != test.print {
-				t.Errorf("\nexpected:\n\n%s\n\nfound:\n\n%s\n", test.print, s)
+				t.Errorf(" \nexpected:\n\n%s\n\nfound:\n\n%s\n", test.print, s)
 			}
 		})
 	}

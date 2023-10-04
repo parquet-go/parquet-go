@@ -76,6 +76,9 @@ func (c *Column) Path() []string { return c.path[1:] }
 // Name returns the column name.
 func (c *Column) Name() string { return c.schema.Name }
 
+// FieldID returns column field id
+func (c *Column) FieldID() int32 { return c.schema.FieldID }
+
 // Columns returns the list of child columns.
 //
 // The method returns the same slice across multiple calls, the program must

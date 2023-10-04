@@ -58,6 +58,7 @@ type Schema struct {
 //	date      | for int32 types use the DATE logical type
 //	timestamp | for int64 types use the TIMESTAMP logical type with, by default, millisecond precision
 //	split     | for float32/float64, use the BYTE_STREAM_SPLIT encoding
+//	id={n}    | where n is int32 denoting a column field id. Example id=2 for a column with filed id of 2
 //
 // # The date logical type is an int32 value of the number of days since the unix epoch
 //
@@ -366,6 +367,9 @@ func structNodeOf(t reflect.Type) *structNode {
 			fields[i].Tag.Get("parquet-key"),
 			fields[i].Tag.Get("parquet-value"),
 		})
+		if withId, ok := field.Node.(nodeID); ok {
+			field.id = withId.ID()
+		}
 		s.fields[i] = field
 	}
 
@@ -460,10 +464,13 @@ func fieldByIndex(v reflect.Value, index []int) reflect.Value {
 type structField struct {
 	Node
 	name  string
+	id    int32
 	index []int
 }
 
 func (f *structField) Name() string { return f.name }
+
+func (f *structField) ID() int32 { return f.id }
 
 func (f *structField) Value(base reflect.Value) reflect.Value {
 	switch base.Kind() {
@@ -702,6 +709,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		list       bool
 		encoded    encoding.Encoding
 		compressed compress.Codec
+		fieldID    *int32
 	)
 
 	setNode := func(n Node) {
@@ -737,6 +745,15 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			throwInvalidNode(t, "struct field has compression codecs declared multiple times", name, tag...)
 		}
 		compressed = c
+	}
+
+	setId := func(id string) {
+		o, err := strconv.Atoi(id)
+		if err != nil {
+			throwInvalidNode(t, "struct field has field id that is not a valid int32", name, tag...)
+		}
+		i := int32(o)
+		fieldID = &i
 	}
 
 	forEachTagOption(tag, func(option, args string) {
@@ -881,7 +898,12 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 				}
 			}
 		default:
-			throwUnknownTag(t, name, option)
+			if strings.HasPrefix(option, "id=") {
+				_, id, _ := strings.Cut(option, "=")
+				setId(id)
+			} else {
+				throwUnknownTag(t, name, option)
+			}
 		}
 	})
 
@@ -927,7 +949,9 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 	if optional {
 		node = Optional(node)
 	}
-
+	if fieldID != nil {
+		node = FieldID(node, *fieldID)
+	}
 	return node
 }
 

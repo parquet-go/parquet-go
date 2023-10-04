@@ -86,6 +86,13 @@ func printSchemaWithIndent(w io.StringWriter, name string, node Node, indent *pr
 		if name != "" {
 			w.WriteString(" ")
 			w.WriteString(name)
+			if withID, ok := node.(nodeID); ok {
+				id := withID.ID()
+				if id != 0 {
+					w.WriteString(" = ")
+					w.WriteString(strconv.Itoa(int(id)))
+				}
+			}
 		}
 
 		if annotation := annotationOf(node); annotation != "" {

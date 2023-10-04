@@ -156,6 +156,20 @@ func (opt *optionalNode) Repeated() bool       { return false }
 func (opt *optionalNode) Required() bool       { return false }
 func (opt *optionalNode) GoType() reflect.Type { return reflect.PtrTo(opt.Node.GoType()) }
 
+// FieldID wraps a node to provide node field id
+func FieldID(node Node, id int32) Node { return &fieldIDNode{Node: node, id: id} }
+
+type fieldIDNode struct {
+	Node
+	id int32
+}
+
+type nodeID interface {
+	ID() int32
+}
+
+func (f *fieldIDNode) ID() int32 { return f.id }
+
 // Repeated wraps the given node to make it repeated.
 func Repeated(node Node) Node { return &repeatedNode{node} }
 
