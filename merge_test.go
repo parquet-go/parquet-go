@@ -155,6 +155,7 @@ func TestMergeRowGroups(t *testing.T) {
 					},
 					Person{FirstName: "Han", LastName: "Solo"},
 				),
+
 				sortedRowGroup(
 					[]parquet.RowGroupOption{
 						parquet.SchemaOf(Person{}),
@@ -165,8 +166,19 @@ func TestMergeRowGroups(t *testing.T) {
 						),
 					},
 				),
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("LastName"),
+							),
+						),
+					},
+					Person{FirstName: "Obiwan", LastName: "Kenobi"},
+				),
 			},
 			output: sortedRowGroup(nil,
+				Person{FirstName: "Obiwan", LastName: "Kenobi"},
 				Person{FirstName: "Han", LastName: "Solo"},
 			),
 		},
