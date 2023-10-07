@@ -2230,13 +2230,13 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 		writeRows writeRowsFunc
 	}
 
-	fields := structFieldsOf(t)
+	fields := structFieldsOf(t, schema.tagSource)
 	columns := make([]column, len(fields))
 
 	for i, f := range fields {
 		optional := false
 		columnPath := path.append(f.Name)
-		forEachStructTagOption(f, func(_ reflect.Type, option, _ string) {
+		forEachStructTagOption(f, schema.tagSource, func(_ reflect.Type, option, _ string) {
 			switch option {
 			case "list":
 				columnPath = columnPath.append("list", "element")

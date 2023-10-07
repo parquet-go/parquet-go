@@ -407,24 +407,24 @@ type levels struct {
 // individually as the base case.
 type deconstructFunc func([][]Value, levels, reflect.Value)
 
-func deconstructFuncOf(columnIndex int16, node Node) (int16, deconstructFunc) {
+func deconstructFuncOf(columnIndex int16, node Node, source tagSource) (int16, deconstructFunc) {
 	switch {
 	case node.Optional():
-		return deconstructFuncOfOptional(columnIndex, node)
+		return deconstructFuncOfOptional(columnIndex, node, source)
 	case node.Repeated():
-		return deconstructFuncOfRepeated(columnIndex, node)
+		return deconstructFuncOfRepeated(columnIndex, node, source)
 	case isList(node):
-		return deconstructFuncOfList(columnIndex, node)
+		return deconstructFuncOfList(columnIndex, node, source)
 	case isMap(node):
-		return deconstructFuncOfMap(columnIndex, node)
+		return deconstructFuncOfMap(columnIndex, node, source)
 	default:
-		return deconstructFuncOfRequired(columnIndex, node)
+		return deconstructFuncOfRequired(columnIndex, node, source)
 	}
 }
 
 //go:noinline
-func deconstructFuncOfOptional(columnIndex int16, node Node) (int16, deconstructFunc) {
-	columnIndex, deconstruct := deconstructFuncOf(columnIndex, Required(node))
+func deconstructFuncOfOptional(columnIndex int16, node Node, source tagSource) (int16, deconstructFunc) {
+	columnIndex, deconstruct := deconstructFuncOf(columnIndex, Required(node), source)
 	return columnIndex, func(columns [][]Value, levels levels, value reflect.Value) {
 		if value.IsValid() {
 			if value.IsZero() {
@@ -441,8 +441,8 @@ func deconstructFuncOfOptional(columnIndex int16, node Node) (int16, deconstruct
 }
 
 //go:noinline
-func deconstructFuncOfRepeated(columnIndex int16, node Node) (int16, deconstructFunc) {
-	columnIndex, deconstruct := deconstructFuncOf(columnIndex, Required(node))
+func deconstructFuncOfRepeated(columnIndex int16, node Node, source tagSource) (int16, deconstructFunc) {
+	columnIndex, deconstruct := deconstructFuncOf(columnIndex, Required(node), source)
 	return columnIndex, func(columns [][]Value, levels levels, value reflect.Value) {
 		if value.Kind() == reflect.Interface {
 			value = value.Elem()
@@ -463,27 +463,27 @@ func deconstructFuncOfRepeated(columnIndex int16, node Node) (int16, deconstruct
 	}
 }
 
-func deconstructFuncOfRequired(columnIndex int16, node Node) (int16, deconstructFunc) {
+func deconstructFuncOfRequired(columnIndex int16, node Node, source tagSource) (int16, deconstructFunc) {
 	switch {
 	case node.Leaf():
 		return deconstructFuncOfLeaf(columnIndex, node)
 	default:
-		return deconstructFuncOfGroup(columnIndex, node)
+		return deconstructFuncOfGroup(columnIndex, node, source)
 	}
 }
 
-func deconstructFuncOfList(columnIndex int16, node Node) (int16, deconstructFunc) {
-	return deconstructFuncOf(columnIndex, Repeated(listElementOf(node)))
+func deconstructFuncOfList(columnIndex int16, node Node, source tagSource) (int16, deconstructFunc) {
+	return deconstructFuncOf(columnIndex, Repeated(listElementOf(node)), source)
 }
 
 //go:noinline
-func deconstructFuncOfMap(columnIndex int16, node Node) (int16, deconstructFunc) {
+func deconstructFuncOfMap(columnIndex int16, node Node, source tagSource) (int16, deconstructFunc) {
 	keyValue := mapKeyValueOf(node)
 	keyValueType := keyValue.GoType()
 	keyValueElem := keyValueType.Elem()
 	keyType := keyValueElem.Field(0).Type
 	valueType := keyValueElem.Field(1).Type
-	nextColumnIndex, deconstruct := deconstructFuncOf(columnIndex, schemaOf(keyValueElem))
+	nextColumnIndex, deconstruct := deconstructFuncOf(columnIndex, schemaOf(keyValueElem, source), source)
 	return nextColumnIndex, func(columns [][]Value, levels levels, mapValue reflect.Value) {
 		if !mapValue.IsValid() || mapValue.Len() == 0 {
 			deconstruct(columns, levels, reflect.Value{})
@@ -507,11 +507,11 @@ func deconstructFuncOfMap(columnIndex int16, node Node) (int16, deconstructFunc)
 }
 
 //go:noinline
-func deconstructFuncOfGroup(columnIndex int16, node Node) (int16, deconstructFunc) {
+func deconstructFuncOfGroup(columnIndex int16, node Node, source tagSource) (int16, deconstructFunc) {
 	fields := node.Fields()
 	funcs := make([]deconstructFunc, len(fields))
 	for i, field := range fields {
-		columnIndex, funcs[i] = deconstructFuncOf(columnIndex, field)
+		columnIndex, funcs[i] = deconstructFuncOf(columnIndex, field, source)
 	}
 	return columnIndex, func(columns [][]Value, levels levels, value reflect.Value) {
 		if value.IsValid() {
@@ -555,28 +555,28 @@ func deconstructFuncOfLeaf(columnIndex int16, node Node) (int16, deconstructFunc
 
 type reconstructFunc func(reflect.Value, levels, [][]Value) error
 
-func reconstructFuncOf(columnIndex int16, node Node) (int16, reconstructFunc) {
+func reconstructFuncOf(columnIndex int16, node Node, source tagSource) (int16, reconstructFunc) {
 	switch {
 	case node.Optional():
-		return reconstructFuncOfOptional(columnIndex, node)
+		return reconstructFuncOfOptional(columnIndex, node, source)
 	case node.Repeated():
-		return reconstructFuncOfRepeated(columnIndex, node)
+		return reconstructFuncOfRepeated(columnIndex, node, source)
 	case isList(node):
-		return reconstructFuncOfList(columnIndex, node)
+		return reconstructFuncOfList(columnIndex, node, source)
 	case isMap(node):
-		return reconstructFuncOfMap(columnIndex, node)
+		return reconstructFuncOfMap(columnIndex, node, source)
 	default:
-		return reconstructFuncOfRequired(columnIndex, node)
+		return reconstructFuncOfRequired(columnIndex, node, source)
 	}
 }
 
 //go:noinline
-func reconstructFuncOfOptional(columnIndex int16, node Node) (int16, reconstructFunc) {
+func reconstructFuncOfOptional(columnIndex int16, node Node, source tagSource) (int16, reconstructFunc) {
 	// We convert the optional func to required so that we eventually reach the
 	// leaf base-case.  We're still using the heuristics of optional in the
 	// returned closure (see levels.definitionLevel++), but we don't actually do
 	// deserialization here, that happens in the leaf function, hence this line.
-	nextColumnIndex, reconstruct := reconstructFuncOf(columnIndex, Required(node))
+	nextColumnIndex, reconstruct := reconstructFuncOf(columnIndex, Required(node), source)
 
 	return nextColumnIndex, func(value reflect.Value, levels levels, columns [][]Value) error {
 		levels.definitionLevel++
@@ -608,8 +608,8 @@ func setMakeSlice(v reflect.Value, n int) reflect.Value {
 }
 
 //go:noinline
-func reconstructFuncOfRepeated(columnIndex int16, node Node) (int16, reconstructFunc) {
-	nextColumnIndex, reconstruct := reconstructFuncOf(columnIndex, Required(node))
+func reconstructFuncOfRepeated(columnIndex int16, node Node, source tagSource) (int16, reconstructFunc) {
+	nextColumnIndex, reconstruct := reconstructFuncOf(columnIndex, Required(node), source)
 	return nextColumnIndex, func(value reflect.Value, levels levels, columns [][]Value) error {
 		levels.repetitionDepth++
 		levels.definitionLevel++
@@ -668,26 +668,26 @@ func reconstructFuncOfRepeated(columnIndex int16, node Node) (int16, reconstruct
 	}
 }
 
-func reconstructFuncOfRequired(columnIndex int16, node Node) (int16, reconstructFunc) {
+func reconstructFuncOfRequired(columnIndex int16, node Node, source tagSource) (int16, reconstructFunc) {
 	switch {
 	case node.Leaf():
 		return reconstructFuncOfLeaf(columnIndex, node)
 	default:
-		return reconstructFuncOfGroup(columnIndex, node)
+		return reconstructFuncOfGroup(columnIndex, node, source)
 	}
 }
 
-func reconstructFuncOfList(columnIndex int16, node Node) (int16, reconstructFunc) {
-	return reconstructFuncOf(columnIndex, Repeated(listElementOf(node)))
+func reconstructFuncOfList(columnIndex int16, node Node, source tagSource) (int16, reconstructFunc) {
+	return reconstructFuncOf(columnIndex, Repeated(listElementOf(node)), source)
 }
 
 //go:noinline
-func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc) {
+func reconstructFuncOfMap(columnIndex int16, node Node, source tagSource) (int16, reconstructFunc) {
 	keyValue := mapKeyValueOf(node)
 	keyValueType := keyValue.GoType()
 	keyValueElem := keyValueType.Elem()
 	keyValueZero := reflect.Zero(keyValueElem)
-	nextColumnIndex, reconstruct := reconstructFuncOf(columnIndex, schemaOf(keyValueElem))
+	nextColumnIndex, reconstruct := reconstructFuncOf(columnIndex, schemaOf(keyValueElem, source), source)
 	return nextColumnIndex, func(value reflect.Value, levels levels, columns [][]Value) error {
 		levels.repetitionDepth++
 		levels.definitionLevel++
@@ -752,14 +752,14 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 }
 
 //go:noinline
-func reconstructFuncOfGroup(columnIndex int16, node Node) (int16, reconstructFunc) {
+func reconstructFuncOfGroup(columnIndex int16, node Node, source tagSource) (int16, reconstructFunc) {
 	fields := node.Fields()
 	funcs := make([]reconstructFunc, len(fields))
 	columnOffsets := make([]int16, len(fields))
 	firstColumnIndex := columnIndex
 
 	for i, field := range fields {
-		columnIndex, funcs[i] = reconstructFuncOf(columnIndex, field)
+		columnIndex, funcs[i] = reconstructFuncOf(columnIndex, field, source)
 		columnOffsets[i] = columnIndex - firstColumnIndex
 	}
 

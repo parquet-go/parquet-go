@@ -44,7 +44,7 @@ func NewGenericReader[T any](input io.ReaderAt, options ...ReaderOption) *Generi
 		if t == nil {
 			c.Schema = rowGroup.Schema()
 		} else {
-			c.Schema = schemaOf(dereference(t))
+			c.Schema = schemaOf(dereference(t), defaultTagSource{})
 		}
 	}
 
@@ -77,7 +77,7 @@ func NewGenericRowGroupReader[T any](rowGroup RowGroup, options ...ReaderOption)
 		if t == nil {
 			c.Schema = rowGroup.Schema()
 		} else {
-			c.Schema = schemaOf(dereference(t))
+			c.Schema = schemaOf(dereference(t), defaultTagSource{})
 		}
 	}
 
@@ -414,7 +414,9 @@ func (r *Reader) Read(row interface{}) error {
 }
 
 func (r *Reader) updateReadSchema(rowType reflect.Type) error {
-	schema := schemaOf(rowType)
+	// Reader is a deprecated api. We won't be supporting other tag provider apart
+	// from the default one.
+	schema := schemaOf(rowType, defaultTagSource{})
 
 	if nodesAreEqual(schema, r.file.schema) {
 		r.read.init(schema, r.file.rowGroup)

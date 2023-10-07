@@ -92,7 +92,7 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 	t := typeOf[T]()
 
 	if schema == nil && t != nil {
-		schema = schemaOf(dereference(t))
+		schema = schemaOf(dereference(t), defaultTagSource{})
 		config.Schema = schema
 	}
 

@@ -38,7 +38,7 @@ func NewRowBuffer[T any](options ...RowGroupOption) *RowBuffer[T] {
 
 	t := typeOf[T]()
 	if config.Schema == nil && t != nil {
-		config.Schema = schemaOf(dereference(t))
+		config.Schema = schemaOf(dereference(t), defaultTagSource{})
 	}
 
 	if config.Schema == nil {
