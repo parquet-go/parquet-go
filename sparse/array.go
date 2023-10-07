@@ -88,7 +88,7 @@ func (a BoolArray) UnsafeArray() Array       { return Array{a.array} }
 type Int8Array struct{ array }
 
 func MakeInt8Array(values []int8) Int8Array {
-	return Int8Array{makeArray(*(*unsafe.Pointer)(unsafe.Pointer(&values)), uintptr(len(values)), 8)}
+	return Int8Array{makeArray(*(*unsafe.Pointer)(unsafe.Pointer(&values)), uintptr(len(values)), 1)}
 }
 
 func UnsafeInt8Array(base unsafe.Pointer, length int, offset uintptr) Int8Array {
@@ -197,7 +197,7 @@ func (a Float64Array) UnsafeArray() Array          { return Array{a.array} }
 type Uint8Array struct{ array }
 
 func MakeUint8Array(values []uint8) Uint8Array {
-	return Uint8Array{makeArray(*(*unsafe.Pointer)(unsafe.Pointer(&values)), uintptr(len(values)), 8)}
+	return Uint8Array{makeArray(*(*unsafe.Pointer)(unsafe.Pointer(&values)), uintptr(len(values)), 1)}
 }
 
 func UnsafeUint8Array(base unsafe.Pointer, length int, offset uintptr) Uint8Array {

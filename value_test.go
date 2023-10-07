@@ -41,6 +41,11 @@ func TestValueClone(t *testing.T) {
 		},
 
 		{
+			scenario: "INT8",
+			values:   []interface{}{int8(0), int8(1), int8(math.MinInt8), int8(math.MaxInt8)},
+		},
+
+		{
 			scenario: "INT32",
 			values:   []interface{}{int32(0), int32(1), int32(math.MinInt32), int32(math.MaxInt32)},
 		},

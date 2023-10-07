@@ -19,6 +19,7 @@ import (
 
 func TestGenericBuffer(t *testing.T) {
 	testGenericBuffer[booleanColumn](t)
+	testGenericBuffer[int8Column](t)
 	testGenericBuffer[int32Column](t)
 	testGenericBuffer[int64Column](t)
 	testGenericBuffer[int96Column](t)
@@ -105,6 +106,7 @@ type generator[T any] interface {
 func BenchmarkGenericBuffer(b *testing.B) {
 	benchmarkGenericBuffer[benchmarkRowType](b)
 	benchmarkGenericBuffer[booleanColumn](b)
+	benchmarkGenericBuffer[int8Column](b)
 	benchmarkGenericBuffer[int32Column](b)
 	benchmarkGenericBuffer[int64Column](b)
 	benchmarkGenericBuffer[floatColumn](b)

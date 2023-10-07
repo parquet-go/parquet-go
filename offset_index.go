@@ -55,6 +55,13 @@ func (i booleanOffsetIndex) Offset(int) int64             { return 0 }
 func (i booleanOffsetIndex) CompressedPageSize(int) int64 { return i.page.Size() }
 func (i booleanOffsetIndex) FirstRowIndex(int) int64      { return 0 }
 
+type int8OffsetIndex struct{ page *int32Page }
+
+func (i int8OffsetIndex) NumPages() int                { return 1 }
+func (i int8OffsetIndex) Offset(int) int64             { return 0 }
+func (i int8OffsetIndex) CompressedPageSize(int) int64 { return i.page.Size() }
+func (i int8OffsetIndex) FirstRowIndex(int) int64      { return 0 }
+
 type int32OffsetIndex struct{ page *int32Page }
 
 func (i int32OffsetIndex) NumPages() int                { return 1 }
@@ -103,6 +110,13 @@ func (i fixedLenByteArrayOffsetIndex) NumPages() int                { return 1 }
 func (i fixedLenByteArrayOffsetIndex) Offset(int) int64             { return 0 }
 func (i fixedLenByteArrayOffsetIndex) CompressedPageSize(int) int64 { return i.page.Size() }
 func (i fixedLenByteArrayOffsetIndex) FirstRowIndex(int) int64      { return 0 }
+
+type uint8OffsetIndex struct{ page *uint32Page }
+
+func (i uint8OffsetIndex) NumPages() int                { return 1 }
+func (i uint8OffsetIndex) Offset(int) int64             { return 0 }
+func (i uint8OffsetIndex) CompressedPageSize(int) int64 { return i.page.Size() }
+func (i uint8OffsetIndex) FirstRowIndex(int) int64      { return 0 }
 
 type uint32OffsetIndex struct{ page *uint32Page }
 

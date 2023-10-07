@@ -2,6 +2,10 @@ package sparse
 
 import "unsafe"
 
+func GatherInt8(dst []int32, src Int8Array) int {
+	return gather8(*(*[]uint32)(unsafe.Pointer(&dst)), src.Uint8Array(), 0xFFFFFF00)
+}
+
 func GatherInt32(dst []int32, src Int32Array) int {
 	return GatherUint32(*(*[]uint32)(unsafe.Pointer(&dst)), src.Uint32Array())
 }
@@ -19,6 +23,8 @@ func GatherFloat64(dst []float64, src Float64Array) int {
 }
 
 func GatherBits(dst []byte, src Uint8Array) int { return gatherBits(dst, src) }
+
+func GatherUint8(dst []uint32, src Uint8Array) int { return gather8(dst, src, 0) }
 
 func GatherUint32(dst []uint32, src Uint32Array) int { return gather32(dst, src) }
 

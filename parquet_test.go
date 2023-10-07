@@ -578,6 +578,14 @@ func (row booleanColumn) generate(prng *rand.Rand) booleanColumn {
 	return booleanColumn{Value: prng.Int()%2 == 0}
 }
 
+type int8Column struct {
+	Value int8 `parquet:",delta"`
+}
+
+func (row int8Column) generate(prng *rand.Rand) int8Column {
+	return int8Column{Value: int8(prng.Intn(100))}
+}
+
 type int32Column struct {
 	Value int32 `parquet:",delta"`
 }

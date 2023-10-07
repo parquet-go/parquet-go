@@ -907,6 +907,11 @@ func (d *fixedLenByteArrayDictionary) Page() Page {
 	return &d.fixedLenByteArrayPage
 }
 
+type uint8Dictionary struct {
+	uint32Page
+	table *hashprobe.Uint32Table
+}
+
 type uint32Dictionary struct {
 	uint32Page
 	table *hashprobe.Uint32Table

@@ -347,6 +347,89 @@ func (t booleanType) ConvertValue(val Value, typ Type) (Value, error) {
 	}
 }
 
+type int8Type struct{}
+
+func (t int8Type) String() string                           { return "INT8" }
+func (t int8Type) Kind() Kind                               { return Int32 }
+func (t int8Type) Length() int                              { return 8 }
+func (t int8Type) EstimateSize(n int) int                   { return n }
+func (t int8Type) EstimateNumValues(n int) int              { return n }
+func (t int8Type) Compare(a, b Value) int                   { return compareInt32(a.int32(), b.int32()) }
+func (t int8Type) ColumnOrder() *format.ColumnOrder         { return &typeDefinedColumnOrder }
+func (t int8Type) LogicalType() *format.LogicalType         { return nil }
+func (t int8Type) ConvertedType() *deprecated.ConvertedType { return nil }
+func (t int8Type) PhysicalType() *format.Type               { return &physicalTypes[Int32] }
+
+func (t int8Type) NewColumnIndexer(sizeLimit int) ColumnIndexer {
+	return newInt32ColumnIndexer()
+}
+
+func (t int8Type) NewColumnBuffer(columnIndex, numValues int) ColumnBuffer {
+	return newInt8ColumnBuffer(t, makeColumnIndex(columnIndex), makeNumValues(numValues))
+}
+
+func (t int8Type) NewDictionary(columnIndex, numValues int, data encoding.Values) Dictionary {
+	return newInt32Dictionary(t, makeColumnIndex(columnIndex), makeNumValues(numValues), data)
+}
+
+func (t int8Type) NewPage(columnIndex, numValues int, data encoding.Values) Page {
+	return newInt32Page(t, makeColumnIndex(columnIndex), makeNumValues(numValues), data)
+}
+
+func (t int8Type) NewValues(values []byte, _ []uint32) encoding.Values {
+	return encoding.Int32ValuesFromBytes(values)
+}
+
+func (t int8Type) Encode(dst []byte, src encoding.Values, enc encoding.Encoding) ([]byte, error) {
+	return encoding.EncodeInt32(dst, src, enc)
+}
+
+func (t int8Type) Decode(dst encoding.Values, src []byte, enc encoding.Encoding) (encoding.Values, error) {
+	return encoding.DecodeInt32(dst, src, enc)
+}
+
+func (t int8Type) EstimateDecodeSize(numValues int, src []byte, enc encoding.Encoding) int {
+	return t.EstimateSize(numValues)
+}
+
+func (t int8Type) AssignValue(dst reflect.Value, src Value) error {
+	v := src.int32()
+	switch dst.Kind() {
+	case reflect.Int8, reflect.Int16, reflect.Int32:
+		dst.SetInt(int64(v))
+	case reflect.Uint8, reflect.Uint16, reflect.Uint32:
+		dst.SetUint(uint64(v))
+	default:
+		dst.Set(reflect.ValueOf(v))
+	}
+	return nil
+}
+
+func (t int8Type) ConvertValue(val Value, typ Type) (Value, error) {
+	switch typ.(type) {
+	case *stringType:
+		return convertStringToInt32(val)
+	}
+	switch typ.Kind() {
+	case Boolean:
+		return convertBooleanToInt32(val)
+	case Int32:
+		return val, nil
+	case Int64:
+		return convertInt64ToInt32(val)
+	case Int96:
+		return convertInt96ToInt32(val)
+	case Float:
+		return convertFloatToInt32(val)
+	case Double:
+		return convertDoubleToInt32(val)
+	case ByteArray, FixedLenByteArray:
+		return convertByteArrayToInt32(val)
+	default:
+		return makeValueKind(Int32), nil
+	}
+}
+
 type int32Type struct{}
 
 func (t int32Type) String() string                           { return "INT32" }
@@ -940,6 +1023,28 @@ func (t fixedLenByteArrayType) ConvertValue(val Value, typ Type) (Value, error) 
 	}
 }
 
+type uint8Type struct{ int8Type }
+
+func (t uint8Type) Compare(a, b Value) int {
+	return compareUint32(a.uint32(), b.uint32())
+}
+
+func (t uint8Type) NewColumnIndexer(sizeLimit int) ColumnIndexer {
+	return newUint32ColumnIndexer()
+}
+
+func (t uint8Type) NewColumnBuffer(columnIndex, numValues int) ColumnBuffer {
+	return newUint8ColumnBuffer(t, makeColumnIndex(columnIndex), makeNumValues(numValues))
+}
+
+func (t uint8Type) NewDictionary(columnIndex, numValues int, data encoding.Values) Dictionary {
+	return newUint32Dictionary(t, makeColumnIndex(columnIndex), makeNumValues(numValues), data)
+}
+
+func (t uint8Type) NewPage(columnIndex, numValues int, data encoding.Values) Page {
+	return newUint32Page(t, makeColumnIndex(columnIndex), makeNumValues(numValues), data)
+}
+
 type uint32Type struct{ int32Type }
 
 func (t uint32Type) Compare(a, b Value) int {
@@ -1117,18 +1222,25 @@ type intType format.IntType
 
 func (t *intType) baseType() Type {
 	if t.IsSigned {
-		if t.BitWidth == 64 {
-			return int64Type{}
-		} else {
+		switch t.BitWidth {
+		case 8:
+			return int8Type{}
+		case 16, 32:
 			return int32Type{}
+		case 64:
+			return int64Type{}
 		}
 	} else {
-		if t.BitWidth == 64 {
-			return uint64Type{}
-		} else {
+		switch t.BitWidth {
+		case 8:
+			return uint8Type{}
+		case 16, 32:
 			return uint32Type{}
+		case 64:
+			return uint64Type{}
 		}
 	}
+	panic(fmt.Sprintf("Unexpcted int BitWidth: %d", t.BitWidth))
 }
 
 func (t *intType) String() string { return (*format.IntType)(t).String() }
