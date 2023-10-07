@@ -400,9 +400,6 @@ func structFieldsOf(t reflect.Type, source tagSource) []reflect.StructField {
 		f := &fields[i]
 
 		tags := source.Tags(f)
-		if len(tags) == 0 {
-			continue
-		}
 		// Field name is the first key in the first tag string. For fields providing
 		// other tags but not the field name they must begin with a comma
 		tag := tags[0]
@@ -422,9 +419,6 @@ func appendStructFields(
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
 		tags := source.Tags(&f)
-		if len(tags) == 0 {
-			continue
-		}
 		tag := tags[0]
 		name, _ := split(tag)
 		if tag != "-," && name == "-" {
@@ -539,9 +533,6 @@ func decimalFixedLenByteArraySize(precision int) int {
 
 func forEachStructTagOption(sf reflect.StructField, source tagSource, do func(t reflect.Type, option, args string)) {
 	tags := source.Tags(&sf)
-	if len(tags) == 0 {
-		return
-	}
 	tag := tags[0]
 	if tag != "" {
 		_, tag = split(tag) // skip the field name
