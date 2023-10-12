@@ -361,12 +361,12 @@ type tagSource interface {
 	//	0: parquet tag
 	// 	1: parquet-key tag (This is for map keys)
 	// 	2: parquet-value tag (This is for map values)
-	Tags(f *reflect.StructField) [3]string
+	Tags(f reflect.StructField) [3]string
 }
 
 type defaultTagSource struct{}
 
-func (defaultTagSource) Tags(f *reflect.StructField) (o [3]string) {
+func (defaultTagSource) Tags(f reflect.StructField) (o [3]string) {
 	return [3]string{
 		f.Tag.Get("parquet"),
 		f.Tag.Get("parquet-key"),
@@ -386,7 +386,7 @@ func structNodeOf(t reflect.Type, tags tagSource) *structNode {
 
 	for i := range fields {
 		field := structField{name: fields[i].Name, index: fields[i].Index}
-		src := tags.Tags(&fields[i])
+		src := tags.Tags(fields[i])
 		field.Node = makeNodeOf(fields[i].Type, fields[i].Name, src[:], tags)
 		s.fields[i] = field
 	}
@@ -399,7 +399,7 @@ func structFieldsOf(t reflect.Type, tags tagSource) []reflect.StructField {
 	for i := range fields {
 		f := &fields[i]
 
-		tags := tags.Tags(f)
+		tags := tags.Tags(*f)
 		// Field name is the first key in the first tag string. For fields providing
 		// other tags but not the field name they must begin with a comma
 		tag := tags[0]
@@ -418,7 +418,7 @@ func appendStructFields(
 ) []reflect.StructField {
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
-		fieldTags := tags.Tags(&f)
+		fieldTags := tags.Tags(f)
 		tag := fieldTags[0]
 		name, _ := split(tag)
 		if tag != "-," && name == "-" {
@@ -532,7 +532,7 @@ func decimalFixedLenByteArraySize(precision int) int {
 }
 
 func forEachStructTagOption(sf reflect.StructField, tags tagSource, do func(t reflect.Type, option, args string)) {
-	fieldTags := tags.Tags(&sf)
+	fieldTags := tags.Tags(sf)
 	tag := fieldTags[0]
 	if tag != "" {
 		_, tag = split(tag) // skip the field name
