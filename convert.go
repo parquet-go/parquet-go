@@ -243,7 +243,7 @@ func (id identity) Schema() *Schema                 { return id.schema }
 func Convert(to, from Node) (conv Conversion, err error) {
 	schema, _ := to.(*Schema)
 	if schema == nil {
-		schema = NewSchema("", to)
+		schema = NewSchema("", to, SchemaOptions{})
 	}
 
 	if nodesAreEqual(to, from) {

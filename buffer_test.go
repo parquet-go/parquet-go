@@ -454,7 +454,7 @@ func TestBuffer(t *testing.T) {
 								t.Run(ordering.scenario, func(t *testing.T) {
 									schema := parquet.NewSchema("test", parquet.Group{
 										"data": mod.function(parquet.Leaf(config.typ)),
-									})
+									}, parquet.SchemaOptions{})
 
 									options := []parquet.RowGroupOption{
 										schema,

@@ -407,7 +407,7 @@ type levels struct {
 // individually as the base case.
 type deconstructFunc func([][]Value, levels, reflect.Value)
 
-func deconstructFuncOf(columnIndex int16, node Node, tags tagSource) (int16, deconstructFunc) {
+func deconstructFuncOf(columnIndex int16, node Node, tags TagSource) (int16, deconstructFunc) {
 	switch {
 	case node.Optional():
 		return deconstructFuncOfOptional(columnIndex, node, tags)
@@ -423,7 +423,7 @@ func deconstructFuncOf(columnIndex int16, node Node, tags tagSource) (int16, dec
 }
 
 //go:noinline
-func deconstructFuncOfOptional(columnIndex int16, node Node, tags tagSource) (int16, deconstructFunc) {
+func deconstructFuncOfOptional(columnIndex int16, node Node, tags TagSource) (int16, deconstructFunc) {
 	columnIndex, deconstruct := deconstructFuncOf(columnIndex, Required(node), tags)
 	return columnIndex, func(columns [][]Value, levels levels, value reflect.Value) {
 		if value.IsValid() {
@@ -441,7 +441,7 @@ func deconstructFuncOfOptional(columnIndex int16, node Node, tags tagSource) (in
 }
 
 //go:noinline
-func deconstructFuncOfRepeated(columnIndex int16, node Node, tags tagSource) (int16, deconstructFunc) {
+func deconstructFuncOfRepeated(columnIndex int16, node Node, tags TagSource) (int16, deconstructFunc) {
 	columnIndex, deconstruct := deconstructFuncOf(columnIndex, Required(node), tags)
 	return columnIndex, func(columns [][]Value, levels levels, value reflect.Value) {
 		if value.Kind() == reflect.Interface {
@@ -463,7 +463,7 @@ func deconstructFuncOfRepeated(columnIndex int16, node Node, tags tagSource) (in
 	}
 }
 
-func deconstructFuncOfRequired(columnIndex int16, node Node, tags tagSource) (int16, deconstructFunc) {
+func deconstructFuncOfRequired(columnIndex int16, node Node, tags TagSource) (int16, deconstructFunc) {
 	switch {
 	case node.Leaf():
 		return deconstructFuncOfLeaf(columnIndex, node)
@@ -472,12 +472,12 @@ func deconstructFuncOfRequired(columnIndex int16, node Node, tags tagSource) (in
 	}
 }
 
-func deconstructFuncOfList(columnIndex int16, node Node, tags tagSource) (int16, deconstructFunc) {
+func deconstructFuncOfList(columnIndex int16, node Node, tags TagSource) (int16, deconstructFunc) {
 	return deconstructFuncOf(columnIndex, Repeated(listElementOf(node)), tags)
 }
 
 //go:noinline
-func deconstructFuncOfMap(columnIndex int16, node Node, tags tagSource) (int16, deconstructFunc) {
+func deconstructFuncOfMap(columnIndex int16, node Node, tags TagSource) (int16, deconstructFunc) {
 	keyValue := mapKeyValueOf(node)
 	keyValueType := keyValue.GoType()
 	keyValueElem := keyValueType.Elem()
@@ -507,7 +507,7 @@ func deconstructFuncOfMap(columnIndex int16, node Node, tags tagSource) (int16, 
 }
 
 //go:noinline
-func deconstructFuncOfGroup(columnIndex int16, node Node, tags tagSource) (int16, deconstructFunc) {
+func deconstructFuncOfGroup(columnIndex int16, node Node, tags TagSource) (int16, deconstructFunc) {
 	fields := node.Fields()
 	funcs := make([]deconstructFunc, len(fields))
 	for i, field := range fields {
@@ -555,7 +555,7 @@ func deconstructFuncOfLeaf(columnIndex int16, node Node) (int16, deconstructFunc
 
 type reconstructFunc func(reflect.Value, levels, [][]Value) error
 
-func reconstructFuncOf(columnIndex int16, node Node, tags tagSource) (int16, reconstructFunc) {
+func reconstructFuncOf(columnIndex int16, node Node, tags TagSource) (int16, reconstructFunc) {
 	switch {
 	case node.Optional():
 		return reconstructFuncOfOptional(columnIndex, node, tags)
@@ -571,7 +571,7 @@ func reconstructFuncOf(columnIndex int16, node Node, tags tagSource) (int16, rec
 }
 
 //go:noinline
-func reconstructFuncOfOptional(columnIndex int16, node Node, tags tagSource) (int16, reconstructFunc) {
+func reconstructFuncOfOptional(columnIndex int16, node Node, tags TagSource) (int16, reconstructFunc) {
 	// We convert the optional func to required so that we eventually reach the
 	// leaf base-case.  We're still using the heuristics of optional in the
 	// returned closure (see levels.definitionLevel++), but we don't actually do
@@ -608,7 +608,7 @@ func setMakeSlice(v reflect.Value, n int) reflect.Value {
 }
 
 //go:noinline
-func reconstructFuncOfRepeated(columnIndex int16, node Node, tags tagSource) (int16, reconstructFunc) {
+func reconstructFuncOfRepeated(columnIndex int16, node Node, tags TagSource) (int16, reconstructFunc) {
 	nextColumnIndex, reconstruct := reconstructFuncOf(columnIndex, Required(node), tags)
 	return nextColumnIndex, func(value reflect.Value, levels levels, columns [][]Value) error {
 		levels.repetitionDepth++
@@ -668,7 +668,7 @@ func reconstructFuncOfRepeated(columnIndex int16, node Node, tags tagSource) (in
 	}
 }
 
-func reconstructFuncOfRequired(columnIndex int16, node Node, tags tagSource) (int16, reconstructFunc) {
+func reconstructFuncOfRequired(columnIndex int16, node Node, tags TagSource) (int16, reconstructFunc) {
 	switch {
 	case node.Leaf():
 		return reconstructFuncOfLeaf(columnIndex, node)
@@ -677,12 +677,12 @@ func reconstructFuncOfRequired(columnIndex int16, node Node, tags tagSource) (in
 	}
 }
 
-func reconstructFuncOfList(columnIndex int16, node Node, tags tagSource) (int16, reconstructFunc) {
+func reconstructFuncOfList(columnIndex int16, node Node, tags TagSource) (int16, reconstructFunc) {
 	return reconstructFuncOf(columnIndex, Repeated(listElementOf(node)), tags)
 }
 
 //go:noinline
-func reconstructFuncOfMap(columnIndex int16, node Node, tags tagSource) (int16, reconstructFunc) {
+func reconstructFuncOfMap(columnIndex int16, node Node, tags TagSource) (int16, reconstructFunc) {
 	keyValue := mapKeyValueOf(node)
 	keyValueType := keyValue.GoType()
 	keyValueElem := keyValueType.Elem()
@@ -752,7 +752,7 @@ func reconstructFuncOfMap(columnIndex int16, node Node, tags tagSource) (int16, 
 }
 
 //go:noinline
-func reconstructFuncOfGroup(columnIndex int16, node Node, tags tagSource) (int16, reconstructFunc) {
+func reconstructFuncOfGroup(columnIndex int16, node Node, tags TagSource) (int16, reconstructFunc) {
 	fields := node.Fields()
 	funcs := make([]reconstructFunc, len(fields))
 	columnOffsets := make([]int16, len(fields))

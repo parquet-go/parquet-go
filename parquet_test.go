@@ -1218,7 +1218,7 @@ func TestParquetAnyValueConversions(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			pWtr := parquet.NewGenericWriter[any](&buf, parquet.NewSchema("", test.schema))
+			pWtr := parquet.NewGenericWriter[any](&buf, parquet.NewSchema("", test.schema, parquet.SchemaOptions{}))
 			if _, err := pWtr.Write([]any{test.input}); err != nil {
 				t.Fatal(err)
 			}
