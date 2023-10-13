@@ -611,11 +611,7 @@ func nodeOf(t reflect.Type, tag []string) Node {
 				if err != nil {
 					throwInvalidTag(t, "map", option)
 				}
-				fid, err := strconv.Atoi(id)
-				if err != nil {
-					throwInvalidTag(t, "map", option)
-				}
-				n = FieldID(n, fid)
+				n = FieldID(n, id)
 			default:
 				throwUnknownTag(t, "map", option)
 			}
@@ -673,18 +669,13 @@ func parseDecimalArgs(args string) (scale, precision int, err error) {
 	return int(s), int(p), nil
 }
 
-func parseIDArgs(args string) (string, error) {
+func parseIDArgs(args string) (int, error) {
 	if !strings.HasPrefix(args, "(") || !strings.HasSuffix(args, ")") {
-		return "", fmt.Errorf("malformed id args: %s", args)
+		return 0, fmt.Errorf("malformed id args: %s", args)
 	}
-
 	args = strings.TrimPrefix(args, "(")
 	args = strings.TrimSuffix(args, ")")
-
-	if len(args) == 0 {
-		return "", nil
-	}
-	return args, nil
+	return strconv.Atoi(args)
 }
 
 func parseTimestampArgs(args string) (TimeUnit, error) {
@@ -768,14 +759,6 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			throwInvalidNode(t, "struct field has compression codecs declared multiple times", name, tag...)
 		}
 		compressed = c
-	}
-
-	setId := func(id string) {
-		o, err := strconv.Atoi(id)
-		if err != nil {
-			throwInvalidNode(t, "struct field has field id that is not a valid int", name, tag...)
-		}
-		fieldID = &o
 	}
 
 	forEachTagOption(tag, func(option, args string) {
@@ -922,9 +905,9 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		case "id":
 			id, err := parseIDArgs(args)
 			if err != nil {
-				throwInvalidTag(t, name, option)
+				throwInvalidNode(t, "struct field has field id that is not a valid int", name, tag...)
 			}
-			setId(id)
+			fieldID = &id
 		}
 	})
 
