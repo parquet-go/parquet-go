@@ -511,15 +511,11 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 
 	config.Schema.forEachNode(func(name string, node Node) {
 		nodeType := node.Type()
-		fieldID := int32(0)
-		if withID, ok := node.(nodeID); ok {
-			fieldID = withID.ID()
-		}
+
 		repetitionType := (*format.FieldRepetitionType)(nil)
 		if node != config.Schema { // the root has no repetition type
 			repetitionType = fieldRepetitionTypePtrOf(node)
 		}
-
 		// For backward compatibility with older readers, the parquet specification
 		// recommends to set the scale and precision on schema elements when the
 		// column is of logical type decimal.
@@ -544,7 +540,7 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 			ConvertedType:  nodeType.ConvertedType(),
 			Scale:          scale,
 			Precision:      precision,
-			FieldID:        fieldID,
+			FieldID:        int32(node.ID()),
 			LogicalType:    logicalType,
 		})
 	})

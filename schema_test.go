@@ -196,7 +196,7 @@ func TestSchemaOf(t *testing.T) {
 			schema := parquet.SchemaOf(test.value)
 
 			if s := schema.String(); s != test.print {
-				t.Errorf(" \nexpected:\n\n%s\n\nfound:\n\n%s\n", test.print, s)
+				t.Errorf("\nexpected:\n\n%s\n\nfound:\n\n%s\n", test.print, s)
 			}
 		})
 	}

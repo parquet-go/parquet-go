@@ -76,8 +76,8 @@ func (c *Column) Path() []string { return c.path[1:] }
 // Name returns the column name.
 func (c *Column) Name() string { return c.schema.Name }
 
-// FieldID returns column field id
-func (c *Column) FieldID() int { return int(c.schema.FieldID) }
+// ID returns column field id
+func (c *Column) ID() int { return int(c.schema.FieldID) }
 
 // Columns returns the list of child columns.
 //

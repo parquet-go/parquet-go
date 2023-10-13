@@ -58,7 +58,7 @@ type Schema struct {
 //	date      | for int32 types use the DATE logical type
 //	timestamp | for int64 types use the TIMESTAMP logical type with, by default, millisecond precision
 //	split     | for float32/float64, use the BYTE_STREAM_SPLIT encoding
-//	id={n}    | where n is int32 denoting a column field id. Example id=2 for a column with filed id of 2
+//	id={n}    | where n is int denoting a column field id. Example id=2 for a column with filed id of 2
 //
 // # The date logical type is an int32 value of the number of days since the unix epoch
 //
@@ -175,6 +175,9 @@ func (s *Schema) ConfigureReader(config *ReaderConfig) { config.Schema = s }
 // instances to be passed to NewWriter to pre-declare the schema of the
 // output parquet file.
 func (s *Schema) ConfigureWriter(config *WriterConfig) { config.Schema = s }
+
+// ID returns field id of the root node.
+func (s *Schema) ID() int { return s.root.ID() }
 
 // String returns a parquet schema representation of s.
 func (s *Schema) String() string { return sprint(s.name, s.root) }
@@ -367,9 +370,6 @@ func structNodeOf(t reflect.Type) *structNode {
 			fields[i].Tag.Get("parquet-key"),
 			fields[i].Tag.Get("parquet-value"),
 		})
-		if withId, ok := field.Node.(nodeID); ok {
-			field.id = withId.ID()
-		}
 		s.fields[i] = field
 	}
 
@@ -432,6 +432,8 @@ func (s *structNode) Compression() compress.Codec { return nil }
 
 func (s *structNode) GoType() reflect.Type { return s.gotype }
 
+func (s *structNode) ID() int { return 0 }
+
 func (s *structNode) String() string { return sprint("", s) }
 
 func (s *structNode) Type() Type { return groupType{} }
@@ -464,13 +466,10 @@ func fieldByIndex(v reflect.Value, index []int) reflect.Value {
 type structField struct {
 	Node
 	name  string
-	id    int32
 	index []int
 }
 
 func (f *structField) Name() string { return f.name }
-
-func (f *structField) ID() int32 { return f.id }
 
 func (f *structField) Value(base reflect.Value) reflect.Value {
 	switch base.Kind() {
@@ -709,7 +708,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		list       bool
 		encoded    encoding.Encoding
 		compressed compress.Codec
-		fieldID    *int32
+		fieldID    *int
 	)
 
 	setNode := func(n Node) {
@@ -750,10 +749,9 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 	setId := func(id string) {
 		o, err := strconv.Atoi(id)
 		if err != nil {
-			throwInvalidNode(t, "struct field has field id that is not a valid int32", name, tag...)
+			throwInvalidNode(t, "struct field has field id that is not a valid int", name, tag...)
 		}
-		i := int32(o)
-		fieldID = &i
+		fieldID = &o
 	}
 
 	forEachTagOption(tag, func(option, args string) {

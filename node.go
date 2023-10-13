@@ -21,6 +21,9 @@ import (
 // Nodes are immutable values and therefore safe to use concurrently from
 // multiple goroutines.
 type Node interface {
+	// Returns field id
+	ID() int
+
 	// Returns a human-readable representation of the parquet node.
 	String() string
 
@@ -157,18 +160,14 @@ func (opt *optionalNode) Required() bool       { return false }
 func (opt *optionalNode) GoType() reflect.Type { return reflect.PtrTo(opt.Node.GoType()) }
 
 // FieldID wraps a node to provide node field id
-func FieldID(node Node, id int32) Node { return &fieldIDNode{Node: node, id: id} }
+func FieldID(node Node, id int) Node { return &fieldIDNode{Node: node, id: id} }
 
 type fieldIDNode struct {
 	Node
-	id int32
+	id int
 }
 
-type nodeID interface {
-	ID() int32
-}
-
-func (f *fieldIDNode) ID() int32 { return f.id }
+func (f *fieldIDNode) ID() int { return f.id }
 
 // Repeated wraps the given node to make it repeated.
 func Repeated(node Node) Node { return &repeatedNode{node} }
@@ -198,6 +197,8 @@ func Leaf(typ Type) Node {
 }
 
 type leafNode struct{ typ Type }
+
+func (n *leafNode) ID() int { return 0 }
 
 func (n *leafNode) String() string { return sprint("", n) }
 
@@ -261,6 +262,8 @@ func applyFieldRepetitionType(t format.FieldRepetitionType, repetitionLevel, def
 }
 
 type Group map[string]Node
+
+func (g Group) ID() int { return 0 }
 
 func (g Group) String() string { return sprint("", g) }
 
