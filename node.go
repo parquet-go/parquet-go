@@ -21,7 +21,10 @@ import (
 // Nodes are immutable values and therefore safe to use concurrently from
 // multiple goroutines.
 type Node interface {
-	// Returns field id
+	// The id of this node in its parent node. Zero value is treated as id is not
+	// set. ID only needs to be unique within its parent context.
+	//
+	// This is the same as parquet field_id
 	ID() int
 
 	// Returns a human-readable representation of the parquet node.
