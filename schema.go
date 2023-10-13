@@ -58,7 +58,7 @@ type Schema struct {
 //	date      | for int32 types use the DATE logical type
 //	timestamp | for int64 types use the TIMESTAMP logical type with, by default, millisecond precision
 //	split     | for float32/float64, use the BYTE_STREAM_SPLIT encoding
-//	id={n}    | where n is int denoting a column field id. Example id=2 for a column with filed id of 2
+//	id(n)     | where n is int denoting a column field id. Example id(2) for a column with field id of 2
 //
 // # The date logical type is an int32 value of the number of days since the unix epoch
 //
@@ -606,6 +606,16 @@ func nodeOf(t reflect.Type, tag []string) Node {
 				return
 			case "optional":
 				n = Optional(n)
+			case "id":
+				id, err := parseIDArgs(args)
+				if err != nil {
+					throwInvalidTag(t, "map", option)
+				}
+				fid, err := strconv.Atoi(id)
+				if err != nil {
+					throwInvalidTag(t, "map", option)
+				}
+				n = FieldID(n, fid)
 			default:
 				throwUnknownTag(t, "map", option)
 			}
@@ -661,6 +671,20 @@ func parseDecimalArgs(args string) (scale, precision int, err error) {
 		return 0, 0, err
 	}
 	return int(s), int(p), nil
+}
+
+func parseIDArgs(args string) (string, error) {
+	if !strings.HasPrefix(args, "(") || !strings.HasSuffix(args, ")") {
+		return "", fmt.Errorf("malformed id args: %s", args)
+	}
+
+	args = strings.TrimPrefix(args, "(")
+	args = strings.TrimSuffix(args, ")")
+
+	if len(args) == 0 {
+		return "", nil
+	}
+	return args, nil
 }
 
 func parseTimestampArgs(args string) (TimeUnit, error) {
@@ -895,13 +919,12 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 					throwInvalidTag(t, name, option)
 				}
 			}
-		default:
-			if strings.HasPrefix(option, "id=") {
-				_, id, _ := strings.Cut(option, "=")
-				setId(id)
-			} else {
-				throwUnknownTag(t, name, option)
+		case "id":
+			id, err := parseIDArgs(args)
+			if err != nil {
+				throwInvalidTag(t, name, option)
 			}
+			setId(id)
 		}
 	})
 

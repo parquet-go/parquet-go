@@ -86,16 +86,17 @@ func printSchemaWithIndent(w io.StringWriter, name string, node Node, indent *pr
 		if name != "" {
 			w.WriteString(" ")
 			w.WriteString(name)
-			if id := node.ID(); id != 0 {
-				w.WriteString(" = ")
-				w.WriteString(strconv.Itoa(id))
-			}
 		}
 
 		if annotation := annotationOf(node); annotation != "" {
 			w.WriteString(" (")
 			w.WriteString(annotation)
 			w.WriteString(")")
+		}
+
+		if id := node.ID(); id != 0 {
+			w.WriteString(" = ")
+			w.WriteString(strconv.Itoa(id))
 		}
 
 		w.WriteString(";")
@@ -111,6 +112,11 @@ func printSchemaWithIndent(w io.StringWriter, name string, node Node, indent *pr
 			w.WriteString(" (")
 			w.WriteString(annotation)
 			w.WriteString(")")
+		}
+
+		if id := node.ID(); id != 0 {
+			w.WriteString(" = ")
+			w.WriteString(strconv.Itoa(id))
 		}
 
 		w.WriteString(" {")
