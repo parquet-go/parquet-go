@@ -539,7 +539,14 @@ func schemaRepetitionTypeOf(s *format.SchemaElement) format.FieldRepetitionType 
 }
 
 func (c *Column) decompress(compressedPageData []byte, uncompressedPageSize int32) (page *buffer, err error) {
-	page = buffers.get(int(uncompressedPageSize))
+	nSize := int(uncompressedPageSize)
+	if nSize < 0 {
+		// this size overflowed int32.
+		convert32 := uint32(uncompressedPageSize)
+		nSize = int(convert32)
+	}
+
+	page = buffers.get(nSize)
 	page.data, err = c.compression.Decode(page.data, compressedPageData)
 	if err != nil {
 		page.unref()
