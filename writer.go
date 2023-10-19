@@ -18,6 +18,12 @@ import (
 	"github.com/segmentio/encoding/thrift"
 )
 
+const (
+	// The uncompressed page size is stored as int32 and must not be larger than the
+	// maximum int32 value (see format.PageHeader).
+	maxUncompressedPageSize = int(^uint32(0) >> 1)
+)
+
 // GenericWriter is similar to a Writer but uses a type parameter to define the
 // Go type representing the schema of rows being written.
 //
@@ -1363,6 +1369,9 @@ func (c *writerColumn) writeDataPage(page Page) (int64, error) {
 	}
 
 	uncompressedPageSize := buf.size()
+	if uncompressedPageSize > maxUncompressedPageSize {
+		return 0, fmt.Errorf("page size must not be larger than %d but was %d", maxUncompressedPageSize, uncompressedPageSize)
+	}
 	if c.isCompressed {
 		if err := buf.compress(c.compression); err != nil {
 			return 0, fmt.Errorf("compressing parquet data page: %w", err)
@@ -1458,6 +1467,9 @@ func (c *writerColumn) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	}
 
 	uncompressedPageSize := buf.size()
+	if uncompressedPageSize > maxUncompressedPageSize {
+		return fmt.Errorf("page size must not be larger than %d but was %d", maxUncompressedPageSize, uncompressedPageSize)
+	}
 	if isCompressed(c.compression) {
 		if err := buf.compress(c.compression); err != nil {
 			return fmt.Errorf("copmressing parquet dictionary page: %w", err)
