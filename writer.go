@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"math/bits"
 	"reflect"
 	"sort"
@@ -1468,7 +1469,7 @@ func (c *writerColumn) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 
 	uncompressedPageSize := buf.size()
 	if uncompressedPageSize > maxUncompressedPageSize {
-		return fmt.Errorf("page size limit exceeded: %d>%d", maxUncompressedPageSize, uncompressedPageSize)
+		return fmt.Errorf("page size limit exceeded: %d>%d", uncompressedPageSize, maxUncompressedPageSize)
 	}
 	if isCompressed(c.compression) {
 		if err := buf.compress(c.compression); err != nil {
