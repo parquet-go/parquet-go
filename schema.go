@@ -723,7 +723,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		list       bool
 		encoded    encoding.Encoding
 		compressed compress.Codec
-		fieldID    *int
+		fieldID    int
 	)
 
 	setNode := func(n Node) {
@@ -907,7 +907,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			if err != nil {
 				throwInvalidNode(t, "struct field has field id that is not a valid int", name, tag...)
 			}
-			fieldID = &id
+			fieldID = id
 		}
 	})
 
@@ -953,8 +953,8 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 	if optional {
 		node = Optional(node)
 	}
-	if fieldID != nil {
-		node = FieldID(node, *fieldID)
+	if fieldID != 0 {
+		node = FieldID(node, fieldID)
 	}
 	return node
 }
