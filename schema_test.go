@@ -181,6 +181,29 @@ func TestSchemaOf(t *testing.T) {
 	}
 }`,
 		},
+		{
+			value: new(struct {
+				A struct {
+					B string `parquet:"b,id(2)"`
+				} `parquet:"a,id(1)"`
+				C map[string]string `parquet:"c,id(3)"`
+				D []string          `parquet:"d,id(4)"`
+				E string            `parquet:"e,optional,id(5)"`
+			}),
+			print: `message {
+	required group a = 1 {
+		required binary b (STRING) = 2;
+	}
+	required group c (MAP) = 3 {
+		repeated group key_value {
+			required binary key (STRING);
+			required binary value (STRING);
+		}
+	}
+	repeated binary d (STRING) = 4;
+	optional binary e (STRING) = 5;
+}`,
+		},
 	}
 
 	for _, test := range tests {
