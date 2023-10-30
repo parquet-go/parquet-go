@@ -52,6 +52,50 @@ func TestOpenFile(t *testing.T) {
 	}
 }
 
+func TestOpenFileWithoutPageIndex(t *testing.T) {
+	for _, path := range testdataFiles {
+		t.Run(path, func(t *testing.T) {
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+
+			s, err := f.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			fileWithIndex, err := parquet.OpenFile(f, s.Size(), parquet.SkipPageIndex(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fileWithoutIndex, err := parquet.OpenFile(f, s.Size(), parquet.SkipPageIndex(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if size := fileWithoutIndex.Size(); size != s.Size() {
+				t.Errorf("file size mismatch: want=%d got=%d", s.Size(), size)
+			}
+
+			for iRowGroup, rowGroup := range fileWithoutIndex.RowGroups() {
+				for iChunk, chunk := range rowGroup.ColumnChunks() {
+					columnIndex := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].ColumnIndex()
+					if columnIndex == nil && chunk.ColumnIndex() != nil || columnIndex != nil && chunk.ColumnIndex() == nil {
+						t.Fatalf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
+					}
+
+					offsetIndex := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].OffsetIndex()
+					if offsetIndex == nil && chunk.OffsetIndex() != nil || offsetIndex != nil && chunk.OffsetIndex() == nil {
+						t.Fatalf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
+					}
+				}
+			}
+		})
+	}
+}
+
 func printColumns(t *testing.T, col *parquet.Column, indent string) {
 	if t.Failed() {
 		return

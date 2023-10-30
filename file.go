@@ -10,8 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/parquet-go/parquet-go/format"
 	"github.com/segmentio/encoding/thrift"
+
+	"github.com/parquet-go/parquet-go/format"
 )
 
 const (
@@ -461,6 +462,7 @@ func (c *fileColumnChunk) Pages() Pages {
 }
 
 func (c *fileColumnChunk) ColumnIndex() ColumnIndex {
+	c.readColumnIndex()
 	if c.columnIndex == nil {
 		return nil
 	}
@@ -468,6 +470,7 @@ func (c *fileColumnChunk) ColumnIndex() ColumnIndex {
 }
 
 func (c *fileColumnChunk) OffsetIndex() OffsetIndex {
+	c.readOffsetIndex()
 	if c.offsetIndex == nil {
 		return nil
 	}
@@ -483,6 +486,48 @@ func (c *fileColumnChunk) BloomFilter() BloomFilter {
 
 func (c *fileColumnChunk) NumValues() int64 {
 	return c.chunk.MetaData.NumValues
+}
+
+func (c *fileColumnChunk) readColumnIndex() {
+	if c.columnIndex != nil {
+		return
+	}
+	chunkMeta := c.file.metadata.RowGroups[c.rowGroup.Ordinal].Columns[c.Column()]
+	offset, length := chunkMeta.ColumnIndexOffset, chunkMeta.ColumnIndexLength
+	if length == 0 {
+		return
+	}
+
+	indexData := make([]byte, int(length))
+	var columnIndex format.ColumnIndex
+	if _, err := readAt(c.file.reader, indexData, offset); err != nil {
+		return
+	}
+	if err := thrift.Unmarshal(&c.file.protocol, indexData, &columnIndex); err != nil {
+		return
+	}
+	c.columnIndex = &columnIndex
+}
+
+func (c *fileColumnChunk) readOffsetIndex() {
+	if c.offsetIndex != nil {
+		return
+	}
+	chunkMeta := c.file.metadata.RowGroups[c.rowGroup.Ordinal].Columns[c.Column()]
+	offset, length := chunkMeta.OffsetIndexOffset, chunkMeta.OffsetIndexLength
+	if length == 0 {
+		return
+	}
+
+	indexData := make([]byte, int(length))
+	var offsetIndex format.OffsetIndex
+	if _, err := readAt(c.file.reader, indexData, offset); err != nil {
+		return
+	}
+	if err := thrift.Unmarshal(&c.file.protocol, indexData, &offsetIndex); err != nil {
+		return
+	}
+	c.offsetIndex = &offsetIndex
 }
 
 type filePages struct {
