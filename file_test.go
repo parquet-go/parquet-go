@@ -81,13 +81,21 @@ func TestOpenFileWithoutPageIndex(t *testing.T) {
 
 			for iRowGroup, rowGroup := range fileWithoutIndex.RowGroups() {
 				for iChunk, chunk := range rowGroup.ColumnChunks() {
-					columnIndex := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].ColumnIndex()
-					if columnIndex == nil && chunk.ColumnIndex() != nil || columnIndex != nil && chunk.ColumnIndex() == nil {
+					preloadedColumnIndex, _ := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].ColumnIndex()
+					columnIndex, err := chunk.ColumnIndex()
+					if err != nil {
+						t.Fatalf("get column index %s", err)
+					}
+					if preloadedColumnIndex == nil && columnIndex != nil || preloadedColumnIndex != nil && columnIndex == nil {
 						t.Fatalf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
 					}
 
-					offsetIndex := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].OffsetIndex()
-					if offsetIndex == nil && chunk.OffsetIndex() != nil || offsetIndex != nil && chunk.OffsetIndex() == nil {
+					preloadedOffsetIndex, _ := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].OffsetIndex()
+					offsetIndex, err := chunk.OffsetIndex()
+					if err != nil {
+						t.Fatalf("get offset index %s", err)
+					}
+					if preloadedOffsetIndex == nil && offsetIndex != nil || preloadedOffsetIndex != nil && offsetIndex == nil {
 						t.Fatalf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
 					}
 				}

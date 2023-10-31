@@ -461,20 +461,24 @@ func (c *fileColumnChunk) Pages() Pages {
 	return r
 }
 
-func (c *fileColumnChunk) ColumnIndex() ColumnIndex {
-	c.readColumnIndex()
-	if c.columnIndex == nil {
-		return nil
+func (c *fileColumnChunk) ColumnIndex() (ColumnIndex, error) {
+	if err := c.readColumnIndex(); err != nil {
+		return nil, err
 	}
-	return fileColumnIndex{c}
+	if c.columnIndex == nil {
+		return nil, nil
+	}
+	return fileColumnIndex{c}, nil
 }
 
-func (c *fileColumnChunk) OffsetIndex() OffsetIndex {
-	c.readOffsetIndex()
-	if c.offsetIndex == nil {
-		return nil
+func (c *fileColumnChunk) OffsetIndex() (OffsetIndex, error) {
+	if err := c.readOffsetIndex(); err != nil {
+		return nil, err
 	}
-	return (*fileOffsetIndex)(c.offsetIndex)
+	if c.offsetIndex == nil {
+		return nil, nil
+	}
+	return (*fileOffsetIndex)(c.offsetIndex), nil
 }
 
 func (c *fileColumnChunk) BloomFilter() BloomFilter {
@@ -488,46 +492,48 @@ func (c *fileColumnChunk) NumValues() int64 {
 	return c.chunk.MetaData.NumValues
 }
 
-func (c *fileColumnChunk) readColumnIndex() {
+func (c *fileColumnChunk) readColumnIndex() error {
 	if c.columnIndex != nil {
-		return
+		return nil
 	}
 	chunkMeta := c.file.metadata.RowGroups[c.rowGroup.Ordinal].Columns[c.Column()]
 	offset, length := chunkMeta.ColumnIndexOffset, chunkMeta.ColumnIndexLength
 	if length == 0 {
-		return
+		return nil
 	}
 
 	indexData := make([]byte, int(length))
 	var columnIndex format.ColumnIndex
 	if _, err := readAt(c.file.reader, indexData, offset); err != nil {
-		return
+		return fmt.Errorf("read %d bytes column index at offset %d: %w", length, offset, err)
 	}
 	if err := thrift.Unmarshal(&c.file.protocol, indexData, &columnIndex); err != nil {
-		return
+		return fmt.Errorf("decode column index: rowGroup=%d columnChunk=%d/%d: %w", c.rowGroup.Ordinal, c.Column(), len(c.rowGroup.Columns), err)
 	}
 	c.columnIndex = &columnIndex
+	return nil
 }
 
-func (c *fileColumnChunk) readOffsetIndex() {
+func (c *fileColumnChunk) readOffsetIndex() error {
 	if c.offsetIndex != nil {
-		return
+		return nil
 	}
 	chunkMeta := c.file.metadata.RowGroups[c.rowGroup.Ordinal].Columns[c.Column()]
 	offset, length := chunkMeta.OffsetIndexOffset, chunkMeta.OffsetIndexLength
 	if length == 0 {
-		return
+		return nil
 	}
 
 	indexData := make([]byte, int(length))
 	var offsetIndex format.OffsetIndex
 	if _, err := readAt(c.file.reader, indexData, offset); err != nil {
-		return
+		return fmt.Errorf("read %d bytes offset index at offset %d: %w", length, offset, err)
 	}
 	if err := thrift.Unmarshal(&c.file.protocol, indexData, &offsetIndex); err != nil {
-		return
+		return fmt.Errorf("decode offset index: rowGroup=%d columnChunk=%d/%d: %w", c.rowGroup.Ordinal, c.Column(), len(c.rowGroup.Columns), err)
 	}
 	c.offsetIndex = &offsetIndex
+	return nil
 }
 
 type filePages struct {

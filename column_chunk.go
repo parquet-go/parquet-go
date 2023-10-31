@@ -23,8 +23,8 @@ type ColumnChunk interface {
 	// methods, programs must treat those as read-only.
 	//
 	// If the column chunk does not have a page index, the methods return nil.
-	ColumnIndex() ColumnIndex
-	OffsetIndex() OffsetIndex
+	ColumnIndex() (ColumnIndex, error)
+	OffsetIndex() (OffsetIndex, error)
 	BloomFilter() BloomFilter
 
 	// Returns the number of values in the column chunk.

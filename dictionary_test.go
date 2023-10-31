@@ -257,7 +257,7 @@ func TestIssue312(t *testing.T) {
 			rowGroup := testCase.getRowGroup(t)
 
 			chunk := rowGroup.ColumnChunks()[0]
-			idx := chunk.ColumnIndex()
+			idx, _ := chunk.ColumnIndex()
 			val := idx.MinValue(0)
 			columnType := chunk.Type()
 			values := columnType.NewValues(val.Bytes(), []uint32{0, uint32(len(val.Bytes()))})

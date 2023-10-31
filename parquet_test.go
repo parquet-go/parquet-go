@@ -170,8 +170,12 @@ func ExampleSearch() {
 	rowGroup := file.RowGroups()[0]
 	firstNameColChunk := rowGroup.ColumnChunks()[0]
 
-	found := parquet.Search(firstNameColChunk.ColumnIndex(), parquet.ValueOf("Luke"), parquet.ByteArrayType)
-	offsetIndex := firstNameColChunk.OffsetIndex()
+	columnIndex, err := firstNameColChunk.ColumnIndex()
+	if err != nil {
+		log.Fatal(err)
+	}
+	found := parquet.Search(columnIndex, parquet.ValueOf("Luke"), parquet.ByteArrayType)
+	offsetIndex, _ := firstNameColChunk.OffsetIndex()
 	fmt.Printf("numPages: %d\n", offsetIndex.NumPages())
 	fmt.Printf("result found in page: %d\n", found)
 	if found < offsetIndex.NumPages() {
