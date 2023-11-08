@@ -1190,3 +1190,37 @@ func TestConvertValue(t *testing.T) {
 		})
 	}
 }
+
+func TestSliceMissingChunkPage(t *testing.T) {
+	type stringRow struct{ StringVal string }
+	schema := parquet.SchemaOf(&stringRow{})
+	buffer := parquet.NewGenericBuffer[stringRow](schema)
+	if _, err := buffer.Write([]stringRow{{"hello"}, {"world"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	type boolRow struct{ BoolValue bool }
+	conv := convertMissingColumn{
+		schema: parquet.SchemaOf(&boolRow{}),
+	}
+	boolRowGroup := parquet.ConvertRowGroup(buffer, conv)
+
+	page, err := boolRowGroup.ColumnChunks()[0].Pages().ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.NumValues() != buffer.NumRows() {
+		t.Fatalf("page size mismatch: want = %d, got = %d", buffer.NumRows(), page.NumValues())
+	}
+	if size := page.Slice(0, 1).NumValues(); size != 1 {
+		t.Fatalf("page slice size mismatch: want = %d, got = %d", 1, size)
+	}
+}
+
+type convertMissingColumn struct {
+	schema *parquet.Schema
+}
+
+func (m convertMissingColumn) Column(_ int) int                        { return -1 }
+func (m convertMissingColumn) Schema() *parquet.Schema                 { return m.schema }
+func (m convertMissingColumn) Convert(rows []parquet.Row) (int, error) { return len(rows), nil }

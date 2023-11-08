@@ -490,12 +490,22 @@ func (p missingPage) NumRows() int64                    { return p.numRows }
 func (p missingPage) NumValues() int64                  { return p.numValues }
 func (p missingPage) NumNulls() int64                   { return p.numNulls }
 func (p missingPage) Bounds() (min, max Value, ok bool) { return }
-func (p missingPage) Slice(i, j int64) Page             { return p }
-func (p missingPage) Size() int64                       { return 0 }
-func (p missingPage) RepetitionLevels() []byte          { return nil }
-func (p missingPage) DefinitionLevels() []byte          { return nil }
-func (p missingPage) Data() encoding.Values             { return p.typ.NewValues(nil, nil) }
-func (p missingPage) Values() ValueReader               { return &missingPageValues{page: p} }
+func (p missingPage) Slice(i, j int64) Page {
+	return missingPage{
+		&missingColumnChunk{
+			typ:       p.typ,
+			column:    p.column,
+			numRows:   j - i,
+			numValues: j - i,
+			numNulls:  j - i,
+		},
+	}
+}
+func (p missingPage) Size() int64              { return 0 }
+func (p missingPage) RepetitionLevels() []byte { return nil }
+func (p missingPage) DefinitionLevels() []byte { return nil }
+func (p missingPage) Data() encoding.Values    { return p.typ.NewValues(nil, nil) }
+func (p missingPage) Values() ValueReader      { return &missingPageValues{page: p} }
 
 type missingPageValues struct {
 	page missingPage
