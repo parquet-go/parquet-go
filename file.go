@@ -498,7 +498,8 @@ func (c *fileColumnChunk) readColumnIndex() error {
 	}
 	chunkMeta := c.file.metadata.RowGroups[c.rowGroup.Ordinal].Columns[c.Column()]
 	offset, length := chunkMeta.ColumnIndexOffset, chunkMeta.ColumnIndexLength
-	if length == 0 {
+	if offset == 0 {
+		c.columnIndex = &format.ColumnIndex{}
 		return nil
 	}
 
@@ -520,7 +521,8 @@ func (c *fileColumnChunk) readOffsetIndex() error {
 	}
 	chunkMeta := c.file.metadata.RowGroups[c.rowGroup.Ordinal].Columns[c.Column()]
 	offset, length := chunkMeta.OffsetIndexOffset, chunkMeta.OffsetIndexLength
-	if length == 0 {
+	if offset == 0 {
+		c.offsetIndex = &format.OffsetIndex{}
 		return nil
 	}
 
