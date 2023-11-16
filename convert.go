@@ -457,7 +457,7 @@ func (c *missingColumnChunk) Pages() Pages                      { return onePage
 func (c *missingColumnChunk) ColumnIndex() (ColumnIndex, error) { return missingColumnIndex{c}, nil }
 func (c *missingColumnChunk) OffsetIndex() (OffsetIndex, error) { return missingOffsetIndex{}, nil }
 func (c *missingColumnChunk) BloomFilter() BloomFilter          { return missingBloomFilter{} }
-func (c *missingColumnChunk) NumValues() int64                  { return 0 }
+func (c *missingColumnChunk) NumValues() int64                  { return c.numValues }
 
 type missingColumnIndex struct{ *missingColumnChunk }
 
