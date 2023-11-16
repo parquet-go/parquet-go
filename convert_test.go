@@ -1191,7 +1191,7 @@ func TestConvertValue(t *testing.T) {
 	}
 }
 
-func TestSliceMissingChunkPage(t *testing.T) {
+func TestMissingColumnChunk(t *testing.T) {
 	type stringRow struct{ StringVal string }
 	schema := parquet.SchemaOf(&stringRow{})
 	buffer := parquet.NewGenericBuffer[stringRow](schema)
@@ -1204,17 +1204,27 @@ func TestSliceMissingChunkPage(t *testing.T) {
 		schema: parquet.SchemaOf(&boolRow{}),
 	}
 	boolRowGroup := parquet.ConvertRowGroup(buffer, conv)
+	chunk := boolRowGroup.ColumnChunks()[0]
 
-	page, err := boolRowGroup.ColumnChunks()[0].Pages().ReadPage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.NumValues() != buffer.NumRows() {
-		t.Fatalf("page size mismatch: want = %d, got = %d", buffer.NumRows(), page.NumValues())
-	}
-	if size := page.Slice(0, 1).NumValues(); size != 1 {
-		t.Fatalf("page slice size mismatch: want = %d, got = %d", 1, size)
-	}
+	t.Run("chunk values", func(t *testing.T) {
+		if chunk.NumValues() != buffer.NumRows() {
+			t.Fatal("chunk values mismatch, got", chunk.NumValues(), "want", buffer.NumRows())
+		}
+	})
+
+	t.Run("slice page", func(t *testing.T) {
+		page, err := chunk.Pages().ReadPage()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if page.NumValues() != buffer.NumRows() {
+			t.Fatalf("page size mismatch: want = %d, got = %d", buffer.NumRows(), page.NumValues())
+		}
+		if size := page.Slice(0, 1).NumValues(); size != 1 {
+			t.Fatalf("page slice size mismatch: want = %d, got = %d", 1, size)
+		}
+	})
 }
 
 type convertMissingColumn struct {
