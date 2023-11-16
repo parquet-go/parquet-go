@@ -24,12 +24,12 @@ type ColumnChunk interface {
 	//
 	// If the column chunk does not have a page index, the methods return nil.
 	//
-	// Prior to v0.20, thes methods did not return an error because the page index
-	// was either read when a file was opened, or skipped completely using the
-	// parquet.SkipPageIndex option. Version v0.20 introduced a change that the page
-	// index can be read on-demand at any time, even if a file was opened with the
-	// parquet.SkipPageIndex option. Since reading the page index can fail, these
-	// methods now return an error.
+	// Prior to v0.20, these methods did not return an error because the page index
+	// for a file was either fully read when the file was opened, or skipped
+	// completely using the parquet.SkipPageIndex option. Version v0.20 introduced a
+	// change that the page index can be read on-demand at any time, even if a file
+	// was opened with the parquet.SkipPageIndex option. Since reading the page index
+	// can fail, these methods now return an error.
 	ColumnIndex() (ColumnIndex, error)
 	OffsetIndex() (OffsetIndex, error)
 	BloomFilter() BloomFilter
