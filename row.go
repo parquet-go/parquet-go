@@ -614,6 +614,14 @@ func reconstructFuncOfRepeated(columnIndex int16, node Node) (int16, reconstruct
 		levels.repetitionDepth++
 		levels.definitionLevel++
 
+		if len(columns) == 0 {
+			return nil
+		}
+
+		if len(columns[0]) == 0 {
+			return nil
+		}
+
 		if columns[0][0].definitionLevel < levels.definitionLevel {
 			setMakeSlice(value, 0)
 			return nil
