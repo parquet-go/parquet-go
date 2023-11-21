@@ -451,13 +451,13 @@ type missingColumnChunk struct {
 	numNulls  int64
 }
 
-func (c *missingColumnChunk) Type() Type               { return c.typ }
-func (c *missingColumnChunk) Column() int              { return int(c.column) }
-func (c *missingColumnChunk) Pages() Pages             { return onePage(missingPage{c}) }
-func (c *missingColumnChunk) ColumnIndex() ColumnIndex { return missingColumnIndex{c} }
-func (c *missingColumnChunk) OffsetIndex() OffsetIndex { return missingOffsetIndex{} }
-func (c *missingColumnChunk) BloomFilter() BloomFilter { return missingBloomFilter{} }
-func (c *missingColumnChunk) NumValues() int64         { return c.numValues }
+func (c *missingColumnChunk) Type() Type                        { return c.typ }
+func (c *missingColumnChunk) Column() int                       { return int(c.column) }
+func (c *missingColumnChunk) Pages() Pages                      { return onePage(missingPage{c}) }
+func (c *missingColumnChunk) ColumnIndex() (ColumnIndex, error) { return missingColumnIndex{c}, nil }
+func (c *missingColumnChunk) OffsetIndex() (OffsetIndex, error) { return missingOffsetIndex{}, nil }
+func (c *missingColumnChunk) BloomFilter() BloomFilter          { return missingBloomFilter{} }
+func (c *missingColumnChunk) NumValues() int64                  { return c.numValues }
 
 type missingColumnIndex struct{ *missingColumnChunk }
 
