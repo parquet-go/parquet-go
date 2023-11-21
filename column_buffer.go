@@ -1995,7 +1995,7 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsF
 		if t.Elem().Kind() == reflect.Uint8 {
 			return writeRowsFuncOfRequired(t, schema, path)
 		} else {
-			return writeRowsFuncOfSlice(t, schema, path)
+			return writeRowsFuncOfSlice(t, schema, path, false)
 		}
 
 	case reflect.Array:
@@ -2176,7 +2176,7 @@ func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath) wri
 	}
 }
 
-func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, optionalList bool) writeRowsFunc {
 	elemType := t.Elem()
 	elemSize := uintptr(elemType.Size())
 	writeRows := writeRowsFuncOf(elemType, schema, path)
@@ -2202,6 +2202,10 @@ func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath) write
 			b := sparse.Array{}
 
 			elemLevels := levels
+			if !a.Nil() && optionalList {
+				// increase definition level for non nil optionalList lists
+				elemLevels.definitionLevel++
+			}
 			if a.Len() > 0 {
 				b = a.Slice(0, 1)
 				elemLevels.definitionLevel += definitionLevelIncrement
@@ -2234,11 +2238,13 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 	columns := make([]column, len(fields))
 
 	for i, f := range fields {
+		list := false
 		optional := false
 		columnPath := path.append(f.Name)
 		forEachStructTagOption(f, func(_ reflect.Type, option, _ string) {
 			switch option {
 			case "list":
+				list = true
 				columnPath = columnPath.append("list", "element")
 			case "optional":
 				optional = true
@@ -2248,7 +2254,11 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 		writeRows := writeRowsFuncOf(f.Type, schema, columnPath)
 		if optional {
 			switch f.Type.Kind() {
-			case reflect.Pointer, reflect.Slice:
+			case reflect.Pointer:
+			case reflect.Slice:
+				if list {
+					writeRows = writeRowsFuncOfSlice(f.Type, schema, columnPath, true)
+				}
 			default:
 				writeRows = writeRowsFuncOfOptional(f.Type, schema, columnPath, writeRows)
 			}
