@@ -763,6 +763,28 @@ type nestedListColumn struct {
 	Level2 []utf8string        `parquet:"level2"`
 }
 
+type optionalListColumn struct {
+	OptionalList []int `parquet:",list,optional"`
+}
+
+func (optionalListColumn) Generate(rand *rand.Rand, size int) reflect.Value {
+	var ints []int
+	switch rand.Intn(3) {
+	case 0:
+		// test for non-empty slice
+		n := rand.Intn(size)
+		for i := 0; i < n; i++ {
+			ints = append(ints, rand.Intn(1000))
+		}
+	case 1:
+		// test for empty slice
+		ints = []int{}
+	default:
+		// test for nil slice
+	}
+	return reflect.ValueOf(optionalListColumn{OptionalList: ints})
+}
+
 type utf8string string
 
 func (utf8string) Generate(rand *rand.Rand, size int) reflect.Value {
