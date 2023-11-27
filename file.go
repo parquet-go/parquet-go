@@ -781,6 +781,7 @@ func (f *filePages) Close() error {
 	f.dictOffset = 0
 	f.index = 0
 	f.skip = 0
+	ReleaseDictionary(f.dictionary)
 	f.dictionary = nil
 	return nil
 }

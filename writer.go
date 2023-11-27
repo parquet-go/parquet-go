@@ -1207,7 +1207,9 @@ func (c *writerColumn) flushFilterPages() error {
 		// be reused after resetting which would have reset the length of
 		// the filter to 0.
 		c.resizeBloomFilter(int64(dict.Len()))
-		return c.writePageToFilter(dict.Page())
+		dictPage := dict.Page()
+		defer Release(dictPage)
+		return c.writePageToFilter(dictPage)
 	}
 
 	// When the filter was already allocated, pages have been written to it as
@@ -1463,6 +1465,8 @@ func (c *writerColumn) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	buf := c.buffers
 	buf.reset()
 
+	dictPage := dict.Page()
+	defer Release(dictPage)
 	if err := buf.encode(dict.Page(), &Plain); err != nil {
 		return fmt.Errorf("writing parquet dictionary page: %w", err)
 	}

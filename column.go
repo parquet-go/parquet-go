@@ -785,12 +785,25 @@ func (c *Column) decodeDictionary(header DictionaryPageHeader, page *buffer, siz
 	}
 
 	numValues := int(header.NumValues())
-	values := pageType.NewValues(nil, nil)
+	var (
+		vbuf, obuf  *buffer
+		pageOffsets []uint32
+	)
+	vbuf = buffers.get(pageType.EstimateDecodeSize(numValues, pageData, LookupEncoding(pageEncoding)))
+	defer vbuf.unref()
+
+	if pageType.Kind() == ByteArray && !isDictionaryEncoding(LookupEncoding(pageEncoding)) {
+		obuf = buffers.get(4 * (numValues + 1))
+		defer obuf.unref()
+		pageOffsets = unsafecast.BytesToUint32(obuf.data)
+	}
+
+	values := pageType.NewValues(vbuf.data, pageOffsets)
 	values, err := pageType.Decode(values, pageData, LookupEncoding(pageEncoding))
 	if err != nil {
 		return nil, err
 	}
-	return pageType.NewDictionary(int(c.index), numValues, values), nil
+	return newBufferedDictionary(pageType.NewDictionary(int(c.index), numValues, values), vbuf, obuf), nil
 }
 
 var (
