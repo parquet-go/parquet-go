@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math/rand"
+	"os"
 	"reflect"
 	"sort"
 	"testing"
@@ -255,5 +256,43 @@ func assertRowsEqualByRow[T any](t *testing.T, rowsGot, rowsWant []T) {
 	}
 	if count > 0 {
 		t.Error(count, "rows mismatched out of", len(rowsWant), "total")
+	}
+}
+
+func TestIssue_82(t *testing.T) {
+	type Record struct {
+		A string `parquet:"a"`
+	}
+
+	fi, err := os.Open("testdata/lz4_raw_compressed_larger.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pr := parquet.NewGenericReader[Record](fi, parquet.DefaultReaderConfig())
+	defer pr.Close()
+
+	var out bytes.Buffer
+
+	pw := parquet.NewSortingWriter[Record](
+		&out,
+		1000,
+		parquet.SortingWriterConfig(
+			parquet.SortingColumns(parquet.Ascending("a")),
+		),
+	)
+
+	if _, err := parquet.CopyRows(pw, pr); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result := parquet.NewGenericReader[Record](bytes.NewReader(out.Bytes()), parquet.DefaultReaderConfig())
+	defer result.Close()
+	if result.NumRows() != pr.NumRows() {
+		t.Fatalf("expected %d got %d", pr.NumRows(), result.NumRows())
 	}
 }
