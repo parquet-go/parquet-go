@@ -268,9 +268,23 @@ func TestIssue_82(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer fi.Close()
 
-	pr := parquet.NewGenericReader[Record](fi, parquet.DefaultReaderConfig())
-	defer pr.Close()
+	stat, err := fi.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fl, err := parquet.OpenFile(fi, stat.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := fl.RowGroups()
+	if expect, got := 1, len(groups); expect != got {
+		t.Fatalf("expected %d row groups got %d", expect, got)
+	}
+
+	fr := parquet.NewRowGroupReader(groups[0])
 
 	var out bytes.Buffer
 
@@ -282,17 +296,23 @@ func TestIssue_82(t *testing.T) {
 		),
 	)
 
-	if _, err := parquet.CopyRows(pw, pr); err != nil {
+	if _, err := parquet.CopyRows(pw, fr); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := pw.Close(); err != nil {
 		t.Fatal(err)
 	}
-
-	result := parquet.NewGenericReader[Record](bytes.NewReader(out.Bytes()), parquet.DefaultReaderConfig())
-	defer result.Close()
-	if result.NumRows() != pr.NumRows() {
-		t.Fatalf("expected %d got %d", pr.NumRows(), result.NumRows())
+	rowsWant, err := parquet.Read[Record](fl, stat.Size())
+	if err != nil {
+		t.Fatal(err)
 	}
+	rowsGot, err := parquet.Read[Record](bytes.NewReader(out.Bytes()), int64(out.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(rowsWant, func(i, j int) bool {
+		return rowsWant[i].A < rowsWant[j].A
+	})
+	assertRowsEqualByRow(t, rowsGot, rowsWant)
 }
