@@ -648,6 +648,43 @@ func (p *bufferedPage) Release() {
 	bufferUnref(p.repetitionLevels)
 }
 
+type bufferedDictionary struct {
+	Dictionary
+	values  *buffer
+	offsets *buffer
+}
+
+func newBufferedDictionary(dict Dictionary, values, offsets *buffer) Dictionary {
+	p := &bufferedDictionary{
+		Dictionary: dict,
+		values:     values,
+		offsets:    offsets,
+	}
+	bufferRef(values)
+	bufferRef(offsets)
+	return p
+}
+
+func (d *bufferedDictionary) Page() Page {
+	return newBufferedPage(
+		d.Dictionary.Page(),
+		d.values,
+		d.offsets,
+		nil,
+		nil,
+	)
+}
+
+func (d *bufferedDictionary) Retain() {
+	bufferRef(d.values)
+	bufferRef(d.offsets)
+}
+
+func (d *bufferedDictionary) Release() {
+	bufferUnref(d.values)
+	bufferUnref(d.offsets)
+}
+
 func bufferRef(buf *buffer) {
 	if buf != nil {
 		buf.ref()
@@ -699,6 +736,12 @@ func Retain(page Page) {
 func Release(page Page) {
 	if p, _ := page.(releasable); p != nil {
 		p.Release()
+	}
+}
+
+func ReleaseDictionary(d Dictionary) {
+	if d, _ := d.(releasable); d != nil {
+		d.Release()
 	}
 }
 
