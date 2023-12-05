@@ -1,6 +1,7 @@
 package parquet_test
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -81,22 +82,36 @@ func TestOpenFileWithoutPageIndex(t *testing.T) {
 
 			for iRowGroup, rowGroup := range fileWithoutIndex.RowGroups() {
 				for iChunk, chunk := range rowGroup.ColumnChunks() {
-					preloadedColumnIndex, _ := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].ColumnIndex()
+					chunkMeta := fileWithoutIndex.Metadata().RowGroups[iRowGroup].Columns[iChunk].MetaData
+
+					preloadedColumnIndex, pErr := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].ColumnIndex()
+					if errors.Is(pErr, parquet.ErrMissingColumnIndex) && chunkMeta.IndexPageOffset != 0 {
+						t.Errorf("get column index for %s: %s", chunkMeta.PathInSchema[0], pErr)
+					}
 					columnIndex, err := chunk.ColumnIndex()
-					if err != nil {
-						t.Fatalf("get column index %s", err)
+					if errors.Is(err, parquet.ErrMissingColumnIndex) && chunkMeta.IndexPageOffset != 0 {
+						t.Errorf("get column index for %s: %s", chunkMeta.PathInSchema[0], err)
+					}
+					if !errors.Is(err, pErr) {
+						t.Errorf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
 					}
 					if preloadedColumnIndex == nil && columnIndex != nil || preloadedColumnIndex != nil && columnIndex == nil {
-						t.Fatalf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
+						t.Errorf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
 					}
 
-					preloadedOffsetIndex, _ := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].OffsetIndex()
+					preloadedOffsetIndex, pErr := fileWithIndex.RowGroups()[iRowGroup].ColumnChunks()[iChunk].OffsetIndex()
+					if errors.Is(pErr, parquet.ErrMissingOffsetIndex) && chunkMeta.IndexPageOffset != 0 {
+						t.Errorf("get offset index for %s: %s", chunkMeta.PathInSchema[0], pErr)
+					}
 					offsetIndex, err := chunk.OffsetIndex()
-					if err != nil {
-						t.Fatalf("get offset index %s", err)
+					if errors.Is(err, parquet.ErrMissingOffsetIndex) && chunkMeta.IndexPageOffset != 0 {
+						t.Errorf("get offset index for %s: %s", chunkMeta.PathInSchema[0], err)
+					}
+					if !errors.Is(err, pErr) {
+						t.Errorf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
 					}
 					if preloadedOffsetIndex == nil && offsetIndex != nil || preloadedOffsetIndex != nil && offsetIndex == nil {
-						t.Fatalf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
+						t.Errorf("mismatch when opening file with and without index, chunk=%d, row group=%d", iChunk, iRowGroup)
 					}
 				}
 			}
