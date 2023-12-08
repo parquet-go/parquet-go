@@ -787,7 +787,7 @@ func (c *Column) decodeDictionary(header DictionaryPageHeader, page *buffer, siz
 	// Dictionaries always have PLAIN encoding, so we need to allocate offsets for the decoded page.
 	numValues := int(header.NumValues())
 	dictBufferSize := pageType.EstimateDecodeSize(numValues, pageData, LookupEncoding(pageEncoding))
-	values := pageType.NewValues(make([]byte, dictBufferSize), make([]uint32, numValues))
+	values := pageType.NewValues(make([]byte, 0, dictBufferSize), make([]uint32, 0, numValues))
 	values, err := pageType.Decode(values, pageData, LookupEncoding(pageEncoding))
 	if err != nil {
 		return nil, err
