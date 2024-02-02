@@ -537,11 +537,16 @@ func TestReslicingBooleanPage(t *testing.T) {
 	}
 
 	// continue reslicing and reading the values
-	for i := 0; i < numValues-1; i += 3 {
+	sliceEvery := 3
+	for i := 0; i < numValues-1; i += sliceEvery {
 		vs := make([]parquet.Value, numValues)
 
-		low := int64(1)
+		low := int64(sliceEvery)
 		high := int64(numValues - i)
+
+		if low >= high {
+			break
+		}
 
 		// slice the page
 		pg = pg.Slice(low, high)
