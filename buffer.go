@@ -31,7 +31,7 @@ type GenericBuffer[T any] struct {
 //
 // If the option list may explicitly declare a schema, it must be compatible
 // with the schema generated from T.
-fun NewGenericBuffer[T any](options ...RowGroupOption) *GenericBuffer[T] {
+func NewGenericBuffer[T any](options ...RowGroupOption) *GenericBuffer[T] {
 	config, err := NewRowGroupConfig(options...)
 	if err != nil {
 		panic(err)
