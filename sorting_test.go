@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math/rand"
+	"os"
 	"reflect"
 	"sort"
 	"testing"
@@ -256,4 +257,62 @@ func assertRowsEqualByRow[T any](t *testing.T, rowsGot, rowsWant []T) {
 	if count > 0 {
 		t.Error(count, "rows mismatched out of", len(rowsWant), "total")
 	}
+}
+
+func TestIssue_82(t *testing.T) {
+	type Record struct {
+		A string `parquet:"a"`
+	}
+
+	fi, err := os.Open("testdata/lz4_raw_compressed_larger.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fi.Close()
+
+	stat, err := fi.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fl, err := parquet.OpenFile(fi, stat.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := fl.RowGroups()
+	if expect, got := 1, len(groups); expect != got {
+		t.Fatalf("expected %d row groups got %d", expect, got)
+	}
+
+	fr := parquet.NewRowGroupReader(groups[0])
+
+	var out bytes.Buffer
+
+	pw := parquet.NewSortingWriter[Record](
+		&out,
+		1000,
+		parquet.SortingWriterConfig(
+			parquet.SortingColumns(parquet.Ascending("a")),
+		),
+	)
+
+	if _, err := parquet.CopyRows(pw, fr); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rowsWant, err := parquet.Read[Record](fl, stat.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowsGot, err := parquet.Read[Record](bytes.NewReader(out.Bytes()), int64(out.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(rowsWant, func(i, j int) bool {
+		return rowsWant[i].A < rowsWant[j].A
+	})
+	assertRowsEqualByRow(t, rowsGot, rowsWant)
 }

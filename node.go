@@ -21,6 +21,12 @@ import (
 // Nodes are immutable values and therefore safe to use concurrently from
 // multiple goroutines.
 type Node interface {
+	// The id of this node in its parent node. Zero value is treated as id is not
+	// set. ID only needs to be unique within its parent context.
+	//
+	// This is the same as parquet field_id
+	ID() int
+
 	// Returns a human-readable representation of the parquet node.
 	String() string
 
@@ -156,6 +162,16 @@ func (opt *optionalNode) Repeated() bool       { return false }
 func (opt *optionalNode) Required() bool       { return false }
 func (opt *optionalNode) GoType() reflect.Type { return reflect.PtrTo(opt.Node.GoType()) }
 
+// FieldID wraps a node to provide node field id
+func FieldID(node Node, id int) Node { return &fieldIDNode{Node: node, id: id} }
+
+type fieldIDNode struct {
+	Node
+	id int
+}
+
+func (f *fieldIDNode) ID() int { return f.id }
+
 // Repeated wraps the given node to make it repeated.
 func Repeated(node Node) Node { return &repeatedNode{node} }
 
@@ -184,6 +200,8 @@ func Leaf(typ Type) Node {
 }
 
 type leafNode struct{ typ Type }
+
+func (n *leafNode) ID() int { return 0 }
 
 func (n *leafNode) String() string { return sprint("", n) }
 
@@ -248,6 +266,8 @@ func applyFieldRepetitionType(t format.FieldRepetitionType, repetitionLevel, def
 
 type Group map[string]Node
 
+func (g Group) ID() int { return 0 }
+
 func (g Group) String() string { return sprint("", g) }
 
 func (g Group) Type() Type { return groupType{} }
@@ -292,6 +312,14 @@ type groupField struct {
 func (f *groupField) Name() string { return f.name }
 
 func (f *groupField) Value(base reflect.Value) reflect.Value {
+	if base.Kind() == reflect.Interface {
+		if base.IsNil() {
+			return reflect.ValueOf(nil)
+		}
+		if base = base.Elem(); base.Kind() == reflect.Pointer && base.IsNil() {
+			return reflect.ValueOf(nil)
+		}
+	}
 	return base.MapIndex(reflect.ValueOf(&f.name).Elem())
 }
 

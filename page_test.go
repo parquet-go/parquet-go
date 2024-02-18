@@ -497,3 +497,71 @@ func TestRepeatedPageTrailingNulls(t *testing.T) {
 		t.Errorf("wrong number of rows read: got=%d want=%d", n, len(records))
 	}
 }
+
+func TestReslicingBooleanPage(t *testing.T) {
+	type testStruct struct {
+		B bool `parquet:"b"`
+	}
+
+	numValues := 100
+	expected := []*testStruct{}
+	for i := 0; i < numValues; i++ {
+		expected = append(expected, &testStruct{B: i%2 == 0})
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[*testStruct](buf)
+	_, err := writer.Write(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader := bytes.NewReader(buf.Bytes())
+	pf, err := parquet.OpenFile(reader, reader.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// grab the page we wrote above
+	rg := pf.RowGroups()[0]
+	cc := rg.ColumnChunks()
+	pgs := cc[0].Pages()
+
+	pg, err := pgs.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// continue reslicing and reading the values
+	sliceEvery := 3
+	for i := 0; i < numValues-1; i += sliceEvery {
+		vs := make([]parquet.Value, numValues)
+
+		low := int64(sliceEvery)
+		high := int64(numValues - i)
+
+		if low >= high {
+			break
+		}
+
+		// slice the page
+		pg = pg.Slice(low, high)
+		v := pg.Values()
+		v.ReadValues(vs)
+
+		// and the expected values with the same low/high
+		expected = expected[low:high]
+
+		// confirm values match
+		for n, exp := range expected {
+			if exp.B != vs[n].Boolean() {
+				t.Fatalf("unexpected value: %v at pos: %d", vs[n], n)
+			}
+			n++
+		}
+	}
+}

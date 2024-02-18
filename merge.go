@@ -350,7 +350,7 @@ func (m *mergeBuffer) setup(rows []Rows, compare func(Row, Row) int) {
 		extra := size - len(m.buffer)
 		b := make([][]Row, extra)
 		for i := range b {
-			b[i] = make([]Row, mergeBufferSize)
+			b[i] = make([]Row, 0, mergeBufferSize)
 		}
 		m.buffer = append(m.buffer, b...)
 		m.head = append(m.head, make([]int, extra)...)
@@ -379,6 +379,11 @@ func (m *mergeBuffer) release() {
 func (m *mergeBuffer) fill() error {
 	m.len = len(m.rows)
 	for i := range m.rows {
+		if m.head[i] < len(m.buffer[i]) {
+			// There is still rows data in m.buffer[i]. Skip filling the row buffer until
+			// all rows have been read.
+			continue
+		}
 		m.head[i] = 0
 		m.buffer[i] = m.buffer[i][:mergeBufferSize]
 		n, err := m.rows[i].ReadRows(m.buffer[i])
@@ -460,6 +465,10 @@ func (m *mergeBuffer) left() bool {
 func (m *mergeBuffer) read() (n int64) {
 	for n < int64(len(m.copy)) && m.Len() != 0 {
 		r := m.buffer[:m.len][0]
+		if len(r) == 0 {
+			heap.Pop(m)
+			continue
+		}
 		m.copy[n] = append(m.copy[n][:0], r[m.head[0]]...)
 		m.head[0]++
 		n++

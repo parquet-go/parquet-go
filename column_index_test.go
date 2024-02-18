@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBinaryColumnIndexMinMax(t *testing.T) {
@@ -57,4 +58,39 @@ func TestBinaryColumnIndexMinMax(t *testing.T) {
 			}
 		}
 	}
+}
+
+func Test_ColumnIndexReuse(t *testing.T) {
+	min := "a"
+	max := "z"
+	indexer := parquet.ByteArrayType.NewColumnIndexer(16)
+	indexer.IndexPage(100, 0,
+		parquet.ValueOf(min),
+		parquet.ValueOf(max),
+	)
+	before := indexer.ColumnIndex()
+	require.Equal(t, 1, len(before.NullPages))
+	require.False(t, before.NullPages[0])
+
+	// Reset the indexer. Should be safe for reuse.
+	indexer.Reset()
+
+	// Index two pages that are both nul pages, expect the previous index to not have changed.
+	indexer.IndexPage(100, 100,
+		parquet.ValueOf(min),
+		parquet.ValueOf(max),
+	)
+	indexer.IndexPage(10, 10,
+		parquet.ValueOf(min),
+		parquet.ValueOf(max),
+	)
+	after := indexer.ColumnIndex()
+
+	require.Equal(t, 2, len(after.NullPages))
+	require.True(t, after.NullPages[0])
+	require.True(t, after.NullPages[1])
+
+	// Validate null pages of the previous index.
+	require.Equal(t, 1, len(before.NullPages))
+	require.False(t, before.NullPages[0])
 }

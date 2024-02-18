@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/format"
@@ -139,7 +140,7 @@ func checkRowGroupColumnIndex(rowGroup parquet.RowGroup) error {
 
 func checkColumnChunkColumnIndex(columnChunk parquet.ColumnChunk) error {
 	columnType := columnChunk.Type()
-	columnIndex := columnChunk.ColumnIndex()
+	columnIndex, _ := columnChunk.ColumnIndex()
 	numPages := columnIndex.NumPages()
 	pagesRead := 0
 	stats := newColumnStats(columnType)
@@ -225,7 +226,7 @@ func checkRowGroupOffsetIndex(rowGroup parquet.RowGroup) error {
 }
 
 func checkColumnChunkOffsetIndex(columnChunk parquet.ColumnChunk) error {
-	offsetIndex := columnChunk.OffsetIndex()
+	offsetIndex, _ := columnChunk.OffsetIndex()
 	numPages := offsetIndex.NumPages()
 	pagesRead := 0
 	rowIndex := int64(0)
@@ -289,7 +290,7 @@ func checkFileColumnIndex(f *parquet.File) error {
 	columnIndexes := f.ColumnIndexes()
 	i := 0
 	return forEachColumnChunk(f, func(col *parquet.Column, chunk parquet.ColumnChunk) error {
-		columnIndex := chunk.ColumnIndex()
+		columnIndex, _ := chunk.ColumnIndex()
 		if n := columnIndex.NumPages(); n <= 0 {
 			return fmt.Errorf("invalid number of pages found in the column index: %d", n)
 		}
@@ -356,7 +357,7 @@ func checkFileOffsetIndex(f *parquet.File) error {
 	offsetIndexes := f.OffsetIndexes()
 	i := 0
 	return forEachColumnChunk(f, func(col *parquet.Column, chunk parquet.ColumnChunk) error {
-		offsetIndex := chunk.OffsetIndex()
+		offsetIndex, _ := chunk.OffsetIndex()
 		if n := offsetIndex.NumPages(); n <= 0 {
 			return fmt.Errorf("invalid number of pages found in the offset index: %d", n)
 		}
