@@ -205,7 +205,7 @@ func TestIssue312(t *testing.T) {
 	node = parquet.Encoded(node, &parquet.RLEDictionary)
 	g := parquet.Group{}
 	g["mystring"] = node
-	schema := parquet.NewSchema("test", g, parquet.SchemaOptions{})
+	schema := parquet.NewSchema("test", g)
 
 	rows := []parquet.Row{[]parquet.Value{parquet.ValueOf("hello").Level(0, 0, 0)}}
 

@@ -96,7 +96,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		schema = c.Schema
 	} else {
 		//TODO:(gernest) implement FileOption that configures SchemaOptions
-		schema = NewSchema(f.root.Name(), f.root, SchemaOptions{})
+		schema = NewSchema(f.root.Name(), f.root)
 	}
 	columns := make([]*Column, 0, numLeafColumnsOf(f.root))
 	f.schema = schema

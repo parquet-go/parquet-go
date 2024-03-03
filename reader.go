@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+
+	"github.com/parquet-go/parquet-go/schema"
 )
 
 // GenericReader is similar to a Reader but uses a type parameter to define the
@@ -44,7 +46,7 @@ func NewGenericReader[T any](input io.ReaderAt, options ...ReaderOption) *Generi
 		if t == nil {
 			c.Schema = rowGroup.Schema()
 		} else {
-			c.Schema = schemaOf(dereference(t), defaultTagSource{})
+			c.Schema = schemaOf(dereference(t), schema.DefaultOptions().TagSource())
 		}
 	}
 
@@ -77,7 +79,7 @@ func NewGenericRowGroupReader[T any](rowGroup RowGroup, options ...ReaderOption)
 		if t == nil {
 			c.Schema = rowGroup.Schema()
 		} else {
-			c.Schema = schemaOf(dereference(t), defaultTagSource{})
+			c.Schema = schemaOf(dereference(t), schema.DefaultOptions().TagSource())
 		}
 	}
 
@@ -416,7 +418,7 @@ func (r *Reader) Read(row interface{}) error {
 func (r *Reader) updateReadSchema(rowType reflect.Type) error {
 	// Reader is a deprecated api. We won't be supporting other tag provider apart
 	// from the default one.
-	schema := schemaOf(rowType, defaultTagSource{})
+	schema := schemaOf(rowType, schema.DefaultOptions().TagSource())
 
 	if nodesAreEqual(schema, r.file.schema) {
 		r.read.init(schema, r.file.rowGroup)

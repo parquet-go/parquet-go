@@ -13,6 +13,7 @@ import (
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/schema"
 )
 
 // Schema represents a parquet schema created from a Go value.
@@ -26,7 +27,7 @@ type Schema struct {
 	reconstruct reconstructFunc
 	mapping     columnMapping
 	columns     [][]string
-	options     SchemaOptions
+	options     *schema.Options
 }
 
 // SchemaOf constructs a parquet schema from a Go value.
@@ -96,48 +97,40 @@ type Schema struct {
 //	}
 //
 // The schema name is the Go type name of the value.
-func SchemaOf(model interface{}) *Schema {
-	return schemaOf(dereference(reflect.TypeOf(model)), defaultTagSource{})
+func SchemaOf(model interface{}, opts ...schema.Option) *Schema {
+	return schemaOf(dereference(reflect.TypeOf(model)), schema.DefaultOptions().Apply(opts...).TagSource())
 }
 
 var cachedSchemas sync.Map // map[reflect.Type]*Schema
 
-func schemaOf(model reflect.Type, tags TagSource) *Schema {
+func schemaOf(model reflect.Type, tags schema.TagSource) *Schema {
 	cached, _ := cachedSchemas.Load(model)
-	schema, _ := cached.(*Schema)
-	if schema != nil {
-		return schema
+	cachedSchema, _ := cached.(*Schema)
+	if cachedSchema != nil {
+		return cachedSchema
 	}
 	if model.Kind() != reflect.Struct {
 		panic("cannot construct parquet schema from value of type " + model.String())
 	}
-	schema = NewSchema(model.Name(), nodeOf(model, StructTag{}, tags), SchemaOptions{
-		TagSource: tags,
-	})
+	schema := NewSchema(model.Name(), nodeOf(model, schema.StructTag{}, tags), schema.WithTagSource(tags))
 	if actual, loaded := cachedSchemas.LoadOrStore(model, schema); loaded {
 		schema = actual.(*Schema)
 	}
 	return schema
 }
 
-type SchemaOptions struct {
-	TagSource TagSource
-}
-
 // NewSchema constructs a new Schema object with the given name and root node.
 //
 // The function panics if Node contains more leaf columns than supported by the
 // package (see parquet.MaxColumnIndex).
-func NewSchema(name string, root Node, options SchemaOptions) *Schema {
-	if options.TagSource == nil {
-		options.TagSource = defaultTagSource{}
-	}
+func NewSchema(name string, root Node, opts ...schema.Option) *Schema {
+	options := schema.DefaultOptions().Apply(opts...)
 	mapping, columns := columnMappingOf(root)
 	return &Schema{
 		name:        name,
 		root:        root,
-		deconstruct: makeDeconstructFunc(root, options.TagSource),
-		reconstruct: makeReconstructFunc(root, options.TagSource),
+		deconstruct: makeDeconstructFunc(root, options.TagSource()),
+		reconstruct: makeReconstructFunc(root, options.TagSource()),
 		mapping:     mapping,
 		columns:     columns,
 		options:     options,
@@ -151,7 +144,7 @@ func dereference(t reflect.Type) reflect.Type {
 	return t
 }
 
-func makeDeconstructFunc(node Node, tags TagSource) (deconstruct deconstructFunc) {
+func makeDeconstructFunc(node Node, tags schema.TagSource) (deconstruct deconstructFunc) {
 	if schema, _ := node.(*Schema); schema != nil {
 		return schema.deconstruct
 	}
@@ -161,7 +154,7 @@ func makeDeconstructFunc(node Node, tags TagSource) (deconstruct deconstructFunc
 	return deconstruct
 }
 
-func makeReconstructFunc(node Node, tags TagSource) (reconstruct reconstructFunc) {
+func makeReconstructFunc(node Node, tags schema.TagSource) (reconstruct reconstructFunc) {
 	if schema, _ := node.(*Schema); schema != nil {
 		return schema.reconstruct
 	}
@@ -360,37 +353,7 @@ type structNode struct {
 	fields []structField
 }
 
-// StructTag contains struct tag values that are use by parquet-go to configure
-// nodes.
-type StructTag struct {
-	// Value set on parquet struct tag
-	Parquet string
-	// Value set on parquet-key struct tag
-	MapKey string
-	// Value set on parquet-value struct tag
-	MapValue string
-}
-
-type TagSource interface {
-	Tags(f reflect.StructField) StructTag
-	isTagSource()
-}
-
-type defaultTagSource struct{}
-
-var _ TagSource = defaultTagSource{}
-
-func (defaultTagSource) Tags(f reflect.StructField) StructTag {
-	return StructTag{
-		Parquet:  f.Tag.Get("parquet"),
-		MapKey:   f.Tag.Get("parquet-key"),
-		MapValue: f.Tag.Get("parquet-value"),
-	}
-}
-
-func (defaultTagSource) isTagSource() {}
-
-func structNodeOf(t reflect.Type, tags TagSource) *structNode {
+func structNodeOf(t reflect.Type, tags schema.TagSource) *structNode {
 	// Collect struct fields first so we can order them before generating the
 	// column indexes.
 	fields := structFieldsOf(t, tags)
@@ -409,7 +372,7 @@ func structNodeOf(t reflect.Type, tags TagSource) *structNode {
 	return s
 }
 
-func structFieldsOf(t reflect.Type, tags TagSource) []reflect.StructField {
+func structFieldsOf(t reflect.Type, tags schema.TagSource) []reflect.StructField {
 	fields := appendStructFields(t, nil, nil, 0, tags)
 
 	for i := range fields {
@@ -429,7 +392,7 @@ func structFieldsOf(t reflect.Type, tags TagSource) []reflect.StructField {
 
 func appendStructFields(
 	t reflect.Type, fields []reflect.StructField, index []int, offset uintptr,
-	tags TagSource,
+	tags schema.TagSource,
 ) []reflect.StructField {
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
@@ -535,7 +498,7 @@ func throwUnknownTag(t reflect.Type, name string, tag string) {
 	panic(tag + " is an unrecognized parquet tag: " + nodeString(t, name, tag))
 }
 
-func throwInvalidNode(t reflect.Type, msg, name string, tag StructTag) {
+func throwInvalidNode(t reflect.Type, msg, name string, tag schema.StructTag) {
 	panic(msg + ": " + nodeString(t, name, tag.Parquet))
 }
 
@@ -545,7 +508,7 @@ func decimalFixedLenByteArraySize(precision int) int {
 	return int(math.Ceil((math.Log10(2) + float64(precision)) / math.Log10(256)))
 }
 
-func forEachStructTagOption(sf reflect.StructField, tags TagSource, do func(t reflect.Type, option, args string)) {
+func forEachStructTagOption(sf reflect.StructField, tags schema.TagSource, do func(t reflect.Type, option, args string)) {
 	fieldTags := tags.Tags(sf)
 	tag := fieldTags.Parquet
 	if tag != "" {
@@ -564,7 +527,7 @@ func forEachStructTagOption(sf reflect.StructField, tags TagSource, do func(t re
 	}
 }
 
-func nodeOf(t reflect.Type, tag StructTag, tags TagSource) Node {
+func nodeOf(t reflect.Type, tag schema.StructTag, tags schema.TagSource) Node {
 	switch t {
 	case reflect.TypeOf(deprecated.Int96{}):
 		return Leaf(Int96Type)
@@ -601,13 +564,13 @@ func nodeOf(t reflect.Type, tag StructTag, tags TagSource) Node {
 		n = String()
 
 	case reflect.Ptr:
-		n = Optional(nodeOf(t.Elem(), StructTag{}, tags))
+		n = Optional(nodeOf(t.Elem(), schema.StructTag{}, tags))
 
 	case reflect.Slice:
 		if elem := t.Elem(); elem.Kind() == reflect.Uint8 { // []byte?
 			n = Leaf(ByteArrayType)
 		} else {
-			n = Repeated(nodeOf(elem, StructTag{}, tags))
+			n = Repeated(nodeOf(elem, schema.StructTag{}, tags))
 		}
 
 	case reflect.Array:
@@ -620,12 +583,12 @@ func nodeOf(t reflect.Type, tag StructTag, tags TagSource) Node {
 			n = JSON()
 		} else {
 			n = Map(
-				makeNodeOf(t.Key(), t.Name(), StructTag{Parquet: tag.MapKey}, tags),
-				makeNodeOf(t.Elem(), t.Name(), StructTag{Parquet: tag.MapValue}, tags),
+				makeNodeOf(t.Key(), t.Name(), schema.StructTag{Parquet: tag.MapKey}, tags),
+				makeNodeOf(t.Elem(), t.Name(), schema.StructTag{Parquet: tag.MapValue}, tags),
 			)
 		}
 
-		forEachTagOption(StructTag{Parquet: tag.Parquet}, func(option, args string) {
+		forEachTagOption(schema.StructTag{Parquet: tag.Parquet}, func(option, args string) {
 			switch option {
 			case "", "json":
 				return
@@ -726,7 +689,7 @@ var (
 	_ WriterOption   = (*Schema)(nil)
 )
 
-func makeNodeOf(t reflect.Type, name string, tag StructTag, tags TagSource) Node {
+func makeNodeOf(t reflect.Type, name string, tag schema.StructTag, tags schema.TagSource) Node {
 	var (
 		node       Node
 		optional   bool
@@ -841,7 +804,7 @@ func makeNodeOf(t reflect.Type, name string, tag StructTag, tags TagSource) Node
 		case "list":
 			switch t.Kind() {
 			case reflect.Slice:
-				element := nodeOf(t.Elem(), StructTag{}, tags)
+				element := nodeOf(t.Elem(), schema.StructTag{}, tags)
 				setNode(element)
 				setList()
 			default:
@@ -962,7 +925,7 @@ func makeNodeOf(t reflect.Type, name string, tag StructTag, tags TagSource) Node
 	return node
 }
 
-func forEachTagOption(tags StructTag, do func(option, args string)) {
+func forEachTagOption(tags schema.StructTag, do func(option, args string)) {
 	for _, tag := range []string{tags.Parquet, tags.MapKey, tags.MapValue} {
 		_, tag = split(tag) // skip the field name
 		for tag != "" {

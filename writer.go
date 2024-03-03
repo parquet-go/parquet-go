@@ -15,6 +15,7 @@ import (
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/format"
+	pschema "github.com/parquet-go/parquet-go/schema"
 	"github.com/segmentio/encoding/thrift"
 )
 
@@ -92,7 +93,7 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 	t := typeOf[T]()
 
 	if schema == nil && t != nil {
-		schema = schemaOf(dereference(t), defaultTagSource{})
+		schema = schemaOf(dereference(t), pschema.DefaultOptions().TagSource())
 		config.Schema = schema
 	}
 
