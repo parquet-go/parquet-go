@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -202,6 +203,14 @@ func TestSchemaOf(t *testing.T) {
 	}
 	repeated binary d (STRING) = 4;
 	optional binary e (STRING) = 5;
+}`,
+		},
+		{
+			value: new(struct {
+				Time time.Time `parquet:"time,delta"`
+			}),
+			print: `message {
+	required int64 time (TIMESTAMP(isAdjustedToUTC=true,unit=NANOS));
 }`,
 		},
 	}
