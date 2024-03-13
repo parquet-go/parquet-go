@@ -12,7 +12,7 @@ require (
 	github.com/segmentio/encoding v0.3.6
 	github.com/stretchr/testify v1.8.4
 	golang.org/x/sys v0.10.0
-	google.golang.org/protobuf v1.30.0
+	google.golang.org/protobuf v1.33.0
 )
 
 require (
