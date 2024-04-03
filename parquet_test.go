@@ -402,7 +402,6 @@ func TestIssue423(t *testing.T) {
 	}
 
 	schema := parquet.SchemaOf(new(Outer))
-	fmt.Println(schema.String())
 	buf := new(bytes.Buffer)
 	w := parquet.NewGenericWriter[Outer](buf, schema)
 	_, err := w.Write(writeRows)
