@@ -1,6 +1,7 @@
 package parquet_test
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -525,4 +526,83 @@ func valueOrder(columnType parquet.Type, values []parquet.Value) indexOrder {
 	}
 
 	return ascendingIndexOrder
+}
+
+func TestColumnPages_SeekToRow(t *testing.T) {
+	type Contact struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"`
+		Sex  bool   `parquet:"sex"`
+	}
+
+	buf := bytes.Buffer{}
+	writer := parquet.NewWriter(&buf)
+	data := [][]Contact{
+		{
+			{ID: 1, Name: "user1"},
+			{ID: 2, Name: "user2"},
+			{ID: 7, Name: "user7"},
+		},
+		{
+			{ID: 8, Name: "user8"},
+			{ID: 10, Name: "user10"},
+			{ID: 12, Name: "user12"},
+		},
+		{
+			{ID: 15, Name: "user15"},
+			{ID: 16, Name: "user16"},
+		},
+	}
+	for _, rows := range data {
+		for _, row := range rows {
+			err := writer.Write(&row)
+			if err != nil {
+				panic(err)
+			}
+		}
+		err := writer.Flush()
+		if err != nil {
+			panic(err)
+		}
+	}
+	err := writer.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	pr, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Error(err)
+	}
+
+	id := pr.Root().Column("id")
+
+	pages := id.Pages()
+	defer pages.Close()
+
+	var idx int64
+	for _, rows := range data {
+		for _, row := range rows {
+			err := pages.SeekToRow(idx)
+			if err != nil {
+				t.Error(err)
+			}
+
+			page, err := pages.ReadPage()
+			if err != nil {
+				t.Error(err)
+			}
+
+			var values [1]int64
+			page.Values().(interface {
+				ReadInt64s(values []int64) (n int, err error)
+			}).ReadInt64s(values[:])
+
+			if values[0] != row.ID {
+				t.Errorf("read value of page mismatch, row index %d: got=%d want=%d", idx, values[0], row.ID)
+			}
+
+			idx++
+		}
+	}
 }
