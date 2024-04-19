@@ -1265,7 +1265,8 @@ func TestReadMapAsAny(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recs, err := parquet.Read[rec](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	data, size := bytes.NewReader(buf.Bytes()), int64(buf.Len())
+	recs, err := parquet.Read[rec](data, size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1273,11 +1274,22 @@ func TestReadMapAsAny(t *testing.T) {
 		t.Errorf("value mismatch: want=%+v got=%+v", typed, recs)
 	}
 
-	anys, err := parquet.Read[any](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	anys, err := parquet.Read[any](data, size)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(anys, anyd) {
+		t.Errorf("value mismatch: want=%+v got=%+v", anyd, anys)
+	}
+
+	vals, err := parquet.Read[any](data, size, parquet.NewSchema("", parquet.Group{
+		"n": parquet.Int(64),
+		"m": parquet.Map(parquet.String(), parquet.Int(64)),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(vals, anyd) {
 		t.Errorf("value mismatch: want=%+v got=%+v", anyd, anys)
 	}
 }
