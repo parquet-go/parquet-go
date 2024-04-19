@@ -1203,3 +1203,40 @@ func TestSetKeyValueMetadataOverwritesExisting(t *testing.T) {
 		t.Errorf("expected %q, got %q", testValue, value)
 	}
 }
+
+func TestWriterWithNestedArray(t *testing.T) {
+
+	type NestedArrayWithTag struct {
+		Field [][]int `parquet:"field,list"`
+	}
+
+	b := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[NestedArrayWithTag](b)
+
+	expect := []NestedArrayWithTag{
+		{
+			Field: [][]int{{1}},
+		},
+	}
+
+	if _, err := w.Write(expect); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f := bytes.NewReader(b.Bytes())
+	r := parquet.NewGenericReader[NestedArrayWithTag](f)
+
+	values := make([]NestedArrayWithTag, 1)
+
+	_, err := r.Read(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(expect, values) {
+		t.Fatalf("values do not match.\n\texpect: %v\n\tactual: %v", expect, values)
+	}
+}
