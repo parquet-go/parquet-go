@@ -951,7 +951,11 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 	if node.Repeated() && !list {
 		elemKind := node.GoType().Elem().Kind()
 		if elemKind == reflect.Slice {
-			panic("unhandled nested slice on parquet schema without list tag")
+			// Special case: allow strings in a logical map
+			isUint8 := node.GoType().Elem().Elem().Kind() == reflect.Uint8
+			if !isUint8 {
+				panic("unhandled nested slice on parquet schema without list tag")
+			}
 		}
 	}
 
