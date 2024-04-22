@@ -701,7 +701,7 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 		column := columns[0]
 		t := value.Type()
 		if t.Kind() == reflect.Interface {
-			t = reflect.TypeFor[map[string]any]()
+			t = reflect.TypeOf((map[string]any)(nil))
 		}
 		k := t.Key()
 		v := t.Elem()
