@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1201,5 +1202,40 @@ func TestSetKeyValueMetadataOverwritesExisting(t *testing.T) {
 	}
 	if value != testValue {
 		t.Errorf("expected %q, got %q", testValue, value)
+	}
+}
+
+func TestColumnMaxValueAndMinValue(t *testing.T) {
+	type testStruct struct {
+		A string `parquet:"a,plain"`
+	}
+
+	tests := make([]testStruct, 100)
+	tests[0] = testStruct{A: ""}
+	for i := 1; i < 100; i++ {
+		tests[i] = testStruct{A: strconv.Itoa(i)}
+	}
+	schema := parquet.SchemaOf(&testStruct{})
+	b := bytes.NewBuffer(nil)
+	config := parquet.DefaultWriterConfig()
+	config.PageBufferSize = 256
+	w := parquet.NewGenericWriter[testStruct](b, schema, config)
+	_, _ = w.Write(tests[0:50])
+	_, _ = w.Write(tests[50:100])
+	_ = w.Close()
+
+	f, err := parquet.OpenFile(bytes.NewReader(b.Bytes()), int64(b.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.RowGroups()) != 1 {
+		t.Fatalf("wrong number of row groups in parquet file: want=1 got=%d", f.RowGroups())
+	}
+	statistics := f.Metadata().RowGroups[0].Columns[0].MetaData.Statistics
+	if string(statistics.MinValue) != "" {
+		t.Fatalf("wrong min value of row groups in parquet file: want=' '() got=%s", string(statistics.MinValue))
+	}
+	if string(statistics.MaxValue) != "99" {
+		t.Fatalf("wrong max value of row groups in parquet file: want=99 got=%s", string(statistics.MaxValue))
 	}
 }
