@@ -1582,7 +1582,7 @@ func (c *writerColumn) recordPageStats(headerSize int32, header *format.PageHead
 			if existingMaxValue.isNull() || c.columnType.Compare(maxValue, existingMaxValue) > 0 {
 				buf := c.columnChunk.MetaData.Statistics.MaxValue[:0]
 				// if maxValue is empty string, c.columnChunk.MetaData.Statistics.MaxValue should be []bytes{}, but nil
-				if buf == nil && !maxValue.IsNull() && len(maxValue.Bytes()) == 0 {
+				if buf == nil && maxValue.Kind() == ByteArray && len(maxValue.ByteArray()) == 0 {
 					buf = make([]byte, 0)
 				}
 				c.columnChunk.MetaData.Statistics.MaxValue = maxValue.AppendBytes(buf)
@@ -1591,7 +1591,7 @@ func (c *writerColumn) recordPageStats(headerSize int32, header *format.PageHead
 			if existingMinValue.isNull() || c.columnType.Compare(minValue, existingMinValue) < 0 {
 				buf := c.columnChunk.MetaData.Statistics.MinValue[:0]
 				// same as above
-				if buf == nil && !minValue.IsNull() && len(minValue.Bytes()) == 0 {
+				if buf == nil && minValue.Kind() == ByteArray && len(minValue.ByteArray()) == 0 {
 					buf = make([]byte, 0)
 				}
 				c.columnChunk.MetaData.Statistics.MinValue = minValue.AppendBytes(buf)
