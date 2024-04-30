@@ -1249,3 +1249,47 @@ func TestParquetAnyValueConversions(t *testing.T) {
 		})
 	}
 }
+
+func TestReadMapAsAny(t *testing.T) {
+	type rec struct {
+		N int            `parquet:"n"`
+		M map[string]int `parquet:"m"`
+	}
+
+	typed := []rec{{3, map[string]int{"a": 1, "b": 2}}}
+	type obj = map[string]any
+	anyd := []any{obj{"n": int64(3), "m": obj{"a": int64(1), "b": int64(2)}}}
+
+	var buf bytes.Buffer
+	if err := parquet.Write(&buf, typed); err != nil {
+		t.Fatal(err)
+	}
+
+	data, size := bytes.NewReader(buf.Bytes()), int64(buf.Len())
+	recs, err := parquet.Read[rec](data, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(recs, typed) {
+		t.Errorf("value mismatch: want=%+v got=%+v", typed, recs)
+	}
+
+	anys, err := parquet.Read[any](data, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(anys, anyd) {
+		t.Errorf("value mismatch: want=%+v got=%+v", anyd, anys)
+	}
+
+	vals, err := parquet.Read[any](data, size, parquet.NewSchema("", parquet.Group{
+		"n": parquet.Int(64),
+		"m": parquet.Map(parquet.String(), parquet.Int(64)),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(vals, anyd) {
+		t.Errorf("value mismatch: want=%+v got=%+v", anyd, anys)
+	}
+}
