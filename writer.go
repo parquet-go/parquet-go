@@ -786,8 +786,15 @@ func (w *writer) writeFileFooter() error {
 		numRows += w.rowGroups[rowGroupIndex].NumRows
 	}
 
+	// We implemented the parquet specification version 2+, which is represented
+	// by the version number 2 in the file metadata.
+	//
+	// For reference, see:
+	// https://github.com/apache/arrow/blob/70b9ef5/go/parquet/metadata/file.go#L122-L127
+	const parquetFileFormatVersion = 2
+
 	footer, err := thrift.Marshal(new(thrift.CompactProtocol), &format.FileMetaData{
-		Version:          1,
+		Version:          parquetFileFormatVersion,
 		Schema:           w.schemaElements,
 		NumRows:          numRows,
 		RowGroups:        w.rowGroups,
