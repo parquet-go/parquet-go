@@ -455,10 +455,16 @@ func TestMergeRowGroupsCursorsAreClosed(t *testing.T) {
 		mergedRows := m.Rows()
 		defer mergedRows.Close()
 
-		// Add 1 more slot to the buffer to force an io.EOF on the first read.
-		rbuf := make([]parquet.Row, (numRowGroups*rowsPerGroup)+1)
-		if _, err := mergedRows.ReadRows(rbuf); !errors.Is(err, io.EOF) {
-			t.Fatal(err)
+		// Read until EOF
+		rbuf := make([]parquet.Row, numRowGroups*rowsPerGroup)
+		for {
+			_, err := mergedRows.ReadRows(rbuf)
+			if err != nil && !errors.Is(err, io.EOF) {
+				t.Fatal(err)
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
 		}
 	}()
 
@@ -562,15 +568,22 @@ func BenchmarkMergeRowGroups(b *testing.B) {
 					defer func() { rows.Close() }()
 
 					benchmarkRowsPerSecond(b, func() int {
-						n, err := rows.ReadRows(rbuf)
-						if err != nil {
-							if !errors.Is(err, io.EOF) {
-								b.Fatal(err)
+						total := 0
+						for {
+							n, err := rows.ReadRows(rbuf)
+							if err != nil {
+								if !errors.Is(err, io.EOF) {
+									b.Fatal(err)
+								}
+								rows.Close()
+								rows = mergedRowGroup.Rows()
 							}
-							rows.Close()
-							rows = mergedRowGroup.Rows()
+							total += n
+							if errors.Is(err, io.EOF) {
+								break
+							}
 						}
-						return n
+						return total
 					})
 				})
 			}

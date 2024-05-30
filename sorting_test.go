@@ -3,6 +3,7 @@ package parquet_test
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"math/rand"
 	"os"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSortingWriter(t *testing.T) {
@@ -315,4 +317,74 @@ func TestIssue_82(t *testing.T) {
 		return rowsWant[i].A < rowsWant[j].A
 	})
 	assertRowsEqualByRow(t, rowsGot, rowsWant)
+}
+
+func TestMergedRowsCorruptedString(t *testing.T) {
+	rowCount := 210 // starts failing at 210+
+	type Row struct {
+		Tag string `parquet:"tag"`
+	}
+	rowsWant := make([]Row, rowCount)
+	for i := range rowsWant {
+		rowsWant[i].Tag = randString(100)
+	}
+
+	// Create two files each with half of the rows.
+	files := make([]*parquet.File, 2)
+	for i := 0; i < 2; i++ {
+		buffer := bytes.NewBuffer(nil)
+
+		writer := parquet.NewSortingWriter[Row](buffer, int64(rowCount),
+			&parquet.WriterConfig{
+				PageBufferSize: 2560,
+				Sorting: parquet.SortingConfig{
+					SortingColumns: []parquet.SortingColumn{
+						parquet.Ascending("tag"),
+					},
+				},
+			})
+
+		_, err := writer.Write(rowsWant[i*(rowCount/2) : (i+1)*(rowCount/2)])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+		require.NoError(t, err)
+		files[i] = f
+	}
+
+	// Merge the row groups from the separate files.
+	merged, err := parquet.MergeRowGroups([]parquet.RowGroup{files[0].RowGroups()[0], files[1].RowGroups()[0]},
+		parquet.SortingRowGroupConfig(parquet.SortingColumns(parquet.Ascending("tag"))),
+	)
+	require.NoError(t, err)
+	require.Equal(t, rowCount, int(merged.NumRows()))
+
+	// Validate the merged rows.
+	reader := merged.Rows()
+	t.Cleanup(func() { reader.Close() })
+	buf := make([]parquet.Row, rowCount)
+	sort.Slice(rowsWant, func(i, j int) bool {
+		return rowsWant[i].Tag < rowsWant[j].Tag
+	})
+	for i, n := 0, 0; i < rowCount; i += n {
+		n, err = reader.ReadRows(buf)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+
+		for j, r := range buf[:n] {
+			if rowsWant[i+j].Tag != r[0].String() {
+				t.Fatalf("corruption at row %v: want %s but got %s", i+j, rowsWant[i+j].Tag, r[0].String())
+			}
+		}
+	}
 }
