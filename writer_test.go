@@ -840,7 +840,7 @@ Column: value
 // TestWriter uses the Apache parquet-cli tool to validate generated parquet files.
 // On MacOS systems using brew, this can be installed with `brew install parquet-cli`.
 // For more information on installing and running this tool, see:
-// https://github.com/apache/parquet-mr/blob/ef9929c130f8f2e24fca1c7b42b0742a4d9d5e61/parquet-cli/README.md
+// https://github.com/apache/parquet-java/blob/ef9929c130f8f2e24fca1c7b42b0742a4d9d5e61/parquet-cli/README.md
 // This test expects the parquet-cli command to exist in the environment path as `parquet`
 // and to require no additional arguments before the primary command. If you need to run
 // it in some other way on your system, you can configure the environment variable

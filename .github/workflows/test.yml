@@ -39,10 +39,10 @@ jobs:
       - name: Setup Parquet CLI
         run: |
           set -ex
-          wget https://github.com/apache/parquet-mr/archive/refs/tags/apache-parquet-1.13.1.tar.gz
+          wget https://github.com/apache/parquet-java/archive/refs/tags/apache-parquet-1.13.1.tar.gz
           tar -xf apache-parquet-1.13.1.tar.gz
-          mvn --file parquet-mr-apache-parquet-1.13.1/parquet-cli/pom.xml install -DskipTests
-          mvn --file parquet-mr-apache-parquet-1.13.1/parquet-cli/pom.xml dependency:copy-dependencies
+          mvn --file parquet-java-apache-parquet-1.13.1/parquet-cli/pom.xml install -DskipTests
+          mvn --file parquet-java-apache-parquet-1.13.1/parquet-cli/pom.xml dependency:copy-dependencies
 
       - name: Setup Go ${{ matrix.go }}
         uses: actions/setup-go@v3
@@ -54,7 +54,7 @@ jobs:
 
       - name: Run Tests
         env:
-          TARGET: parquet-mr-apache-parquet-1.13.1/parquet-cli/target
+          TARGET: parquet-java-apache-parquet-1.13.1/parquet-cli/target
         run: >
           PARQUET_GO_TEST_CLI="java -cp $TARGET/parquet-cli-1.13.1.jar:$TARGET/dependency/* org.apache.parquet.cli.Main"
           go test -trimpath -race -tags=${{ matrix.tags }} ./...
