@@ -113,6 +113,21 @@ func TestSchemaOf(t *testing.T) {
 
 		{
 			value: new(struct {
+				Inner struct {
+					TimeMillis int32 `parquet:"time_millis,time"`
+					TimeMicros int64 `parquet:"time_micros,time(microsecond)"`
+				} `parquet:"inner,optional"`
+			}),
+			print: `message {
+	optional group inner {
+		required int32 time_millis (TIME(isAdjustedToUTC=true,unit=MILLIS));
+		required int64 time_micros (TIME(isAdjustedToUTC=true,unit=MICROS));
+	}
+}`,
+		},
+
+		{
+			value: new(struct {
 				Name string `parquet:",json"`
 			}),
 			print: `message {
