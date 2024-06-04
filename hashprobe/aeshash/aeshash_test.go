@@ -4,31 +4,10 @@ import (
 	"encoding/binary"
 	"testing"
 	"time"
-	"unsafe"
 )
 
-//go:noescape
-//go:linkname runtime_memhash32 runtime.memhash32
-func runtime_memhash32(data unsafe.Pointer, seed uintptr) uintptr
-
-//go:noescape
-//go:linkname runtime_memhash64 runtime.memhash64
-func runtime_memhash64(data unsafe.Pointer, seed uintptr) uintptr
-
-//go:noescape
-//go:linkname runtime_memhash runtime.memhash
-func runtime_memhash(data unsafe.Pointer, seed, size uintptr) uintptr
-
-func memhash32(data uint32, seed uintptr) uintptr {
-	return runtime_memhash32(unsafe.Pointer(&data), seed)
-}
-
-func memhash64(data uint64, seed uintptr) uintptr {
-	return runtime_memhash64(unsafe.Pointer(&data), seed)
-}
-
-func memhash128(data [16]byte, seed uintptr) uintptr {
-	return runtime_memhash(unsafe.Pointer(&data), seed, 16)
+func init() {
+	testingInitAesKeySched()
 }
 
 func TestHash32(t *testing.T) {
@@ -36,11 +15,11 @@ func TestHash32(t *testing.T) {
 		t.Skip("AES hash not supported on this platform")
 	}
 
-	h0 := memhash32(42, 1)
-	h1 := Hash32(42, 1)
+	h := Hash32(42, 1)
 
-	if h0 != h1 {
-		t.Errorf("want=%016x got=%016x", h0, h1)
+	expected := uintptr(0x5e6ec6d2d7f7e0a0)
+	if h != expected {
+		t.Errorf("want=%016x got=%016x", expected, h)
 	}
 }
 
@@ -74,11 +53,11 @@ func TestHash64(t *testing.T) {
 		t.Skip("AES hash not supported on this platform")
 	}
 
-	h0 := memhash64(42, 1)
-	h1 := Hash64(42, 1)
+	h := Hash64(42, 1)
 
-	if h0 != h1 {
-		t.Errorf("want=%016x got=%016x", h0, h1)
+	expected := uintptr(0x5e6ec6d2d7f7e0a0)
+	if h != expected {
+		t.Errorf("want=%016x got=%016x", expected, h)
 	}
 }
 
@@ -126,11 +105,11 @@ func TestHash128(t *testing.T) {
 		t.Skip("AES hash not supported on this platform")
 	}
 
-	h0 := memhash128([16]byte{0: 42}, 1)
-	h1 := Hash128([16]byte{0: 42}, 1)
+	h := Hash128([16]byte{0: 42}, 1)
 
-	if h0 != h1 {
-		t.Errorf("want=%016x got=%016x", h0, h1)
+	expected := uintptr(0x5db3281d2806690a)
+	if h != expected {
+		t.Errorf("want=%016x got=%016x", expected, h)
 	}
 }
 
