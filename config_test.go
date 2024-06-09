@@ -34,7 +34,10 @@ func TestConfig(t *testing.T) {
 		},
 	}
 	for _, tc := range tcs {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			writer := NewGenericWriter[RowType](os.Stdout, tc.cfg)
 			if reflect.DeepEqual(tc.cfg, writer.base.config) {
 				t.Fatalf("expected %+v, got %+v\n", tc.cfg, writer.base.config)
