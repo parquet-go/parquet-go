@@ -270,8 +270,8 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		PageBufferSize:       coalesceInt(c.PageBufferSize, config.PageBufferSize),
 		WriteBufferSize:      coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
 		DataPageVersion:      coalesceInt(c.DataPageVersion, config.DataPageVersion),
-		DataPageStatistics:   config.DataPageStatistics,
-		MaxRowsPerRowGroup:   config.MaxRowsPerRowGroup,
+		DataPageStatistics:   coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
+		MaxRowsPerRowGroup:   coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
 		KeyValueMetadata:     keyValueMetadata,
 		Schema:               coalesceSchema(c.Schema, config.Schema),
 		BloomFilters:         coalesceBloomFilters(c.BloomFilters, config.BloomFilters),
@@ -691,6 +691,10 @@ func (opt rowGroupOption) ConfigureRowGroup(config *RowGroupConfig) { opt(config
 type sortingOption func(*SortingConfig)
 
 func (opt sortingOption) ConfigureSorting(config *SortingConfig) { opt(config) }
+
+func coalesceBool(i1, i2 bool) bool {
+	return i1 || i2
+}
 
 func coalesceInt(i1, i2 int) int {
 	if i1 != 0 {
