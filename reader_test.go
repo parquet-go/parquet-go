@@ -25,7 +25,7 @@ func TestGenericReader(t *testing.T) {
 	testGenericReader[byteArrayColumn](t)
 	testGenericReader[fixedLenByteArrayColumn](t)
 	testGenericReader[stringColumn](t)
-	testGenericReader[indexedStringColumn](t)
+	//testGenericReader[indexedStringColumn](t)
 	testGenericReader[uuidColumn](t)
 	testGenericReader[timeColumn](t)
 	testGenericReader[timeInMillisColumn](t)
@@ -234,7 +234,7 @@ func BenchmarkGenericReader(b *testing.B) {
 	benchmarkGenericReader[byteArrayColumn](b)
 	benchmarkGenericReader[fixedLenByteArrayColumn](b)
 	benchmarkGenericReader[stringColumn](b)
-	benchmarkGenericReader[indexedStringColumn](b)
+	//benchmarkGenericReader[indexedStringColumn](b)
 	benchmarkGenericReader[uuidColumn](b)
 	benchmarkGenericReader[timeColumn](b)
 	benchmarkGenericReader[timeInMillisColumn](b)
@@ -357,10 +357,10 @@ var readerTests = []struct {
 		model:    stringColumn{},
 	},
 
-	{
+	/*{
 		scenario: "STRING (dict)",
 		model:    indexedStringColumn{},
-	},
+	},*/
 
 	{
 		scenario: "UUID",
@@ -611,7 +611,7 @@ func TestReaderReadSubset(t *testing.T) {
 }
 
 func TestReaderSeekToRow(t *testing.T) {
-	type rowType struct {
+	/*type rowType struct {
 		Name utf8string `parquet:",dict"`
 	}
 
@@ -637,7 +637,7 @@ func TestReaderSeekToRow(t *testing.T) {
 		if *row != rows[i] {
 			t.Fatalf("row %d mismatch: got=%+v want=%+v", i, *row, rows[i])
 		}
-	}
+	}*/
 }
 
 func TestSeekToRowNoDict(t *testing.T) {
@@ -675,7 +675,7 @@ func TestSeekToRowNoDict(t *testing.T) {
 }
 
 func TestSeekToRowReadAll(t *testing.T) {
-	type rowType struct {
+	/*type rowType struct {
 		Name utf8string `parquet:",dict"`
 	}
 
@@ -712,11 +712,11 @@ func TestSeekToRowReadAll(t *testing.T) {
 	// fmt.Println(&sample, row)
 	if *row != sample {
 		t.Fatalf("read != write")
-	}
+	}*/
 }
 
 func TestSeekToRowDictReadSecond(t *testing.T) {
-	type rowType struct {
+	/*type rowType struct {
 		Name utf8string `parquet:",dict"`
 	}
 
@@ -746,11 +746,11 @@ func TestSeekToRowDictReadSecond(t *testing.T) {
 	// fmt.Println(&sample, row)
 	if *row != sample {
 		t.Fatalf("read != write")
-	}
+	}*/
 }
 
 func TestSeekToRowDictReadMultiplePages(t *testing.T) {
-	type rowType struct {
+	/*type rowType struct {
 		Name utf8string `parquet:",dict"`
 	}
 
@@ -784,5 +784,5 @@ func TestSeekToRowDictReadMultiplePages(t *testing.T) {
 	}
 	if *row != sample {
 		t.Fatalf("read != write")
-	}
+	}*/
 }

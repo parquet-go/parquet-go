@@ -157,7 +157,7 @@ func checkColumnChunkColumnIndex(columnChunk parquet.ColumnChunk) error {
 		indexMax := columnIndex.MaxValue(pagesRead)
 
 		if !parquet.Equal(pageMin, indexMin) {
-			return fmt.Errorf("max page value mismatch: index=%q page=%q", indexMin, pageMin)
+			return fmt.Errorf("min page value mismatch: index=%q page=%q", indexMin, pageMin)
 		}
 		if !parquet.Equal(pageMax, indexMax) {
 			return fmt.Errorf("max page value mismatch: index=%q page=%q", indexMax, pageMax)
