@@ -70,6 +70,9 @@ func (c *Column) Encoding() encoding.Encoding { return c.encoding }
 // Compression returns the compression codecs used by this column.
 func (c *Column) Compression() compress.Codec { return c.compression }
 
+// SkipBounds is only used in the writer.
+func (c *Column) SkipBounds() bool { return false }
+
 // Path of the column in the parquet schema.
 func (c *Column) Path() []string { return c.path[1:] }
 

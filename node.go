@@ -68,6 +68,9 @@ type Node interface {
 	// used.
 	Compression() compress.Codec
 
+	// Returns whether bounds should be written for each page.
+	SkipBounds() bool
+
 	// Returns the Go type that best represents the parquet node.
 	//
 	// For leaf nodes, this will be one of bool, int32, int64, deprecated.Int96,
@@ -192,6 +195,13 @@ func (req *requiredNode) Repeated() bool       { return false }
 func (req *requiredNode) Required() bool       { return true }
 func (req *requiredNode) GoType() reflect.Type { return req.Node.GoType() }
 
+// SkipBounds wraps the given node to make it skip outputting bounds for each page.
+func SkipBounds(node Node) Node { return &skipBoundsNode{node} }
+
+type skipBoundsNode struct{ Node }
+
+func (req *skipBoundsNode) SkipBounds() bool { return true }
+
 type node struct{}
 
 // Leaf returns a leaf node of the given type.
@@ -220,6 +230,8 @@ func (n *leafNode) Fields() []Field { return nil }
 func (n *leafNode) Encoding() encoding.Encoding { return nil }
 
 func (n *leafNode) Compression() compress.Codec { return nil }
+
+func (n *leafNode) SkipBounds() bool { return false }
 
 func (n *leafNode) GoType() reflect.Type { return goTypeOfLeaf(n) }
 
@@ -301,6 +313,8 @@ func (g Group) Fields() []Field {
 func (g Group) Encoding() encoding.Encoding { return nil }
 
 func (g Group) Compression() compress.Codec { return nil }
+
+func (g Group) SkipBounds() bool { return false }
 
 func (g Group) GoType() reflect.Type { return goTypeOfGroup(g) }
 

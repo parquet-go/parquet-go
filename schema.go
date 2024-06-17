@@ -210,6 +210,8 @@ func (s *Schema) Encoding() encoding.Encoding { return s.root.Encoding() }
 // schema.
 func (s *Schema) Compression() compress.Codec { return s.root.Compression() }
 
+func (s *Schema) SkipBounds() bool { return false }
+
 // GoType returns the Go type that best represents the schema.
 func (s *Schema) GoType() reflect.Type { return s.root.GoType() }
 
@@ -429,6 +431,8 @@ func (s *structNode) Leaf() bool { return false }
 func (s *structNode) Encoding() encoding.Encoding { return nil }
 
 func (s *structNode) Compression() compress.Codec { return nil }
+
+func (s *structNode) SkipBounds() bool { return false }
 
 func (s *structNode) GoType() reflect.Type { return s.gotype }
 
@@ -724,6 +728,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		encoded    encoding.Encoding
 		compressed compress.Codec
 		fieldID    int
+		skipBounds bool
 	)
 
 	setNode := func(n Node) {
@@ -759,6 +764,13 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			throwInvalidNode(t, "struct field has compression codecs declared multiple times", name, tag...)
 		}
 		compressed = c
+	}
+
+	setSkipBounds := func() {
+		if skipBounds {
+			throwInvalidNode(t, "struct field has multiple declaration of the skipbounds tag", name, tag...)
+		}
+		skipBounds = true
 	}
 
 	forEachTagOption(tag, func(option, args string) {
@@ -913,6 +925,8 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 				throwInvalidNode(t, "struct field has field id that is not a valid int", name, tag...)
 			}
 			fieldID = id
+		case "skipbounds":
+			setSkipBounds()
 		}
 	})
 
@@ -963,6 +977,9 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 	}
 	if fieldID != 0 {
 		node = FieldID(node, fieldID)
+	}
+	if skipBounds {
+		node = SkipBounds(node)
 	}
 	return node
 }
