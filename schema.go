@@ -893,13 +893,20 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			case reflect.Int32:
 				timeUnit, err := parseTimestampArgs(args)
 				if err != nil || timeUnit.Duration() < time.Millisecond {
-					throwInvalidTag(t, name, option)
+					throwInvalidTag(t, name, option+args)
 				}
 				setNode(Time(timeUnit))
 			case reflect.Int64:
 				timeUnit, err := parseTimestampArgs(args)
+				if t == reflect.TypeOf(time.Duration(0)) {
+					if args == "()" {
+						timeUnit = Nanosecond
+					} else if timeUnit != Nanosecond {
+						throwInvalidTag(t, name, option+args)
+					}
+				}
 				if err != nil || timeUnit.Duration() == time.Millisecond {
-					throwInvalidTag(t, name, option)
+					throwInvalidTag(t, name, option+args)
 				}
 				setNode(Time(timeUnit))
 			default:
@@ -910,7 +917,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			case reflect.Int64:
 				timeUnit, err := parseTimestampArgs(args)
 				if err != nil {
-					throwInvalidTag(t, name, option)
+					throwInvalidTag(t, name, option+args)
 				}
 				setNode(Timestamp(timeUnit))
 			default:
@@ -918,7 +925,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 				case reflect.TypeOf(time.Time{}):
 					timeUnit, err := parseTimestampArgs(args)
 					if err != nil {
-						throwInvalidTag(t, name, option)
+						throwInvalidTag(t, name, option+args)
 					}
 					setNode(Timestamp(timeUnit))
 				default:
