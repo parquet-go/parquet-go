@@ -100,6 +100,41 @@ func benchmarkGenericWriter[Row generator[Row]](b *testing.B) {
 	})
 }
 
+func TestIssue121(t *testing.T) {
+	type T struct {
+		T1 uint8
+		T2 int8
+		T3 uint16
+		T4 int16
+	}
+	rows := []T{{1, 2, 3, 4}, {5, 6, 7, 8}}
+
+	b := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[T](b)
+
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f := bytes.NewReader(b.Bytes())
+	r := parquet.NewGenericReader[T](f)
+
+	parquetRows := make([]T, len(rows))
+	n, err := r.Read(parquetRows)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != len(rows) {
+		t.Fatalf("wrong number of rows read: want=%d got=%d", len(rows), n)
+	}
+	if !reflect.DeepEqual(rows, parquetRows) {
+		t.Errorf("wrong value for returned rows: want=%v got=%v", rows, parquetRows)
+	}
+}
+
 func TestIssue272(t *testing.T) {
 	type T2 struct {
 		X string `parquet:",dict,optional"`
