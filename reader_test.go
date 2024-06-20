@@ -38,6 +38,7 @@ func TestGenericReader(t *testing.T) {
 	testGenericReader[listColumn0](t)
 	testGenericReader[nestedListColumn1](t)
 	testGenericReader[nestedListColumn](t)
+	testGenericReader[optionalListColumn](t)
 	testGenericReader[*contact](t)
 	testGenericReader[paddedBooleanColumn](t)
 	testGenericReader[optionalInt32Column](t)
