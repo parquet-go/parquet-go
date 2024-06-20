@@ -15,6 +15,7 @@ import (
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/internal/bitpack"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	pschema "github.com/parquet-go/parquet-go/schema"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -2262,13 +2263,13 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 		writeRows writeRowsFunc
 	}
 
-	fields := structFieldsOf(t)
+	fields := structFieldsOf(t, pschema.DefaultOptions().TagSource())
 	columns := make([]column, len(fields))
 
 	for i, f := range fields {
 		optional := false
 		columnPath := path.append(f.Name)
-		forEachStructTagOption(f, func(_ reflect.Type, option, _ string) {
+		forEachStructTagOption(f, pschema.DefaultOptions().TagSource(), func(_ reflect.Type, option, _ string) {
 			switch option {
 			case "list":
 				columnPath = columnPath.append("list", "element")

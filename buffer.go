@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/parquet-go/parquet-go/internal/debug"
+	"github.com/parquet-go/parquet-go/schema"
 )
 
 // GenericBuffer is similar to a Buffer but uses a type parameter to define the
@@ -39,7 +40,7 @@ func NewGenericBuffer[T any](options ...RowGroupOption) *GenericBuffer[T] {
 
 	t := typeOf[T]()
 	if config.Schema == nil && t != nil {
-		config.Schema = schemaOf(dereference(t))
+		config.Schema = schemaOf(dereference(t), schema.DefaultOptions().TagSource())
 	}
 
 	if config.Schema == nil {

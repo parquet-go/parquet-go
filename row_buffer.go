@@ -6,6 +6,7 @@ import (
 
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/schema"
 )
 
 // RowBuffer is an implementation of the RowGroup interface which stores parquet
@@ -38,7 +39,7 @@ func NewRowBuffer[T any](options ...RowGroupOption) *RowBuffer[T] {
 
 	t := typeOf[T]()
 	if config.Schema == nil && t != nil {
-		config.Schema = schemaOf(dereference(t))
+		config.Schema = schemaOf(dereference(t), schema.DefaultOptions().TagSource())
 	}
 
 	if config.Schema == nil {

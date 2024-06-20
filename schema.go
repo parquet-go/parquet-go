@@ -13,6 +13,7 @@ import (
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/schema"
 )
 
 // Schema represents a parquet schema created from a Go value.
@@ -26,6 +27,7 @@ type Schema struct {
 	reconstruct reconstructFunc
 	mapping     columnMapping
 	columns     [][]string
+	options     *schema.Options
 }
 
 // SchemaOf constructs a parquet schema from a Go value.
@@ -96,22 +98,22 @@ type Schema struct {
 //	}
 //
 // The schema name is the Go type name of the value.
-func SchemaOf(model interface{}) *Schema {
-	return schemaOf(dereference(reflect.TypeOf(model)))
+func SchemaOf(model interface{}, opts ...schema.Option) *Schema {
+	return schemaOf(dereference(reflect.TypeOf(model)), schema.DefaultOptions().Apply(opts...).TagSource())
 }
 
 var cachedSchemas sync.Map // map[reflect.Type]*Schema
 
-func schemaOf(model reflect.Type) *Schema {
+func schemaOf(model reflect.Type, tags schema.TagSource) *Schema {
 	cached, _ := cachedSchemas.Load(model)
-	schema, _ := cached.(*Schema)
-	if schema != nil {
-		return schema
+	cachedSchema, _ := cached.(*Schema)
+	if cachedSchema != nil {
+		return cachedSchema
 	}
 	if model.Kind() != reflect.Struct {
 		panic("cannot construct parquet schema from value of type " + model.String())
 	}
-	schema = NewSchema(model.Name(), nodeOf(model, nil))
+	schema := NewSchema(model.Name(), nodeOf(model, schema.StructTag{}, tags), schema.WithTagSource(tags))
 	if actual, loaded := cachedSchemas.LoadOrStore(model, schema); loaded {
 		schema = actual.(*Schema)
 	}
@@ -122,15 +124,17 @@ func schemaOf(model reflect.Type) *Schema {
 //
 // The function panics if Node contains more leaf columns than supported by the
 // package (see parquet.MaxColumnIndex).
-func NewSchema(name string, root Node) *Schema {
+func NewSchema(name string, root Node, opts ...schema.Option) *Schema {
+	options := schema.DefaultOptions().Apply(opts...)
 	mapping, columns := columnMappingOf(root)
 	return &Schema{
 		name:        name,
 		root:        root,
-		deconstruct: makeDeconstructFunc(root),
-		reconstruct: makeReconstructFunc(root),
+		deconstruct: makeDeconstructFunc(root, options.TagSource()),
+		reconstruct: makeReconstructFunc(root, options.TagSource()),
 		mapping:     mapping,
 		columns:     columns,
+		options:     options,
 	}
 }
 
@@ -141,22 +145,22 @@ func dereference(t reflect.Type) reflect.Type {
 	return t
 }
 
-func makeDeconstructFunc(node Node) (deconstruct deconstructFunc) {
+func makeDeconstructFunc(node Node, tags schema.TagSource) (deconstruct deconstructFunc) {
 	if schema, _ := node.(*Schema); schema != nil {
 		return schema.deconstruct
 	}
 	if !node.Leaf() {
-		_, deconstruct = deconstructFuncOf(0, node)
+		_, deconstruct = deconstructFuncOf(0, node, tags)
 	}
 	return deconstruct
 }
 
-func makeReconstructFunc(node Node) (reconstruct reconstructFunc) {
+func makeReconstructFunc(node Node, tags schema.TagSource) (reconstruct reconstructFunc) {
 	if schema, _ := node.(*Schema); schema != nil {
 		return schema.reconstruct
 	}
 	if !node.Leaf() {
-		_, reconstruct = reconstructFuncOf(0, node)
+		_, reconstruct = reconstructFuncOf(0, node, tags)
 	}
 	return reconstruct
 }
@@ -353,10 +357,10 @@ type structNode struct {
 	fields []structField
 }
 
-func structNodeOf(t reflect.Type) *structNode {
+func structNodeOf(t reflect.Type, tags schema.TagSource) *structNode {
 	// Collect struct fields first so we can order them before generating the
 	// column indexes.
-	fields := structFieldsOf(t)
+	fields := structFieldsOf(t, tags)
 
 	s := &structNode{
 		gotype: t,
@@ -365,42 +369,41 @@ func structNodeOf(t reflect.Type) *structNode {
 
 	for i := range fields {
 		field := structField{name: fields[i].Name, index: fields[i].Index}
-		field.Node = makeNodeOf(fields[i].Type, fields[i].Name, []string{
-			fields[i].Tag.Get("parquet"),
-			fields[i].Tag.Get("parquet-key"),
-			fields[i].Tag.Get("parquet-value"),
-		})
+		src := tags.Tags(fields[i])
+		field.Node = makeNodeOf(fields[i].Type, fields[i].Name, src, tags)
 		s.fields[i] = field
 	}
-
 	return s
 }
 
-func structFieldsOf(t reflect.Type) []reflect.StructField {
-	fields := appendStructFields(t, nil, nil, 0)
+func structFieldsOf(t reflect.Type, tags schema.TagSource) []reflect.StructField {
+	fields := appendStructFields(t, nil, nil, 0, tags)
 
 	for i := range fields {
 		f := &fields[i]
 
-		if tag := f.Tag.Get("parquet"); tag != "" {
-			name, _ := split(tag)
-			if name != "" {
-				f.Name = name
-			}
+		tags := tags.Tags(*f)
+		// Field name is the first key in the first tag string. For fields providing
+		// other tags but not the field name they must begin with a comma
+		name, _ := split(tags.Parquet)
+		if name != "" {
+			f.Name = name
 		}
 	}
 
 	return fields
 }
 
-func appendStructFields(t reflect.Type, fields []reflect.StructField, index []int, offset uintptr) []reflect.StructField {
+func appendStructFields(
+	t reflect.Type, fields []reflect.StructField, index []int, offset uintptr,
+	tags schema.TagSource,
+) []reflect.StructField {
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
-		if tag := f.Tag.Get("parquet"); tag != "" {
-			name, _ := split(tag)
-			if tag != "-," && name == "-" {
-				continue
-			}
+		fieldTags := tags.Tags(f)
+		name, _ := split(fieldTags.Parquet)
+		if fieldTags.Parquet != "-," && name == "-" {
+			continue
 		}
 
 		fieldIndex := index[:len(index):len(index)]
@@ -409,7 +412,7 @@ func appendStructFields(t reflect.Type, fields []reflect.StructField, index []in
 		f.Offset += offset
 
 		if f.Anonymous {
-			fields = appendStructFields(f.Type, fields, fieldIndex, f.Offset)
+			fields = appendStructFields(f.Type, fields, fieldIndex, f.Offset, tags)
 		} else if f.IsExported() {
 			f.Index = fieldIndex
 			fields = append(fields, f)
@@ -501,8 +504,8 @@ func throwUnknownTag(t reflect.Type, name string, tag string) {
 	panic(tag + " is an unrecognized parquet tag: " + nodeString(t, name, tag))
 }
 
-func throwInvalidNode(t reflect.Type, msg, name string, tag ...string) {
-	panic(msg + ": " + nodeString(t, name, tag...))
+func throwInvalidNode(t reflect.Type, msg, name string, tag schema.StructTag) {
+	panic(msg + ": " + nodeString(t, name, tag.Parquet))
 }
 
 // FixedLenByteArray decimals are sized based on precision
@@ -511,8 +514,10 @@ func decimalFixedLenByteArraySize(precision int) int {
 	return int(math.Ceil((math.Log10(2) + float64(precision)) / math.Log10(256)))
 }
 
-func forEachStructTagOption(sf reflect.StructField, do func(t reflect.Type, option, args string)) {
-	if tag := sf.Tag.Get("parquet"); tag != "" {
+func forEachStructTagOption(sf reflect.StructField, tags schema.TagSource, do func(t reflect.Type, option, args string)) {
+	fieldTags := tags.Tags(sf)
+	tag := fieldTags.Parquet
+	if tag != "" {
 		_, tag = split(tag) // skip the field name
 		for tag != "" {
 			option := ""
@@ -528,7 +533,7 @@ func forEachStructTagOption(sf reflect.StructField, do func(t reflect.Type, opti
 	}
 }
 
-func nodeOf(t reflect.Type, tag []string) Node {
+func nodeOf(t reflect.Type, tag schema.StructTag, tags schema.TagSource) Node {
 	switch t {
 	case reflect.TypeOf(deprecated.Int96{}):
 		return Leaf(Int96Type)
@@ -565,13 +570,13 @@ func nodeOf(t reflect.Type, tag []string) Node {
 		n = String()
 
 	case reflect.Ptr:
-		n = Optional(nodeOf(t.Elem(), nil))
+		n = Optional(nodeOf(t.Elem(), schema.StructTag{}, tags))
 
 	case reflect.Slice:
 		if elem := t.Elem(); elem.Kind() == reflect.Uint8 { // []byte?
 			n = Leaf(ByteArrayType)
 		} else {
-			n = Repeated(nodeOf(elem, nil))
+			n = Repeated(nodeOf(elem, schema.StructTag{}, tags))
 		}
 
 	case reflect.Array:
@@ -580,27 +585,16 @@ func nodeOf(t reflect.Type, tag []string) Node {
 		}
 
 	case reflect.Map:
-		var mapTag, valueTag, keyTag string
-		if len(tag) > 0 {
-			mapTag = tag[0]
-			if len(tag) > 1 {
-				keyTag = tag[1]
-			}
-			if len(tag) >= 2 {
-				valueTag = tag[2]
-			}
-		}
-
-		if strings.Contains(mapTag, "json") {
+		if strings.Contains(tag.Parquet, "json") {
 			n = JSON()
 		} else {
 			n = Map(
-				makeNodeOf(t.Key(), t.Name(), []string{keyTag}),
-				makeNodeOf(t.Elem(), t.Name(), []string{valueTag}),
+				makeNodeOf(t.Key(), t.Name(), schema.StructTag{Parquet: tag.MapKey}, tags),
+				makeNodeOf(t.Elem(), t.Name(), schema.StructTag{Parquet: tag.MapValue}, tags),
 			)
 		}
 
-		forEachTagOption([]string{mapTag}, func(option, args string) {
+		forEachTagOption(schema.StructTag{Parquet: tag.Parquet}, func(option, args string) {
 			switch option {
 			case "", "json":
 				return
@@ -618,7 +612,7 @@ func nodeOf(t reflect.Type, tag []string) Node {
 		})
 
 	case reflect.Struct:
-		return structNodeOf(t)
+		return structNodeOf(t, tags)
 	}
 
 	if n == nil {
@@ -716,7 +710,7 @@ var (
 	_ WriterOption   = (*Schema)(nil)
 )
 
-func makeNodeOf(t reflect.Type, name string, tag []string) Node {
+func makeNodeOf(t reflect.Type, name string, tag schema.StructTag, tags schema.TagSource) Node {
 	var (
 		node       Node
 		optional   bool
@@ -728,42 +722,42 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 
 	setNode := func(n Node) {
 		if node != nil {
-			throwInvalidNode(t, "struct field has multiple logical parquet types declared", name, tag...)
+			throwInvalidNode(t, "struct field has multiple logical parquet types declared", name, tag)
 		}
 		node = n
 	}
 
 	setOptional := func() {
 		if optional {
-			throwInvalidNode(t, "struct field has multiple declaration of the optional tag", name, tag...)
+			throwInvalidNode(t, "struct field has multiple declaration of the optional tag", name, tag)
 		}
 		optional = true
 	}
 
 	setList := func() {
 		if list {
-			throwInvalidNode(t, "struct field has multiple declaration of the list tag", name, tag...)
+			throwInvalidNode(t, "struct field has multiple declaration of the list tag", name, tag)
 		}
 		list = true
 	}
 
 	setEncoding := func(e encoding.Encoding) {
 		if encoded != nil {
-			throwInvalidNode(t, "struct field has encoding declared multiple time", name, tag...)
+			throwInvalidNode(t, "struct field has encoding declared multiple time", name, tag)
 		}
 		encoded = e
 	}
 
 	setCompression := func(c compress.Codec) {
 		if compressed != nil {
-			throwInvalidNode(t, "struct field has compression codecs declared multiple times", name, tag...)
+			throwInvalidNode(t, "struct field has compression codecs declared multiple times", name, tag)
 		}
 		compressed = c
 	}
 
 	forEachTagOption(tag, func(option, args string) {
 		if t.Kind() == reflect.Map {
-			node = nodeOf(t, tag)
+			node = nodeOf(t, tag, tags)
 			return
 		}
 		switch option {
@@ -837,7 +831,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		case "list":
 			switch t.Kind() {
 			case reflect.Slice:
-				element := nodeOf(t.Elem(), nil)
+				element := nodeOf(t.Elem(), schema.StructTag{}, tags)
 				setNode(element)
 				setList()
 			default:
@@ -926,14 +920,14 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		// Note for strings "optional" applies only to the entire BYTE_ARRAY and
 		// not each individual byte.
 		if optional && !isUint8 {
-			node = Repeated(Optional(nodeOf(t.Elem(), tag)))
+			node = Repeated(Optional(nodeOf(t.Elem(), tag, tags)))
 			// Don't also apply "optional" to the whole list.
 			optional = false
 		}
 	}
 
 	if node == nil {
-		node = nodeOf(t, tag)
+		node = nodeOf(t, tag, tags)
 	}
 
 	if compressed != nil {
@@ -967,8 +961,8 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 	return node
 }
 
-func forEachTagOption(tags []string, do func(option, args string)) {
-	for _, tag := range tags {
+func forEachTagOption(tags schema.StructTag, do func(option, args string)) {
+	for _, tag := range []string{tags.Parquet, tags.MapKey, tags.MapValue} {
 		_, tag = split(tag) // skip the field name
 		for tag != "" {
 			option := ""
