@@ -213,6 +213,7 @@ type WriterConfig struct {
 	BloomFilters         []BloomFilterColumn
 	Compression          compress.Codec
 	Sorting              SortingConfig
+	SkipPageBounds       [][]string
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -621,6 +622,15 @@ func Compression(codec compress.Codec) WriterOption {
 func SortingWriterConfig(options ...SortingOption) WriterOption {
 	options = append([]SortingOption{}, options...)
 	return writerOption(func(config *WriterConfig) { config.Sorting.Apply(options...) })
+}
+
+// SkipPageBounds lists the path to a column that shouldn't have bounds written to the
+// footer of the parquet file. This is useful for data blobs, like a raw html file,
+// where the bounds are not meaningful.
+//
+// This option is additive, it may be used multiple times to skip multiple columns.
+func SkipPageBounds(path ...string) WriterOption {
+	return writerOption(func(config *WriterConfig) { config.SkipPageBounds = append(config.SkipPageBounds, path) })
 }
 
 // ColumnBufferCapacity creates a configuration option which defines the size of
