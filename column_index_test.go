@@ -71,8 +71,8 @@ func Test_ColumnIndexReuse(t *testing.T) {
 	if len(before.NullPages) != 1 {
 		t.Fatalf("expected 1 null page, got %d", len(before.NullPages))
 	}
-	if !before.NullPages[0] {
-		t.Fatalf("expected null page 0")
+	if before.NullPages[0] {
+		t.Fatalf("unexpected null page 0")
 	}
 
 	// Reset the indexer. Should be safe for reuse.
@@ -103,7 +103,7 @@ func Test_ColumnIndexReuse(t *testing.T) {
 	if len(before.NullPages) != 1 {
 		t.Fatalf("expected 1 null page, got %d", len(before.NullPages))
 	}
-	if !before.NullPages[0] {
-		t.Fatalf("expected null page 0")
+	if before.NullPages[0] {
+		t.Fatalf("unexpected null page 0")
 	}
 }
