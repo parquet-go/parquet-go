@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSortingWriter(t *testing.T) {
@@ -354,7 +353,9 @@ func TestMergedRowsCorruptedString(t *testing.T) {
 		}
 
 		f, err := parquet.OpenFile(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		files[i] = f
 	}
 
@@ -362,8 +363,12 @@ func TestMergedRowsCorruptedString(t *testing.T) {
 	merged, err := parquet.MergeRowGroups([]parquet.RowGroup{files[0].RowGroups()[0], files[1].RowGroups()[0]},
 		parquet.SortingRowGroupConfig(parquet.SortingColumns(parquet.Ascending("tag"))),
 	)
-	require.NoError(t, err)
-	require.Equal(t, rowCount, int(merged.NumRows()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.NumRows() != int64(rowCount) {
+		t.Fatal("number of rows mismatched: want", rowCount, "but got", merged.NumRows())
+	}
 
 	// Validate the merged rows.
 	reader := merged.Rows()
