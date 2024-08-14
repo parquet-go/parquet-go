@@ -9,7 +9,6 @@ require (
 	github.com/klauspost/compress v1.17.9
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/pierrec/lz4/v4 v4.1.21
-	github.com/segmentio/encoding v0.4.0
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/sys v0.21.0
 	google.golang.org/protobuf v1.34.2

@@ -10,8 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/segmentio/encoding/thrift"
-
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
