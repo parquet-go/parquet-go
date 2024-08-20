@@ -16,13 +16,14 @@ type contact struct {
 
 func TestGenericRows(t *testing.T) {
 	type testCase[T any] struct {
-		name   string
-		config IterConfig
+		name        string
+		config      IterConfig
+		shouldMatch bool
 	}
 	tests := []testCase[[]contact]{
-		{"succeeds because it doesn't reuse rows", IterConfig{ReuseRows: false, ChunkSize: 1}},
-		{"succeeds because ChunkSize is larger than input size", IterConfig{ReuseRows: true, ChunkSize: 10}},
-		{"fails because johnPhoneNumber is overwritten with janePhoneNumber", IterConfig{ReuseRows: true, ChunkSize: 1}},
+		{"succeeds because it doesn't reuse rows", IterConfig{ReuseRows: false, ChunkSize: 1}, true},
+		{"succeeds because ChunkSize is larger than input size", IterConfig{ReuseRows: true, ChunkSize: 10}, true},
+		{"fails because johnPhoneNumber is overwritten with janePhoneNumber", IterConfig{ReuseRows: true, ChunkSize: 1}, false},
 	}
 
 	var johnPhoneNumber = "555-555-5555"
@@ -35,13 +36,15 @@ func TestGenericRows(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			testGenericReaderRows(t, contacts, tt.config)
-			testFlattenRows(t, contacts, tt.config)
+			testGenericReaderRows(t, contacts, tt.config, tt.shouldMatch)
+		})
+		t.Run(tt.name+"_flatten", func(t *testing.T) {
+			testFlattenRows(t, contacts, tt.config, tt.shouldMatch)
 		})
 	}
 }
 
-func testGenericReaderRows[Row any](t *testing.T, rows []Row, config IterConfig) {
+func testGenericReaderRows[Row any](t *testing.T, rows []Row, config IterConfig, shouldMatch bool) {
 	buffer := new(bytes.Buffer)
 	writer := parquet.NewGenericWriter[Row](buffer)
 	_, err := writer.Write(rows)
@@ -65,12 +68,14 @@ func testGenericReaderRows[Row any](t *testing.T, rows []Row, config IterConfig)
 	if len(rows) != len(result) {
 		t.Fatal(fmt.Errorf("incorrect number of values were read: want=%d got=%d", len(rows), len(result)))
 	}
-	if !reflect.DeepEqual(rows, result) {
+
+	matches := reflect.DeepEqual(rows, result)
+	if !((matches && shouldMatch) || (!matches && !shouldMatch)) {
 		t.Fatal(fmt.Errorf("rows mismatch:\nwant: %+v\ngot: %+v", rows, result))
 	}
 }
 
-func testFlattenRows[Row any](t *testing.T, rows []Row, config IterConfig) {
+func testFlattenRows[Row any](t *testing.T, rows []Row, config IterConfig, shouldMatch bool) {
 	buffer := new(bytes.Buffer)
 	writer := parquet.NewGenericWriter[Row](buffer)
 	_, err := writer.Write(rows)
@@ -94,7 +99,9 @@ func testFlattenRows[Row any](t *testing.T, rows []Row, config IterConfig) {
 	if len(rows) != len(result) {
 		t.Fatal(fmt.Errorf("incorrect number of values were read: want=%d got=%d", len(rows), len(result)))
 	}
-	if !reflect.DeepEqual(rows, result) {
+
+	matches := reflect.DeepEqual(rows, result)
+	if !((matches && shouldMatch) || (!matches && !shouldMatch)) {
 		t.Fatal(fmt.Errorf("rows mismatch:\nwant: %+v\ngot: %+v", rows, result))
 	}
 }
