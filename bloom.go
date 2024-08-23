@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"encoding/binary"
 	"io"
 
 	"github.com/parquet-go/parquet-go/bloom"
@@ -9,6 +10,7 @@ import (
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"golang.org/x/sys/cpu"
 )
 
 // BloomFilter is an interface allowing applications to test whether a key
@@ -172,7 +174,18 @@ func (splitBlockEncoding) EncodeInt64(dst []byte, src []int64) ([]byte, error) {
 }
 
 func (e splitBlockEncoding) EncodeInt96(dst []byte, src []deprecated.Int96) ([]byte, error) {
-	splitBlockEncodeFixedLenByteArray(bloom.MakeSplitBlockFilter(dst), unsafecast.Slice[byte](src), 12)
+	if cpu.IsBigEndian {
+		srcLen := len(src)
+		buf := make([]byte, srcLen*12)
+		for idx := range srcLen {
+			binary.LittleEndian.PutUint32(buf[(idx*12):4+(idx*12)], uint32(src[idx][0]))
+			binary.LittleEndian.PutUint32(buf[4+(idx*12):8+(idx*12)], uint32(src[idx][1]))
+			binary.LittleEndian.PutUint32(buf[8+(idx*12):12+(idx*12)], uint32(src[idx][2]))
+		}
+		splitBlockEncodeFixedLenByteArray(bloom.MakeSplitBlockFilter(dst), buf, 12)
+	} else {
+		splitBlockEncodeFixedLenByteArray(bloom.MakeSplitBlockFilter(dst), unsafecast.Slice[byte](src), 12)
+	}
 	return dst, nil
 }
 
