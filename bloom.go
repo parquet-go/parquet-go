@@ -2,7 +2,9 @@ package parquet
 
 import (
 	"io"
+	"encoding/binary"
 
+	"golang.org/x/sys/cpu"
 	"github.com/parquet-go/parquet-go/bloom"
 	"github.com/parquet-go/parquet-go/bloom/xxhash"
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -172,7 +174,18 @@ func (splitBlockEncoding) EncodeInt64(dst []byte, src []int64) ([]byte, error) {
 }
 
 func (e splitBlockEncoding) EncodeInt96(dst []byte, src []deprecated.Int96) ([]byte, error) {
-	splitBlockEncodeFixedLenByteArray(bloom.MakeSplitBlockFilter(dst), deprecated.Int96ToBytes(src), 12)
+        if cpu.IsBigEndian {
+                srcLen := len(src)
+                buf := make([]byte, srcLen*12)
+                for idx := 0; idx < srcLen; idx++ {
+                        binary.LittleEndian.PutUint32(buf[(idx*12):4+(idx*12)], uint32(src[idx][0]))
+                        binary.LittleEndian.PutUint32(buf[4+(idx*12):8+(idx*12)], uint32(src[idx][1]))
+                        binary.LittleEndian.PutUint32(buf[8+(idx*12):12+(idx*12)], uint32(src[idx][2]))
+                }
+	        splitBlockEncodeFixedLenByteArray(bloom.MakeSplitBlockFilter(dst), buf, 12)
+	} else {
+		splitBlockEncodeFixedLenByteArray(bloom.MakeSplitBlockFilter(dst), deprecated.Int96ToBytes(src), 12)
+	}
 	return dst, nil
 }
 

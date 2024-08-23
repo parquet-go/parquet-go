@@ -16,6 +16,7 @@ import (
 	"github.com/parquet-go/parquet-go/internal/bitpack"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
 	"github.com/parquet-go/parquet-go/sparse"
+	"golang.org/x/sys/cpu"
 )
 
 // ColumnBuffer is an interface representing columns of a row group.
@@ -829,7 +830,11 @@ func (col *booleanColumnBuffer) WriteBooleans(values []bool) (int, error) {
 
 func (col *booleanColumnBuffer) WriteValues(values []Value) (int, error) {
 	var model Value
-	col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+        if cpu.IsBigEndian {
+                col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)+7), columnLevels{})
+        } else {
+                col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+        }
 	return len(values), nil
 }
 
@@ -969,7 +974,11 @@ func (col *int32ColumnBuffer) WriteInt32s(values []int32) (int, error) {
 
 func (col *int32ColumnBuffer) WriteValues(values []Value) (int, error) {
 	var model Value
-	col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+	if cpu.IsBigEndian {
+		col.writeValues(makeArrayValue(values, (unsafe.Offsetof(model.u64)+4)), columnLevels{})
+	} else {
+		col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+	}
 	return len(values), nil
 }
 
@@ -1263,7 +1272,11 @@ func (col *floatColumnBuffer) WriteFloats(values []float32) (int, error) {
 
 func (col *floatColumnBuffer) WriteValues(values []Value) (int, error) {
 	var model Value
-	col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+	if cpu.IsBigEndian {
+		col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)+4), columnLevels{})
+	} else {
+		col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+	}
 	return len(values), nil
 }
 
@@ -1753,7 +1766,11 @@ func (col *uint32ColumnBuffer) WriteUint32s(values []uint32) (int, error) {
 
 func (col *uint32ColumnBuffer) WriteValues(values []Value) (int, error) {
 	var model Value
-	col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+	if cpu.IsBigEndian {
+		col.writeValues(makeArrayValue(values, (unsafe.Offsetof(model.u64)+4)), columnLevels{})
+	} else {
+		col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)), columnLevels{})
+	}
 	return len(values), nil
 }
 

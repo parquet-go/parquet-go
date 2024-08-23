@@ -1,6 +1,9 @@
 package parquet
 
 import (
+	"math"
+	"encoding/binary"
+	"golang.org/x/sys/cpu"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/format"
@@ -355,12 +358,39 @@ func (i *int32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 }
 
 func (i *int32ColumnIndexer) ColumnIndex() format.ColumnIndex {
-	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Int32ToBytes(i.minValues), 4),
-		splitFixedLenByteArrays(unsafecast.Int32ToBytes(i.maxValues), 4),
-		orderOfInt32(i.minValues),
-		orderOfInt32(i.maxValues),
-	)
+	if cpu.IsBigEndian {
+		minLen := len(i.minValues)
+		maxLen := len(i.maxValues)
+		byteMin := make([]byte, minLen*4)
+		idx := 0
+		for k := 0; k < minLen; k++ {
+			minVal := (i.minValues)[k]
+			binary.LittleEndian.PutUint32(byteMin[idx:(4+idx)], uint32(minVal))
+			idx += 4
+		}
+
+		byteMax := make([]byte, maxLen*4)
+		idx = 0
+		for k := 0; k < maxLen; k++ {
+			maxVal := (i.maxValues)[k]
+			binary.LittleEndian.PutUint32(byteMax[idx:(4+idx)], uint32(maxVal))
+			idx += 4
+		}
+
+		return i.columnIndex(
+			splitFixedLenByteArrays(byteMin, 4),
+			splitFixedLenByteArrays(byteMax, 4),
+			orderOfInt32(i.minValues),
+			orderOfInt32(i.maxValues),
+		)
+	} else {
+		return i.columnIndex(
+			splitFixedLenByteArrays(unsafecast.Int32ToBytes(i.minValues), 4),
+			splitFixedLenByteArrays(unsafecast.Int32ToBytes(i.maxValues), 4),
+			orderOfInt32(i.minValues),
+			orderOfInt32(i.maxValues),
+		)
+	}
 }
 
 type int64ColumnIndexer struct {
@@ -386,12 +416,39 @@ func (i *int64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 }
 
 func (i *int64ColumnIndexer) ColumnIndex() format.ColumnIndex {
-	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Int64ToBytes(i.minValues), 8),
-		splitFixedLenByteArrays(unsafecast.Int64ToBytes(i.maxValues), 8),
-		orderOfInt64(i.minValues),
-		orderOfInt64(i.maxValues),
-	)
+	if cpu.IsBigEndian {
+		minLen := len(i.minValues)
+		maxLen := len(i.maxValues)
+		byteMin := make([]byte, minLen*8)
+		idx := 0
+		for k := 0; k < minLen; k++ {
+			minVal := (i.minValues)[k]
+			binary.LittleEndian.PutUint64(byteMin[idx:(8+idx)], uint64(minVal))
+			idx += 8
+		}
+
+		byteMax := make([]byte, maxLen*8)
+		idx = 0
+		for k := 0; k < maxLen; k++ {
+			maxVal := (i.maxValues)[k]
+			binary.LittleEndian.PutUint64(byteMax[idx:(8+idx)], uint64(maxVal))
+			idx += 8
+		}
+
+		return i.columnIndex(
+			splitFixedLenByteArrays(byteMin, 8),
+			splitFixedLenByteArrays(byteMax, 8),
+			orderOfInt64(i.minValues),
+			orderOfInt64(i.maxValues),
+		)
+	} else {
+		return i.columnIndex(
+			splitFixedLenByteArrays(unsafecast.Int64ToBytes(i.minValues), 8),
+			splitFixedLenByteArrays(unsafecast.Int64ToBytes(i.maxValues), 8),
+			orderOfInt64(i.minValues),
+			orderOfInt64(i.maxValues),
+		)
+	}
 }
 
 type int96ColumnIndexer struct {
@@ -417,12 +474,44 @@ func (i *int96ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 }
 
 func (i *int96ColumnIndexer) ColumnIndex() format.ColumnIndex {
-	return i.columnIndex(
-		splitFixedLenByteArrays(deprecated.Int96ToBytes(i.minValues), 12),
-		splitFixedLenByteArrays(deprecated.Int96ToBytes(i.maxValues), 12),
-		deprecated.OrderOfInt96(i.minValues),
-		deprecated.OrderOfInt96(i.maxValues),
-	)
+	if cpu.IsBigEndian {
+		minLen := len(i.minValues)
+		maxLen := len(i.maxValues)
+		byteMin := make([]byte, minLen*12)
+		idx := 0
+
+		for k := 0; k < minLen; k++ {
+			minVal := (i.minValues)[k]
+			binary.LittleEndian.PutUint32(byteMin[idx:(4+idx)], uint32(minVal[0]))
+			binary.LittleEndian.PutUint32(byteMin[(4+idx):(8+idx)], uint32(minVal[1]))
+			binary.LittleEndian.PutUint32(byteMin[(8+idx):(12+idx)], uint32(minVal[2]))
+			idx += 12
+		}
+
+		byteMax := make([]byte, maxLen*12)
+		idx = 0
+		for k := 0; k < maxLen; k++ {
+			maxVal := (i.maxValues)[k]
+			binary.LittleEndian.PutUint32(byteMax[idx:(4+idx)], uint32(maxVal[0]))
+			binary.LittleEndian.PutUint32(byteMax[(4+idx):(8+idx)], uint32(maxVal[1]))
+			binary.LittleEndian.PutUint32(byteMax[(8+idx):(12+idx)], uint32(maxVal[2]))
+			idx += 12
+		}
+
+		return i.columnIndex(
+			splitFixedLenByteArrays(byteMin, 12),
+			splitFixedLenByteArrays(byteMax, 12),
+			deprecated.OrderOfInt96(i.minValues),
+			deprecated.OrderOfInt96(i.maxValues),
+		)
+	} else {
+		return i.columnIndex(
+			splitFixedLenByteArrays(deprecated.Int96ToBytes(i.minValues), 12),
+			splitFixedLenByteArrays(deprecated.Int96ToBytes(i.maxValues), 12),
+			deprecated.OrderOfInt96(i.minValues),
+			deprecated.OrderOfInt96(i.maxValues),
+		)
+	}
 }
 
 type floatColumnIndexer struct {
@@ -448,12 +537,39 @@ func (i *floatColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 }
 
 func (i *floatColumnIndexer) ColumnIndex() format.ColumnIndex {
-	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Float32ToBytes(i.minValues), 4),
-		splitFixedLenByteArrays(unsafecast.Float32ToBytes(i.maxValues), 4),
-		orderOfFloat32(i.minValues),
-		orderOfFloat32(i.maxValues),
-	)
+	if cpu.IsBigEndian {
+		minLen := len(i.minValues)
+		maxLen := len(i.maxValues)
+		byteMin := make([]byte, minLen*4)
+		idx := 0
+		for k := 0; k < minLen; k++ {
+			minVal := (i.minValues)[k]
+			binary.LittleEndian.PutUint32(byteMin[idx:(4+idx)], math.Float32bits(minVal))
+			idx += 4
+		}
+
+		byteMax := make([]byte, maxLen*4)
+		idx = 0
+		for k := 0; k < maxLen; k++ {
+			maxVal := (i.maxValues)[k]
+			binary.LittleEndian.PutUint32(byteMax[idx:(4+idx)], math.Float32bits(maxVal))
+			idx += 4
+		}
+
+		return i.columnIndex(
+			splitFixedLenByteArrays(byteMin, 4),
+			splitFixedLenByteArrays(byteMax, 4),
+			orderOfFloat32(i.minValues),
+			orderOfFloat32(i.maxValues),
+		)
+	} else {
+		return i.columnIndex(
+			splitFixedLenByteArrays(unsafecast.Float32ToBytes(i.minValues), 4),
+			splitFixedLenByteArrays(unsafecast.Float32ToBytes(i.maxValues), 4),
+			orderOfFloat32(i.minValues),
+			orderOfFloat32(i.maxValues),
+		)
+	}
 }
 
 type doubleColumnIndexer struct {
@@ -479,12 +595,39 @@ func (i *doubleColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 }
 
 func (i *doubleColumnIndexer) ColumnIndex() format.ColumnIndex {
-	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Float64ToBytes(i.minValues), 8),
-		splitFixedLenByteArrays(unsafecast.Float64ToBytes(i.maxValues), 8),
-		orderOfFloat64(i.minValues),
-		orderOfFloat64(i.maxValues),
-	)
+	if cpu.IsBigEndian {
+		minLen := len(i.minValues)
+		maxLen := len(i.maxValues)
+		byteMin := make([]byte, minLen*8)
+		idx := 0
+		for k := 0; k < minLen; k++ {
+			minVal := (i.minValues)[k]
+			binary.LittleEndian.PutUint64(byteMin[idx:(8+idx)], math.Float64bits(minVal))
+			idx += 8
+		}
+
+		byteMax := make([]byte, maxLen*8)
+		idx = 0
+		for k := 0; k < maxLen; k++ {
+			maxVal := (i.maxValues)[k]
+			binary.LittleEndian.PutUint64(byteMax[idx:(8+idx)], math.Float64bits(maxVal))
+			idx += 8
+		}
+
+		return i.columnIndex(
+			splitFixedLenByteArrays(byteMin, 8),
+			splitFixedLenByteArrays(byteMax, 8),
+			orderOfFloat64(i.minValues),
+			orderOfFloat64(i.maxValues),
+		)
+	} else {
+		return i.columnIndex(
+			splitFixedLenByteArrays(unsafecast.Float64ToBytes(i.minValues), 8),
+			splitFixedLenByteArrays(unsafecast.Float64ToBytes(i.maxValues), 8),
+			orderOfFloat64(i.minValues),
+			orderOfFloat64(i.maxValues),
+		)
+	}
 }
 
 type byteArrayColumnIndexer struct {
@@ -598,12 +741,39 @@ func (i *uint32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 }
 
 func (i *uint32ColumnIndexer) ColumnIndex() format.ColumnIndex {
-	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Uint32ToBytes(i.minValues), 4),
-		splitFixedLenByteArrays(unsafecast.Uint32ToBytes(i.maxValues), 4),
-		orderOfUint32(i.minValues),
-		orderOfUint32(i.maxValues),
-	)
+	if cpu.IsBigEndian {
+		minLen := len(i.minValues)
+		maxLen := len(i.maxValues)
+		byteMin := make([]byte, minLen*4)
+		idx := 0
+		for k := 0; k < minLen; k++ {
+			minVal := (i.minValues)[k]
+			binary.LittleEndian.PutUint32(byteMin[idx:(4+idx)], uint32(minVal))
+			idx += 4
+		}
+
+		byteMax := make([]byte, maxLen*4)
+		idx = 0
+		for k := 0; k < maxLen; k++ {
+			maxVal := (i.maxValues)[k]
+			binary.LittleEndian.PutUint32(byteMax[idx:(4+idx)], uint32(maxVal))
+			idx += 4
+		}
+
+		return i.columnIndex(
+			splitFixedLenByteArrays(byteMin, 4),
+			splitFixedLenByteArrays(byteMax, 4),
+			orderOfUint32(i.minValues),
+			orderOfUint32(i.maxValues),
+		)
+	} else {
+		return i.columnIndex(
+			splitFixedLenByteArrays(unsafecast.Uint32ToBytes(i.minValues), 4),
+			splitFixedLenByteArrays(unsafecast.Uint32ToBytes(i.maxValues), 4),
+			orderOfUint32(i.minValues),
+			orderOfUint32(i.maxValues),
+		)
+	}
 }
 
 type uint64ColumnIndexer struct {
@@ -629,12 +799,39 @@ func (i *uint64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 }
 
 func (i *uint64ColumnIndexer) ColumnIndex() format.ColumnIndex {
-	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Uint64ToBytes(i.minValues), 8),
-		splitFixedLenByteArrays(unsafecast.Uint64ToBytes(i.maxValues), 8),
-		orderOfUint64(i.minValues),
-		orderOfUint64(i.maxValues),
-	)
+	if cpu.IsBigEndian {
+		minLen := len(i.minValues)
+		maxLen := len(i.maxValues)
+		byteMin := make([]byte, minLen*8)
+		idx := 0
+		for k := 0; k < minLen; k++ {
+			minVal := (i.minValues)[k]
+			binary.LittleEndian.PutUint64(byteMin[idx:(8+idx)], uint64(minVal))
+			idx += 8
+		}
+
+		byteMax := make([]byte, maxLen*8)
+		idx = 0
+		for k := 0; k < maxLen; k++ {
+			maxVal := (i.maxValues)[k]
+			binary.LittleEndian.PutUint64(byteMax[idx:(8+idx)], uint64(maxVal))
+			idx += 8
+		}
+
+		return i.columnIndex(
+			splitFixedLenByteArrays(byteMin, 8),
+			splitFixedLenByteArrays(byteMax, 8),
+			orderOfUint64(i.minValues),
+			orderOfUint64(i.maxValues),
+		)
+	} else {
+		return i.columnIndex(
+			splitFixedLenByteArrays(unsafecast.Uint64ToBytes(i.minValues), 8),
+			splitFixedLenByteArrays(unsafecast.Uint64ToBytes(i.maxValues), 8),
+			orderOfUint64(i.minValues),
+			orderOfUint64(i.maxValues),
+		)
+	}
 }
 
 type be128ColumnIndexer struct {

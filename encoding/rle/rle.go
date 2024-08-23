@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"unsafe"
+	"golang.org/x/sys/cpu"
 
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
@@ -151,7 +152,17 @@ func encodeBytes(dst, src []byte, bitWidth uint) ([]byte, error) {
 	}
 
 	if len(src) >= 8 {
-		words := unsafe.Slice((*uint64)(unsafe.Pointer(&src[0])), len(src)/8)
+		srcLen := (len(src) / 8)
+		words := make([]uint64, srcLen)
+		if cpu.IsBigEndian {
+			idx := 0
+			for k := 0; k < srcLen; k++ {
+				words[k] = binary.LittleEndian.Uint64((src)[idx:(8 + idx)])
+				idx += 8
+			}
+		} else {
+			words = unsafe.Slice((*uint64)(unsafe.Pointer(&src[0])), len(src)/8)
+		}
 
 		for i := 0; i < len(words); {
 			j := i
@@ -385,6 +396,13 @@ func decodeInt32(dst, src []byte, bitWidth uint) ([]byte, error) {
 
 			bits := [4]byte{}
 			copy(bits[:], src[i:j])
+
+			//swap the bytes in the "bits" array to take care of big endian arch
+			if cpu.IsBigEndian {
+				for m, n := 0, 3; m < n; m, n = m+1, n-1 {
+					bits[m], bits[n] = bits[n], bits[m]
+				}
+			}
 			dst = appendRepeat(dst, bits[:], count)
 			i = j
 		}
