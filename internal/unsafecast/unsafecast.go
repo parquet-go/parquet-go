@@ -17,17 +17,17 @@ import (
 // AddressOf returns the address to the first element in data, even if the slice
 // has length zero.
 func AddressOf[T any](data []T) *T {
-	return *(**T)(unsafe.Pointer(&data))
+	return unsafe.SliceData(data)
 }
 
 // AddressOfBytes returns the address of the first byte in data.
 func AddressOfBytes(data []byte) *byte {
-	return *(**byte)(unsafe.Pointer(&data))
+	return unsafe.SliceData(data)
 }
 
 // AddressOfString returns the address of the first byte in data.
 func AddressOfString(data string) *byte {
-	return *(**byte)(unsafe.Pointer(&data))
+	return unsafe.StringData(data)
 }
 
 // PointerOf is like AddressOf but returns an unsafe.Pointer, losing type
@@ -66,14 +66,14 @@ type slice struct {
 //
 // Note that the function does not perform any checks to ensure that the memory
 // layouts of the types are compatible, it is possible to cause memory
-// corruption if the layouts mismatch (e.g. the pointers in the From are different
-// than the pointers in To).
+// corruption if the layouts mismatch (e.g. the pointers in the From are
+// different than the pointers in To).
 func Slice[To, From any](data []From) []To {
 	// This function could use unsafe.Slice but it would drop the capacity
 	// information, so instead we implement the type conversion.
 	var zf From
 	var zt To
-	var s = (*slice)(unsafe.Pointer(&data))
+	s := (*slice)(unsafe.Pointer(&data))
 	s.len = int((uintptr(s.len) * unsafe.Sizeof(zf)) / unsafe.Sizeof(zt))
 	s.cap = int((uintptr(s.cap) * unsafe.Sizeof(zf)) / unsafe.Sizeof(zt))
 	return *(*[]To)(unsafe.Pointer(s))
@@ -82,11 +82,7 @@ func Slice[To, From any](data []From) []To {
 // Bytes constructs a byte slice. The pointer to the first element of the slice
 // is set to data, the length and capacity are set to size.
 func Bytes(data *byte, size int) []byte {
-	return *(*[]byte)(unsafe.Pointer(&slice{
-		ptr: unsafe.Pointer(data),
-		len: size,
-		cap: size,
-	}))
+	return unsafe.Slice(data, size)
 }
 
 // BytesToString converts a byte slice to a string value. The returned string
@@ -97,16 +93,12 @@ func Bytes(data *byte, size int) []byte {
 // of immutability of Go string values will be violated, resulting in undefined
 // behavior.
 func BytesToString(data []byte) string {
-	return *(*string)(unsafe.Pointer(&data))
+	return unsafe.String(unsafe.SliceData(data), len(data))
 }
 
 // StringToBytes applies the inverse conversion of BytesToString.
 func StringToBytes(data string) []byte {
-	return *(*[]byte)(unsafe.Pointer(&slice{
-		ptr: PointerOfString(data),
-		len: len(data),
-		cap: len(data),
-	}))
+	return unsafe.Slice(unsafe.StringData(data), len(data))
 }
 
 // -----------------------------------------------------------------------------
