@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"unsafe"
 
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
@@ -151,7 +150,7 @@ func encodeBytes(dst, src []byte, bitWidth uint) ([]byte, error) {
 	}
 
 	if len(src) >= 8 {
-		words := unsafe.Slice((*uint64)(unsafe.Pointer(&src[0])), len(src)/8)
+		words := unsafecast.Slice[uint64](src)
 
 		for i := 0; i < len(words); {
 			j := i
@@ -203,7 +202,7 @@ func encodeInt32(dst []byte, src []int32, bitWidth uint) ([]byte, error) {
 	}
 
 	if len(src) >= 8 {
-		words := unsafe.Slice((*[8]int32)(unsafe.Pointer(&src[0])), len(src)/8)
+		words := unsafecast.Slice[[8]int32](src)
 
 		for i := 0; i < len(words); {
 			j := i
@@ -500,7 +499,7 @@ func grow(buf []byte, size int) []byte {
 }
 
 func encodeInt32BitpackDefault(dst []byte, src [][8]int32, bitWidth uint) int {
-	bits := unsafe.Slice((*int32)(unsafe.Pointer(&src[0])), len(src)*8)
+	bits := unsafecast.Slice[int32](src)
 	bitpack.PackInt32(dst, bits, bitWidth)
 	return bitpack.ByteCount(uint(len(src)*8) * bitWidth)
 }

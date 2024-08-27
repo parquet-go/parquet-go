@@ -83,8 +83,7 @@ func (d *byteArrayDictionary) lookupString(indexes []int32, rows sparse.Array) {
 	//
 	//dictionaryLookupByteArrayString(d.offsets, d.values, indexes, rows).check()
 	for i, j := range indexes {
-		v := d.index(int(j))
-		*(*string)(rows.Index(i)) = *(*string)(unsafe.Pointer(&v))
+		*(*string)(rows.Index(i)) = unsafecast.BytesToString(d.index(int(j)))
 	}
 }
 
@@ -92,8 +91,7 @@ func (d *fixedLenByteArrayDictionary) lookupString(indexes []int32, rows sparse.
 	checkLookupIndexBounds(indexes, rows)
 	//dictionaryLookupFixedLenByteArrayString(d.data, d.size, indexes, rows).check()
 	for i, j := range indexes {
-		v := d.index(j)
-		*(*string)(rows.Index(i)) = *(*string)(unsafe.Pointer(&v))
+		*(*string)(rows.Index(i)) = unsafecast.BytesToString(d.index(j))
 	}
 }
 

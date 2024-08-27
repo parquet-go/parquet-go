@@ -20,5 +20,5 @@ func makeTypeID(t reflect.Type) typeID {
 }
 
 func unsafeBytesToString(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }

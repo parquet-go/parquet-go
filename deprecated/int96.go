@@ -3,7 +3,8 @@ package deprecated
 import (
 	"math/big"
 	"math/bits"
-	"unsafe"
+
+	"github.com/parquet-go/parquet-go/internal/unsafecast"
 )
 
 // Int96 is an implementation of the deprecated INT96 parquet type.
@@ -101,7 +102,7 @@ func (i Int96) Len() int {
 // Int96ToBytes converts the slice of Int96 values to a slice of bytes sharing
 // the same backing array.
 func Int96ToBytes(data []Int96) []byte {
-	return unsafe.Slice(*(**byte)(unsafe.Pointer(&data)), 12*len(data))
+	return unsafecast.Slice[byte](data)
 }
 
 // BytesToInt96 converts the byte slice passed as argument to a slice of Int96
@@ -110,7 +111,7 @@ func Int96ToBytes(data []Int96) []byte {
 // When the number of bytes in the input is not a multiple of 12, the function
 // truncates it in the returned slice.
 func BytesToInt96(data []byte) []Int96 {
-	return unsafe.Slice(*(**Int96)(unsafe.Pointer(&data)), len(data)/12)
+	return unsafecast.Slice[Int96](data)
 }
 
 func MaxLenInt96(data []Int96) int {

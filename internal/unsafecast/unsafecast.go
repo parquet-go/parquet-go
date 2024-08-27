@@ -33,13 +33,13 @@ func AddressOfString(data string) *byte {
 // PointerOf is like AddressOf but returns an unsafe.Pointer, losing type
 // information about the underlying data.
 func PointerOf[T any](data []T) unsafe.Pointer {
-	return unsafe.Pointer(AddressOf(data))
+	return unsafe.Pointer(unsafe.SliceData(data))
 }
 
 // PointerOfString is like AddressOfString but returns an unsafe.Pointer, losing
 // type information about the underlying data.
 func PointerOfString(data string) unsafe.Pointer {
-	return unsafe.Pointer(AddressOfString(data))
+	return unsafe.Pointer(unsafe.StringData(data))
 }
 
 // PointerOfValue returns the address of the object packed in the given value.
