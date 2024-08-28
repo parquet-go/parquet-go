@@ -177,7 +177,7 @@ func (e splitBlockEncoding) EncodeInt96(dst []byte, src []deprecated.Int96) ([]b
         if cpu.IsBigEndian {
                 srcLen := len(src)
                 buf := make([]byte, srcLen*12)
-                for idx := 0; idx < srcLen; idx++ {
+                for idx := range srcLen {
                         binary.LittleEndian.PutUint32(buf[(idx*12):4+(idx*12)], uint32(src[idx][0]))
                         binary.LittleEndian.PutUint32(buf[4+(idx*12):8+(idx*12)], uint32(src[idx][1]))
                         binary.LittleEndian.PutUint32(buf[8+(idx*12):12+(idx*12)], uint32(src[idx][2]))

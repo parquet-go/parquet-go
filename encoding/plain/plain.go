@@ -42,7 +42,7 @@ func (e *Encoding) EncodeInt32(dst []byte, src []int32) ([]byte, error) {
 		srcLen := len(src)
 		byteEnc := make([]byte, (srcLen * 4))
 		idx := 0
-		for k := 0; k < srcLen; k++ {
+		for k := range srcLen {
 			binary.LittleEndian.PutUint32(byteEnc[idx:(4+idx)], uint32((src)[k]))
 			idx += 4
 		}
@@ -57,7 +57,7 @@ func (e *Encoding) EncodeInt64(dst []byte, src []int64) ([]byte, error) {
 		srcLen := len(src)
 		byteEnc := make([]byte, (srcLen * 8))
 		idx := 0
-		for k := 0; k < srcLen; k++ {
+		for k := range srcLen {
 			binary.LittleEndian.PutUint64(byteEnc[idx:(8+idx)], uint64((src)[k]))
 			idx += 8
 		}
@@ -76,7 +76,7 @@ func (e *Encoding) EncodeFloat(dst []byte, src []float32) ([]byte, error) {
 		srcLen := len(src)
 		byteEnc := make([]byte, (srcLen * 4))
 		idx := 0
-		for k := 0; k < srcLen; k++ {
+		for k := range srcLen {
 			binary.LittleEndian.PutUint32(byteEnc[idx:(4+idx)], math.Float32bits((src)[k]))
 			idx += 4
 		}
@@ -91,7 +91,7 @@ func (e *Encoding) EncodeDouble(dst []byte, src []float64) ([]byte, error) {
 		srcLen := len(src)
 		byteEnc := make([]byte, (srcLen * 8))
 		idx := 0
-		for k := 0; k < srcLen; k++ {
+		for k := range srcLen {
 			binary.LittleEndian.PutUint64(byteEnc[idx:(8+idx)], math.Float64bits((src)[k]))
 			idx += 8
 		}
@@ -136,7 +136,7 @@ func (e *Encoding) DecodeInt32(dst []int32, src []byte) ([]int32, error) {
 		srcLen := (len(src) / 4)
 		byteDec := make([]int32, srcLen)
 		idx := 0
-		for k := 0; k < srcLen; k++ {
+		for k := range srcLen {
 			byteDec[k] = int32(binary.LittleEndian.Uint32((src)[idx:(4 + idx)]))
 			idx += 4
 		}
@@ -155,7 +155,7 @@ func (e *Encoding) DecodeInt64(dst []int64, src []byte) ([]int64, error) {
 		srcLen := (len(src) / 8)
 		byteDec := make([]int64, srcLen)
 		idx := 0
-		for k := 0; k < srcLen; k++ {
+		for k := range srcLen {
 			byteDec[k] = int64(binary.LittleEndian.Uint64((src)[idx:(8 + idx)]))
 			idx += 8
 		}
@@ -182,7 +182,7 @@ func (e *Encoding) DecodeFloat(dst []float32, src []byte) ([]float32, error) {
 		srcLen := (len(src) / 4)
 		byteDec := make([]float32, srcLen)
 		idx := 0
-		for k := 0; k < srcLen; k++ {
+		for k := range srcLen {
 			byteDec[k] = float32(math.Float32frombits(binary.LittleEndian.Uint32((src)[idx:(4 + idx)])))
 			idx += 4
 		}
@@ -202,7 +202,7 @@ func (e *Encoding) DecodeDouble(dst []float64, src []byte) ([]float64, error) {
 		srcLen := (len(src) / 8)
 		byteDec := make([]float64, srcLen)
 		idx := 0
-		for k := 0; k < srcLen; k++ {
+		for k := range srcLen {
 			byteDec[k] = float64(math.Float64frombits(binary.LittleEndian.Uint64((src)[idx:(8 + idx)])))
 			idx += 8
 		}

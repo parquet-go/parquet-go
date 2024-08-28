@@ -830,6 +830,11 @@ func (col *booleanColumnBuffer) WriteBooleans(values []bool) (int, error) {
 
 func (col *booleanColumnBuffer) WriteValues(values []Value) (int, error) {
 	var model Value
+
+        //On a big endian system, a boolean/byte value, which is in little endian format, is byte aligned
+        //to the 7th byte in a u64 (8 bytes) variable.. Hence the data will be available at 7th byte when 
+        //interpreted as a little endian byte format. So, in order to access a boolean/byte value out of u64 variable, 
+        //we need to add an offset of "7"
         if cpu.IsBigEndian {
                 col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)+7), columnLevels{})
         } else {
@@ -974,6 +979,11 @@ func (col *int32ColumnBuffer) WriteInt32s(values []int32) (int, error) {
 
 func (col *int32ColumnBuffer) WriteValues(values []Value) (int, error) {
 	var model Value
+
+	//On a big endian system, an int32/uint32 value, which is in little endian format, is byte aligned
+	//to the 4th byte in a u64 (8 bytes) variable.. Hence the data will be available at 4th byte when 
+	//interpreted as a little endian byte format. So, in order to access an int32/uint32 value out of u64 variable, 
+	//we need to add an offset of "4"
 	if cpu.IsBigEndian {
 		col.writeValues(makeArrayValue(values, (unsafe.Offsetof(model.u64)+4)), columnLevels{})
 	} else {
@@ -1272,6 +1282,11 @@ func (col *floatColumnBuffer) WriteFloats(values []float32) (int, error) {
 
 func (col *floatColumnBuffer) WriteValues(values []Value) (int, error) {
 	var model Value
+
+        //On a big endian system, an int32/uint32 value, which is in little endian format, is byte aligned
+        //to the 4th byte in a u64 (8 bytes) variable.. Hence the data will be available at 4th byte when 
+        //interpreted as a little endian byte format. So, in order to access an int32/uint32 value out of u64 variable, 
+        //we need to add an offset of "4"
 	if cpu.IsBigEndian {
 		col.writeValues(makeArrayValue(values, unsafe.Offsetof(model.u64)+4), columnLevels{})
 	} else {
@@ -1766,6 +1781,11 @@ func (col *uint32ColumnBuffer) WriteUint32s(values []uint32) (int, error) {
 
 func (col *uint32ColumnBuffer) WriteValues(values []Value) (int, error) {
 	var model Value
+
+        //On a big endian system, an int32/uint32 value, which is in little endian format, is byte aligned
+        //to the 4th byte in a u64 (8 bytes) variable.. Hence the data will be available at 4th byte when 
+        //interpreted as a little endian byte format. So, in order to access an int32/uint32 value out of u64 variable, 
+        //we need to add an offset of "4"
 	if cpu.IsBigEndian {
 		col.writeValues(makeArrayValue(values, (unsafe.Offsetof(model.u64)+4)), columnLevels{})
 	} else {

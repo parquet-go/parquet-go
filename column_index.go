@@ -1,13 +1,13 @@
 package parquet
 
 import (
-	"math"
 	"encoding/binary"
-	"golang.org/x/sys/cpu"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/format"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"golang.org/x/sys/cpu"
+	"math"
 )
 
 type ColumnIndex interface {
@@ -357,25 +357,20 @@ func (i *int32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 	i.maxValues = append(i.maxValues, max.int32())
 }
 
+func reverseInt32MinMaxValues(mLen int, mVal []int32) []byte {
+	buf := make([]byte, mLen*4)
+	idx := 0
+	for k := range mLen {
+		binary.LittleEndian.PutUint32(buf[idx:(4+idx)], uint32(mVal[k]))
+		idx += 4
+	}
+	return buf
+}
+
 func (i *int32ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	if cpu.IsBigEndian {
-		minLen := len(i.minValues)
-		maxLen := len(i.maxValues)
-		byteMin := make([]byte, minLen*4)
-		idx := 0
-		for k := 0; k < minLen; k++ {
-			minVal := (i.minValues)[k]
-			binary.LittleEndian.PutUint32(byteMin[idx:(4+idx)], uint32(minVal))
-			idx += 4
-		}
-
-		byteMax := make([]byte, maxLen*4)
-		idx = 0
-		for k := 0; k < maxLen; k++ {
-			maxVal := (i.maxValues)[k]
-			binary.LittleEndian.PutUint32(byteMax[idx:(4+idx)], uint32(maxVal))
-			idx += 4
-		}
+		byteMin := reverseInt32MinMaxValues(len(i.minValues), i.minValues)
+		byteMax := reverseInt32MinMaxValues(len(i.maxValues), i.maxValues)
 
 		return i.columnIndex(
 			splitFixedLenByteArrays(byteMin, 4),
@@ -415,25 +410,20 @@ func (i *int64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 	i.maxValues = append(i.maxValues, max.int64())
 }
 
+func reverseInt64MinMaxValues(mLen int, mVal []int64) []byte {
+	buf := make([]byte, mLen*8)
+	idx := 0
+	for k := range mLen {
+		binary.LittleEndian.PutUint64(buf[idx:(8+idx)], uint64(mVal[k]))
+		idx += 8
+	}
+	return buf
+}
+
 func (i *int64ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	if cpu.IsBigEndian {
-		minLen := len(i.minValues)
-		maxLen := len(i.maxValues)
-		byteMin := make([]byte, minLen*8)
-		idx := 0
-		for k := 0; k < minLen; k++ {
-			minVal := (i.minValues)[k]
-			binary.LittleEndian.PutUint64(byteMin[idx:(8+idx)], uint64(minVal))
-			idx += 8
-		}
-
-		byteMax := make([]byte, maxLen*8)
-		idx = 0
-		for k := 0; k < maxLen; k++ {
-			maxVal := (i.maxValues)[k]
-			binary.LittleEndian.PutUint64(byteMax[idx:(8+idx)], uint64(maxVal))
-			idx += 8
-		}
+		byteMin := reverseInt64MinMaxValues(len(i.minValues), i.minValues)
+		byteMax := reverseInt64MinMaxValues(len(i.maxValues), i.maxValues)
 
 		return i.columnIndex(
 			splitFixedLenByteArrays(byteMin, 8),
@@ -473,30 +463,22 @@ func (i *int96ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 	i.maxValues = append(i.maxValues, max.Int96())
 }
 
+func reverseInt96MinMaxValues(mLen int, mVal []deprecated.Int96) []byte {
+	buf := make([]byte, mLen*12)
+	idx := 0
+	for k := range mLen {
+		binary.LittleEndian.PutUint32(buf[idx:(4+idx)], uint32(mVal[k][0]))
+		binary.LittleEndian.PutUint32(buf[(4+idx):(8+idx)], uint32(mVal[k][1]))
+		binary.LittleEndian.PutUint32(buf[(8+idx):(12+idx)], uint32(mVal[k][2]))
+		idx += 12
+	}
+	return buf
+}
+
 func (i *int96ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	if cpu.IsBigEndian {
-		minLen := len(i.minValues)
-		maxLen := len(i.maxValues)
-		byteMin := make([]byte, minLen*12)
-		idx := 0
-
-		for k := 0; k < minLen; k++ {
-			minVal := (i.minValues)[k]
-			binary.LittleEndian.PutUint32(byteMin[idx:(4+idx)], uint32(minVal[0]))
-			binary.LittleEndian.PutUint32(byteMin[(4+idx):(8+idx)], uint32(minVal[1]))
-			binary.LittleEndian.PutUint32(byteMin[(8+idx):(12+idx)], uint32(minVal[2]))
-			idx += 12
-		}
-
-		byteMax := make([]byte, maxLen*12)
-		idx = 0
-		for k := 0; k < maxLen; k++ {
-			maxVal := (i.maxValues)[k]
-			binary.LittleEndian.PutUint32(byteMax[idx:(4+idx)], uint32(maxVal[0]))
-			binary.LittleEndian.PutUint32(byteMax[(4+idx):(8+idx)], uint32(maxVal[1]))
-			binary.LittleEndian.PutUint32(byteMax[(8+idx):(12+idx)], uint32(maxVal[2]))
-			idx += 12
-		}
+		byteMin := reverseInt96MinMaxValues(len(i.minValues), i.minValues)
+		byteMax := reverseInt96MinMaxValues(len(i.maxValues), i.maxValues)
 
 		return i.columnIndex(
 			splitFixedLenByteArrays(byteMin, 12),
@@ -536,25 +518,20 @@ func (i *floatColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 	i.maxValues = append(i.maxValues, max.float())
 }
 
+func reverseFloatMinMaxValues(mLen int, mVal []float32) []byte {
+	buf := make([]byte, mLen*4)
+	idx := 0
+	for k := range mLen {
+		binary.LittleEndian.PutUint32(buf[idx:(4+idx)], math.Float32bits(mVal[k]))
+		idx += 4
+	}
+	return buf
+}
+
 func (i *floatColumnIndexer) ColumnIndex() format.ColumnIndex {
 	if cpu.IsBigEndian {
-		minLen := len(i.minValues)
-		maxLen := len(i.maxValues)
-		byteMin := make([]byte, minLen*4)
-		idx := 0
-		for k := 0; k < minLen; k++ {
-			minVal := (i.minValues)[k]
-			binary.LittleEndian.PutUint32(byteMin[idx:(4+idx)], math.Float32bits(minVal))
-			idx += 4
-		}
-
-		byteMax := make([]byte, maxLen*4)
-		idx = 0
-		for k := 0; k < maxLen; k++ {
-			maxVal := (i.maxValues)[k]
-			binary.LittleEndian.PutUint32(byteMax[idx:(4+idx)], math.Float32bits(maxVal))
-			idx += 4
-		}
+		byteMin := reverseFloatMinMaxValues(len(i.minValues), i.minValues)
+		byteMax := reverseFloatMinMaxValues(len(i.maxValues), i.maxValues)
 
 		return i.columnIndex(
 			splitFixedLenByteArrays(byteMin, 4),
@@ -594,25 +571,20 @@ func (i *doubleColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 	i.maxValues = append(i.maxValues, max.double())
 }
 
+func reverseDoubleMinMaxValues(mLen int, mVal []float64) []byte {
+	buf := make([]byte, mLen*8)
+	idx := 0
+	for k := range mLen {
+		binary.LittleEndian.PutUint64(buf[idx:(8+idx)], math.Float64bits(mVal[k]))
+		idx += 8
+	}
+	return buf
+}
+
 func (i *doubleColumnIndexer) ColumnIndex() format.ColumnIndex {
 	if cpu.IsBigEndian {
-		minLen := len(i.minValues)
-		maxLen := len(i.maxValues)
-		byteMin := make([]byte, minLen*8)
-		idx := 0
-		for k := 0; k < minLen; k++ {
-			minVal := (i.minValues)[k]
-			binary.LittleEndian.PutUint64(byteMin[idx:(8+idx)], math.Float64bits(minVal))
-			idx += 8
-		}
-
-		byteMax := make([]byte, maxLen*8)
-		idx = 0
-		for k := 0; k < maxLen; k++ {
-			maxVal := (i.maxValues)[k]
-			binary.LittleEndian.PutUint64(byteMax[idx:(8+idx)], math.Float64bits(maxVal))
-			idx += 8
-		}
+		byteMin := reverseDoubleMinMaxValues(len(i.minValues), i.minValues)
+		byteMax := reverseDoubleMinMaxValues(len(i.maxValues), i.maxValues)
 
 		return i.columnIndex(
 			splitFixedLenByteArrays(byteMin, 8),
@@ -740,25 +712,20 @@ func (i *uint32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 	i.maxValues = append(i.maxValues, max.uint32())
 }
 
+func reverseUint32MinMaxValues(mLen int, mVal []uint32) []byte {
+	buf := make([]byte, mLen*4)
+	idx := 0
+	for k := range mLen {
+		binary.LittleEndian.PutUint32(buf[idx:(4+idx)], mVal[k])
+		idx += 4
+	}
+	return buf
+}
+
 func (i *uint32ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	if cpu.IsBigEndian {
-		minLen := len(i.minValues)
-		maxLen := len(i.maxValues)
-		byteMin := make([]byte, minLen*4)
-		idx := 0
-		for k := 0; k < minLen; k++ {
-			minVal := (i.minValues)[k]
-			binary.LittleEndian.PutUint32(byteMin[idx:(4+idx)], uint32(minVal))
-			idx += 4
-		}
-
-		byteMax := make([]byte, maxLen*4)
-		idx = 0
-		for k := 0; k < maxLen; k++ {
-			maxVal := (i.maxValues)[k]
-			binary.LittleEndian.PutUint32(byteMax[idx:(4+idx)], uint32(maxVal))
-			idx += 4
-		}
+		byteMin := reverseUint32MinMaxValues(len(i.minValues), i.minValues)
+		byteMax := reverseUint32MinMaxValues(len(i.maxValues), i.maxValues)
 
 		return i.columnIndex(
 			splitFixedLenByteArrays(byteMin, 4),
@@ -798,25 +765,20 @@ func (i *uint64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 	i.maxValues = append(i.maxValues, max.uint64())
 }
 
+func reverseUint64MinMaxValues(mLen int, mVal []uint64) []byte {
+	buf := make([]byte, mLen*8)
+	idx := 0
+	for k := range mLen {
+		binary.LittleEndian.PutUint64(buf[idx:(8+idx)], mVal[k])
+		idx += 8
+	}
+	return buf
+}
+
 func (i *uint64ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	if cpu.IsBigEndian {
-		minLen := len(i.minValues)
-		maxLen := len(i.maxValues)
-		byteMin := make([]byte, minLen*8)
-		idx := 0
-		for k := 0; k < minLen; k++ {
-			minVal := (i.minValues)[k]
-			binary.LittleEndian.PutUint64(byteMin[idx:(8+idx)], uint64(minVal))
-			idx += 8
-		}
-
-		byteMax := make([]byte, maxLen*8)
-		idx = 0
-		for k := 0; k < maxLen; k++ {
-			maxVal := (i.maxValues)[k]
-			binary.LittleEndian.PutUint64(byteMax[idx:(8+idx)], uint64(maxVal))
-			idx += 8
-		}
+		byteMin := reverseUint64MinMaxValues(len(i.minValues), i.minValues)
+		byteMax := reverseUint64MinMaxValues(len(i.maxValues), i.maxValues)
 
 		return i.columnIndex(
 			splitFixedLenByteArrays(byteMin, 8),

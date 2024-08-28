@@ -156,7 +156,7 @@ func encodeBytes(dst, src []byte, bitWidth uint) ([]byte, error) {
 		words := make([]uint64, srcLen)
 		if cpu.IsBigEndian {
 			idx := 0
-			for k := 0; k < srcLen; k++ {
+			for k := range srcLen {
 				words[k] = binary.LittleEndian.Uint64((src)[idx:(8 + idx)])
 				idx += 8
 			}

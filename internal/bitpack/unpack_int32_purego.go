@@ -13,7 +13,7 @@ func unpackInt32(dst []int32, src []byte, bitWidth uint) {
 	bits := make([]uint32, srcLen)
 	if cpu.IsBigEndian {
 		idx := 0
-		for k := 0; k < srcLen; k++ {
+		for k := range srcLen {
 			bits[k] = binary.LittleEndian.Uint32((src)[idx:(4 + idx)])
 			idx += 4
 		}
