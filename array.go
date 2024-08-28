@@ -14,7 +14,7 @@ func makeArrayValue(values []Value, offset uintptr) sparse.Array {
 
 func makeArrayString(values []string) sparse.Array {
 	str := ""
-	ptr := unsafecacst.PointerOf(values)
+	ptr := unsafecast.PointerOf(values)
 	return sparse.UnsafeArray(ptr, len(values), unsafe.Sizeof(str))
 }
 

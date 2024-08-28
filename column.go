@@ -691,7 +691,7 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 	if pageType.Kind() == ByteArray && !isDictionaryEncoding(pageEncoding) {
 		obuf = buffers.get(4 * (numValues + 1))
 		defer obuf.unref()
-		pageOffsets = unsafecast.BytesToUint32(obuf.data)
+		pageOffsets = unsafecast.Slice[uint32](obuf.data)
 	}
 
 	values := pageType.NewValues(pageValues, pageOffsets)

@@ -82,9 +82,9 @@ func (e *Encoding) DecodeBoolean(dst []byte, src []byte) ([]byte, error) {
 }
 
 func (e *Encoding) DecodeInt32(dst []int32, src []byte) ([]int32, error) {
-	buf := unsafecast.Int32ToBytes(dst)
+	buf := unsafecast.Slice[byte](dst)
 	buf, err := decodeInt32(buf[:0], src, uint(e.BitWidth))
-	return unsafecast.BytesToInt32(buf), e.wrap(err)
+	return unsafecast.Slice[int32](buf), e.wrap(err)
 }
 
 func (e *Encoding) wrap(err error) error {
@@ -195,7 +195,7 @@ func encodeInt32(dst []byte, src []int32, bitWidth uint) ([]byte, error) {
 		return dst, errEncodeInvalidBitWidth("INT32", bitWidth)
 	}
 	if bitWidth == 0 {
-		if !isZero(unsafecast.Int32ToBytes(src)) {
+		if !isZero(unsafecast.Slice[byte](src)) {
 			return dst, errEncodeInvalidBitWidth("INT32", bitWidth)
 		}
 		return appendUvarint(dst, uint64(len(src))<<1), nil
@@ -372,7 +372,7 @@ func decodeInt32(dst, src []byte, bitWidth uint) ([]byte, error) {
 				in = buf
 			}
 
-			out := unsafecast.BytesToInt32(dst[offset:])
+			out := unsafecast.Slice[int32](dst[offset:])
 			bitpack.UnpackInt32(out, in, bitWidth)
 			i += length
 		} else {
