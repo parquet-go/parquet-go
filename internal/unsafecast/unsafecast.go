@@ -9,30 +9,7 @@
 //	With great power comes great responsibility.
 package unsafecast
 
-import (
-	"reflect"
-	"unsafe"
-)
-
-// PointerOf is like AddressOf but returns an unsafe.Pointer, losing type
-// information about the underlying data.
-func PointerOf[T any](data []T) unsafe.Pointer {
-	return unsafe.Pointer(unsafe.SliceData(data))
-}
-
-// PointerOfString is like AddressOfString but returns an unsafe.Pointer, losing
-// type information about the underlying data.
-func PointerOfString(data string) unsafe.Pointer {
-	return unsafe.Pointer(unsafe.StringData(data))
-}
-
-// PointerOfValue returns the address of the object packed in the given value.
-//
-// This function is like value.UnsafePointer but works for any underlying type,
-// bypassing the safety checks done by the reflect package.
-func PointerOfValue(value reflect.Value) unsafe.Pointer {
-	return (*[2]unsafe.Pointer)(unsafe.Pointer(&value))[1]
-}
+import "unsafe"
 
 // The slice type represents the memory layout of slices in Go. It is similar to
 // reflect.SliceHeader but uses a unsafe.Pointer instead of uintptr to for the
@@ -65,18 +42,13 @@ func Slice[To, From any](data []From) []To {
 	return *(*[]To)(unsafe.Pointer(&s))
 }
 
-// BytesToString converts a byte slice to a string value. The returned string
-// shares the backing array of the byte slice.
+// String converts a byte slice to a string value. The returned string shares
+// the backing array of the byte slice.
 //
 // Programs using this function are responsible for ensuring that the data slice
 // is not modified while the returned string is in use, otherwise the guarantee
 // of immutability of Go string values will be violated, resulting in undefined
 // behavior.
-func BytesToString(data []byte) string {
+func String(data []byte) string {
 	return unsafe.String(unsafe.SliceData(data), len(data))
-}
-
-// StringToBytes applies the inverse conversion of BytesToString.
-func StringToBytes(data string) []byte {
-	return unsafe.Slice(unsafe.StringData(data), len(data))
 }

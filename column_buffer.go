@@ -1505,7 +1505,7 @@ func (col *byteArrayColumnBuffer) writeByteArrays(values []byte) (count, bytes i
 	baseBytes := len(col.values) + (plain.ByteArrayLengthSize * len(col.lengths))
 
 	err = plain.RangeByteArray(values, func(value []byte) error {
-		col.append(unsafecast.BytesToString(value))
+		col.append(unsafecast.String(value))
 		return nil
 	})
 
@@ -2356,8 +2356,8 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 					mapKey.SetIterKey(it)
 					mapValue.SetIterValue(it)
 
-					k := makeArray(unsafecast.PointerOfValue(mapKey), 1, keySize)
-					v := makeArray(unsafecast.PointerOfValue(mapValue), 1, valueSize)
+					k := makeArray(reflectValueData(mapKey), 1, keySize)
+					v := makeArray(reflectValueData(mapValue), 1, valueSize)
 
 					if err := writeKeyValues(columns, k, v, elemLevels); err != nil {
 						return err
@@ -2440,7 +2440,7 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeR
 				val = t.UnixNano()
 			}
 
-			a := makeArray(unsafecast.PointerOfValue(reflect.ValueOf(val)), 1, elemSize)
+			a := makeArray(reflectValueData(reflect.ValueOf(val)), 1, elemSize)
 			if err := writeRows(columns, a, levels); err != nil {
 				return err
 			}

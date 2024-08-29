@@ -751,7 +751,7 @@ func (d *byteArrayDictionary) Lookup(indexes []int32, values []Value) {
 func (d *byteArrayDictionary) Bounds(indexes []int32) (min, max Value) {
 	if len(indexes) > 0 {
 		base := d.index(int(indexes[0]))
-		minValue := unsafecast.BytesToString(base)
+		minValue := unsafecast.String(base)
 		maxValue := minValue
 		values := [64]string{}
 
@@ -870,7 +870,7 @@ func (d *fixedLenByteArrayDictionary) Lookup(indexes []int32, values []Value) {
 func (d *fixedLenByteArrayDictionary) Bounds(indexes []int32) (min, max Value) {
 	if len(indexes) > 0 {
 		base := d.index(indexes[0])
-		minValue := unsafecast.BytesToString(base)
+		minValue := unsafecast.String(base)
 		maxValue := minValue
 		values := [64]string{}
 

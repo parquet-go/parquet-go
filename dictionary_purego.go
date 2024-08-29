@@ -40,14 +40,14 @@ func (d *doubleDictionary) lookup(indexes []int32, rows sparse.Array) {
 func (d *byteArrayDictionary) lookupString(indexes []int32, rows sparse.Array) {
 	checkLookupIndexBounds(indexes, rows)
 	for i, j := range indexes {
-		*(*string)(rows.Index(i)) = unsafecast.BytesToString(d.index(int(j)))
+		*(*string)(rows.Index(i)) = unsafecast.String(d.index(int(j)))
 	}
 }
 
 func (d *fixedLenByteArrayDictionary) lookupString(indexes []int32, rows sparse.Array) {
 	checkLookupIndexBounds(indexes, rows)
 	for i, j := range indexes {
-		*(*string)(rows.Index(i)) = unsafecast.BytesToString(d.index(j))
+		*(*string)(rows.Index(i)) = unsafecast.String(d.index(j))
 	}
 }
 

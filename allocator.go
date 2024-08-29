@@ -35,7 +35,7 @@ func (a *allocator) copyBytes(v []byte) []byte {
 func (a *allocator) copyString(v string) string {
 	b := a.makeBytes(len(v))
 	copy(b, v)
-	return unsafecast.BytesToString(b)
+	return unsafecast.String(b)
 }
 
 func (a *allocator) reset() {

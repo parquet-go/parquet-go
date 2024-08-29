@@ -3,8 +3,6 @@ package sparse
 import (
 	"time"
 	"unsafe"
-
-	"github.com/parquet-go/parquet-go/internal/unsafecast"
 )
 
 type Array struct{ array }
@@ -40,7 +38,11 @@ type array struct {
 
 func makeArray[T any](base []T) array {
 	var z T
-	return array{ptr: unsafecast.PointerOf(base), len: uintptr(len(base)), off: unsafe.Sizeof(z)}
+	return array{
+		ptr: unsafe.Pointer(unsafe.SliceData(base)),
+		len: uintptr(len(base)),
+		off: unsafe.Sizeof(z),
+	}
 }
 
 func unsafeArray(base unsafe.Pointer, length int, offset uintptr) array {
