@@ -958,7 +958,7 @@ func (col *int32ColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 4) != 0 {
 		return 0, fmt.Errorf("cannot write INT32 values from input of size %d", len(b))
 	}
-	col.values = append(col.values, unsafecast.BytesToInt32(b)...)
+	col.values = append(col.values, unsafecast.Slice[int32](b)...)
 	return len(b), nil
 }
 
@@ -1057,7 +1057,7 @@ func (col *int64ColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 8) != 0 {
 		return 0, fmt.Errorf("cannot write INT64 values from input of size %d", len(b))
 	}
-	col.values = append(col.values, unsafecast.BytesToInt64(b)...)
+	col.values = append(col.values, unsafecast.Slice[int64](b)...)
 	return len(b), nil
 }
 
@@ -1155,7 +1155,7 @@ func (col *int96ColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 12) != 0 {
 		return 0, fmt.Errorf("cannot write INT96 values from input of size %d", len(b))
 	}
-	col.values = append(col.values, deprecated.BytesToInt96(b)...)
+	col.values = append(col.values, unsafecast.Slice[deprecated.Int96](b)...)
 	return len(b), nil
 }
 
@@ -1252,7 +1252,7 @@ func (col *floatColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 4) != 0 {
 		return 0, fmt.Errorf("cannot write FLOAT values from input of size %d", len(b))
 	}
-	col.values = append(col.values, unsafecast.BytesToFloat32(b)...)
+	col.values = append(col.values, unsafecast.Slice[float32](b)...)
 	return len(b), nil
 }
 
@@ -1350,7 +1350,7 @@ func (col *doubleColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 8) != 0 {
 		return 0, fmt.Errorf("cannot write DOUBLE values from input of size %d", len(b))
 	}
-	col.values = append(col.values, unsafecast.BytesToFloat64(b)...)
+	col.values = append(col.values, unsafecast.Slice[float64](b)...)
 	return len(b), nil
 }
 
@@ -1505,7 +1505,7 @@ func (col *byteArrayColumnBuffer) writeByteArrays(values []byte) (count, bytes i
 	baseBytes := len(col.values) + (plain.ByteArrayLengthSize * len(col.lengths))
 
 	err = plain.RangeByteArray(values, func(value []byte) error {
-		col.append(unsafecast.BytesToString(value))
+		col.append(unsafecast.String(value))
 		return nil
 	})
 
@@ -1742,7 +1742,7 @@ func (col *uint32ColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 4) != 0 {
 		return 0, fmt.Errorf("cannot write INT32 values from input of size %d", len(b))
 	}
-	col.values = append(col.values, unsafecast.BytesToUint32(b)...)
+	col.values = append(col.values, unsafecast.Slice[uint32](b)...)
 	return len(b), nil
 }
 
@@ -1840,7 +1840,7 @@ func (col *uint64ColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 8) != 0 {
 		return 0, fmt.Errorf("cannot write INT64 values from input of size %d", len(b))
 	}
-	col.values = append(col.values, unsafecast.BytesToUint64(b)...)
+	col.values = append(col.values, unsafecast.Slice[uint64](b)...)
 	return len(b), nil
 }
 
@@ -2356,8 +2356,8 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 					mapKey.SetIterKey(it)
 					mapValue.SetIterValue(it)
 
-					k := makeArray(unsafecast.PointerOfValue(mapKey), 1, keySize)
-					v := makeArray(unsafecast.PointerOfValue(mapValue), 1, valueSize)
+					k := makeArray(reflectValueData(mapKey), 1, keySize)
+					v := makeArray(reflectValueData(mapValue), 1, valueSize)
 
 					if err := writeKeyValues(columns, k, v, elemLevels); err != nil {
 						return err
@@ -2440,7 +2440,7 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeR
 				val = t.UnixNano()
 			}
 
-			a := makeArray(unsafecast.PointerOfValue(reflect.ValueOf(val)), 1, elemSize)
+			a := makeArray(reflectValueData(reflect.ValueOf(val)), 1, elemSize)
 			if err := writeRows(columns, a, levels); err != nil {
 				return err
 			}

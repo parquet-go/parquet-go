@@ -325,8 +325,8 @@ func (i *booleanColumnIndexer) IndexPage(numValues, numNulls int64, min, max Val
 
 func (i *booleanColumnIndexer) ColumnIndex() format.ColumnIndex {
 	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.BoolToBytes(i.minValues), 1),
-		splitFixedLenByteArrays(unsafecast.BoolToBytes(i.maxValues), 1),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 1),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 1),
 		orderOfBool(i.minValues),
 		orderOfBool(i.maxValues),
 	)
@@ -356,8 +356,8 @@ func (i *int32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 
 func (i *int32ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Int32ToBytes(i.minValues), 4),
-		splitFixedLenByteArrays(unsafecast.Int32ToBytes(i.maxValues), 4),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 4),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 4),
 		orderOfInt32(i.minValues),
 		orderOfInt32(i.maxValues),
 	)
@@ -387,8 +387,8 @@ func (i *int64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 
 func (i *int64ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Int64ToBytes(i.minValues), 8),
-		splitFixedLenByteArrays(unsafecast.Int64ToBytes(i.maxValues), 8),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 8),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 8),
 		orderOfInt64(i.minValues),
 		orderOfInt64(i.maxValues),
 	)
@@ -418,8 +418,8 @@ func (i *int96ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 
 func (i *int96ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	return i.columnIndex(
-		splitFixedLenByteArrays(deprecated.Int96ToBytes(i.minValues), 12),
-		splitFixedLenByteArrays(deprecated.Int96ToBytes(i.maxValues), 12),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 12),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 12),
 		deprecated.OrderOfInt96(i.minValues),
 		deprecated.OrderOfInt96(i.maxValues),
 	)
@@ -449,8 +449,8 @@ func (i *floatColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 
 func (i *floatColumnIndexer) ColumnIndex() format.ColumnIndex {
 	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Float32ToBytes(i.minValues), 4),
-		splitFixedLenByteArrays(unsafecast.Float32ToBytes(i.maxValues), 4),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 4),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 4),
 		orderOfFloat32(i.minValues),
 		orderOfFloat32(i.maxValues),
 	)
@@ -480,8 +480,8 @@ func (i *doubleColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 
 func (i *doubleColumnIndexer) ColumnIndex() format.ColumnIndex {
 	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Float64ToBytes(i.minValues), 8),
-		splitFixedLenByteArrays(unsafecast.Float64ToBytes(i.maxValues), 8),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 8),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 8),
 		orderOfFloat64(i.minValues),
 		orderOfFloat64(i.maxValues),
 	)
@@ -599,8 +599,8 @@ func (i *uint32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 
 func (i *uint32ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Uint32ToBytes(i.minValues), 4),
-		splitFixedLenByteArrays(unsafecast.Uint32ToBytes(i.maxValues), 4),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 4),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 4),
 		orderOfUint32(i.minValues),
 		orderOfUint32(i.maxValues),
 	)
@@ -630,8 +630,8 @@ func (i *uint64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 
 func (i *uint64ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	return i.columnIndex(
-		splitFixedLenByteArrays(unsafecast.Uint64ToBytes(i.minValues), 8),
-		splitFixedLenByteArrays(unsafecast.Uint64ToBytes(i.maxValues), 8),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 8),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 8),
 		orderOfUint64(i.minValues),
 		orderOfUint64(i.maxValues),
 	)
@@ -664,8 +664,8 @@ func (i *be128ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 }
 
 func (i *be128ColumnIndexer) ColumnIndex() format.ColumnIndex {
-	minValues := splitFixedLenByteArrays(unsafecast.Uint128ToBytes(i.minValues), 16)
-	maxValues := splitFixedLenByteArrays(unsafecast.Uint128ToBytes(i.maxValues), 16)
+	minValues := splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 16)
+	maxValues := splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 16)
 	return i.columnIndex(
 		minValues,
 		maxValues,

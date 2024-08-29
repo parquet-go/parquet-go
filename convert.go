@@ -14,6 +14,7 @@ import (
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
+	"github.com/parquet-go/parquet-go/internal/unsafecast"
 )
 
 // ConvertError is an error type returned by calls to Convert when the conversion
@@ -912,7 +913,7 @@ func convertStringToInt96(v Value) (Value, error) {
 	b := i.Bytes()
 	c := make([]byte, 12)
 	copy(c, b)
-	i96 := deprecated.BytesToInt96(c)
+	i96 := unsafecast.Slice[deprecated.Int96](c)
 	return v.convertToInt96(i96[0]), nil
 }
 

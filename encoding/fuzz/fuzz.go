@@ -90,7 +90,7 @@ func EncodeByteArray(f *testing.F, e encoding.Encoding) {
 				baseOffset := offsets[0]
 
 				for _, endOffset := range offsets[1:] {
-					dst = append(dst, unsafecast.BytesToString(values[baseOffset:endOffset]))
+					dst = append(dst, unsafecast.String(values[baseOffset:endOffset]))
 					baseOffset = endOffset
 				}
 			}
@@ -107,7 +107,7 @@ func EncodeByteArray(f *testing.F, e encoding.Encoding) {
 				if n > r {
 					n = r
 				}
-				dst = append(dst, unsafecast.BytesToString(src[i:i+n]))
+				dst = append(dst, unsafecast.String(src[i:i+n]))
 				i += n
 			}
 

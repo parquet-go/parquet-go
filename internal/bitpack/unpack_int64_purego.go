@@ -5,7 +5,7 @@ package bitpack
 import "github.com/parquet-go/parquet-go/internal/unsafecast"
 
 func unpackInt64(dst []int64, src []byte, bitWidth uint) {
-	bits := unsafecast.BytesToUint32(src)
+	bits := unsafecast.Slice[uint32](src)
 	bitMask := uint64(1<<bitWidth) - 1
 	bitOffset := uint(0)
 

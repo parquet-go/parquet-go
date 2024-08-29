@@ -18,7 +18,7 @@ func TestUnsafeCastSlice(t *testing.T) {
 		t.Fatalf("length mismatch: want=2 got=%d", len(b))
 	}
 	if cap(b) != 6 { // (13 * sizeof(uint32)) / sizeof(int64)
-		t.Fatalf("capacity mismatch: want=7 got=%d", cap(b))
+		t.Fatalf("capacity mismatch: want=6 got=%d", cap(b))
 	}
 	if b[0] != 1 {
 		t.Errorf("wrong value at index 0: want=1 got=%d", b[0])
