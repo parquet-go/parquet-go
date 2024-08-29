@@ -35,7 +35,7 @@ func Slice[To, From any](data []From) []To {
 	var zf From
 	var zt To
 	var s = slice{
-		ptr: *(*unsafe.Pointer)(unsafe.Pointer(&data)),
+		ptr: unsafe.Pointer(unsafe.SliceData(data)),
 		len: int((uintptr(len(data)) * unsafe.Sizeof(zf)) / unsafe.Sizeof(zt)),
 		cap: int((uintptr(cap(data)) * unsafe.Sizeof(zf)) / unsafe.Sizeof(zt)),
 	}
