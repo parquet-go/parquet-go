@@ -56,6 +56,7 @@ type Schema struct {
 //	uuid      | for string and [16]byte types, use the parquet UUID logical type
 //	decimal   | for int32, int64 and [n]byte types, use the parquet DECIMAL logical type
 //	date      | for int32 types use the DATE logical type
+//	time      | for int32 and int64 types use the TIME logical type
 //	timestamp | for int64 types use the TIMESTAMP logical type with, by default, millisecond precision
 //	split     | for float32/float64, use the BYTE_STREAM_SPLIT encoding
 //	id(n)     | where n is int denoting a column field id. Example id(2) for a column with field id of 2
@@ -887,12 +888,36 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			default:
 				throwInvalidTag(t, name, option)
 			}
+		case "time":
+			switch t.Kind() {
+			case reflect.Int32:
+				timeUnit, err := parseTimestampArgs(args)
+				if err != nil || timeUnit.Duration() < time.Millisecond {
+					throwInvalidTag(t, name, option+args)
+				}
+				setNode(Time(timeUnit))
+			case reflect.Int64:
+				timeUnit, err := parseTimestampArgs(args)
+				if t == reflect.TypeOf(time.Duration(0)) {
+					if args == "()" {
+						timeUnit = Nanosecond
+					} else if timeUnit != Nanosecond {
+						throwInvalidTag(t, name, option+args)
+					}
+				}
+				if err != nil || timeUnit.Duration() == time.Millisecond {
+					throwInvalidTag(t, name, option+args)
+				}
+				setNode(Time(timeUnit))
+			default:
+				throwInvalidTag(t, name, option)
+			}
 		case "timestamp":
 			switch t.Kind() {
 			case reflect.Int64:
 				timeUnit, err := parseTimestampArgs(args)
 				if err != nil {
-					throwInvalidTag(t, name, option)
+					throwInvalidTag(t, name, option+args)
 				}
 				setNode(Timestamp(timeUnit))
 			default:
@@ -900,7 +925,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 				case reflect.TypeOf(time.Time{}):
 					timeUnit, err := parseTimestampArgs(args)
 					if err != nil {
-						throwInvalidTag(t, name, option)
+						throwInvalidTag(t, name, option+args)
 					}
 					setNode(Timestamp(timeUnit))
 				default:
