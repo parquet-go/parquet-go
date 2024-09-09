@@ -12,7 +12,6 @@ import (
 	"github.com/parquet-go/parquet-go/internal/bitpack"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
 	"github.com/parquet-go/parquet-go/sparse"
-	"golang.org/x/sys/cpu"
 )
 
 const (
@@ -141,12 +140,8 @@ func (d *booleanDictionary) Index(i int32) Value { return d.makeValue(d.index(i)
 func (d *booleanDictionary) index(i int32) bool { return d.valueAt(int(i)) }
 
 func (d *booleanDictionary) Insert(indexes []int32, values []Value) {
-	model := Value{}
-	if cpu.IsBigEndian {
-		d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)+7))
-	} else {
-		d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
-	}
+	offset := getOffset(*d)
+	d.insert(indexes, makeArrayValue(values, offsetOfU64+offset))
 }
 
 func (d *booleanDictionary) insert(indexes []int32, rows sparse.Array) {
@@ -176,7 +171,7 @@ func (d *booleanDictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *booleanDictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValue(false)
 	memsetValues(values, model)
-	d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
+	d.lookup(indexes, makeArrayValue(values, offsetOfU64))
 }
 
 func (d *booleanDictionary) lookup(indexes []int32, rows sparse.Array) {
@@ -243,12 +238,8 @@ func (d *int32Dictionary) Index(i int32) Value { return d.makeValue(d.index(i)) 
 func (d *int32Dictionary) index(i int32) int32 { return d.values[i] }
 
 func (d *int32Dictionary) Insert(indexes []int32, values []Value) {
-	model := Value{}
-	if cpu.IsBigEndian {
-		d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)+4))
-	} else {
-		d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
-	}
+	offset := getOffset(*d)
+	d.insert(indexes, makeArrayValue(values, offsetOfU64+offset))
 }
 
 func (d *int32Dictionary) init(indexes []int32) {
@@ -300,11 +291,8 @@ func (d *int32Dictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *int32Dictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValue(0)
 	memsetValues(values, model)
-	if cpu.IsBigEndian {
-		d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)+4))
-	} else {
-		d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
-	}
+        offset := getOffset(*d)
+        d.lookup(indexes, makeArrayValue(values, offsetOfU64+offset))
 }
 
 func (d *int32Dictionary) Bounds(indexes []int32) (min, max Value) {
@@ -351,8 +339,7 @@ func (d *int64Dictionary) Index(i int32) Value { return d.makeValue(d.index(i)) 
 func (d *int64Dictionary) index(i int32) int64 { return d.values[i] }
 
 func (d *int64Dictionary) Insert(indexes []int32, values []Value) {
-	model := Value{}
-	d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
+	d.insert(indexes, makeArrayValue(values, offsetOfU64))
 }
 
 func (d *int64Dictionary) init(indexes []int32) {
@@ -391,7 +378,7 @@ func (d *int64Dictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *int64Dictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValue(0)
 	memsetValues(values, model)
-	d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
+	d.lookup(indexes, makeArrayValue(values, offsetOfU64))
 }
 
 func (d *int64Dictionary) Bounds(indexes []int32) (min, max Value) {
@@ -533,12 +520,8 @@ func (d *floatDictionary) Index(i int32) Value { return d.makeValue(d.index(i)) 
 func (d *floatDictionary) index(i int32) float32 { return d.values[i] }
 
 func (d *floatDictionary) Insert(indexes []int32, values []Value) {
-	model := Value{}
-	if cpu.IsBigEndian {
-		d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)+4))
-	} else {
-		d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
-	}
+        offset := getOffset(*d)
+        d.insert(indexes, makeArrayValue(values, offsetOfU64+offset))
 }
 
 func (d *floatDictionary) init(indexes []int32) {
@@ -577,11 +560,8 @@ func (d *floatDictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *floatDictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValue(0)
 	memsetValues(values, model)
-	if cpu.IsBigEndian {
-		d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)+4))
-	} else {
-		d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
-	}
+        offset := getOffset(*d)
+        d.lookup(indexes, makeArrayValue(values, offsetOfU64+offset))
 }
 
 func (d *floatDictionary) Bounds(indexes []int32) (min, max Value) {
@@ -628,8 +608,7 @@ func (d *doubleDictionary) Index(i int32) Value { return d.makeValue(d.index(i))
 func (d *doubleDictionary) index(i int32) float64 { return d.values[i] }
 
 func (d *doubleDictionary) Insert(indexes []int32, values []Value) {
-	model := Value{}
-	d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
+	d.insert(indexes, makeArrayValue(values, offsetOfU64))
 }
 
 func (d *doubleDictionary) init(indexes []int32) {
@@ -668,7 +647,7 @@ func (d *doubleDictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *doubleDictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValue(0)
 	memsetValues(values, model)
-	d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
+	d.lookup(indexes, makeArrayValue(values, offsetOfU64))
 }
 
 func (d *doubleDictionary) Bounds(indexes []int32) (min, max Value) {
@@ -727,8 +706,7 @@ func (d *byteArrayDictionary) Len() int { return d.len() }
 func (d *byteArrayDictionary) Index(i int32) Value { return d.makeValueBytes(d.index(int(i))) }
 
 func (d *byteArrayDictionary) Insert(indexes []int32, values []Value) {
-	model := Value{}
-	d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.ptr)))
+	d.insert(indexes, makeArrayValue(values, offsetOfPtr))
 }
 
 func (d *byteArrayDictionary) init() {
@@ -766,7 +744,7 @@ func (d *byteArrayDictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *byteArrayDictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValueString("")
 	memsetValues(values, model)
-	d.lookupString(indexes, makeArrayValue(values, unsafe.Offsetof(model.ptr)))
+	d.lookupString(indexes, makeArrayValue(values, offsetOfPtr))
 }
 
 func (d *byteArrayDictionary) Bounds(indexes []int32) (min, max Value) {
@@ -885,7 +863,7 @@ func (d *fixedLenByteArrayDictionary) insertValues(indexes []int32, count int, v
 func (d *fixedLenByteArrayDictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValueString("")
 	memsetValues(values, model)
-	d.lookupString(indexes, makeArrayValue(values, unsafe.Offsetof(model.ptr)))
+	d.lookupString(indexes, makeArrayValue(values, offsetOfPtr))
 }
 
 func (d *fixedLenByteArrayDictionary) Bounds(indexes []int32) (min, max Value) {
@@ -952,12 +930,8 @@ func (d *uint32Dictionary) Index(i int32) Value { return d.makeValue(d.index(i))
 func (d *uint32Dictionary) index(i int32) uint32 { return d.values[i] }
 
 func (d *uint32Dictionary) Insert(indexes []int32, values []Value) {
-	model := Value{}
-	if cpu.IsBigEndian {
-		d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)+4))
-	} else {
-		d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
-	}
+        offset := getOffset(*d)
+        d.insert(indexes, makeArrayValue(values, offsetOfU64+offset))
 }
 
 func (d *uint32Dictionary) init(indexes []int32) {
@@ -996,11 +970,8 @@ func (d *uint32Dictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *uint32Dictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValue(0)
 	memsetValues(values, model)
-	if cpu.IsBigEndian {
-		d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)+4))
-	} else {
-		d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
-	}
+        offset := getOffset(*d)
+        d.lookup(indexes, makeArrayValue(values, offsetOfU64+offset))
 }
 
 func (d *uint32Dictionary) Bounds(indexes []int32) (min, max Value) {
@@ -1047,8 +1018,7 @@ func (d *uint64Dictionary) Index(i int32) Value { return d.makeValue(d.index(i))
 func (d *uint64Dictionary) index(i int32) uint64 { return d.values[i] }
 
 func (d *uint64Dictionary) Insert(indexes []int32, values []Value) {
-	model := Value{}
-	d.insert(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
+	d.insert(indexes, makeArrayValue(values, offsetOfU64))
 }
 
 func (d *uint64Dictionary) init(indexes []int32) {
@@ -1087,7 +1057,7 @@ func (d *uint64Dictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *uint64Dictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValue(0)
 	memsetValues(values, model)
-	d.lookup(indexes, makeArrayValue(values, unsafe.Offsetof(model.u64)))
+	d.lookup(indexes, makeArrayValue(values, offsetOfU64))
 }
 
 func (d *uint64Dictionary) Bounds(indexes []int32) (min, max Value) {
@@ -1205,7 +1175,7 @@ func (d *be128Dictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *be128Dictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValueString("")
 	memsetValues(values, model)
-	d.lookupString(indexes, makeArrayValue(values, unsafe.Offsetof(model.ptr)))
+	d.lookupString(indexes, makeArrayValue(values, offsetOfPtr))
 }
 
 func (d *be128Dictionary) Bounds(indexes []int32) (min, max Value) {
