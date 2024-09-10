@@ -87,40 +87,42 @@ func (f *formatColumnIndex) IsDescending() bool {
 type fileColumnIndex struct{ chunk *fileColumnChunk }
 
 func (i fileColumnIndex) NumPages() int {
-	return len(i.chunk.columnIndex.NullPages)
+	return len(i.chunk.columnIndex.Load().NullPages)
 }
 
 func (i fileColumnIndex) NullCount(j int) int64 {
-	if len(i.chunk.columnIndex.NullCounts) > 0 {
-		return i.chunk.columnIndex.NullCounts[j]
+	index := i.chunk.columnIndex.Load()
+	if len(index.NullCounts) > 0 {
+		return index.NullCounts[j]
 	}
 	return 0
 }
 
 func (i fileColumnIndex) NullPage(j int) bool {
-	return len(i.chunk.columnIndex.NullPages) > 0 && i.chunk.columnIndex.NullPages[j]
+	index := i.chunk.columnIndex.Load()
+	return len(index.NullPages) > 0 && index.NullPages[j]
 }
 
 func (i fileColumnIndex) MinValue(j int) Value {
 	if i.NullPage(j) {
 		return Value{}
 	}
-	return i.makeValue(i.chunk.columnIndex.MinValues[j])
+	return i.makeValue(i.chunk.columnIndex.Load().MinValues[j])
 }
 
 func (i fileColumnIndex) MaxValue(j int) Value {
 	if i.NullPage(j) {
 		return Value{}
 	}
-	return i.makeValue(i.chunk.columnIndex.MaxValues[j])
+	return i.makeValue(i.chunk.columnIndex.Load().MaxValues[j])
 }
 
 func (i fileColumnIndex) IsAscending() bool {
-	return i.chunk.columnIndex.BoundaryOrder == format.Ascending
+	return i.chunk.columnIndex.Load().BoundaryOrder == format.Ascending
 }
 
 func (i fileColumnIndex) IsDescending() bool {
-	return i.chunk.columnIndex.BoundaryOrder == format.Descending
+	return i.chunk.columnIndex.Load().BoundaryOrder == format.Descending
 }
 
 func (i *fileColumnIndex) makeValue(b []byte) Value {
