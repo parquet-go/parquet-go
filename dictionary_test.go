@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/encoding"
 )
 
 var dictionaryTypes = [...]parquet.Type{
@@ -271,4 +272,12 @@ func TestIssue312(t *testing.T) {
 			_ = columnType.NewDictionary(0, 1, values)
 		})
 	}
+}
+
+func TestNewIndexedPage(t *testing.T) {
+	// Reproduces a slice arithmetic bug in newIndexedPage that
+	// could cause a panic when cap(vals) >= size and len(vals)+size > cap(vals).
+	dict := parquet.ByteArrayType.NewDictionary(1, 1, encoding.ByteArrayValues([]byte("foobar"), []uint32{0}))
+	// cap(vals) = 100; size = 100; len(vals) = 50  ==> boom!
+	dict.Type().NewPage(1, 100, encoding.Int32Values(make([]int32, 50, 100)))
 }
