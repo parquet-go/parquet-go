@@ -29,7 +29,7 @@ const (
 	//
 	// This constant is used to determine a useful chunk size depending on the
 	// size of values being inserted in dictionaries. More values of small size
-	// can fit in CPU caches, so the inserts can operation on larger chunks.
+	// can fit in CPU caches, so the inserts can operate on larger chunks.
 	insertsTargetCacheFootprint = 8192
 )
 
@@ -1242,7 +1242,7 @@ func newIndexedPage(typ *indexedType, columnIndex int16, numValues int32, data e
 			copy(tmp, values)
 			values = tmp
 		} else {
-			clear := values[len(values) : len(values)+size]
+			clear := values[len(values):size]
 			for i := range clear {
 				clear[i] = 0
 			}
