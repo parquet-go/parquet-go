@@ -307,7 +307,7 @@ func testLevelsEncoding(t *testing.T, e encoding.Encoding) {
 	values := []byte{}
 
 	for _, input := range levelsTests {
-		setBitWidth(e, maxLenInt8(unsafecast.BytesToInt8(input)))
+		setBitWidth(e, maxLenInt8(unsafecast.Slice[int8](input)))
 
 		t.Run("", func(t *testing.T) {
 			var err error
@@ -518,27 +518,27 @@ func assertEqualBytes(t *testing.T, want, got []byte) {
 
 func assertEqualInt32(t *testing.T, want, got []int32) {
 	t.Helper()
-	assertEqualBytes(t, unsafecast.Int32ToBytes(want), unsafecast.Int32ToBytes(got))
+	assertEqualBytes(t, unsafecast.Slice[byte](want), unsafecast.Slice[byte](got))
 }
 
 func assertEqualInt64(t *testing.T, want, got []int64) {
 	t.Helper()
-	assertEqualBytes(t, unsafecast.Int64ToBytes(want), unsafecast.Int64ToBytes(got))
+	assertEqualBytes(t, unsafecast.Slice[byte](want), unsafecast.Slice[byte](got))
 }
 
 func assertEqualInt96(t *testing.T, want, got []deprecated.Int96) {
 	t.Helper()
-	assertEqualBytes(t, deprecated.Int96ToBytes(want), deprecated.Int96ToBytes(got))
+	assertEqualBytes(t, unsafecast.Slice[byte](want), unsafecast.Slice[byte](got))
 }
 
 func assertEqualFloat32(t *testing.T, want, got []float32) {
 	t.Helper()
-	assertEqualBytes(t, unsafecast.Float32ToBytes(want), unsafecast.Float32ToBytes(got))
+	assertEqualBytes(t, unsafecast.Slice[byte](want), unsafecast.Slice[byte](got))
 }
 
 func assertEqualFloat64(t *testing.T, want, got []float64) {
 	t.Helper()
-	assertEqualBytes(t, unsafecast.Float64ToBytes(want), unsafecast.Float64ToBytes(got))
+	assertEqualBytes(t, unsafecast.Slice[byte](want), unsafecast.Slice[byte](got))
 }
 
 const (
@@ -614,7 +614,7 @@ func benchmarkEncodeLevels(b *testing.B, e encoding.Encoding) {
 	testCanEncodeLevels(b, e)
 	buffer := make([]byte, 0)
 	values := generateLevelValues(benchmarkNumValues, newRand())
-	setBitWidth(e, maxLenInt8(unsafecast.BytesToInt8(values)))
+	setBitWidth(e, maxLenInt8(unsafecast.Slice[int8](values)))
 
 	reportThroughput(b, benchmarkNumValues, len(values), func() {
 		benchmarkZeroAllocsPerRun(b, func() {
@@ -763,7 +763,7 @@ func benchmarkDecodeBoolean(b *testing.B, e encoding.Encoding) {
 func benchmarkDecodeLevels(b *testing.B, e encoding.Encoding) {
 	testCanEncodeLevels(b, e)
 	values := generateLevelValues(benchmarkNumValues, newRand())
-	setBitWidth(e, maxLenInt8(unsafecast.BytesToInt8(values)))
+	setBitWidth(e, maxLenInt8(unsafecast.Slice[int8](values)))
 	buffer, _ := e.EncodeLevels(nil, values)
 
 	reportThroughput(b, benchmarkNumValues, len(values), func() {

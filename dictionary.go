@@ -29,7 +29,7 @@ const (
 	//
 	// This constant is used to determine a useful chunk size depending on the
 	// size of values being inserted in dictionaries. More values of small size
-	// can fit in CPU caches, so the inserts can operation on larger chunks.
+	// can fit in CPU caches, so the inserts can operate on larger chunks.
 	insertsTargetCacheFootprint = 8192
 )
 
@@ -750,7 +750,7 @@ func (d *byteArrayDictionary) Lookup(indexes []int32, values []Value) {
 func (d *byteArrayDictionary) Bounds(indexes []int32) (min, max Value) {
 	if len(indexes) > 0 {
 		base := d.index(int(indexes[0]))
-		minValue := unsafecast.BytesToString(base)
+		minValue := unsafecast.String(base)
 		maxValue := minValue
 		values := [64]string{}
 
@@ -869,7 +869,7 @@ func (d *fixedLenByteArrayDictionary) Lookup(indexes []int32, values []Value) {
 func (d *fixedLenByteArrayDictionary) Bounds(indexes []int32) (min, max Value) {
 	if len(indexes) > 0 {
 		base := d.index(indexes[0])
-		minValue := unsafecast.BytesToString(base)
+		minValue := unsafecast.String(base)
 		maxValue := minValue
 		values := [64]string{}
 
@@ -1241,7 +1241,7 @@ func newIndexedPage(typ *indexedType, columnIndex int16, numValues int32, data e
 			copy(tmp, values)
 			values = tmp
 		} else {
-			clear := values[len(values) : len(values)+size]
+			clear := values[len(values):size]
 			for i := range clear {
 				clear[i] = 0
 			}

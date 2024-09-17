@@ -18,7 +18,7 @@ func unpackInt64(dst []int64, src []byte, bitWidth uint) {
 			idx += 4
 		}
 	} else {
-		bits = unsafecast.BytesToUint32(src)
+		bits = unsafecast.Slice[uint32](src)
 	}
 
 	bitMask := uint64(1<<bitWidth) - 1
