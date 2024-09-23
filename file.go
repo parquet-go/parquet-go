@@ -513,6 +513,9 @@ func (c *fileColumnChunk) readColumnIndex() (*format.ColumnIndex, error) {
 		return nil, fmt.Errorf("decode column index: rowGroup=%d columnChunk=%d/%d: %w", c.rowGroup.Ordinal, c.Column(), len(c.rowGroup.Columns), err)
 	}
 	index := &columnIndex
+	// We do a CAS (and Load on CAS failure) instead of a simple Store for
+	// the nice property that concurrent calling goroutines will only ever
+	// observe a single pointer value for the result.
 	if !c.columnIndex.CompareAndSwap(nil, index) {
 		// another goroutine populated it since we last read the pointer
 		return c.columnIndex.Load(), nil
