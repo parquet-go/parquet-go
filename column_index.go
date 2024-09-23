@@ -99,16 +99,12 @@ func (i fileColumnIndex) NullCount(j int) int64 {
 }
 
 func (i fileColumnIndex) NullPage(j int) bool {
-	return i.nullPage(j, i.columnIndex())
-}
-
-func (i fileColumnIndex) nullPage(j int, index *format.ColumnIndex) bool {
-	return len(index.NullPages) > 0 && index.NullPages[j]
+	return isNullPage(j, i.columnIndex())
 }
 
 func (i fileColumnIndex) MinValue(j int) Value {
 	index := i.columnIndex()
-	if i.nullPage(j, index) {
+	if isNullPage(j, index) {
 		return Value{}
 	}
 	return i.makeValue(index.MinValues[j])
@@ -116,7 +112,7 @@ func (i fileColumnIndex) MinValue(j int) Value {
 
 func (i fileColumnIndex) MaxValue(j int) Value {
 	index := i.columnIndex()
-	if i.nullPage(j, index) {
+	if isNullPage(j, index) {
 		return Value{}
 	}
 	return i.makeValue(index.MaxValues[j])
@@ -135,6 +131,10 @@ func (i *fileColumnIndex) makeValue(b []byte) Value {
 }
 
 func (i fileColumnIndex) columnIndex() *format.ColumnIndex { return i.chunk.columnIndex.Load() }
+
+func isNullPage(j int, index *format.ColumnIndex) bool {
+	return len(index.NullPages) > 0 && index.NullPages[j]
+}
 
 type emptyColumnIndex struct{}
 
