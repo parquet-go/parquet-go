@@ -107,17 +107,19 @@ func (i fileColumnIndex) nullPage(j int, index *format.ColumnIndex) bool {
 }
 
 func (i fileColumnIndex) MinValue(j int) Value {
-	if i.nullPage(j, i.columnIndex()) {
+	index := i.columnIndex()
+	if i.nullPage(j, index) {
 		return Value{}
 	}
-	return i.makeValue(i.columnIndex().MinValues[j])
+	return i.makeValue(index.MinValues[j])
 }
 
 func (i fileColumnIndex) MaxValue(j int) Value {
-	if i.nullPage(j, i.columnIndex()) {
+	index := i.columnIndex()
+	if i.nullPage(j, index) {
 		return Value{}
 	}
-	return i.makeValue(i.columnIndex().MaxValues[j])
+	return i.makeValue(index.MaxValues[j])
 }
 
 func (i fileColumnIndex) IsAscending() bool {
