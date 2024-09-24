@@ -4,8 +4,8 @@ package bitpack
 
 import (
 	"encoding/binary"
-	"golang.org/x/sys/cpu"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"golang.org/x/sys/cpu"
 )
 
 func unpackInt64(dst []int64, src []byte, bitWidth uint) {

@@ -6,9 +6,9 @@ package plain
 import (
 	"encoding/binary"
 	"fmt"
+	"golang.org/x/sys/cpu"
 	"io"
 	"math"
-	"golang.org/x/sys/cpu"
 
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"

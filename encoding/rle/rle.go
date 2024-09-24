@@ -8,9 +8,9 @@ package rle
 import (
 	"encoding/binary"
 	"fmt"
+	"golang.org/x/sys/cpu"
 	"io"
 	"unsafe"
-	"golang.org/x/sys/cpu"
 
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
