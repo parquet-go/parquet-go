@@ -2,10 +2,26 @@ package parquet
 
 import (
 	"bytes"
+	"cmp"
 	"sort"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/internal/quick"
+)
+
+type order[T cmp.Ordered] []T
+
+func (v order[T]) Len() int           { return len(v) }
+func (v order[T]) Less(i, j int) bool { return v[i] < v[j] }
+func (v order[T]) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
+
+type (
+	int32Order   = order[int32]
+	int64Order   = order[int64]
+	uint32Order  = order[uint32]
+	uint64Order  = order[uint64]
+	float32Order = order[float32]
+	float64Order = order[float64]
 )
 
 type boolOrder []bool
@@ -13,42 +29,6 @@ type boolOrder []bool
 func (v boolOrder) Len() int           { return len(v) }
 func (v boolOrder) Less(i, j int) bool { return !v[i] && v[j] }
 func (v boolOrder) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type int32Order []int32
-
-func (v int32Order) Len() int           { return len(v) }
-func (v int32Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v int32Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type int64Order []int64
-
-func (v int64Order) Len() int           { return len(v) }
-func (v int64Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v int64Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type uint32Order []uint32
-
-func (v uint32Order) Len() int           { return len(v) }
-func (v uint32Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v uint32Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type uint64Order []uint64
-
-func (v uint64Order) Len() int           { return len(v) }
-func (v uint64Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v uint64Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type float32Order []float32
-
-func (v float32Order) Len() int           { return len(v) }
-func (v float32Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v float32Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type float64Order []float64
-
-func (v float64Order) Len() int           { return len(v) }
-func (v float64Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v float64Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
 
 type bytesOrder [][]byte
 
