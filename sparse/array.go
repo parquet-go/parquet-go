@@ -12,6 +12,7 @@ func UnsafeArray(base unsafe.Pointer, length int, offset uintptr) Array {
 }
 
 func (a Array) Len() int                   { return int(a.len) }
+func (a Array) Nil() bool                  { return a.ptr == nil }
 func (a Array) Index(i int) unsafe.Pointer { return a.index(i) }
 func (a Array) Slice(i, j int) Array       { return Array{a.slice(i, j)} }
 func (a Array) Offset(off uintptr) Array   { return Array{a.offset(off)} }
