@@ -352,6 +352,8 @@ func (cl *columnLoader) open(file *File, path []string) (*Column, error) {
 	c.typ = &groupType{}
 	if lt := c.schema.LogicalType; lt != nil && lt.Map != nil {
 		c.typ = &mapType{}
+	} else if lt != nil && lt.List != nil {
+		c.typ = &listType{}
 	}
 	c.columns = make([]*Column, numChildren)
 
