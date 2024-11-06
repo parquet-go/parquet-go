@@ -398,7 +398,7 @@ func decodeInt32(dst, src []byte, bitWidth uint) ([]byte, error) {
 			bits := [4]byte{}
 			copy(bits[:], src[i:j])
 
-			//swap the bytes in the "bits" array to take care of big endian arch
+			// swap the bytes in the "bits" array to take care of big endian arch
 			if cpu.IsBigEndian {
 				for m, n := 0, 3; m < n; m, n = m+1, n-1 {
 					bits[m], bits[n] = bits[n], bits[m]
