@@ -9,7 +9,7 @@ import (
 )
 
 func unsafecastInt96ToBytes(src []deprecated.Int96) []byte {
-	out := make([]byte, srcLen*12)
+	out := make([]byte, len(src)*12)
 	for i := range src {
 		binary.LittleEndian.PutUint32(out[(i*12):4+(i*12)], uint32(src[i][0]))
 		binary.LittleEndian.PutUint32(out[4+(i*12):8+(i*12)], uint32(src[i][1]))

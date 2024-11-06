@@ -1,3 +1,8 @@
+//go:build !s309x
+
+// Note: this test is currently disabled on Big-Endian architectures because it
+// assumes a Little-Endian memory layout.
+
 package unsafecast_test
 
 import (
