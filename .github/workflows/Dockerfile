@@ -1,8 +1,12 @@
 # docker buildx build --progress plain --platform linux/s390x --tag user/parque-go:s390x --build-arg=TARGETARCH=s390x -f ./.github/workflows/Dockerfile .
-FROM  golang:1.22 as builder
+FROM  golang:1.23 AS builder
 
-WORKDIR /workspace/parque
-ADD ../.. ./
-
+WORKDIR /workspace/parquet
 RUN go env
-RUN go test -v -trimpath
+
+ADD ../../go.mod .
+ADD ../../go.sum .
+RUN go mod download
+
+ADD ../.. ./
+RUN go test -trimpath ./...

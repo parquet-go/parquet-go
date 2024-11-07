@@ -4,9 +4,16 @@ import (
 	"testing"
 
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"golang.org/x/sys/cpu"
 )
 
 func TestUnsafeCastSlice(t *testing.T) {
+	// Note: this test is currently disabled on Big-Endian architectures because
+	// it assumes a Little-Endian memory layout.
+	if cpu.IsBigEndian {
+		t.Skip("skipping test on big-endian architecture")
+	}
+
 	a := make([]uint32, 4, 13)
 	a[0] = 1
 	a[1] = 0
