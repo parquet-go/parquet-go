@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"math/bits"
+	"sync"
 
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/bitpacked"
@@ -83,12 +84,26 @@ var (
 	}
 )
 
+var extraEncodings sync.Map
+
 func isDictionaryEncoding(encoding encoding.Encoding) bool {
 	return isDictionaryFormat(encoding.Encoding())
 }
 
 func isDictionaryFormat(encoding format.Encoding) bool {
 	return encoding == format.PlainDictionary || encoding == format.RLEDictionary
+}
+
+func RegisterEncoding(enc encoding.Encoding) bool {
+	ns := encoding.NotSupported{}
+	if enc == ns {
+		return false
+	}
+	if LookupEncoding(enc.Encoding()) != ns {
+		return false
+	}
+	extraEncodings.Store(enc.Encoding(), enc)
+	return true
 }
 
 // LookupEncoding returns the parquet encoding associated with the given code.
@@ -100,6 +115,9 @@ func LookupEncoding(enc format.Encoding) encoding.Encoding {
 		if e := encodings[enc]; e != nil {
 			return e
 		}
+	}
+	if enc, ok := extraEncodings.Load(enc); ok {
+		return enc.(encoding.Encoding)
 	}
 	return encoding.NotSupported{}
 }
