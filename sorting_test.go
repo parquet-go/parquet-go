@@ -2,12 +2,12 @@ package parquet_test
 
 import (
 	"bytes"
-	"encoding/binary"
+	"cmp"
 	"io"
 	"math/rand"
 	"os"
 	"reflect"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -52,8 +52,8 @@ func TestSortingWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].Value < rows[j].Value
+	slices.SortFunc(rows, func(a, b Row) int {
+		return cmp.Compare(a.Value, b.Value)
 	})
 
 	assertRowsEqual(t, rows, read)
@@ -101,8 +101,8 @@ func TestSortingWriterDropDuplicatedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].Value < rows[j].Value
+	slices.SortFunc(rows, func(a, b Row) int {
+		return cmp.Compare(a.Value, b.Value)
 	})
 
 	n := len(rows) / 2
@@ -148,8 +148,8 @@ func TestSortingWriterCorruptedString(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sort.Slice(rowsWant, func(i, j int) bool {
-		return rowsWant[i].Tag < rowsWant[j].Tag
+	slices.SortFunc(rowsWant, func(a, b Row) int {
+		return cmp.Compare(a.Tag, b.Tag)
 	})
 
 	assertRowsEqualByRow(t, rowsGot, rowsWant)
@@ -190,8 +190,8 @@ func TestSortingWriterCorruptedFixedLenByteArray(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sort.Slice(rowsWant, func(i, j int) bool {
-		return idLess(rowsWant[i].ID, rowsWant[j].ID)
+	slices.SortFunc(rowsWant, func(a, b Row) int {
+		return bytes.Compare(a.ID[:], b.ID[:])
 	})
 
 	assertRowsEqualByRow(t, rowsGot, rowsWant)
@@ -213,20 +213,6 @@ func rand16bytes() [16]byte {
 		b[i] = letterRunes[rand.Intn(len(letterRunes))]
 	}
 	return b
-}
-
-func idLess(ID1, ID2 [16]byte) bool {
-	k1 := binary.BigEndian.Uint64(ID1[:8])
-	k2 := binary.BigEndian.Uint64(ID2[:8])
-	switch {
-	case k1 < k2:
-		return true
-	case k1 > k2:
-		return false
-	}
-	k1 = binary.BigEndian.Uint64(ID1[8:])
-	k2 = binary.BigEndian.Uint64(ID2[8:])
-	return k1 < k2
 }
 
 func assertRowsEqualByRow[T any](t *testing.T, rowsGot, rowsWant []T) {
@@ -312,8 +298,8 @@ func TestIssue_82(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sort.Slice(rowsWant, func(i, j int) bool {
-		return rowsWant[i].A < rowsWant[j].A
+	slices.SortFunc(rowsWant, func(a, b Record) int {
+		return cmp.Compare(a.A, b.A)
 	})
 	assertRowsEqualByRow(t, rowsGot, rowsWant)
 }
@@ -374,8 +360,8 @@ func TestMergedRowsCorruptedString(t *testing.T) {
 	reader := merged.Rows()
 	t.Cleanup(func() { reader.Close() })
 	buf := make([]parquet.Row, rowCount)
-	sort.Slice(rowsWant, func(i, j int) bool {
-		return rowsWant[i].Tag < rowsWant[j].Tag
+	slices.SortFunc(rowsWant, func(a, b Row) int {
+		return cmp.Compare(a.Tag, b.Tag)
 	})
 	for i, n := 0, 0; i < rowCount; i += n {
 		n, err = reader.ReadRows(buf)

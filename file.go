@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -345,26 +346,22 @@ func (f *File) hasIndexes() bool {
 var _ io.ReaderAt = (*File)(nil)
 
 func sortKeyValueMetadata(keyValueMetadata []format.KeyValue) {
-	sort.Slice(keyValueMetadata, func(i, j int) bool {
-		switch {
-		case keyValueMetadata[i].Key < keyValueMetadata[j].Key:
-			return true
-		case keyValueMetadata[i].Key > keyValueMetadata[j].Key:
-			return false
-		default:
-			return keyValueMetadata[i].Value < keyValueMetadata[j].Value
+	slices.SortFunc(keyValueMetadata, func(a, b format.KeyValue) int {
+		if cmp := strings.Compare(a.Key, b.Key); cmp != 0 {
+			return cmp
 		}
+		return strings.Compare(a.Value, b.Value)
 	})
 }
 
 func lookupKeyValueMetadata(keyValueMetadata []format.KeyValue, key string) (value string, ok bool) {
-	i := sort.Search(len(keyValueMetadata), func(i int) bool {
-		return keyValueMetadata[i].Key >= key
+	i, found := slices.BinarySearchFunc(keyValueMetadata, key, func(kv format.KeyValue, key string) int {
+		return strings.Compare(kv.Key, key)
 	})
-	if i == len(keyValueMetadata) || keyValueMetadata[i].Key != key {
-		return "", false
+	if found {
+		return keyValueMetadata[i].Value, true
 	}
-	return keyValueMetadata[i].Value, true
+	return "", false
 }
 
 type fileRowGroup struct {

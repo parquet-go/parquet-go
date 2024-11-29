@@ -3,6 +3,7 @@ package parquet
 import (
 	"bytes"
 	"cmp"
+	"slices"
 	"sort"
 	"testing"
 
@@ -97,7 +98,7 @@ func TestOrderOfBool(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(boolOrder(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -116,11 +117,11 @@ func TestOrderOfInt32(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(int32Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(int32Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -154,11 +155,11 @@ func TestOrderOfInt64(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(int64Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(int64Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -188,11 +189,11 @@ func TestOrderOfUint32(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(uint32Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(uint32Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -222,11 +223,11 @@ func TestOrderOfUint64(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(uint64Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(uint64Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -256,11 +257,11 @@ func TestOrderOfFloat32(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(float32Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(float32Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -290,11 +291,11 @@ func TestOrderOfFloat64(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(float64Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(float64Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -321,19 +322,19 @@ func TestOrderOfBytes(t *testing.T) {
 		return checkOrdering(t, bytesOrder(values), orderOfBytes(values))
 	}
 	err := quick.Check(func(values [][16]byte) bool {
-		slices := make([][]byte, len(values))
+		byteSlices := make([][]byte, len(values))
 		for i := range values {
-			slices[i] = values[i][:]
+			byteSlices[i] = values[i][:]
 		}
-		if !check(slices) {
+		if !check(byteSlices) {
 			return false
 		}
-		sort.Sort(bytesOrder(slices))
-		if !check(slices) {
+		slices.SortFunc(byteSlices, bytes.Compare)
+		if !check(byteSlices) {
 			return false
 		}
-		sort.Sort(sort.Reverse(bytesOrder(slices)))
-		if !check(slices) {
+		slices.Reverse(byteSlices)
+		if !check(byteSlices) {
 			return false
 		}
 		return true

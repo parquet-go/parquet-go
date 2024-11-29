@@ -1,7 +1,8 @@
 package parquet_test
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -27,8 +28,8 @@ func TestDedupeRowReader(t *testing.T) {
 		dedupeRows = append(dedupeRows, row)
 	}
 
-	sort.Slice(dedupeRows, func(i, j int) bool {
-		return dedupeRows[i].Value < dedupeRows[j].Value
+	slices.SortFunc(dedupeRows, func(a, b Row) int {
+		return cmp.Compare(a.Value, b.Value)
 	})
 
 	buffer1 := parquet.NewRowBuffer[Row]()
@@ -75,8 +76,8 @@ func TestDedupeRowWriter(t *testing.T) {
 		dedupeRows = append(dedupeRows, row)
 	}
 
-	sort.Slice(dedupeRows, func(i, j int) bool {
-		return dedupeRows[i].Value < dedupeRows[j].Value
+	slices.SortFunc(dedupeRows, func(a, b Row) int {
+		return cmp.Compare(a.Value, b.Value)
 	})
 
 	buffer1 := parquet.NewRowBuffer[Row]()
