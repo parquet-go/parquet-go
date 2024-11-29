@@ -25,6 +25,7 @@ const (
 	DefaultWriteBufferSize      = 32 * 1024
 	DefaultDataPageVersion      = 2
 	DefaultDataPageStatistics   = false
+	DefaultSkipMagicBytes       = false
 	DefaultSkipPageIndex        = false
 	DefaultSkipBloomFilters     = false
 	DefaultMaxRowsPerRowGroup   = math.MaxInt64
@@ -90,6 +91,7 @@ func formatCreatedBy(application, version, build string) string {
 //		ReadMode:         ReadModeAsync,
 //	})
 type FileConfig struct {
+	SkipMagicBytes   bool
 	SkipPageIndex    bool
 	SkipBloomFilters bool
 	ReadBufferSize   int
@@ -101,6 +103,7 @@ type FileConfig struct {
 // default file configuration.
 func DefaultFileConfig() *FileConfig {
 	return &FileConfig{
+		SkipMagicBytes:   DefaultSkipMagicBytes,
 		SkipPageIndex:    DefaultSkipPageIndex,
 		SkipBloomFilters: DefaultSkipBloomFilters,
 		ReadBufferSize:   defaultReadBufferSize,
@@ -130,6 +133,7 @@ func (c *FileConfig) Apply(options ...FileOption) {
 // ConfigureFile applies configuration options from c to config.
 func (c *FileConfig) ConfigureFile(config *FileConfig) {
 	*config = FileConfig{
+		SkipMagicBytes:   c.SkipMagicBytes,
 		SkipPageIndex:    c.SkipPageIndex,
 		SkipBloomFilters: c.SkipBloomFilters,
 		ReadBufferSize:   coalesceInt(c.ReadBufferSize, config.ReadBufferSize),
@@ -433,6 +437,14 @@ type RowGroupOption interface {
 // options for parquet sorting writers.
 type SortingOption interface {
 	ConfigureSorting(*SortingConfig)
+}
+
+// SkipMagicBytes is a file configuration option which prevents automatically
+// reading the magic bytes when opening a parquet file, when set to true. This
+// is useful as an optimization when programs can trust that they are dealing
+// with parquet files and do not need to verify the first 4 bytes.
+func SkipMagicBytes(skip bool) FileOption {
+	return fileOption(func(config *FileConfig) { config.SkipMagicBytes = skip })
 }
 
 // SkipPageIndex is a file configuration option which prevents automatically
