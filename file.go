@@ -49,11 +49,13 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	}
 	f := &File{reader: r, size: size, config: c}
 
-	if _, err := readAt(r, b[:4], 0); err != nil {
-		return nil, fmt.Errorf("reading magic header of parquet file: %w", err)
-	}
-	if string(b[:4]) != "PAR1" {
-		return nil, fmt.Errorf("invalid magic header of parquet file: %q", b[:4])
+	if !c.SkipMagicBytes {
+		if _, err := readAt(r, b[:4], 0); err != nil {
+			return nil, fmt.Errorf("reading magic header of parquet file: %w", err)
+		}
+		if string(b[:4]) != "PAR1" {
+			return nil, fmt.Errorf("invalid magic header of parquet file: %q", b[:4])
+		}
 	}
 
 	if cast, ok := f.reader.(interface{ SetMagicFooterSection(offset, length int64) }); ok {
