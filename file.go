@@ -320,14 +320,13 @@ func (f *File) ReadAt(b []byte, off int64) (int, error) {
 
 // ColumnIndexes returns the page index of the parquet file f.
 //
-// If the file did not contain a column index, the method returns an empty slice
-// and nil error.
+// If the file did not contain a column index, the method returns an empty slice.
 func (f *File) ColumnIndexes() []format.ColumnIndex { return f.columnIndexes }
 
 // OffsetIndexes returns the page index of the parquet file f.
 //
 // If the file did not contain an offset index, the method returns an empty
-// slice and nil error.
+// slice.
 func (f *File) OffsetIndexes() []format.OffsetIndex { return f.offsetIndexes }
 
 // Lookup returns the value associated with the given key in the file key/value
