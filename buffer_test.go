@@ -587,12 +587,12 @@ scenarios:
 			if n > 0 {
 				if n != 1 {
 					t.Errorf("reading value from %q reader returned the wrong count: want=1 got=%d", test.scenario, n)
-					continue scnearios
+					continue scenarios
 				}
 				if i < len(test.values) {
 					if !parquet.Equal(v[0], test.values[i]) {
 						t.Errorf("%q value at index %d mismatches: want=%v got=%v", test.scenario, i, test.values[i], v[0])
-						continue scnearios
+						continue scenarios
 					}
 				}
 				i++
