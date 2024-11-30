@@ -569,7 +569,7 @@ func testBuffer(t *testing.T, node parquet.Node, buffer *parquet.Buffer, encodin
 	// number of values as a proxy for the row indexes.
 	halfValues := numValues / 2
 
-scnearios:
+scenarios:
 	for _, test := range [...]struct {
 		scenario string
 		values   []parquet.Value
