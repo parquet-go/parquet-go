@@ -3,6 +3,7 @@ package parquet
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -12,7 +13,6 @@ import (
 	"os"
 	"reflect"
 	"slices"
-	"sort"
 
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/encoding"
@@ -1669,19 +1669,15 @@ addPages:
 }
 
 func sortPageEncodings(encodings []format.Encoding) {
-	sort.Slice(encodings, func(i, j int) bool {
-		return encodings[i] < encodings[j]
-	})
+	slices.Sort(encodings)
 }
 
 func sortPageEncodingStats(stats []format.PageEncodingStats) {
-	sort.Slice(stats, func(i, j int) bool {
-		s1 := &stats[i]
-		s2 := &stats[j]
-		if s1.PageType != s2.PageType {
-			return s1.PageType < s2.PageType
+	slices.SortFunc(stats, func(s1, s2 format.PageEncodingStats) int {
+		if k := cmp.Compare(s1.PageType, s2.PageType); k != 0 {
+			return k
 		}
-		return s1.Encoding < s2.Encoding
+		return cmp.Compare(s1.Encoding, s2.Encoding)
 	})
 }
 

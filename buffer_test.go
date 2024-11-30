@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"testing"
@@ -239,7 +240,7 @@ func BenchmarkSortGenericBuffer(b *testing.B) {
 		ID [16]byte
 	}
 
-	buf := parquet.NewGenericBuffer[Row](
+	buffer := parquet.NewGenericBuffer[Row](
 		parquet.SortingRowGroupConfig(
 			parquet.SortingColumns(
 				parquet.Ascending("ID"),
@@ -255,15 +256,15 @@ func BenchmarkSortGenericBuffer(b *testing.B) {
 		binary.LittleEndian.PutUint64(rows[i].ID[8:], ^uint64(i))
 	}
 
-	buf.Write(rows)
+	buffer.Write(rows)
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
 		for j := 0; j < 10; j++ {
-			buf.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
+			buffer.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
 		}
 
-		sort.Sort(buf)
+		sort.Sort(buffer)
 	}
 }
 
@@ -494,11 +495,12 @@ type sortFunc func(parquet.Type, []parquet.Value)
 func unordered(typ parquet.Type, values []parquet.Value) {}
 
 func ascending(typ parquet.Type, values []parquet.Value) {
-	sort.Slice(values, func(i, j int) bool { return typ.Compare(values[i], values[j]) < 0 })
+	slices.SortFunc(values, func(a, b parquet.Value) int { return typ.Compare(a, b) })
 }
 
 func descending(typ parquet.Type, values []parquet.Value) {
-	sort.Slice(values, func(i, j int) bool { return typ.Compare(values[i], values[j]) > 0 })
+	ascending(typ, values)
+	slices.Reverse(values)
 }
 
 func testBuffer(t *testing.T, node parquet.Node, buffer *parquet.Buffer, encoding encoding.Encoding, values []interface{}, sortFunc sortFunc) {
@@ -567,6 +569,7 @@ func testBuffer(t *testing.T, node parquet.Node, buffer *parquet.Buffer, encodin
 	// number of values as a proxy for the row indexes.
 	halfValues := numValues / 2
 
+scenarios:
 	for _, test := range [...]struct {
 		scenario string
 		values   []parquet.Value
@@ -583,20 +586,22 @@ func testBuffer(t *testing.T, node parquet.Node, buffer *parquet.Buffer, encodin
 			n, err := test.reader.ReadValues(v[:])
 			if n > 0 {
 				if n != 1 {
-					t.Fatalf("reading value from %q reader returned the wrong count: want=1 got=%d", test.scenario, n)
+					t.Errorf("reading value from %q reader returned the wrong count: want=1 got=%d", test.scenario, n)
+					continue scenarios
 				}
 				if i < len(test.values) {
 					if !parquet.Equal(v[0], test.values[i]) {
-						t.Fatalf("%q value at index %d mismatches: want=%v got=%v", test.scenario, i, test.values[i], v[0])
+						t.Errorf("%q value at index %d mismatches: want=%v got=%v", test.scenario, i, test.values[i], v[0])
+						continue scenarios
 					}
 				}
 				i++
 			}
 			if err != nil {
-				if err == io.EOF {
-					break
+				if err != io.EOF {
+					t.Errorf("reading value from %q reader: %v", test.scenario, err)
 				}
-				t.Fatalf("reading value from %q reader: %v", test.scenario, err)
+				break
 			}
 		}
 
@@ -911,21 +916,21 @@ func TestNullsSortFirst(t *testing.T) {
 		{A: nil},
 		{A: &str2},
 	}
-	buf := parquet.NewBuffer(
+	buffer := parquet.NewBuffer(
 		s,
 		parquet.SortingRowGroupConfig(parquet.SortingColumns(parquet.NullsFirst(parquet.Ascending(s.Columns()[0][0])))),
 	)
 	for _, rec := range records {
 		row := s.Deconstruct(nil, rec)
-		_, err := buf.WriteRows([]parquet.Row{row})
+		_, err := buffer.WriteRows([]parquet.Row{row})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	sort.Sort(buf)
+	sort.Sort(buffer)
 
-	rows := buf.Rows()
+	rows := buffer.Rows()
 	defer rows.Close()
 	rowBuf := make([]parquet.Row, len(records))
 	if _, err := rows.ReadRows(rowBuf); err != nil {

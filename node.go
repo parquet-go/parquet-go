@@ -2,7 +2,8 @@ package parquet
 
 import (
 	"reflect"
-	"sort"
+	"slices"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -288,8 +289,8 @@ func (g Group) Fields() []Field {
 			name: name,
 		})
 	}
-	sort.Slice(groupFields, func(i, j int) bool {
-		return groupFields[i].name < groupFields[j].name
+	slices.SortFunc(groupFields, func(a, b groupField) int {
+		return strings.Compare(a.name, b.name)
 	})
 	fields := make([]Field, len(groupFields))
 	for i := range groupFields {
