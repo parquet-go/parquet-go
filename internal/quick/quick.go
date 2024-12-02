@@ -7,7 +7,12 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	stdquick "testing/quick"
 )
+
+// maxCompositeSize is the maximum length of composite values e.g. strings, slices, or maps
+const maxCompositeSize = 10
 
 var DefaultConfig = Config{
 	Sizes: []int{
@@ -71,6 +76,12 @@ func (c *Config) Check(f interface{}) error {
 type MakeValueFunc func(reflect.Value, *rand.Rand)
 
 func MakeValueFuncOf(t reflect.Type) MakeValueFunc {
+	if m, ok := reflect.Zero(t).Interface().(stdquick.Generator); ok {
+		return func(v reflect.Value, r *rand.Rand) {
+			v.Set(m.Generate(r, maxCompositeSize))
+		}
+	}
+
 	switch t {
 	case reflect.TypeOf(time.Time{}):
 		return func(v reflect.Value, r *rand.Rand) {
@@ -108,7 +119,7 @@ func MakeValueFuncOf(t reflect.Type) MakeValueFunc {
 		return func(v reflect.Value, r *rand.Rand) {
 			const characters = "1234567890qwertyuiopasdfghjklzxcvbnm"
 			s := new(strings.Builder)
-			n := r.Intn(10)
+			n := r.Intn(maxCompositeSize)
 			for i := 0; i < n; i++ {
 				s.WriteByte(characters[i])
 			}
@@ -134,7 +145,7 @@ func MakeValueFuncOf(t reflect.Type) MakeValueFunc {
 		default:
 			makeElem := MakeValueFuncOf(t.Elem())
 			return func(v reflect.Value, r *rand.Rand) {
-				n := r.Intn(10)
+				n := r.Intn(maxCompositeSize)
 				s := reflect.MakeSlice(t, n, n)
 				for i := 0; i < n; i++ {
 					makeElem(s.Index(i), r)
@@ -148,7 +159,7 @@ func MakeValueFuncOf(t reflect.Type) MakeValueFunc {
 		makeElem := MakeValueFuncOf(t.Elem())
 		return func(v reflect.Value, r *rand.Rand) {
 			m := reflect.MakeMap(t)
-			n := r.Intn(10)
+			n := r.Intn(maxCompositeSize)
 			k := reflect.New(t.Key()).Elem()
 			e := reflect.New(t.Elem()).Elem()
 			for i := 0; i < n; i++ {
