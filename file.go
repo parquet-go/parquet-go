@@ -43,7 +43,6 @@ type File struct {
 // parts of the file are left untouched; this means that successfully opening
 // a file does not validate that the pages have valid checksums.
 func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
-	b := make([]byte, 8)
 	c, err := NewFileConfig(options...)
 	if err != nil {
 		return nil, err
@@ -51,6 +50,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	f := &File{reader: r, size: size, config: c}
 
 	if !c.SkipMagicBytes {
+		var b [4]byte
 		if _, err := readAt(r, b[:4], 0); err != nil {
 			return nil, fmt.Errorf("reading magic header of parquet file: %w", err)
 		}
@@ -62,22 +62,34 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	if cast, ok := f.reader.(interface{ SetMagicFooterSection(offset, length int64) }); ok {
 		cast.SetMagicFooterSection(size-8, 8)
 	}
-	if n, err := r.ReadAt(b[:8], size-8); n != 8 {
-		return nil, fmt.Errorf("reading magic footer of parquet file: %w", err)
+
+	optimisticFooterSize := max(8, min(int64(c.ReadBufferSize), size))
+	optimisticFooterData := make([]byte, optimisticFooterSize)
+
+	if n, err := r.ReadAt(optimisticFooterData, size-optimisticFooterSize); n != len(optimisticFooterData) {
+		return nil, fmt.Errorf("reading magic footer of parquet file: %w (read: %d)", err, n)
 	}
-	if string(b[4:8]) != "PAR1" {
-		return nil, fmt.Errorf("invalid magic footer of parquet file: %q", b[4:8])
+	optimisticFooterSize -= 8
+	b := optimisticFooterData[optimisticFooterSize:]
+	if string(b[4:]) != "PAR1" {
+		return nil, fmt.Errorf("invalid magic footer of parquet file: %q", b[4:])
 	}
 
 	footerSize := int64(binary.LittleEndian.Uint32(b[:4]))
-	footerData := make([]byte, footerSize)
+	footerData := []byte(nil)
 
-	if cast, ok := f.reader.(interface{ SetFooterSection(offset, length int64) }); ok {
-		cast.SetFooterSection(size-(footerSize+8), footerSize)
+	if footerSize <= optimisticFooterSize {
+		footerData = optimisticFooterData[optimisticFooterSize-footerSize : optimisticFooterSize]
+	} else {
+		footerData = make([]byte, footerSize)
+		if cast, ok := f.reader.(interface{ SetFooterSection(offset, length int64) }); ok {
+			cast.SetFooterSection(size-(footerSize+8), footerSize)
+		}
+		if _, err := f.readAt(footerData, size-(footerSize+8)); err != nil {
+			return nil, fmt.Errorf("reading footer of parquet file: %w", err)
+		}
 	}
-	if _, err := f.readAt(footerData, size-(footerSize+8)); err != nil {
-		return nil, fmt.Errorf("reading footer of parquet file: %w", err)
-	}
+
 	if err := thrift.Unmarshal(&f.protocol, footerData, &f.metadata); err != nil {
 		return nil, fmt.Errorf("reading parquet file metadata: %w", err)
 	}
