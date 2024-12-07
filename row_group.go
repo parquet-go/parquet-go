@@ -163,11 +163,7 @@ func (r *rowGroup) NumRows() int64                  { return r.numRows }
 func (r *rowGroup) ColumnChunks() []ColumnChunk     { return r.columns }
 func (r *rowGroup) SortingColumns() []SortingColumn { return r.sorting }
 func (r *rowGroup) Schema() *Schema                 { return r.schema }
-func (r *rowGroup) Rows() Rows                      { return newRowGroupRows(r, ReadModeSync) }
-
-func NewRowGroupRowReader(rowGroup RowGroup) Rows {
-	return newRowGroupRows(rowGroup, ReadModeSync)
-}
+func (r *rowGroup) Rows() Rows                      { return NewRowGroupRowReader(r, ReadModeSync) }
 
 type rowGroupRows struct {
 	rowGroup     RowGroup
@@ -196,7 +192,7 @@ func (r *rowGroupRows) buffer(i int) []Value {
 	return r.buffers[j:k:k]
 }
 
-func newRowGroupRows(rowGroup RowGroup, pageReadMode ReadMode) *rowGroupRows {
+func NewRowGroupRowReader(rowGroup RowGroup, pageReadMode ReadMode) Rows {
 	return &rowGroupRows{
 		rowGroup:     rowGroup,
 		pageReadMode: pageReadMode,

@@ -421,7 +421,7 @@ func (g *fileRowGroup) Schema() *Schema                 { return g.schema }
 func (g *fileRowGroup) NumRows() int64                  { return g.rowGroup.NumRows }
 func (g *fileRowGroup) ColumnChunks() []ColumnChunk     { return g.columns }
 func (g *fileRowGroup) SortingColumns() []SortingColumn { return g.sorting }
-func (g *fileRowGroup) Rows() Rows                      { return newRowGroupRows(g, g.config.ReadMode) }
+func (g *fileRowGroup) Rows() Rows                      { return NewRowGroupRowReader(g, g.config.ReadMode) }
 
 type fileSortingColumn struct {
 	column     *Column
