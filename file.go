@@ -63,7 +63,10 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		cast.SetMagicFooterSection(size-8, 8)
 	}
 
-	optimisticFooterSize := max(8, min(int64(c.ReadBufferSize), size))
+	optimisticFooterSize := min(int64(c.ReadBufferSize), size)
+	if !c.OptimisticRead || optimisticFooterSize < 8 {
+		optimisticFooterSize = 8
+	}
 	optimisticFooterData := make([]byte, optimisticFooterSize)
 
 	if n, err := r.ReadAt(optimisticFooterData, size-optimisticFooterSize); n != len(optimisticFooterData) {
