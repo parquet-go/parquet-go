@@ -34,7 +34,8 @@ func TestOpenFile(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			p, err := parquet.OpenFile(f, s.Size())
+			p, err := parquet.OpenFile(f, s.Size(),
+				parquet.OptimisticRead(true))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,7 +72,8 @@ func TestOpenFileWithoutPageIndex(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			fileWithoutIndex, err := parquet.OpenFile(f, s.Size(), parquet.SkipPageIndex(true))
+			fileWithoutIndex, err := parquet.OpenFile(f, s.Size(),
+				parquet.SkipPageIndex(true))
 			if err != nil {
 				t.Fatal(err)
 			}

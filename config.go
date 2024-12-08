@@ -94,6 +94,7 @@ type FileConfig struct {
 	SkipMagicBytes   bool
 	SkipPageIndex    bool
 	SkipBloomFilters bool
+	OptimisticRead   bool
 	ReadBufferSize   int
 	ReadMode         ReadMode
 	Schema           *Schema
@@ -465,6 +466,17 @@ func SkipPageIndex(skip bool) FileOption {
 // Defaults to false.
 func SkipBloomFilters(skip bool) FileOption {
 	return fileOption(func(config *FileConfig) { config.SkipBloomFilters = skip })
+}
+
+// OptimisticRead configures a file to optimistically perform larger buffered
+// reads to improve performance. This is useful when reading from remote storage
+// and amortize the cost of network round trips.
+//
+// This is an option instead of enabled by default because dependents of this
+// package have historically relied on the read patterns to provide external
+// caches and achieve similar results (e.g., Tempo).
+func OptimisticRead(enabled bool) FileOption {
+	return fileOption(func(config *FileConfig) { config.OptimisticRead = enabled })
 }
 
 // FileReadMode is a file configuration option which controls the way pages
