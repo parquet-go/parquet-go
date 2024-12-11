@@ -81,6 +81,8 @@ var (
 		6: {BitWidth: 7},
 		7: {BitWidth: 8},
 	}
+
+	extraEncodings = make(map[format.Encoding]encoding.Encoding)
 )
 
 func isDictionaryEncoding(encoding encoding.Encoding) bool {
@@ -91,11 +93,26 @@ func isDictionaryFormat(encoding format.Encoding) bool {
 	return encoding == format.PlainDictionary || encoding == format.RLEDictionary
 }
 
+func RegisterEncoding(enc encoding.Encoding) bool {
+	ns := encoding.NotSupported{}
+	if enc == ns {
+		return false
+	}
+	if LookupEncoding(enc.Encoding()) != ns {
+		return false
+	}
+	extraEncodings[enc.Encoding()] = enc
+	return true
+}
+
 // LookupEncoding returns the parquet encoding associated with the given code.
 //
 // The function never returns nil. If the encoding is not supported,
 // encoding.NotSupported is returned.
 func LookupEncoding(enc format.Encoding) encoding.Encoding {
+	if enc, ok := extraEncodings[enc]; ok {
+		return enc
+	}
 	if enc >= 0 && int(enc) < len(encodings) {
 		if e := encodings[enc]; e != nil {
 			return e
