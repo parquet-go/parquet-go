@@ -2,7 +2,7 @@ package parquet
 
 import (
 	"bytes"
-	"slices"
+	"reflect"
 	"testing"
 )
 
@@ -51,7 +51,7 @@ func TestWriteAndReadOptionalList(t *testing.T) {
 
 	records := []record{
 		{Values: []float64{1.0, 2.0, 3.0}},
-		{Values: nil},
+		{Values: []float64{}},
 		{Values: []float64{4.0, 5.0}},
 	}
 
@@ -65,9 +65,7 @@ func TestWriteAndReadOptionalList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !slices.EqualFunc(records, found, func(a, b record) bool {
-		return slices.Equal(a.Values, b.Values)
-	}) {
+	if !reflect.DeepEqual(records, found) {
 		t.Fatalf("expected %v, got %v", records, found)
 	}
 }
@@ -94,7 +92,7 @@ func TestWriteAndReadOptionalPointer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !slices.Equal(records, found) {
+	if !reflect.DeepEqual(records, found) {
 		t.Fatalf("expected %v, got %v", records, found)
 	}
 }
