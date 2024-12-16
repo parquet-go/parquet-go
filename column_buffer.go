@@ -2050,6 +2050,15 @@ func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) wr
 }
 
 func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
+	if t.Kind() == reflect.Slice { // assume nested list
+		return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+			if rows.Len() == 0 {
+				return writeRows(columns, rows, levels)
+			}
+			levels.definitionLevel++
+			return writeRows(columns, rows, levels)
+		}
+	}
 	nullIndex := nullIndexFuncOf(t)
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		if rows.Len() == 0 {
@@ -2258,11 +2267,12 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 	columns := make([]column, len(fields))
 
 	for i, f := range fields {
-		optional := false
+		list, optional := false, false
 		columnPath := path.append(f.Name)
 		forEachStructTagOption(f, func(_ reflect.Type, option, _ string) {
 			switch option {
 			case "list":
+				list = true
 				columnPath = columnPath.append("list", "element")
 			case "optional":
 				optional = true
@@ -2271,8 +2281,10 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 
 		writeRows := writeRowsFuncOf(f.Type, schema, columnPath)
 		if optional {
-			switch f.Type.Kind() {
-			case reflect.Pointer, reflect.Slice:
+			kind := f.Type.Kind()
+			switch {
+			case kind == reflect.Pointer:
+			case kind == reflect.Slice && !list:
 			default:
 				writeRows = writeRowsFuncOfOptional(f.Type, schema, columnPath, writeRows)
 			}
