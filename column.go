@@ -25,6 +25,7 @@ type Column struct {
 	schema      *format.SchemaElement
 	order       *format.ColumnOrder
 	path        columnPath
+	fields      []Field
 	columns     []*Column
 	chunks      []*format.ColumnChunk
 	columnIndex []*format.ColumnIndex
@@ -56,13 +57,7 @@ func (c *Column) Required() bool { return schemaRepetitionTypeOf(c.schema) == fo
 func (c *Column) Leaf() bool { return c.index >= 0 }
 
 // Fields returns the list of fields on the column.
-func (c *Column) Fields() []Field {
-	fields := make([]Field, len(c.columns))
-	for i, column := range c.columns {
-		fields[i] = column
-	}
-	return fields
-}
+func (c *Column) Fields() []Field { return c.fields }
 
 // Encoding returns the encodings used by this column.
 func (c *Column) Encoding() encoding.Encoding { return c.encoding }
@@ -370,6 +365,10 @@ func (cl *columnLoader) open(file *File, path []string) (*Column, error) {
 		}
 	}
 
+	c.fields = make([]Field, len(c.columns))
+	for i, column := range c.columns {
+		c.fields[i] = column
+	}
 	return c, nil
 }
 
