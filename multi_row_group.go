@@ -109,7 +109,9 @@ func (c *multiRowGroup) SortingColumns() []SortingColumn { return nil }
 
 func (c *multiRowGroup) Schema() *Schema { return c.schema }
 
-func (c *multiRowGroup) Rows() Rows { return NewRowGroupRowReader(c, c.pageReadMode) }
+func (c *multiRowGroup) Rows() Rows {
+	return NewRowGroupRowReader(c, c.pageReadMode, defaultValueBufferSize)
+}
 
 type multiColumnChunk struct {
 	rowGroup *multiRowGroup

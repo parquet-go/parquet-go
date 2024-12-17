@@ -431,7 +431,9 @@ func (buf *Buffer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 //
 // The buffer and the returned reader share memory. Mutating the buffer
 // concurrently to reading rows may result in non-deterministic behavior.
-func (buf *Buffer) Rows() Rows { return NewRowGroupRowReader(buf, ReadModeSync) }
+func (buf *Buffer) Rows() Rows {
+	return NewRowGroupRowReader(buf, ReadModeSync, defaultValueBufferSize)
+}
 
 // bufferWriter is an adapter for Buffer which implements both RowWriter and
 // PageWriter to enable optimizations in CopyRows for types that support writing
