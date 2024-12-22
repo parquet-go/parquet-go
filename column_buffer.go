@@ -1629,8 +1629,11 @@ func (col *fixedLenByteArrayColumnBuffer) Write(b []byte) (int, error) {
 }
 
 func (col *fixedLenByteArrayColumnBuffer) WriteFixedLenByteArrays(values []byte) (int, error) {
+	if len(values) == 0 {
+		return 0, nil
+	}
 	d, m := len(values)/col.size, len(values)%col.size
-	if m != 0 {
+	if d == 0 || m != 0 {
 		return 0, fmt.Errorf("cannot write FIXED_LEN_BYTE_ARRAY values of size %d from input of size %d", col.size, len(values))
 	}
 	col.data = append(col.data, values...)
@@ -1638,7 +1641,10 @@ func (col *fixedLenByteArrayColumnBuffer) WriteFixedLenByteArrays(values []byte)
 }
 
 func (col *fixedLenByteArrayColumnBuffer) WriteValues(values []Value) (int, error) {
-	for _, v := range values {
+	for i, v := range values {
+		if n := len(v.byteArray()); n != col.size {
+			return i, fmt.Errorf("cannot write FIXED_LEN_BYTE_ARRAY values of size %d from input of size %d", col.size, n)
+		}
 		col.data = append(col.data, v.byteArray()...)
 	}
 	return len(values), nil
@@ -2024,7 +2030,7 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsF
 
 	case reflect.Array:
 		if t.Elem().Kind() == reflect.Uint8 {
-			return writeRowsFuncOfRequired(t, schema, path)
+			return writeRowsFuncOfArray(t, schema, path)
 		}
 
 	case reflect.Pointer:
@@ -2155,6 +2161,16 @@ func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, wr
 
 		return nil
 	}
+}
+
+func writeRowsFuncOfArray(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+	column := schema.mapping.lookup(path)
+	arrayLen := t.Len()
+	columnLen := column.node.Type().Length()
+	if arrayLen != columnLen {
+		panic(fmt.Sprintf("cannot convert Go values of type "+typeNameOf(t)+" to FIXED_LEN_BYTE_ARRAY(%d)", columnLen))
+	}
+	return writeRowsFuncOfRequired(t, schema, path)
 }
 
 func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
