@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2269,11 +2270,11 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 	for i, f := range fields {
 		list, optional := false, false
 		columnPath := path.append(f.Name)
-		forEachStructTagOption(f, func(_ reflect.Type, option, _ string) {
+		forEachStructTagOption(f, func(_ reflect.Type, option, args string) {
 			switch option {
 			case "list":
 				list = true
-				columnPath = columnPath.append("list", "element")
+				columnPath = columnPath.append("list", cmp.Or(args, "element"))
 			case "optional":
 				optional = true
 			}
