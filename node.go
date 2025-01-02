@@ -422,7 +422,7 @@ func numLeafColumns(node Node, columnIndex int) int {
 func listElementOf(node Node) Node {
 	if !node.Leaf() {
 		if list := fieldByName(node, "list"); list != nil {
-			// TODO: It should not be named "element", but some versions of pyarrow
+			// TODO: It should be named "element", but some versions of pyarrow
 			//       and some versions of polars used "item" instead.
 			//       https://issues.apache.org/jira/browse/ARROW-11497
 			//       https://github.com/pola-rs/polars/issues/17100
