@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+
+	"github.com/parquet-go/parquet-go/format"
 )
 
 // GenericReader is similar to a Reader but uses a type parameter to define the
@@ -55,6 +57,10 @@ func NewGenericReader[T any](input io.ReaderAt, options ...ReaderOption) *Generi
 				rowGroup: rowGroup,
 			},
 		},
+	}
+
+	if f.Metadata() != nil {
+		r.base.file.keyValueMetadata = f.Metadata().KeyValueMetadata
 	}
 
 	if !nodesAreEqual(c.Schema, f.schema) {
@@ -128,6 +134,14 @@ func (r *GenericReader[T]) NumRows() int64 {
 
 func (r *GenericReader[T]) SeekToRow(rowIndex int64) error {
 	return r.base.SeekToRow(rowIndex)
+}
+
+// Lookup returns the value of the key/value metadata associated
+// with the given key.
+// The method returns an empty string if the reader has not been configured with
+// a file that has key/value metadata or if the key is not present in the metadata.
+func (r *GenericReader[T]) Lookup(key string) string {
+	return r.base.Lookup(key)
 }
 
 func (r *GenericReader[T]) Close() error {
@@ -277,6 +291,10 @@ func NewReader(input io.ReaderAt, options ...ReaderOption) *Reader {
 			schema:   f.schema,
 			rowGroup: fileRowGroupOf(f),
 		},
+	}
+
+	if f.Metadata() != nil {
+		r.file.keyValueMetadata = f.Metadata().KeyValueMetadata
 	}
 
 	if c.Schema != nil {
@@ -460,6 +478,19 @@ func (r *Reader) SeekToRow(rowIndex int64) error {
 	return nil
 }
 
+// Lookup returns the value of the key/value metadata associated
+// with the given key.
+// The method returns an empty string if the reader has not been configured with
+// a file that has key/value metadata or if the key is not present in the metadata.
+func (r *Reader) Lookup(key string) string {
+	for _, kv := range r.file.keyValueMetadata {
+		if kv.Key == key {
+			return kv.Value
+		}
+	}
+	return ""
+}
+
 // Close closes the reader, preventing more rows from being read.
 func (r *Reader) Close() error {
 	if err := r.read.Close(); err != nil {
@@ -477,10 +508,11 @@ func (r *Reader) Close() error {
 // read rows into Go values, potentially doing partial reads on a subset of the
 // columns due to using a converted row group view.
 type reader struct {
-	schema   *Schema
-	rowGroup RowGroup
-	rows     Rows
-	rowIndex int64
+	schema           *Schema
+	rowGroup         RowGroup
+	rows             Rows
+	rowIndex         int64
+	keyValueMetadata []format.KeyValue
 }
 
 func (r *reader) init(schema *Schema, rowGroup RowGroup) {
