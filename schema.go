@@ -26,15 +26,28 @@ import (
 type Schema struct {
 	name  string
 	root  Node
-	once  sync.Once
-	state *schemaState
+	funcs onceValue[schemaFuncs]
+	state onceValue[schemaState]
+}
+
+type schemaFuncs struct {
+	deconstruct deconstructFunc
+	reconstruct reconstructFunc
 }
 
 type schemaState struct {
-	deconstruct deconstructFunc
-	reconstruct reconstructFunc
-	mapping     columnMapping
-	columns     [][]string
+	mapping columnMapping
+	columns [][]string
+}
+
+type onceValue[T any] struct {
+	once  sync.Once
+	value *T
+}
+
+func (v *onceValue[T]) load(f func() *T) *T {
+	v.once.Do(func() { v.value = f() })
+	return v.value
 }
 
 // SchemaOf constructs a parquet schema from a Go value.
@@ -144,7 +157,7 @@ func dereference(t reflect.Type) reflect.Type {
 
 func makeDeconstructFunc(node Node) (deconstruct deconstructFunc) {
 	if schema, _ := node.(*Schema); schema != nil {
-		return schema.lazyLoadState().deconstruct
+		return schema.lazyLoadFuncs().deconstruct
 	}
 	if !node.Leaf() {
 		_, deconstruct = deconstructFuncOf(0, node)
@@ -154,7 +167,7 @@ func makeDeconstructFunc(node Node) (deconstruct deconstructFunc) {
 
 func makeReconstructFunc(node Node) (reconstruct reconstructFunc) {
 	if schema, _ := node.(*Schema); schema != nil {
-		return schema.lazyLoadState().reconstruct
+		return schema.lazyLoadFuncs().reconstruct
 	}
 	if !node.Leaf() {
 		_, reconstruct = reconstructFuncOf(0, node)
@@ -162,17 +175,23 @@ func makeReconstructFunc(node Node) (reconstruct reconstructFunc) {
 	return reconstruct
 }
 
-func (s *Schema) lazyLoadState() *schemaState {
-	s.once.Do(func() {
-		mapping, columns := columnMappingOf(s.root)
-		s.state = &schemaState{
+func (s *Schema) lazyLoadFuncs() *schemaFuncs {
+	return s.funcs.load(func() *schemaFuncs {
+		return &schemaFuncs{
 			deconstruct: makeDeconstructFunc(s.root),
 			reconstruct: makeReconstructFunc(s.root),
-			mapping:     mapping,
-			columns:     columns,
 		}
 	})
-	return s.state
+}
+
+func (s *Schema) lazyLoadState() *schemaState {
+	return s.state.load(func() *schemaState {
+		mapping, columns := columnMappingOf(s.root)
+		return &schemaState{
+			mapping: mapping,
+			columns: columns,
+		}
+	})
 }
 
 // ConfigureRowGroup satisfies the RowGroupOption interface, allowing Schema
@@ -233,6 +252,7 @@ func (s *Schema) GoType() reflect.Type { return s.root.GoType() }
 // parquet schema.
 func (s *Schema) Deconstruct(row Row, value interface{}) Row {
 	state := s.lazyLoadState()
+	funcs := s.lazyLoadFuncs()
 	columns := make([][]Value, len(state.columns))
 	values := make([]Value, len(state.columns))
 
@@ -248,7 +268,7 @@ func (s *Schema) Deconstruct(row Row, value interface{}) Row {
 		}
 		v = v.Elem()
 	}
-	state.deconstruct(columns, levels{}, v)
+	funcs.deconstruct(columns, levels{}, v)
 	return appendRow(row, columns)
 }
 
@@ -280,6 +300,7 @@ func (s *Schema) Reconstruct(value interface{}, row Row) error {
 	b := valuesSliceBufferPool.Get().(*valuesSliceBuffer)
 
 	state := s.lazyLoadState()
+	funcs := s.lazyLoadFuncs()
 	columns := b.reserve(len(state.columns))
 	row.Range(func(columnIndex int, columnValues []Value) bool {
 		if columnIndex < len(columns) {
@@ -288,7 +309,7 @@ func (s *Schema) Reconstruct(value interface{}, row Row) error {
 		return true
 	})
 	// we avoid the defer penalty by releasing b manually
-	err := state.reconstruct(v, levels{}, columns)
+	err := funcs.reconstruct(v, levels{}, columns)
 	b.release()
 	return err
 }
