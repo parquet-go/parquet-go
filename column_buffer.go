@@ -2047,7 +2047,7 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsF
 }
 
 func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
-	column := schema.mapping.lookup(path)
+	column := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := column.columnIndex
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		columns[columnIndex].writeValues(rows, levels)
@@ -2164,7 +2164,7 @@ func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, wr
 }
 
 func writeRowsFuncOfArray(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
-	column := schema.mapping.lookup(path)
+	column := schema.lazyLoadState().mapping.lookup(path)
 	arrayLen := t.Len()
 	columnLen := column.node.Type().Length()
 	if arrayLen != columnLen {
