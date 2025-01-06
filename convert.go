@@ -86,7 +86,7 @@ func convertToSelf(column []Value) error { return nil }
 func convertToType(targetType, sourceType Type) conversionFunc {
 	return func(column []Value) error {
 		for i, v := range column {
-			v, err := sourceType.ConvertValue(v, targetType)
+			v, err := targetType.ConvertValue(v, sourceType)
 			if err != nil {
 				return err
 			}
