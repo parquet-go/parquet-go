@@ -6,11 +6,12 @@ package parquet
 
 import (
 	"encoding/binary"
+	"math"
+
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/format"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
-	"math"
 )
 
 type ColumnIndex interface {
@@ -90,7 +91,7 @@ func (f *formatColumnIndex) IsDescending() bool {
 	return f.index.BoundaryOrder == format.Descending
 }
 
-type fileColumnIndex struct{ chunk *fileColumnChunk }
+type fileColumnIndex struct{ chunk *FileColumnChunk }
 
 func (i fileColumnIndex) NumPages() int {
 	return len(i.columnIndex().NullPages)

@@ -92,6 +92,10 @@ func (c *Column) Column(name string) *Column {
 
 // Pages returns a reader exposing all pages in this column, across row groups.
 func (c *Column) Pages() Pages {
+	return c.PagesFrom(c.file.reader)
+}
+
+func (c *Column) PagesFrom(reader io.ReaderAt) Pages {
 	if c.index < 0 {
 		return emptyPages{}
 	}
@@ -99,7 +103,7 @@ func (c *Column) Pages() Pages {
 		pages: make([]filePages, len(c.file.rowGroups)),
 	}
 	for i := range r.pages {
-		r.pages[i].init(c.file.rowGroups[i].(*fileRowGroup).columns[c.index].(*fileColumnChunk))
+		r.pages[i].init(c.file.rowGroups[i].(*fileRowGroup).columns[c.index].(*FileColumnChunk), reader)
 	}
 	return r
 }
