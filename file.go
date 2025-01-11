@@ -142,7 +142,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 			g := &rowGroups[i]
 
 			for j := range g.columns {
-				c := g.columns[j].(*fileColumnChunk)
+				c := g.columns[j].(*FileColumnChunk)
 
 				if offset := c.chunk.MetaData.BloomFilterOffset; offset > 0 {
 					section.Seek(offset, io.SeekStart)
@@ -392,10 +392,10 @@ func (g *fileRowGroup) init(file *File, schema *Schema, columns []*Column, rowGr
 	g.config = file.config
 	g.columns = make([]ColumnChunk, len(rowGroup.Columns))
 	g.sorting = make([]SortingColumn, len(rowGroup.SortingColumns))
-	fileColumnChunks := make([]fileColumnChunk, len(rowGroup.Columns))
+	fileColumnChunks := make([]FileColumnChunk, len(rowGroup.Columns))
 
 	for i := range g.columns {
-		fileColumnChunks[i] = fileColumnChunk{
+		fileColumnChunks[i] = FileColumnChunk{
 			file:     file,
 			column:   columns[i],
 			rowGroup: rowGroup,
@@ -452,7 +452,7 @@ func (s *fileSortingColumn) String() string {
 	return b.String()
 }
 
-type fileColumnChunk struct {
+type FileColumnChunk struct {
 	file        *File
 	column      *Column
 	bloomFilter *bloomFilter
@@ -462,22 +462,30 @@ type fileColumnChunk struct {
 	chunk       *format.ColumnChunk
 }
 
-func (c *fileColumnChunk) Type() Type {
+func (c *FileColumnChunk) Type() Type {
 	return c.column.Type()
 }
 
-func (c *fileColumnChunk) Column() int {
+func (c *FileColumnChunk) Column() int {
 	return int(c.column.Index())
 }
 
-func (c *fileColumnChunk) Pages() Pages {
+func (c *FileColumnChunk) Pages() Pages {
+	return c.PagesFrom(c.file.reader)
+}
+
+func (c *FileColumnChunk) PagesFrom(reader io.ReaderAt) Pages {
 	r := new(filePages)
-	r.init(c)
+	r.init(c, reader)
 	return r
 }
 
-func (c *fileColumnChunk) ColumnIndex() (ColumnIndex, error) {
-	index, err := c.readColumnIndex()
+func (c *FileColumnChunk) ColumnIndex() (ColumnIndex, error) {
+	return c.ColumnIndexFrom(c.file.reader)
+}
+
+func (c *FileColumnChunk) ColumnIndexFrom(reader io.ReaderAt) (ColumnIndex, error) {
+	index, err := c.readColumnIndexFrom(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -487,8 +495,12 @@ func (c *fileColumnChunk) ColumnIndex() (ColumnIndex, error) {
 	return fileColumnIndex{c}, nil
 }
 
-func (c *fileColumnChunk) OffsetIndex() (OffsetIndex, error) {
-	index, err := c.readOffsetIndex()
+func (c *FileColumnChunk) OffsetIndex() (OffsetIndex, error) {
+	return c.OffsetIndexFrom(c.file.reader)
+}
+
+func (c *FileColumnChunk) OffsetIndexFrom(reader io.ReaderAt) (OffsetIndex, error) {
+	index, err := c.readOffsetIndex(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -498,18 +510,22 @@ func (c *fileColumnChunk) OffsetIndex() (OffsetIndex, error) {
 	return (*fileOffsetIndex)(index), nil
 }
 
-func (c *fileColumnChunk) BloomFilter() BloomFilter {
+func (c *FileColumnChunk) BloomFilter() BloomFilter {
 	if c.bloomFilter == nil {
 		return nil
 	}
 	return c.bloomFilter
 }
 
-func (c *fileColumnChunk) NumValues() int64 {
+func (c *FileColumnChunk) NumValues() int64 {
 	return c.chunk.MetaData.NumValues
 }
 
-func (c *fileColumnChunk) readColumnIndex() (*format.ColumnIndex, error) {
+func (c *FileColumnChunk) readColumnIndex() (*format.ColumnIndex, error) {
+	return c.readColumnIndexFrom(c.file.reader)
+}
+
+func (c *FileColumnChunk) readColumnIndexFrom(reader io.ReaderAt) (*format.ColumnIndex, error) {
 	if index := c.columnIndex.Load(); index != nil {
 		return index, nil
 	}
@@ -521,7 +537,7 @@ func (c *fileColumnChunk) readColumnIndex() (*format.ColumnIndex, error) {
 
 	indexData := make([]byte, int(length))
 	var columnIndex format.ColumnIndex
-	if _, err := readAt(c.file.reader, indexData, offset); err != nil {
+	if _, err := readAt(reader, indexData, offset); err != nil {
 		return nil, fmt.Errorf("read %d bytes column index at offset %d: %w", length, offset, err)
 	}
 	if err := thrift.Unmarshal(&c.file.protocol, indexData, &columnIndex); err != nil {
@@ -538,7 +554,7 @@ func (c *fileColumnChunk) readColumnIndex() (*format.ColumnIndex, error) {
 	return index, nil
 }
 
-func (c *fileColumnChunk) readOffsetIndex() (*format.OffsetIndex, error) {
+func (c *FileColumnChunk) readOffsetIndex(reader io.ReaderAt) (*format.OffsetIndex, error) {
 	if index := c.offsetIndex.Load(); index != nil {
 		return index, nil
 	}
@@ -550,7 +566,7 @@ func (c *fileColumnChunk) readOffsetIndex() (*format.OffsetIndex, error) {
 
 	indexData := make([]byte, int(length))
 	var offsetIndex format.OffsetIndex
-	if _, err := readAt(c.file.reader, indexData, offset); err != nil {
+	if _, err := readAt(reader, indexData, offset); err != nil {
 		return nil, fmt.Errorf("read %d bytes offset index at offset %d: %w", length, offset, err)
 	}
 	if err := thrift.Unmarshal(&c.file.protocol, indexData, &offsetIndex); err != nil {
@@ -565,7 +581,7 @@ func (c *fileColumnChunk) readOffsetIndex() (*format.OffsetIndex, error) {
 }
 
 type filePages struct {
-	chunk    *fileColumnChunk
+	chunk    *FileColumnChunk
 	rbuf     *bufio.Reader
 	rbufpool *sync.Pool
 	section  io.SectionReader
@@ -583,7 +599,7 @@ type filePages struct {
 	bufferSize int
 }
 
-func (f *filePages) init(c *fileColumnChunk) {
+func (f *filePages) init(c *FileColumnChunk, reader io.ReaderAt) {
 	f.chunk = c
 	f.baseOffset = c.chunk.MetaData.DataPageOffset
 	f.dataOffset = f.baseOffset
@@ -594,7 +610,7 @@ func (f *filePages) init(c *fileColumnChunk) {
 		f.dictOffset = f.baseOffset
 	}
 
-	f.section = *io.NewSectionReader(c.file, f.baseOffset, c.chunk.MetaData.TotalCompressedSize)
+	f.section = *io.NewSectionReader(reader, f.baseOffset, c.chunk.MetaData.TotalCompressedSize)
 	f.rbuf, f.rbufpool = getBufioReader(&f.section, f.bufferSize)
 	f.decoder.Reset(f.protocol.NewReader(f.rbuf))
 }
@@ -674,7 +690,7 @@ func (f *filePages) ReadPage() (Page, error) {
 }
 
 func (f *filePages) readDictionary() error {
-	chunk := io.NewSectionReader(f.chunk.file, f.baseOffset, f.chunk.chunk.MetaData.TotalCompressedSize)
+	chunk := io.NewSectionReader(f.section.Outer())
 	rbuf, pool := getBufioReader(chunk, f.bufferSize)
 	defer putBufioReader(rbuf, pool)
 

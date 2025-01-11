@@ -88,7 +88,7 @@ func (f *formatColumnIndex) IsDescending() bool {
 	return f.index.BoundaryOrder == format.Descending
 }
 
-type fileColumnIndex struct{ chunk *fileColumnChunk }
+type fileColumnIndex struct{ chunk *FileColumnChunk }
 
 func (i fileColumnIndex) NumPages() int {
 	return len(i.columnIndex().NullPages)
