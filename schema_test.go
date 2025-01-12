@@ -1,8 +1,8 @@
 package parquet_test
 
 import (
-	"reflect"
 	"bytes"
+	"reflect"
 	"testing"
 	"time"
 
