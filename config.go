@@ -25,6 +25,7 @@ const (
 	DefaultWriteBufferSize      = 32 * 1024
 	DefaultDataPageVersion      = 2
 	DefaultDataPageStatistics   = false
+	DefaultSkipMagicBytes       = false
 	DefaultSkipPageIndex        = false
 	DefaultSkipBloomFilters     = false
 	DefaultMaxRowsPerRowGroup   = math.MaxInt64
@@ -90,8 +91,10 @@ func formatCreatedBy(application, version, build string) string {
 //		ReadMode:         ReadModeAsync,
 //	})
 type FileConfig struct {
+	SkipMagicBytes   bool
 	SkipPageIndex    bool
 	SkipBloomFilters bool
+	OptimisticRead   bool
 	ReadBufferSize   int
 	ReadMode         ReadMode
 	Schema           *Schema
@@ -101,6 +104,7 @@ type FileConfig struct {
 // default file configuration.
 func DefaultFileConfig() *FileConfig {
 	return &FileConfig{
+		SkipMagicBytes:   DefaultSkipMagicBytes,
 		SkipPageIndex:    DefaultSkipPageIndex,
 		SkipBloomFilters: DefaultSkipBloomFilters,
 		ReadBufferSize:   defaultReadBufferSize,
@@ -130,6 +134,7 @@ func (c *FileConfig) Apply(options ...FileOption) {
 // ConfigureFile applies configuration options from c to config.
 func (c *FileConfig) ConfigureFile(config *FileConfig) {
 	*config = FileConfig{
+		SkipMagicBytes:   c.SkipMagicBytes,
 		SkipPageIndex:    c.SkipPageIndex,
 		SkipBloomFilters: c.SkipBloomFilters,
 		ReadBufferSize:   coalesceInt(c.ReadBufferSize, config.ReadBufferSize),
@@ -213,6 +218,7 @@ type WriterConfig struct {
 	BloomFilters         []BloomFilterColumn
 	Compression          compress.Codec
 	Sorting              SortingConfig
+	SkipPageBounds       [][]string
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -270,8 +276,8 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		PageBufferSize:       coalesceInt(c.PageBufferSize, config.PageBufferSize),
 		WriteBufferSize:      coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
 		DataPageVersion:      coalesceInt(c.DataPageVersion, config.DataPageVersion),
-		DataPageStatistics:   config.DataPageStatistics,
-		MaxRowsPerRowGroup:   config.MaxRowsPerRowGroup,
+		DataPageStatistics:   coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
+		MaxRowsPerRowGroup:   coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
 		KeyValueMetadata:     keyValueMetadata,
 		Schema:               coalesceSchema(c.Schema, config.Schema),
 		BloomFilters:         coalesceBloomFilters(c.BloomFilters, config.BloomFilters),
@@ -434,6 +440,14 @@ type SortingOption interface {
 	ConfigureSorting(*SortingConfig)
 }
 
+// SkipMagicBytes is a file configuration option which prevents automatically
+// reading the magic bytes when opening a parquet file, when set to true. This
+// is useful as an optimization when programs can trust that they are dealing
+// with parquet files and do not need to verify the first 4 bytes.
+func SkipMagicBytes(skip bool) FileOption {
+	return fileOption(func(config *FileConfig) { config.SkipMagicBytes = skip })
+}
+
 // SkipPageIndex is a file configuration option which prevents automatically
 // reading the page index when opening a parquet file, when set to true. This is
 // useful as an optimization when programs know that they will not need to
@@ -452,6 +466,17 @@ func SkipPageIndex(skip bool) FileOption {
 // Defaults to false.
 func SkipBloomFilters(skip bool) FileOption {
 	return fileOption(func(config *FileConfig) { config.SkipBloomFilters = skip })
+}
+
+// OptimisticRead configures a file to optimistically perform larger buffered
+// reads to improve performance. This is useful when reading from remote storage
+// and amortize the cost of network round trips.
+//
+// This is an option instead of enabled by default because dependents of this
+// package have historically relied on the read patterns to provide external
+// caches and achieve similar results (e.g., Tempo).
+func OptimisticRead(enabled bool) FileOption {
+	return fileOption(func(config *FileConfig) { config.OptimisticRead = enabled })
 }
 
 // FileReadMode is a file configuration option which controls the way pages
@@ -623,6 +648,15 @@ func SortingWriterConfig(options ...SortingOption) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.Sorting.Apply(options...) })
 }
 
+// SkipPageBounds lists the path to a column that shouldn't have bounds written to the
+// footer of the parquet file. This is useful for data blobs, like a raw html file,
+// where the bounds are not meaningful.
+//
+// This option is additive, it may be used multiple times to skip multiple columns.
+func SkipPageBounds(path ...string) WriterOption {
+	return writerOption(func(config *WriterConfig) { config.SkipPageBounds = append(config.SkipPageBounds, path) })
+}
+
 // ColumnBufferCapacity creates a configuration option which defines the size of
 // row group column buffers.
 //
@@ -691,6 +725,10 @@ func (opt rowGroupOption) ConfigureRowGroup(config *RowGroupConfig) { opt(config
 type sortingOption func(*SortingConfig)
 
 func (opt sortingOption) ConfigureSorting(config *SortingConfig) { opt(config) }
+
+func coalesceBool(i1, i2 bool) bool {
+	return i1 || i2
+}
 
 func coalesceInt(i1, i2 int) int {
 	if i1 != 0 {

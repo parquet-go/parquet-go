@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
-	"github.com/stretchr/testify/require"
 )
 
 func TestBinaryColumnIndexMinMax(t *testing.T) {
@@ -69,8 +68,12 @@ func Test_ColumnIndexReuse(t *testing.T) {
 		parquet.ValueOf(max),
 	)
 	before := indexer.ColumnIndex()
-	require.Equal(t, 1, len(before.NullPages))
-	require.False(t, before.NullPages[0])
+	if len(before.NullPages) != 1 {
+		t.Fatalf("expected 1 null page, got %d", len(before.NullPages))
+	}
+	if before.NullPages[0] {
+		t.Fatalf("unexpected null page 0")
+	}
 
 	// Reset the indexer. Should be safe for reuse.
 	indexer.Reset()
@@ -86,11 +89,21 @@ func Test_ColumnIndexReuse(t *testing.T) {
 	)
 	after := indexer.ColumnIndex()
 
-	require.Equal(t, 2, len(after.NullPages))
-	require.True(t, after.NullPages[0])
-	require.True(t, after.NullPages[1])
+	if len(after.NullPages) != 2 {
+		t.Fatalf("expected 2 null pages, got %d", len(after.NullPages))
+	}
+	if !after.NullPages[0] {
+		t.Fatalf("expected null page 0")
+	}
+	if !after.NullPages[1] {
+		t.Fatalf("expected null page 1")
+	}
 
 	// Validate null pages of the previous index.
-	require.Equal(t, 1, len(before.NullPages))
-	require.False(t, before.NullPages[0])
+	if len(before.NullPages) != 1 {
+		t.Fatalf("expected 1 null page, got %d", len(before.NullPages))
+	}
+	if before.NullPages[0] {
+		t.Fatalf("unexpected null page 0")
+	}
 }

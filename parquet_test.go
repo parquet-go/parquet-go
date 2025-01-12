@@ -419,6 +419,47 @@ func TestIssue423(t *testing.T) {
 	assertRowsEqual(t, writeRows, readRows)
 }
 
+func TestIssue178(t *testing.T) {
+	schema := parquet.NewSchema("testRow", parquet.Group{
+		"fixedField": parquet.Leaf(parquet.FixedLenByteArrayType(32)),
+	})
+
+	tests := []struct {
+		name string
+		test func(*testing.T) error
+	}{
+		{
+			name: "WriteRows",
+			test: func(t *testing.T) error {
+				buffer := new(bytes.Buffer)
+				writer := parquet.NewGenericWriter[any](buffer, schema)
+				_, err := writer.WriteRows([]parquet.Row{
+					{parquet.FixedLenByteArrayValue(make([]byte, 16))},
+				})
+				return err
+			},
+		},
+
+		{
+			name: "WriteFixedLenByteArray",
+			test: func(t *testing.T) error {
+				buffer := parquet.NewGenericBuffer[any](schema)
+				column := buffer.ColumnBuffers()[0]
+				_, err := column.(parquet.FixedLenByteArrayWriter).WriteFixedLenByteArrays(make([]byte, 16))
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.test(t); err == nil {
+				t.Fatal("expected error when writing a byte slice of length 16 to a fixed length byte array column of length 32")
+			}
+		})
+	}
+}
+
 func TestReadFileGenericMultipleRowGroupsMultiplePages(t *testing.T) {
 	type MyRow struct {
 		ID    [16]byte `parquet:"id,delta,uuid"`

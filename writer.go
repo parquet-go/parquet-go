@@ -3,6 +3,7 @@ package parquet
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -11,13 +12,13 @@ import (
 	"math/bits"
 	"os"
 	"reflect"
-	"sort"
+	"slices"
 
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/plain"
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
-	"github.com/segmentio/encoding/thrift"
 )
 
 const (
@@ -604,7 +605,10 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 			bufferIndex:        int32(leaf.columnIndex),
 			bufferSize:         int32(float64(config.PageBufferSize) * 0.98),
 			writePageStats:     config.DataPageStatistics,
-			encodings:          make([]format.Encoding, 0, 3),
+			writePageBounds: !slices.ContainsFunc(config.SkipPageBounds, func(skip []string) bool {
+				return columnPath(skip).equal(leaf.path)
+			}),
+			encodings: make([]format.Encoding, 0, 3),
 			// Data pages in version 2 can omit compression when dictionary
 			// encoding is employed; only the dictionary page needs to be
 			// compressed, the data pages are encoded with the hybrid
@@ -1145,13 +1149,14 @@ type writerColumn struct {
 		encoder  thrift.Encoder
 	}
 
-	filter         []byte
-	numRows        int64
-	bufferIndex    int32
-	bufferSize     int32
-	writePageStats bool
-	isCompressed   bool
-	encodings      []format.Encoding
+	filter          []byte
+	numRows         int64
+	bufferIndex     int32
+	bufferSize      int32
+	writePageStats  bool
+	writePageBounds bool
+	isCompressed    bool
+	encodings       []format.Encoding
 
 	columnChunk *format.ColumnChunk
 	offsetIndex *format.OffsetIndex
@@ -1573,7 +1578,13 @@ func (c *writerColumn) recordPageStats(headerSize int32, header *format.PageHead
 	if page != nil {
 		numNulls := page.NumNulls()
 		numValues := page.NumValues()
-		minValue, maxValue, pageHasBounds := page.Bounds()
+
+		var minValue, maxValue Value
+		var pageHasBounds bool
+		if c.writePageBounds {
+			minValue, maxValue, pageHasBounds = page.Bounds()
+		}
+
 		c.columnIndex.IndexPage(numValues, numNulls, minValue, maxValue)
 		c.columnChunk.MetaData.NumValues += numValues
 		c.columnChunk.MetaData.Statistics.NullCount += numNulls
@@ -1658,19 +1669,15 @@ addPages:
 }
 
 func sortPageEncodings(encodings []format.Encoding) {
-	sort.Slice(encodings, func(i, j int) bool {
-		return encodings[i] < encodings[j]
-	})
+	slices.Sort(encodings)
 }
 
 func sortPageEncodingStats(stats []format.PageEncodingStats) {
-	sort.Slice(stats, func(i, j int) bool {
-		s1 := &stats[i]
-		s2 := &stats[j]
-		if s1.PageType != s2.PageType {
-			return s1.PageType < s2.PageType
+	slices.SortFunc(stats, func(s1, s2 format.PageEncodingStats) int {
+		if k := cmp.Compare(s1.PageType, s2.PageType); k != 0 {
+			return k
 		}
-		return s1.Encoding < s2.Encoding
+		return cmp.Compare(s1.Encoding, s2.Encoding)
 	})
 }
 

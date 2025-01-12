@@ -25,6 +25,7 @@ type Column struct {
 	schema      *format.SchemaElement
 	order       *format.ColumnOrder
 	path        columnPath
+	fields      []Field
 	columns     []*Column
 	chunks      []*format.ColumnChunk
 	columnIndex []*format.ColumnIndex
@@ -56,13 +57,7 @@ func (c *Column) Required() bool { return schemaRepetitionTypeOf(c.schema) == fo
 func (c *Column) Leaf() bool { return c.index >= 0 }
 
 // Fields returns the list of fields on the column.
-func (c *Column) Fields() []Field {
-	fields := make([]Field, len(c.columns))
-	for i, column := range c.columns {
-		fields[i] = column
-	}
-	return fields
-}
+func (c *Column) Fields() []Field { return c.fields }
 
 // Encoding returns the encodings used by this column.
 func (c *Column) Encoding() encoding.Encoding { return c.encoding }
@@ -97,6 +92,10 @@ func (c *Column) Column(name string) *Column {
 
 // Pages returns a reader exposing all pages in this column, across row groups.
 func (c *Column) Pages() Pages {
+	return c.PagesFrom(c.file.reader)
+}
+
+func (c *Column) PagesFrom(reader io.ReaderAt) Pages {
 	if c.index < 0 {
 		return emptyPages{}
 	}
@@ -104,7 +103,7 @@ func (c *Column) Pages() Pages {
 		pages: make([]filePages, len(c.file.rowGroups)),
 	}
 	for i := range r.pages {
-		r.pages[i].init(c.file.rowGroups[i].(*fileRowGroup).columns[c.index].(*fileColumnChunk))
+		r.pages[i].init(c.file.rowGroups[i].(*fileRowGroup).columns[c.index].(*FileColumnChunk), reader)
 	}
 	return r
 }
@@ -352,6 +351,8 @@ func (cl *columnLoader) open(file *File, path []string) (*Column, error) {
 	c.typ = &groupType{}
 	if lt := c.schema.LogicalType; lt != nil && lt.Map != nil {
 		c.typ = &mapType{}
+	} else if lt != nil && lt.List != nil {
+		c.typ = &listType{}
 	}
 	c.columns = make([]*Column, numChildren)
 
@@ -368,6 +369,10 @@ func (cl *columnLoader) open(file *File, path []string) (*Column, error) {
 		}
 	}
 
+	c.fields = make([]Field, len(c.columns))
+	for i, column := range c.columns {
+		c.fields[i] = column
+	}
 	return c, nil
 }
 
@@ -691,7 +696,7 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 	if pageType.Kind() == ByteArray && !isDictionaryEncoding(pageEncoding) {
 		obuf = buffers.get(4 * (numValues + 1))
 		defer obuf.unref()
-		pageOffsets = unsafecast.BytesToUint32(obuf.data)
+		pageOffsets = unsafecast.Slice[uint32](obuf.data)
 	}
 
 	values := pageType.NewValues(pageValues, pageOffsets)

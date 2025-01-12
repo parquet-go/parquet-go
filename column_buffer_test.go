@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"bytes"
+	"reflect"
 	"testing"
 )
 
@@ -40,6 +42,59 @@ func BenchmarkBroadcastRangeInt32(b *testing.B) {
 		broadcastRangeInt32(buf, 0)
 	}
 	b.SetBytes(4 * int64(len(buf)))
+}
+
+func TestWriteAndReadOptionalList(t *testing.T) {
+	type record struct {
+		Values []float64 `parquet:"values,list,optional"`
+	}
+
+	records := []record{
+		{Values: []float64{1.0, 2.0, 3.0}},
+		{Values: []float64{}},
+		{Values: []float64{4.0, 5.0}},
+	}
+
+	buffer := new(bytes.Buffer)
+	if err := Write(buffer, records); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := Read[record](bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(records, found) {
+		t.Fatalf("expected %v, got %v", records, found)
+	}
+}
+
+func TestWriteAndReadOptionalPointer(t *testing.T) {
+	type record struct {
+		Value float64 `parquet:"values,optional"`
+	}
+
+	records := []record{
+		{Value: 1.0},
+		{Value: 0.0},
+		{Value: 2.0},
+		{Value: 0.0},
+	}
+
+	buffer := new(bytes.Buffer)
+	if err := Write(buffer, records); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := Read[record](bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(records, found) {
+		t.Fatalf("expected %v, got %v", records, found)
+	}
 }
 
 // https://github.com/segmentio/parquet-go/issues/501

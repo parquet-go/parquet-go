@@ -162,27 +162,27 @@ func (splitBlockEncoding) EncodeBoolean(dst []byte, src []byte) ([]byte, error) 
 }
 
 func (splitBlockEncoding) EncodeInt32(dst []byte, src []int32) ([]byte, error) {
-	splitBlockEncodeUint32(bloom.MakeSplitBlockFilter(dst), unsafecast.Int32ToUint32(src))
+	splitBlockEncodeUint32(bloom.MakeSplitBlockFilter(dst), unsafecast.Slice[uint32](src))
 	return dst, nil
 }
 
 func (splitBlockEncoding) EncodeInt64(dst []byte, src []int64) ([]byte, error) {
-	splitBlockEncodeUint64(bloom.MakeSplitBlockFilter(dst), unsafecast.Int64ToUint64(src))
+	splitBlockEncodeUint64(bloom.MakeSplitBlockFilter(dst), unsafecast.Slice[uint64](src))
 	return dst, nil
 }
 
 func (e splitBlockEncoding) EncodeInt96(dst []byte, src []deprecated.Int96) ([]byte, error) {
-	splitBlockEncodeFixedLenByteArray(bloom.MakeSplitBlockFilter(dst), deprecated.Int96ToBytes(src), 12)
+	splitBlockEncodeFixedLenByteArray(bloom.MakeSplitBlockFilter(dst), unsafecastInt96ToBytes(src), 12)
 	return dst, nil
 }
 
 func (splitBlockEncoding) EncodeFloat(dst []byte, src []float32) ([]byte, error) {
-	splitBlockEncodeUint32(bloom.MakeSplitBlockFilter(dst), unsafecast.Float32ToUint32(src))
+	splitBlockEncodeUint32(bloom.MakeSplitBlockFilter(dst), unsafecast.Slice[uint32](src))
 	return dst, nil
 }
 
 func (splitBlockEncoding) EncodeDouble(dst []byte, src []float64) ([]byte, error) {
-	splitBlockEncodeUint64(bloom.MakeSplitBlockFilter(dst), unsafecast.Float64ToUint64(src))
+	splitBlockEncodeUint64(bloom.MakeSplitBlockFilter(dst), unsafecast.Slice[uint64](src))
 	return dst, nil
 }
 
@@ -210,7 +210,7 @@ func (splitBlockEncoding) EncodeByteArray(dst []byte, src []byte, offsets []uint
 func (splitBlockEncoding) EncodeFixedLenByteArray(dst []byte, src []byte, size int) ([]byte, error) {
 	filter := bloom.MakeSplitBlockFilter(dst)
 	if size == 16 {
-		splitBlockEncodeUint128(filter, unsafecast.BytesToUint128(src))
+		splitBlockEncodeUint128(filter, unsafecast.Slice[[16]byte](src))
 	} else {
 		splitBlockEncodeFixedLenByteArray(filter, src, size)
 	}

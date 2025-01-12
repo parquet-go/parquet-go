@@ -582,7 +582,7 @@ func reconstructFuncOfOptional(columnIndex int16, node Node) (int16, reconstruct
 		levels.definitionLevel++
 
 		if columns[0][0].definitionLevel < levels.definitionLevel {
-			value.Set(reflect.Zero(value.Type()))
+			value.SetZero()
 			return nil
 		}
 
@@ -600,9 +600,19 @@ func reconstructFuncOfOptional(columnIndex int16, node Node) (int16, reconstruct
 func setMakeSlice(v reflect.Value, n int) reflect.Value {
 	t := v.Type()
 	if t.Kind() == reflect.Interface {
-		t = reflect.TypeOf(([]interface{})(nil))
+		t = reflect.TypeOf(([]any)(nil))
 	}
 	s := reflect.MakeSlice(t, n, n)
+	v.Set(s)
+	return s
+}
+
+func setNullSlice(v reflect.Value) reflect.Value {
+	t := v.Type()
+	if t.Kind() == reflect.Interface {
+		t = reflect.TypeOf(([]any)(nil))
+	}
+	s := reflect.Zero(t)
 	v.Set(s)
 	return s
 }
@@ -686,7 +696,6 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 	keyValue := mapKeyValueOf(node)
 	keyValueType := keyValue.GoType()
 	keyValueElem := keyValueType.Elem()
-	keyValueZero := reflect.Zero(keyValueElem)
 	nextColumnIndex, reconstruct := reconstructFuncOf(columnIndex, schemaOf(keyValueElem))
 	return nextColumnIndex, func(value reflect.Value, levels levels, columns [][]Value) error {
 		levels.repetitionDepth++
@@ -723,7 +732,7 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 		if value.IsNil() {
 			m := reflect.MakeMapWithSize(t, n)
 			value.Set(m)
-			value = m // track map instead of interface{} for read[any]()
+			value = m // track map instead of any for read[any]()
 		}
 
 		elem := reflect.New(keyValueElem).Elem()
@@ -748,7 +757,7 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 			}
 
 			value.SetMapIndex(elem.Field(0).Convert(k), elem.Field(1).Convert(v))
-			elem.Set(keyValueZero)
+			elem.SetZero()
 			levels.repetitionLevel = levels.repetitionDepth
 		}
 
@@ -770,7 +779,7 @@ func reconstructFuncOfGroup(columnIndex int16, node Node) (int16, reconstructFun
 
 	return columnIndex, func(value reflect.Value, levels levels, columns [][]Value) error {
 		if value.Kind() == reflect.Interface {
-			value.Set(reflect.MakeMap(reflect.TypeOf((map[string]interface{})(nil))))
+			value.Set(reflect.MakeMap(reflect.TypeOf((map[string]any)(nil))))
 			value = value.Elem()
 		}
 
@@ -778,7 +787,6 @@ func reconstructFuncOfGroup(columnIndex int16, node Node) (int16, reconstructFun
 			elemType := value.Type().Elem()
 			name := reflect.New(reflect.TypeOf("")).Elem()
 			elem := reflect.New(elemType).Elem()
-			zero := reflect.Zero(elemType)
 
 			if value.Len() > 0 {
 				value.Set(reflect.MakeMap(value.Type()))
@@ -795,7 +803,7 @@ func reconstructFuncOfGroup(columnIndex int16, node Node) (int16, reconstructFun
 				}
 				off = end
 				value.SetMapIndex(name, elem)
-				elem.Set(zero)
+				elem.SetZero()
 			}
 		} else {
 			off := int16(0)

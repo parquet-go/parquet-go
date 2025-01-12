@@ -271,7 +271,7 @@ func BenchmarkSortRowBuffer(b *testing.B) {
 		ID [16]byte
 	}
 
-	buf := parquet.NewRowBuffer[Row](
+	buffer := parquet.NewRowBuffer[Row](
 		parquet.SortingRowGroupConfig(
 			parquet.SortingColumns(
 				parquet.Ascending("ID"),
@@ -287,15 +287,15 @@ func BenchmarkSortRowBuffer(b *testing.B) {
 		binary.LittleEndian.PutUint64(rows[i].ID[8:], ^uint64(i))
 	}
 
-	buf.Write(rows)
+	buffer.Write(rows)
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
 		for j := 0; j < 10; j++ {
-			buf.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
+			buffer.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
 		}
 
-		sort.Sort(buf)
+		sort.Sort(buffer)
 	}
 }
 

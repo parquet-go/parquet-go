@@ -114,7 +114,7 @@ func TestIssue400(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = w.Close(); err != nil {
+	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,8 +124,8 @@ func TestIssue400(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(expect[0], values[0]) {
-		t.Errorf("want %q got %q", values[0], expect[0])
+	if !reflect.DeepEqual(expect, values) {
+		t.Errorf("want %v got %v", expect, values)
 	}
 }
 

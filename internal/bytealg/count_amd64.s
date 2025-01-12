@@ -20,11 +20,10 @@ TEXT ·Count(SB), NOSPLIT, $0-40
     XORQ R12, R12
     XORQ R13, R13
     XORQ R14, R14
-    XORQ R15, R15
+    XORQ R9, R9
 
     CMPB ·hasAVX512Count(SB), $0
     JE initAVX2
-
     SHRQ $8, DX
     SHLQ $8, DX
     ADDQ AX, DX
@@ -39,24 +38,24 @@ loopAVX512:
     VPCMPUB $0, Z0, Z3, K3
     VPCMPUB $0, Z0, Z4, K4
     KMOVQ K1, R8
-    KMOVQ K2, R9
-    KMOVQ K3, R10
-    KMOVQ K4, R11
+    KMOVQ K2, R10
+    KMOVQ K3, R11
+    KMOVQ K4, R8
     POPCNTQ R8, R8
-    POPCNTQ R9, R9
     POPCNTQ R10, R10
     POPCNTQ R11, R11
+    POPCNTQ R8, R8
     ADDQ R8, R12
-    ADDQ R9, R13
-    ADDQ R10, R14
-    ADDQ R11, R15
+    ADDQ R10, R13
+    ADDQ R11, R14
+    ADDQ R8, R9
     ADDQ $256, AX
     CMPQ AX, DX
     JNE loopAVX512
     ADDQ R12, R13
-    ADDQ R14, R15
+    ADDQ R14, R9
     ADDQ R13, SI
-    ADDQ R15, SI
+    ADDQ R9, SI
     JMP doneAVX
 
 initAVX2:
@@ -74,13 +73,12 @@ loopAVX2:
     POPCNTL R12, R12
     POPCNTL R13, R13
     ADDQ R12, R14
-    ADDQ R13, R15
+    ADDQ R13, R9
     ADDQ $64, AX
     CMPQ AX, DX
     JNE loopAVX2
     ADDQ R14, SI
-    ADDQ R15, SI
-
+    ADDQ R9, SI
 doneAVX:
     VZEROUPPER
     JMP test

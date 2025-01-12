@@ -4,9 +4,16 @@ import (
 	"testing"
 
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"golang.org/x/sys/cpu"
 )
 
 func TestUnsafeCastSlice(t *testing.T) {
+	// Note: this test is currently disabled on Big-Endian architectures because
+	// it assumes a Little-Endian memory layout.
+	if cpu.IsBigEndian {
+		t.Skip("skipping test on big-endian architecture")
+	}
+
 	a := make([]uint32, 4, 13)
 	a[0] = 1
 	a[1] = 0
@@ -18,7 +25,7 @@ func TestUnsafeCastSlice(t *testing.T) {
 		t.Fatalf("length mismatch: want=2 got=%d", len(b))
 	}
 	if cap(b) != 6 { // (13 * sizeof(uint32)) / sizeof(int64)
-		t.Fatalf("capacity mismatch: want=7 got=%d", cap(b))
+		t.Fatalf("capacity mismatch: want=6 got=%d", cap(b))
 	}
 	if b[0] != 1 {
 		t.Errorf("wrong value at index 0: want=1 got=%d", b[0])

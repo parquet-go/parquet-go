@@ -2,10 +2,27 @@ package parquet
 
 import (
 	"bytes"
+	"cmp"
+	"slices"
 	"sort"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/internal/quick"
+)
+
+type order[T cmp.Ordered] []T
+
+func (v order[T]) Len() int           { return len(v) }
+func (v order[T]) Less(i, j int) bool { return v[i] < v[j] }
+func (v order[T]) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
+
+type (
+	int32Order   = order[int32]
+	int64Order   = order[int64]
+	uint32Order  = order[uint32]
+	uint64Order  = order[uint64]
+	float32Order = order[float32]
+	float64Order = order[float64]
 )
 
 type boolOrder []bool
@@ -13,42 +30,6 @@ type boolOrder []bool
 func (v boolOrder) Len() int           { return len(v) }
 func (v boolOrder) Less(i, j int) bool { return !v[i] && v[j] }
 func (v boolOrder) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type int32Order []int32
-
-func (v int32Order) Len() int           { return len(v) }
-func (v int32Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v int32Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type int64Order []int64
-
-func (v int64Order) Len() int           { return len(v) }
-func (v int64Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v int64Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type uint32Order []uint32
-
-func (v uint32Order) Len() int           { return len(v) }
-func (v uint32Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v uint32Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type uint64Order []uint64
-
-func (v uint64Order) Len() int           { return len(v) }
-func (v uint64Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v uint64Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type float32Order []float32
-
-func (v float32Order) Len() int           { return len(v) }
-func (v float32Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v float32Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-
-type float64Order []float64
-
-func (v float64Order) Len() int           { return len(v) }
-func (v float64Order) Less(i, j int) bool { return v[i] < v[j] }
-func (v float64Order) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
 
 type bytesOrder [][]byte
 
@@ -117,7 +98,7 @@ func TestOrderOfBool(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(boolOrder(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -136,11 +117,11 @@ func TestOrderOfInt32(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(int32Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(int32Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -174,11 +155,11 @@ func TestOrderOfInt64(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(int64Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(int64Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -208,11 +189,11 @@ func TestOrderOfUint32(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(uint32Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(uint32Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -242,11 +223,11 @@ func TestOrderOfUint64(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(uint64Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(uint64Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -276,11 +257,11 @@ func TestOrderOfFloat32(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(float32Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(float32Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -310,11 +291,11 @@ func TestOrderOfFloat64(t *testing.T) {
 		if !check(values) {
 			return false
 		}
-		sort.Sort(float64Order(values))
+		slices.Sort(values)
 		if !check(values) {
 			return false
 		}
-		sort.Sort(sort.Reverse(float64Order(values)))
+		slices.Reverse(values)
 		if !check(values) {
 			return false
 		}
@@ -341,19 +322,19 @@ func TestOrderOfBytes(t *testing.T) {
 		return checkOrdering(t, bytesOrder(values), orderOfBytes(values))
 	}
 	err := quick.Check(func(values [][16]byte) bool {
-		slices := make([][]byte, len(values))
+		byteSlices := make([][]byte, len(values))
 		for i := range values {
-			slices[i] = values[i][:]
+			byteSlices[i] = values[i][:]
 		}
-		if !check(slices) {
+		if !check(byteSlices) {
 			return false
 		}
-		sort.Sort(bytesOrder(slices))
-		if !check(slices) {
+		slices.SortFunc(byteSlices, bytes.Compare)
+		if !check(byteSlices) {
 			return false
 		}
-		sort.Sort(sort.Reverse(bytesOrder(slices)))
-		if !check(slices) {
+		slices.Reverse(byteSlices)
+		if !check(byteSlices) {
 			return false
 		}
 		return true
