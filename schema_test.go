@@ -353,7 +353,10 @@ func TestInvalidSchemaOf(t *testing.T) {
 				}
 			}()
 			_ = parquet.SchemaOf(test.value)
-=======
+		})
+	}
+}
+
 func TestSchemaRoundTrip(t *testing.T) {
 	// We create a schemas with all supported kinds, cardinalities, logical types, etc
 	tests := []struct {
