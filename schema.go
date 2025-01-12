@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"reflect"
@@ -118,6 +119,16 @@ func (v *onceValue[T]) load(f func() *T) *T {
 //	}
 //
 // The schema name is the Go type name of the value.
+//
+// For backward compatiblity with parquet files that were created by non-compliant writers,
+// the "list" struct tag can be followed by an argument to define the name of the repeated
+// element. For example:
+//
+//	type Message struct {
+//	  Words []string `parquet:"words,list(item)"`
+//	}
+//
+// The standard column name is "element", which is the default when none are provided.
 func SchemaOf(model interface{}) *Schema {
 	return schemaOf(dereference(reflect.TypeOf(model)))
 }
@@ -753,6 +764,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		node       Node
 		optional   bool
 		list       bool
+		element    string
 		encoded    encoding.Encoding
 		compressed compress.Codec
 		fieldID    int
@@ -772,11 +784,12 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		optional = true
 	}
 
-	setList := func() {
+	setList := func(e string) {
 		if list {
 			throwInvalidNode(t, "struct field has multiple declaration of the list tag", name, tag...)
 		}
 		list = true
+		element = e
 	}
 
 	setEncoding := func(e encoding.Encoding) {
@@ -869,9 +882,8 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 		case "list":
 			switch t.Kind() {
 			case reflect.Slice:
-				element := nodeOf(t.Elem(), nil)
-				setNode(element)
-				setList()
+				setNode(nodeOf(t.Elem(), nil))
+				setList(cmp.Or(args, "element"))
 			default:
 				throwInvalidTag(t, name, option)
 			}
@@ -912,6 +924,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			}
 
 			setNode(Decimal(scale, precision, baseType))
+
 		case "date":
 			switch t.Kind() {
 			case reflect.Int32:
@@ -919,6 +932,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 			default:
 				throwInvalidTag(t, name, option)
 			}
+
 		case "timestamp":
 			switch t.Kind() {
 			case reflect.Int64:
@@ -939,6 +953,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 					throwInvalidTag(t, name, option)
 				}
 			}
+
 		case "id":
 			id, err := parseIDArgs(args)
 			if err != nil {
@@ -977,7 +992,7 @@ func makeNodeOf(t reflect.Type, name string, tag []string) Node {
 	}
 
 	if list {
-		node = List(node)
+		node = ListOf(element, node)
 	}
 
 	if node.Repeated() && !list {

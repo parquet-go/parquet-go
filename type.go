@@ -2036,8 +2036,15 @@ func (t *timestampType) ConvertValue(val Value, typ Type) (Value, error) {
 // List constructs a node of LIST logical type.
 //
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-func List(of Node) Node {
-	return listNode{Group{"list": Repeated(Group{"element": of})}}
+func List(of Node) Node { return ListOf("element", of) }
+
+// ListOf is like List but the column name of the repeated element can be passed
+// as argument.
+//
+// This function is useful to construct types that are backward-compatible with
+// non-compliant parquet implementations.
+func ListOf(element string, of Node) Node {
+	return listNode{Group{"list": Repeated(Group{element: of})}}
 }
 
 type listNode struct{ Group }
@@ -2113,9 +2120,16 @@ func (t *listType) ConvertValue(Value, Type) (Value, error) {
 // Map constructs a node of MAP logical type.
 //
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
-func Map(key, value Node) Node {
+func Map(key, value Node) Node { return MapOf("key_value", key, value) }
+
+// MapOf is like Map but the column name of the repeated key and value can be
+// passed as argument.
+//
+// This function is useful to construct types that are backward-compatible with
+// non-compliant parquet implementations.
+func MapOf(element string, key, value Node) Node {
 	return mapNode{Group{
-		"key_value": Repeated(Group{
+		element: Repeated(Group{
 			"key":   Required(key),
 			"value": value,
 		}),
