@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 	"time"
 
@@ -108,6 +109,23 @@ func TestSchemaOf(t *testing.T) {
 	optional group inner {
 		required int64 timestamp_millis (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
 		required int64 timestamp_micros (TIMESTAMP(isAdjustedToUTC=true,unit=MICROS));
+	}
+}`,
+		},
+
+		{
+			value: new(struct {
+				Inner struct {
+					TimeMillis int32         `parquet:"time_millis,time"`
+					TimeMicros int64         `parquet:"time_micros,time(microsecond)"`
+					TimeDur    time.Duration `parquet:"time_dur,time"`
+				} `parquet:"inner,optional"`
+			}),
+			print: `message {
+	optional group inner {
+		required int32 time_millis (TIME(isAdjustedToUTC=true,unit=MILLIS));
+		required int64 time_micros (TIME(isAdjustedToUTC=true,unit=MICROS));
+		required int64 time_dur (TIME(isAdjustedToUTC=true,unit=NANOS));
 	}
 }`,
 		},
@@ -223,6 +241,118 @@ func TestSchemaOf(t *testing.T) {
 			if s := schema.String(); s != test.print {
 				t.Errorf("\nexpected:\n\n%s\n\nfound:\n\n%s\n", test.print, s)
 			}
+		})
+	}
+}
+
+func TestInvalidSchemaOf(t *testing.T) {
+	tests := []struct {
+		value interface{}
+		panic string
+	}{
+		// Date tags must be int32
+		{
+			value: new(struct {
+				Date float32 `parquet:",date"`
+			}),
+			panic: `date is an invalid parquet tag: Date float32 [date]`,
+		},
+
+		// Time tags must be int32 or int64. Additionally:
+		// - int32 must be millisecond
+		// - int64 must be microsecond or nanosecond
+		// - Duration (int64) must be nanosecond
+		// - If the unit is the problem, it is part of the message.
+		{
+			value: new(struct {
+				Time float32 `parquet:",time"`
+			}),
+			panic: `time is an invalid parquet tag: Time float32 [time]`,
+		},
+		{
+			value: new(struct {
+				Time int32 `parquet:",time(microsecond)"`
+			}),
+			panic: `time(microsecond) is an invalid parquet tag: Time int32 [time(microsecond)]`,
+		},
+		{
+			value: new(struct {
+				Time int32 `parquet:",time(nanosecond)"`
+			}),
+			panic: `time(nanosecond) is an invalid parquet tag: Time int32 [time(nanosecond)]`,
+		},
+		{
+			value: new(struct {
+				Time int64 `parquet:",time(millisecond)"`
+			}),
+			panic: `time(millisecond) is an invalid parquet tag: Time int64 [time(millisecond)]`,
+		},
+		{
+			value: new(struct {
+				Time int64 `parquet:",time(notasecond)"`
+			}),
+			panic: `time(notasecond) is an invalid parquet tag: Time int64 [time(notasecond)]`,
+		},
+		{
+			value: new(struct {
+				Time time.Duration `parquet:",time(millisecond)"`
+			}),
+			panic: `time(millisecond) is an invalid parquet tag: Time time.Duration [time(millisecond)]`,
+		},
+		{
+			value: new(struct {
+				Time time.Duration `parquet:",time(microsecond)"`
+			}),
+			panic: `time(microsecond) is an invalid parquet tag: Time time.Duration [time(microsecond)]`,
+		},
+
+		// Timestamp tags must be int64 or time.Time
+		// Additionally, if the unit is the problem, it is part of the message.
+		{
+			value: new(struct {
+				Timestamp float32 `parquet:",timestamp"`
+			}),
+			panic: `timestamp is an invalid parquet tag: Timestamp float32 [timestamp]`,
+		},
+		{
+			value: new(struct {
+				Timestamp int32 `parquet:",timestamp"`
+			}),
+			panic: `timestamp is an invalid parquet tag: Timestamp int32 [timestamp]`,
+		},
+		{
+			value: new(struct {
+				Timestamp int32 `parquet:",timestamp(microsecond)"`
+			}),
+			panic: `timestamp is an invalid parquet tag: Timestamp int32 [timestamp]`,
+		},
+		{
+			value: new(struct {
+				Timestamp int64 `parquet:",timestamp(notasecond)"`
+			}),
+			panic: `timestamp(notasecond) is an invalid parquet tag: Timestamp int64 [timestamp(notasecond)]`,
+		},
+		{
+			value: new(struct {
+				Timestamp time.Time `parquet:",timestamp(notasecond)"`
+			}),
+			panic: `timestamp(notasecond) is an invalid parquet tag: Timestamp time.Time [timestamp(notasecond)]`,
+		},
+	}
+
+	for _, test := range tests {
+		ft := reflect.TypeOf(test.value).Elem().Field(0)
+		t.Run(ft.Type.String()+" `"+ft.Tag.Get("parquet")+"`", func(t *testing.T) {
+			defer func() {
+				p := recover()
+				if p == nil {
+					t.Fatal("expected panic:", test.panic)
+				}
+				if p != test.panic {
+					t.Fatalf("panic: got %q want %q", p, test.panic)
+				}
+			}()
+			_ = parquet.SchemaOf(test.value)
 		})
 	}
 }
