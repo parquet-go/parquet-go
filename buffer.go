@@ -414,7 +414,7 @@ func (buf *Buffer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 		return 0, ErrRowGroupSchemaMissing
 	case buf.schema == nil:
 		buf.configure(rowGroupSchema)
-	case !nodesAreEqual(buf.schema, rowGroupSchema):
+	case !EqualNodes(buf.schema, rowGroupSchema):
 		return 0, ErrRowGroupSchemaMismatch
 	}
 	if !sortingColumnsHavePrefix(rowGroup.SortingColumns(), buf.SortingColumns()) {
