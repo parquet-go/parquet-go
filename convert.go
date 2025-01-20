@@ -249,7 +249,7 @@ func Convert(to, from Node) (conv Conversion, err error) {
 		schema = NewSchema("", to)
 	}
 
-	if nodesAreEqual(to, from) {
+	if NodesAreEqual(to, from) {
 		return identity{schema}, nil
 	}
 

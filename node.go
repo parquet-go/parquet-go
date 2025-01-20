@@ -487,7 +487,8 @@ func fieldByName(node Node, name string) Field {
 	return nil
 }
 
-func nodesAreEqual(node1, node2 Node) bool {
+// NodesAreEqual compares two parquet nodes and returns true if they are equal.
+func NodesAreEqual(node1, node2 Node) bool {
 	if node1.Leaf() {
 		return node2.Leaf() && leafNodesAreEqual(node1, node2)
 	} else {
@@ -529,7 +530,7 @@ func groupNodesAreEqual(node1, node2 Node) bool {
 			return false
 		}
 
-		if !nodesAreEqual(f1, f2) {
+		if !NodesAreEqual(f1, f2) {
 			return false
 		}
 	}
