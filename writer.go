@@ -415,7 +415,7 @@ func (w *Writer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 		return 0, ErrRowGroupSchemaMissing
 	case w.schema == nil:
 		w.configure(rowGroupSchema)
-	case !NodesAreEqual(w.schema, rowGroupSchema):
+	case !EqualNodes(w.schema, rowGroupSchema):
 		return 0, ErrRowGroupSchemaMismatch
 	}
 	if err := w.writer.flush(); err != nil {

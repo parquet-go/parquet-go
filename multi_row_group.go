@@ -81,7 +81,7 @@ func compatibleSchemaOf(rowGroups []RowGroup) (*Schema, error) {
 	// Slow path: The schema pointers are not the same, but they still have to
 	// be compatible.
 	for _, rowGroup := range rowGroups[1:] {
-		if !NodesAreEqual(schema, rowGroup.Schema()) {
+		if !EqualNodes(schema, rowGroup.Schema()) {
 			return nil, ErrRowGroupSchemaMismatch
 		}
 	}

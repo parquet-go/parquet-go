@@ -57,7 +57,7 @@ func NewGenericReader[T any](input io.ReaderAt, options ...ReaderOption) *Generi
 		},
 	}
 
-	if !NodesAreEqual(c.Schema, f.schema) {
+	if !EqualNodes(c.Schema, f.schema) {
 		r.base.file.rowGroup = convertRowGroupTo(r.base.file.rowGroup, c.Schema)
 	}
 
@@ -90,7 +90,7 @@ func NewGenericRowGroupReader[T any](rowGroup RowGroup, options ...ReaderOption)
 		},
 	}
 
-	if !NodesAreEqual(c.Schema, rowGroup.Schema()) {
+	if !EqualNodes(c.Schema, rowGroup.Schema()) {
 		r.base.file.rowGroup = convertRowGroupTo(r.base.file.rowGroup, c.Schema)
 	}
 
@@ -337,7 +337,7 @@ func NewRowGroupReader(rowGroup RowGroup, options ...ReaderOption) *Reader {
 }
 
 func convertRowGroupTo(rowGroup RowGroup, schema *Schema) RowGroup {
-	if rowGroupSchema := rowGroup.Schema(); !NodesAreEqual(schema, rowGroupSchema) {
+	if rowGroupSchema := rowGroup.Schema(); !EqualNodes(schema, rowGroupSchema) {
 		conv, err := Convert(schema, rowGroupSchema)
 		if err != nil {
 			// TODO: this looks like something we should not be panicking on,
@@ -416,7 +416,7 @@ func (r *Reader) Read(row interface{}) error {
 func (r *Reader) updateReadSchema(rowType reflect.Type) error {
 	schema := schemaOf(rowType)
 
-	if NodesAreEqual(schema, r.file.schema) {
+	if EqualNodes(schema, r.file.schema) {
 		r.read.init(schema, r.file.rowGroup)
 	} else {
 		conv, err := Convert(schema, r.file.schema)
