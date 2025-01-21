@@ -165,6 +165,12 @@ func (w *GenericWriter[T]) Close() error {
 	return w.base.Close()
 }
 
+// FileMetaData returns the FileMetaData structure of the written parquet file.
+// Returns nil until Close is called.
+func (w *GenericWriter[T]) FileMetaData() *format.FileMetaData {
+	return w.base.FileMetaData()
+}
+
 func (w *GenericWriter[T]) Flush() error {
 	return w.base.Flush()
 }
@@ -343,6 +349,15 @@ func (w *Writer) Close() error {
 	return nil
 }
 
+// FileMetaData returns the FileMetaData structure of the written parquet file.
+// Returns nil until Close is called.
+func (w *Writer) FileMetaData() *format.FileMetaData {
+	if w.writer != nil {
+		return w.writer.fileMetaData
+	}
+	return nil
+}
+
 // Flush flushes all buffers into a row group to the underlying io.Writer.
 //
 // Flush is called automatically on Close, it is only useful to call explicitly
@@ -499,6 +514,8 @@ type writer struct {
 	columnIndexes  [][]format.ColumnIndex
 	offsetIndexes  [][]format.OffsetIndex
 	sortingColumns []format.SortingColumn
+
+	fileMetaData *format.FileMetaData
 }
 
 func newWriter(output io.Writer, config *WriterConfig) *writer {
@@ -797,7 +814,7 @@ func (w *writer) writeFileFooter() error {
 	// https://github.com/apache/arrow/blob/70b9ef5/go/parquet/metadata/file.go#L122-L127
 	const parquetFileFormatVersion = 2
 
-	footer, err := thrift.Marshal(new(thrift.CompactProtocol), &format.FileMetaData{
+	w.fileMetaData = &format.FileMetaData{
 		Version:          parquetFileFormatVersion,
 		Schema:           w.schemaElements,
 		NumRows:          numRows,
@@ -805,7 +822,8 @@ func (w *writer) writeFileFooter() error {
 		KeyValueMetadata: w.metadata,
 		CreatedBy:        w.createdBy,
 		ColumnOrders:     w.columnOrders,
-	})
+	}
+	footer, err := thrift.Marshal(new(thrift.CompactProtocol), w.fileMetaData)
 	if err != nil {
 		return err
 	}
