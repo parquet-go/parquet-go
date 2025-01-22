@@ -36,6 +36,18 @@ type File struct {
 	config        *FileConfig
 }
 
+type FileView interface {
+	Metadata() *format.FileMetaData
+	Schema() *Schema
+	NumRows() int64
+	Lookup(key string) (string, bool)
+	Size() int64
+	Root() *Column
+	RowGroups() []RowGroup
+	ColumnIndexes() []format.ColumnIndex
+	OffsetIndexes() []format.OffsetIndex
+}
+
 // OpenFile opens a parquet file and reads the content between offset 0 and the given
 // size in r.
 //
@@ -106,7 +118,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		}
 	}
 
-	if f.root, err = openColumns(f); err != nil {
+	if f.root, err = openColumns(f, &f.metadata, f.columnIndexes, f.offsetIndexes); err != nil {
 		return nil, fmt.Errorf("opening columns of parquet file: %w", err)
 	}
 

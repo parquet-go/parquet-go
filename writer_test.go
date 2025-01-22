@@ -1148,6 +1148,18 @@ func TestSetKeyValueMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	metadata := w.File().Metadata()
+	if len(metadata.KeyValueMetadata) != 1 {
+		t.Errorf("expected 1 key/value metadata, got %d", len(metadata.KeyValueMetadata))
+	} else {
+		if metadata.KeyValueMetadata[0].Key != testKey {
+			t.Errorf("expected metadata key '%s', got '%s'", testKey, metadata.KeyValueMetadata[0].Key)
+		}
+		if metadata.KeyValueMetadata[0].Value != testValue {
+			t.Errorf("expected metadata value '%s', got '%s'", testValue, metadata.KeyValueMetadata[0].Value)
+		}
+	}
+
 	f, err := parquet.OpenFile(bytes.NewReader(b.Bytes()), int64(b.Len()))
 	if err != nil {
 		t.Fatal(err)
