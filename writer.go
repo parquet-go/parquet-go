@@ -168,7 +168,7 @@ func (w *GenericWriter[T]) Close() error {
 // FileMetaData returns the FileMetaData structure of the written parquet file.
 // Returns nil until Close is called.
 func (w *GenericWriter[T]) FileMetaData() *format.FileMetaData {
-	return w.base.FileMetaData()
+	return w.base.Metadata()
 }
 
 func (w *GenericWriter[T]) Flush() error {
@@ -301,6 +301,18 @@ type Writer struct {
 	rowbuf []Row
 }
 
+type FileLike interface {
+	Metadata() *format.FileMetaData
+	Schema() *Schema
+	NumRows() int64
+	Lookup(key string) (string, bool)
+	Size() int64
+	Root() *Column
+	RowGroups() []RowGroup
+	ColumnIndexes() []format.ColumnIndex
+	OffsetIndexes() []format.OffsetIndex
+}
+
 // NewWriter constructs a parquet writer writing a file to the given io.Writer.
 //
 // The function panics if the writer configuration is invalid. Programs that
@@ -349,11 +361,73 @@ func (w *Writer) Close() error {
 	return nil
 }
 
-// FileMetaData returns the FileMetaData structure of the written parquet file.
+// Metadata returns the Metadata structure of the written parquet file.
 // Returns nil until Close is called.
-func (w *Writer) FileMetaData() *format.FileMetaData {
+func (w *Writer) Metadata() *format.FileMetaData {
 	if w.writer != nil {
 		return w.writer.fileMetaData
+	}
+	return nil
+}
+
+func (w *Writer) NumRows() int64 {
+	if w.writer != nil && w.writer.fileMetaData != nil {
+		return w.writer.fileMetaData.NumRows
+	}
+	return 0
+}
+
+func (w *Writer) Lookup(key string) (string, bool) {
+	if w.writer != nil && w.writer.fileMetaData != nil {
+		return lookupKeyValueMetadata(w.writer.fileMetaData.KeyValueMetadata, key)
+	}
+	return "", false
+}
+
+func (w *Writer) Size() int64 {
+	if w.writer != nil {
+		return w.writer.writer.offset
+	}
+	return 0
+}
+
+func (w *Writer) ColumnIndexes() []format.ColumnIndex {
+	if w.writer != nil {
+		return w.writer.columnIndex
+	}
+	return nil
+}
+
+func (w *Writer) OffsetIndexes() []format.OffsetIndex {
+	if w.writer != nil {
+		return w.writer.offsetIndex
+	}
+	return nil
+}
+
+func (w *Writer) Root() *Column {
+	if w.writer != nil && w.writer.fileMetaData != nil {
+		root, _ := openColumns(nil, *w.writer.fileMetaData, w.writer.columnIndex, w.writer.offsetIndex)
+		return root
+	}
+	return nil
+}
+
+func (w *Writer) RowGroups() []RowGroup {
+	if w.writer != nil && w.writer.fileMetaData != nil {
+		root := w.Root()
+		columns := make([]*Column, 0, numLeafColumnsOf(root))
+		root.forEachLeaf(func(c *Column) { columns = append(columns, c) })
+
+		fileRowGroups := make([]fileRowGroup, len(w.writer.fileMetaData.RowGroups))
+		for i := range fileRowGroups {
+			fileRowGroups[i].init(nil, w.schema, columns, &w.writer.fileMetaData.RowGroups[i])
+		}
+		rowGroups := make([]RowGroup, len(fileRowGroups))
+		for i := range fileRowGroups {
+			rowGroups[i] = &fileRowGroups[i]
+		}
+		return rowGroups
 	}
 	return nil
 }
@@ -720,6 +794,7 @@ func (w *writer) reset(writer io.Writer) {
 	w.rowGroups = w.rowGroups[:0]
 	w.columnIndexes = w.columnIndexes[:0]
 	w.offsetIndexes = w.offsetIndexes[:0]
+	w.fileMetaData = nil
 }
 
 func (w *writer) close() error {
@@ -778,6 +853,7 @@ func (w *writer) writeFileFooter() error {
 	protocol := new(thrift.CompactProtocol)
 	encoder := thrift.NewEncoder(protocol.NewWriter(&w.writer))
 
+	w.columnIndex = w.columnIndex[:0]
 	for i, columnIndexes := range w.columnIndexes {
 		rowGroup := &w.rowGroups[i]
 		for j := range columnIndexes {
@@ -788,8 +864,10 @@ func (w *writer) writeFileFooter() error {
 			}
 			column.ColumnIndexLength = int32(w.writer.offset - column.ColumnIndexOffset)
 		}
+		w.columnIndex = append(w.columnIndex, columnIndexes...)
 	}
 
+	w.offsetIndex = w.offsetIndex[:0]
 	for i, offsetIndexes := range w.offsetIndexes {
 		rowGroup := &w.rowGroups[i]
 		for j := range offsetIndexes {
@@ -800,6 +878,7 @@ func (w *writer) writeFileFooter() error {
 			}
 			column.OffsetIndexLength = int32(w.writer.offset - column.OffsetIndexOffset)
 		}
+		w.offsetIndex = append(w.offsetIndex, offsetIndexes...)
 	}
 
 	numRows := int64(0)

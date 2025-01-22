@@ -106,7 +106,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		}
 	}
 
-	if f.root, err = openColumns(f); err != nil {
+	if f.root, err = openColumns(f, f.metadata, f.columnIndexes, f.offsetIndexes); err != nil {
 		return nil, fmt.Errorf("opening columns of parquet file: %w", err)
 	}
 
