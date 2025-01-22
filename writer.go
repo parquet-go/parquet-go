@@ -537,7 +537,7 @@ func (w *writerFileView) OffsetIndexes() []format.OffsetIndex {
 
 func (w *writerFileView) Root() *Column {
 	if w.writer.fileMetaData != nil {
-		root, _ := openColumns(nil, *w.writer.fileMetaData, w.writer.columnIndex, w.writer.offsetIndex)
+		root, _ := openColumns(nil, w.writer.fileMetaData, w.writer.columnIndex, w.writer.offsetIndex)
 		return root
 	}
 	return nil

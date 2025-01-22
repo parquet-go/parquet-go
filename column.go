@@ -202,7 +202,7 @@ func (c *Column) forEachLeaf(do func(*Column)) {
 	}
 }
 
-func openColumns(file *File, metadata format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex) (*Column, error) {
+func openColumns(file *File, metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex) (*Column, error) {
 	cl := columnLoader{}
 
 	c, err := cl.open(file, metadata, columnIndexes, offsetIndexes, nil)
@@ -273,7 +273,7 @@ type columnLoader struct {
 	rowGroupColumnIndex int
 }
 
-func (cl *columnLoader) open(file *File, metadata format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex, path []string) (*Column, error) {
+func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex, path []string) (*Column, error) {
 	c := &Column{
 		file:   file,
 		schema: &metadata.Schema[cl.schemaIndex],
