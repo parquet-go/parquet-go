@@ -99,7 +99,7 @@ func (c *Column) Pages() Pages {
 }
 
 func (c *Column) PagesFrom(reader io.ReaderAt) Pages {
-	if c.index < 0 || c.file == nil || reader == nil {
+	if c.index < 0 || c.file == nil {
 		return emptyPages{}
 	}
 	r := &columnPages{

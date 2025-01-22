@@ -165,12 +165,6 @@ func (w *GenericWriter[T]) Close() error {
 	return w.base.Close()
 }
 
-// FileMetaData returns the FileMetaData structure of the written parquet file.
-// Returns nil until Close is called.
-func (w *GenericWriter[T]) FileMetaData() *format.FileMetaData {
-	return w.base.Metadata()
-}
-
 func (w *GenericWriter[T]) Flush() error {
 	return w.base.Flush()
 }
@@ -253,6 +247,12 @@ func (w *GenericWriter[T]) writeAny(rows []T) (n int, err error) {
 	return n, nil
 }
 
+// File returns a FileView of the written parquet file.
+// Only available after Close is called.
+func (w *GenericWriter[T]) File() FileView {
+	return w.base.File()
+}
+
 var (
 	_ RowWriterWithSchema = (*GenericWriter[any])(nil)
 	_ RowReaderFrom       = (*GenericWriter[any])(nil)
@@ -301,18 +301,6 @@ type Writer struct {
 	rowbuf []Row
 }
 
-type FileLike interface {
-	Metadata() *format.FileMetaData
-	Schema() *Schema
-	NumRows() int64
-	Lookup(key string) (string, bool)
-	Size() int64
-	Root() *Column
-	RowGroups() []RowGroup
-	ColumnIndexes() []format.ColumnIndex
-	OffsetIndexes() []format.OffsetIndex
-}
-
 // NewWriter constructs a parquet writer writing a file to the given io.Writer.
 //
 // The function panics if the writer configuration is invalid. Programs that
@@ -357,77 +345,6 @@ func (w *Writer) configure(schema *Schema) {
 func (w *Writer) Close() error {
 	if w.writer != nil {
 		return w.writer.close()
-	}
-	return nil
-}
-
-// Metadata returns the Metadata structure of the written parquet file.
-// Returns nil until Close is called.
-func (w *Writer) Metadata() *format.FileMetaData {
-	if w.writer != nil {
-		return w.writer.fileMetaData
-	}
-	return nil
-}
-
-func (w *Writer) NumRows() int64 {
-	if w.writer != nil && w.writer.fileMetaData != nil {
-		return w.writer.fileMetaData.NumRows
-	}
-	return 0
-}
-
-func (w *Writer) Lookup(key string) (string, bool) {
-	if w.writer != nil && w.writer.fileMetaData != nil {
-		return lookupKeyValueMetadata(w.writer.fileMetaData.KeyValueMetadata, key)
-	}
-	return "", false
-}
-
-func (w *Writer) Size() int64 {
-	if w.writer != nil {
-		return w.writer.writer.offset
-	}
-	return 0
-}
-
-func (w *Writer) ColumnIndexes() []format.ColumnIndex {
-	if w.writer != nil {
-		return w.writer.columnIndex
-	}
-	return nil
-}
-
-func (w *Writer) OffsetIndexes() []format.OffsetIndex {
-	if w.writer != nil {
-		return w.writer.offsetIndex
-	}
-	return nil
-}
-
-func (w *Writer) Root() *Column {
-	if w.writer != nil && w.writer.fileMetaData != nil {
-		root, _ := openColumns(nil, *w.writer.fileMetaData, w.writer.columnIndex, w.writer.offsetIndex)
-		return root
-	}
-	return nil
-}
-
-func (w *Writer) RowGroups() []RowGroup {
-	if w.writer != nil && w.writer.fileMetaData != nil {
-		root := w.Root()
-		columns := make([]*Column, 0, numLeafColumnsOf(root))
-		root.forEachLeaf(func(c *Column) { columns = append(columns, c) })
-
-		fileRowGroups := make([]fileRowGroup, len(w.writer.fileMetaData.RowGroups))
-		for i := range fileRowGroups {
-			fileRowGroups[i].init(nil, w.schema, columns, &w.writer.fileMetaData.RowGroups[i])
-		}
-		rowGroups := make([]RowGroup, len(fileRowGroups))
-		for i := range fileRowGroups {
-			rowGroups[i] = &fileRowGroups[i]
-		}
-		return rowGroups
 	}
 	return nil
 }
@@ -565,6 +482,84 @@ func (w *Writer) SetKeyValueMetadata(key, value string) {
 		Key:   key,
 		Value: value,
 	})
+}
+
+type writerFileView struct {
+	writer *writer
+	schema *Schema
+}
+
+// File returns a FileView of the written parquet file.
+// Only available after Close is called.
+func (w *Writer) File() FileView {
+	if w.writer == nil || w.schema == nil {
+		return nil
+	}
+	return &writerFileView{
+		w.writer,
+		w.schema,
+	}
+}
+
+func (w *writerFileView) Metadata() *format.FileMetaData {
+	return w.writer.fileMetaData
+}
+
+func (w *writerFileView) Schema() *Schema {
+	return w.schema
+}
+
+func (w *writerFileView) NumRows() int64 {
+	if w.writer.fileMetaData != nil {
+		return w.writer.fileMetaData.NumRows
+	}
+	return 0
+}
+
+func (w *writerFileView) Lookup(key string) (string, bool) {
+	if w.writer.fileMetaData != nil {
+		return lookupKeyValueMetadata(w.writer.fileMetaData.KeyValueMetadata, key)
+	}
+	return "", false
+}
+
+func (w *writerFileView) Size() int64 {
+	return w.writer.writer.offset
+}
+
+func (w *writerFileView) ColumnIndexes() []format.ColumnIndex {
+	return w.writer.columnIndex
+}
+
+func (w *writerFileView) OffsetIndexes() []format.OffsetIndex {
+	return w.writer.offsetIndex
+}
+
+func (w *writerFileView) Root() *Column {
+	if w.writer.fileMetaData != nil {
+		root, _ := openColumns(nil, *w.writer.fileMetaData, w.writer.columnIndex, w.writer.offsetIndex)
+		return root
+	}
+	return nil
+}
+
+func (w *writerFileView) RowGroups() []RowGroup {
+	if w.writer.fileMetaData != nil {
+		root := w.Root()
+		columns := make([]*Column, 0, numLeafColumnsOf(root))
+		root.forEachLeaf(func(c *Column) { columns = append(columns, c) })
+
+		fileRowGroups := make([]fileRowGroup, len(w.writer.fileMetaData.RowGroups))
+		for i := range fileRowGroups {
+			fileRowGroups[i].init(nil, w.schema, columns, &w.writer.fileMetaData.RowGroups[i])
+		}
+		rowGroups := make([]RowGroup, len(fileRowGroups))
+		for i := range fileRowGroups {
+			rowGroups[i] = &fileRowGroups[i]
+		}
+		return rowGroups
+	}
+	return nil
 }
 
 type writer struct {
