@@ -1148,14 +1148,15 @@ func TestSetKeyValueMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(w.Metadata().KeyValueMetadata) != 1 {
-		t.Errorf("expected 1 key/value metadata, got %d", len(w.Metadata().KeyValueMetadata))
+	metadata := w.File().Metadata()
+	if len(metadata.KeyValueMetadata) != 1 {
+		t.Errorf("expected 1 key/value metadata, got %d", len(metadata.KeyValueMetadata))
 	} else {
-		if w.Metadata().KeyValueMetadata[0].Key != testKey {
-			t.Errorf("expected metadata key '%s', got '%s'", testKey, w.Metadata().KeyValueMetadata[0].Key)
+		if metadata.KeyValueMetadata[0].Key != testKey {
+			t.Errorf("expected metadata key '%s', got '%s'", testKey, metadata.KeyValueMetadata[0].Key)
 		}
-		if w.Metadata().KeyValueMetadata[0].Value != testValue {
-			t.Errorf("expected metadata value '%s', got '%s'", testValue, w.Metadata().KeyValueMetadata[0].Value)
+		if metadata.KeyValueMetadata[0].Value != testValue {
+			t.Errorf("expected metadata value '%s', got '%s'", testValue, metadata.KeyValueMetadata[0].Value)
 		}
 	}
 
