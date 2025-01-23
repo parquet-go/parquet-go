@@ -786,3 +786,80 @@ func TestSeekToRowDictReadMultiplePages(t *testing.T) {
 		t.Fatalf("read != write")
 	}
 }
+
+func TestLookup(t *testing.T) {
+	type rowType struct {
+		Value int32
+	}
+
+	// Create test data with metadata
+	buf := new(bytes.Buffer)
+	schema := parquet.SchemaOf(new(rowType))
+	w := parquet.NewWriter(buf, schema)
+	w.SetKeyValueMetadata("key1", "value1")
+	w.SetKeyValueMetadata("key2", "value2")
+	w.SetKeyValueMetadata("empty", "")
+
+	// Write a sample row
+	if err := w.Write(rowType{Value: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		key      string
+		expected string
+	}{
+		{
+			name:     "existing key 1",
+			key:      "key1",
+			expected: "value1",
+		},
+		{
+			name:     "existing key 2",
+			key:      "key2",
+			expected: "value2",
+		},
+		{
+			name:     "empty value",
+			key:      "empty",
+			expected: "",
+		},
+		{
+			name:     "non-existent key",
+			key:      "missing",
+			expected: "",
+		},
+	}
+
+	t.Run("Reader", func(t *testing.T) {
+		r := parquet.NewReader(bytes.NewReader(buf.Bytes()))
+		defer r.Close()
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				got, _ := r.File().Lookup(tt.key)
+				if got != tt.expected {
+					t.Errorf("Lookup(%q) = %q, want %q", tt.key, got, tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("GenericReader", func(t *testing.T) {
+		r := parquet.NewGenericReader[rowType](bytes.NewReader(buf.Bytes()))
+		defer r.Close()
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				got, _ := r.File().Lookup(tt.key)
+				if got != tt.expected {
+					t.Errorf("Lookup(%q) = %q, want %q", tt.key, got, tt.expected)
+				}
+			})
+		}
+	})
+}

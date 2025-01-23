@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+
+	"github.com/parquet-go/parquet-go/format"
 )
 
 // GenericReader is similar to a Reader but uses a type parameter to define the
@@ -51,6 +53,7 @@ func NewGenericReader[T any](input io.ReaderAt, options ...ReaderOption) *Generi
 	r := &GenericReader[T]{
 		base: Reader{
 			file: reader{
+				file:     f,
 				schema:   c.Schema,
 				rowGroup: rowGroup,
 			},
@@ -132,6 +135,11 @@ func (r *GenericReader[T]) SeekToRow(rowIndex int64) error {
 
 func (r *GenericReader[T]) Close() error {
 	return r.base.Close()
+}
+
+// File returns a FileView of the underlying parquet file.
+func (r *GenericReader[T]) File() FileView {
+	return r.base.File()
 }
 
 // readRows reads the next rows from the reader into the given rows slice up to len(rows).
@@ -274,6 +282,7 @@ func NewReader(input io.ReaderAt, options ...ReaderOption) *Reader {
 
 	r := &Reader{
 		file: reader{
+			file:     f,
 			schema:   f.schema,
 			rowGroup: fileRowGroupOf(f),
 		},
@@ -477,6 +486,7 @@ func (r *Reader) Close() error {
 // read rows into Go values, potentially doing partial reads on a subset of the
 // columns due to using a converted row group view.
 type reader struct {
+	file     *File
 	schema   *Schema
 	rowGroup RowGroup
 	rows     Rows
@@ -558,3 +568,90 @@ var (
 	_ RowReader = (*reader)(nil)
 	_ RowSeeker = (*reader)(nil)
 )
+
+type readerFileView struct {
+	reader *reader
+	schema *Schema
+}
+
+// File returns a FileView of the parquet file being read.
+// Only available if Reader was created with a File.
+func (r *Reader) File() FileView {
+	if r.file.schema == nil || r.file.file == nil {
+		return nil
+	}
+	return &readerFileView{
+		&r.file,
+		r.file.schema,
+	}
+}
+
+func (r *readerFileView) Metadata() *format.FileMetaData {
+	if r.reader.file != nil {
+		return r.reader.file.Metadata()
+	}
+	return nil
+}
+
+func (r *readerFileView) Schema() *Schema {
+	return r.schema
+}
+
+func (r *readerFileView) NumRows() int64 {
+	return r.reader.rowGroup.NumRows()
+}
+
+func (r *readerFileView) Lookup(key string) (string, bool) {
+	if meta := r.Metadata(); meta != nil {
+		return lookupKeyValueMetadata(meta.KeyValueMetadata, key)
+	}
+	return "", false
+}
+
+func (r *readerFileView) Size() int64 {
+	if r.reader.file != nil {
+		return r.reader.file.Size()
+	}
+	return 0
+}
+
+func (r *readerFileView) ColumnIndexes() []format.ColumnIndex {
+	if r.reader.file != nil {
+		return r.reader.file.ColumnIndexes()
+	}
+	return nil
+}
+
+func (r *readerFileView) OffsetIndexes() []format.OffsetIndex {
+	if r.reader.file != nil {
+		return r.reader.file.OffsetIndexes()
+	}
+	return nil
+}
+
+func (r *readerFileView) Root() *Column {
+	if meta := r.Metadata(); meta != nil {
+		root, _ := openColumns(nil, meta, r.ColumnIndexes(), r.OffsetIndexes())
+		return root
+	}
+	return nil
+}
+
+func (r *readerFileView) RowGroups() []RowGroup {
+	if meta := r.Metadata(); meta != nil {
+		root := r.Root()
+		columns := make([]*Column, 0, numLeafColumnsOf(root))
+		root.forEachLeaf(func(c *Column) { columns = append(columns, c) })
+
+		fileRowGroups := make([]fileRowGroup, len(meta.RowGroups))
+		for i := range fileRowGroups {
+			fileRowGroups[i].init(nil, r.schema, columns, &meta.RowGroups[i])
+		}
+		rowGroups := make([]RowGroup, len(fileRowGroups))
+		for i := range fileRowGroups {
+			rowGroups[i] = &fileRowGroups[i]
+		}
+		return rowGroups
+	}
+	return nil
+}
