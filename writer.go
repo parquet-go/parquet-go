@@ -945,15 +945,6 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 	}
 	fileOffset := w.writer.offset
 
-	for _, c := range w.columns {
-		if len(c.filter) > 0 {
-			c.columnChunk.MetaData.BloomFilterOffset = w.writer.offset
-			if err := c.writeBloomFilter(&w.writer); err != nil {
-				return 0, err
-			}
-		}
-	}
-
 	for i, c := range w.columns {
 		w.columnIndex[i] = format.ColumnIndex(c.columnIndex.ColumnIndex())
 
@@ -977,6 +968,15 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 		}
 		if _, err := io.Copy(&w.writer, c.pageBuffer); err != nil {
 			return 0, fmt.Errorf("writing buffered pages of row group column %d: %w", i, err)
+		}
+	}
+
+	for _, c := range w.columns {
+		if len(c.filter) > 0 {
+			c.columnChunk.MetaData.BloomFilterOffset = w.writer.offset
+			if err := c.writeBloomFilter(&w.writer); err != nil {
+				return 0, err
+			}
 		}
 	}
 
