@@ -430,6 +430,12 @@ func (page *repeatedPage) DefinitionLevels() []byte { return page.definitionLeve
 func (page *repeatedPage) Data() encoding.Values { return page.base.Data() }
 
 func (page *repeatedPage) Values() ValueReader {
+	if len(page.repetitionLevels) != 0 && page.repetitionLevels[0] != 0 {
+		return ValueReaderFunc(func([]Value) (int, error) {
+			return 0, fmt.Errorf("%w: repetition level for column %d is %d instead of zero, indicating that the page contains trailing values from the previous page",
+				ErrMalformedRepetitionLevel, page.Column(), page.repetitionLevels[0])
+		})
+	}
 	return &repeatedPageValues{
 		page:   page,
 		values: page.base.Values(),
