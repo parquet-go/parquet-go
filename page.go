@@ -465,10 +465,6 @@ func (page *repeatedPage) Slice(i, j int64) Page {
 	rowIndex1 := len(repetitionLevels)
 	rowIndex2 := len(repetitionLevels)
 
-	if len(repetitionLevels) != 0 && repetitionLevels[0] != 0 {
-		panic("first repetition level must be zero to slice a repeated page")
-	}
-
 	for k, def := range repetitionLevels {
 		if def == 0 {
 			if rowIndex0 == int(i) {
