@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -120,8 +122,7 @@ func TestIssue400(t *testing.T) {
 
 	r := parquet.NewGenericReader[A](bytes.NewReader(b.Bytes()))
 	values := make([]A, 1)
-	_, err = r.Read(values)
-	if err != nil {
+	if n, err := r.Read(values); n != len(values) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(expect, values) {
@@ -889,53 +890,47 @@ func TestIssue206(t *testing.T) {
 		t.Fatalf("Failed to get file stats: %v", err)
 	}
 
-	if _, err := parquet.Read[OrderbookDepth](f, s.Size()); !errors.Is(err, parquet.ErrMalformedRepetitionLevel) {
-		t.Fatal(err)
+	rows, err := parquet.Read[OrderbookDepth](f, s.Size())
+	if err != nil {
+		t.Fatalf("Failed to read file: %v", err)
 	}
 
-	// TODO: add these tests back if we implement a fix for issue #206
-	//
-	// rows, err := parquet.Read[OrderbookDepth](f, s.Size())
-	// if err != nil {
-	// 	t.Fatalf("Failed to read file: %v", err)
-	// }
-	//
-	// b, err := os.ReadFile("testdata/issue206.json")
-	// if err != nil {
-	// 	t.Fatalf("Failed to open file: %v", err)
-	// }
+	b, err := os.ReadFile("testdata/issue206.json")
+	if err != nil {
+		t.Fatalf("Failed to open file: %v", err)
+	}
 
-	// var want []OrderbookDepth
-	// if err := json.Unmarshal(b, &want); err != nil {
-	// 	t.Fatalf("Failed to unmarshal JSON: %v", err)
-	// }
+	var want []OrderbookDepth
+	if err := json.Unmarshal(b, &want); err != nil {
+		t.Fatalf("Failed to unmarshal JSON: %v", err)
+	}
 
-	// if len(rows) != len(want) {
-	// 	t.Errorf("len(rows) != len(want): %d != %d", len(rows), len(want))
-	// }
+	if len(rows) != len(want) {
+		t.Errorf("len(rows) != len(want): %d != %d", len(rows), len(want))
+	}
 
-	// for i := range min(len(rows), len(want)) {
-	// 	g := rows[i]
-	// 	w := want[i]
-	// 	if g.Timestamp != w.Timestamp {
-	// 		t.Errorf("rows[%d].Timestamp != want[%d].Timestamp: %d != %d", i, i, g.Timestamp, w.Timestamp)
-	// 		break
-	// 	}
-	// 	if g.Instrument != w.Instrument {
-	// 		t.Errorf("rows[%d].Instrument != want[%d].Instrument: %q != %q", i, i, g.Instrument, w.Instrument)
-	// 		break
-	// 	}
-	// 	if g.ChangeID != w.ChangeID {
-	// 		t.Errorf("rows[%d].ChangeID != want[%d].ChangeID: %d != %d", i, i, g.ChangeID, w.ChangeID)
-	// 		break
-	// 	}
-	// 	if !slices.Equal(g.Bids, w.Bids) {
-	// 		t.Errorf("rows[%d].Bids != want[%d].Bids:\ngot:  %+v\nwant: %+v", i, i, g.Bids, w.Bids)
-	// 		break
-	// 	}
-	// 	if !slices.Equal(g.Asks, w.Asks) {
-	// 		t.Errorf("rows[%d].Asks != want[%d].Asks:\ngot:  %+v\nwant: %+v", i, i, g.Asks, w.Asks)
-	// 		break
-	// 	}
-	// }
+	for i := range min(len(rows), len(want)) {
+		g := rows[i]
+		w := want[i]
+		if g.Timestamp != w.Timestamp {
+			t.Errorf("rows[%d].Timestamp != want[%d].Timestamp: %d != %d", i, i, g.Timestamp, w.Timestamp)
+			break
+		}
+		if g.Instrument != w.Instrument {
+			t.Errorf("rows[%d].Instrument != want[%d].Instrument: %q != %q", i, i, g.Instrument, w.Instrument)
+			break
+		}
+		if g.ChangeID != w.ChangeID {
+			t.Errorf("rows[%d].ChangeID != want[%d].ChangeID: %d != %d", i, i, g.ChangeID, w.ChangeID)
+			break
+		}
+		if !slices.Equal(g.Bids, w.Bids) {
+			t.Errorf("rows[%d].Bids != want[%d].Bids:\ngot:  %+v\nwant: %+v", i, i, g.Bids, w.Bids)
+			break
+		}
+		if !slices.Equal(g.Asks, w.Asks) {
+			t.Errorf("rows[%d].Asks != want[%d].Asks:\ngot:  %+v\nwant: %+v", i, i, g.Asks, w.Asks)
+			break
+		}
+	}
 }

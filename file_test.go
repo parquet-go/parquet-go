@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -13,12 +12,6 @@ import (
 )
 
 var testdataFiles []string
-var testdataFilesWithMalformedRepetitionLevels = []string{
-	"testdata/issue206.parquet",
-	"testdata/file.parquet",
-	"testdata/small.parquet",
-	"testdata/trace.snappy.parquet",
-}
 
 func init() {
 	testdataFiles, _ = filepath.Glob("testdata/*.parquet")
@@ -169,13 +162,6 @@ func printColumns(t *testing.T, col *parquet.Column, indent, filePath string) {
 			if err != nil {
 				if err == io.EOF {
 					break
-				}
-				if errors.Is(err, parquet.ErrMalformedRepetitionLevel) {
-					if slices.Contains(testdataFilesWithMalformedRepetitionLevels, filePath) {
-						numValues = p.NumValues()
-						nullCount = p.NumNulls()
-						break
-					}
 				}
 				t.Error(err)
 				return

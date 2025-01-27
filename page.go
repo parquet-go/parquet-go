@@ -60,6 +60,14 @@ type Page interface {
 	// like parquet.Int32Reader. Applications should use type assertions on
 	// the returned reader to determine whether those optimizations are
 	// available.
+	//
+	// In the data page format version 1, it wasn't specified whether pages
+	// must start with a new row. Legacy writers have produced parquet files
+	// where row values were overlapping between two consecutive pages.
+	// As a result, the values read must not be assumed to start at the
+	// beginning of a row, unless the program knows that it is only working
+	// with parquet files that used the data page format version 2 (which is
+	// the default behavior for parquet-go).
 	Values() ValueReader
 
 	// Returns a new page which is as slice of the receiver between row indexes
@@ -430,12 +438,6 @@ func (page *repeatedPage) DefinitionLevels() []byte { return page.definitionLeve
 func (page *repeatedPage) Data() encoding.Values { return page.base.Data() }
 
 func (page *repeatedPage) Values() ValueReader {
-	if len(page.repetitionLevels) != 0 && page.repetitionLevels[0] != 0 {
-		return ValueReaderFunc(func([]Value) (int, error) {
-			return 0, fmt.Errorf("%w: repetition level for column %d is %d instead of zero, indicating that the page contains trailing values from the previous page",
-				ErrMalformedRepetitionLevel, page.Column(), page.repetitionLevels[0])
-		})
-	}
 	return &repeatedPageValues{
 		page:   page,
 		values: page.base.Values(),
@@ -462,6 +464,10 @@ func (page *repeatedPage) Slice(i, j int64) Page {
 	rowIndex0 := 0
 	rowIndex1 := len(repetitionLevels)
 	rowIndex2 := len(repetitionLevels)
+
+	if len(repetitionLevels) != 0 && repetitionLevels[0] != 0 {
+		panic("first repetition level must be zero to slice a repeated page")
+	}
 
 	for k, def := range repetitionLevels {
 		if def == 0 {
