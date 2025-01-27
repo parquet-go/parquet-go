@@ -3,9 +3,12 @@ package parquet_test
 import (
 	"bytes"
 	"io"
+	"os"
 	"reflect"
 	"sort"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -156,4 +159,103 @@ func TestWriteRowGroupClosesRows(t *testing.T) {
 			t.Fatal("rows not closed")
 		}
 	}
+}
+
+type highLatencyReaderAt struct {
+	reader  io.ReaderAt
+	latency time.Duration
+}
+
+func (r *highLatencyReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	time.Sleep(r.latency)
+	return r.reader.ReadAt(p, off)
+}
+
+type measuredReaderAt struct {
+	reader      io.ReaderAt
+	reads       atomic.Int64
+	bytes       atomic.Int64
+	inflight    atomic.Int64
+	maxInflight atomic.Int64
+}
+
+func (r *measuredReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	r.reads.Add(1)
+	inflight := r.inflight.Add(1)
+	for {
+		maxInflight := r.maxInflight.Load()
+		if inflight < maxInflight {
+			break
+		}
+		if r.maxInflight.CompareAndSwap(maxInflight, inflight) {
+			break
+		}
+	}
+	n, err := r.reader.ReadAt(p, off)
+	r.inflight.Add(-1)
+	r.bytes.Add(int64(n))
+	return n, err
+}
+
+func BenchmarkReadModeAsync(b *testing.B) {
+	f, err := os.ReadFile("testdata/file.parquet")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	r := &measuredReaderAt{
+		reader: &highLatencyReaderAt{
+			reader:  bytes.NewReader(f),
+			latency: 100 * time.Microsecond,
+		},
+	}
+
+	p, err := parquet.OpenFile(r, int64(len(f)),
+		parquet.OptimisticRead(true),
+		parquet.SkipMagicBytes(true),
+		parquet.SkipPageIndex(true),
+		parquet.SkipBloomFilters(true),
+		parquet.FileReadMode(parquet.ReadModeAsync),
+		parquet.ReadBufferSize(1024*1024),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	rowGroups := p.RowGroups()
+	if len(rowGroups) != 1 {
+		b.Fatalf("unexpected number of row groups: %d", len(rowGroups))
+	}
+
+	numRows := int64(0)
+	rbuf := make([]parquet.Row, 100)
+	rows := rowGroups[0].Rows()
+	defer rows.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		n, err := rows.ReadRows(rbuf)
+		if err != nil {
+			if err == io.EOF {
+				err = rows.SeekToRow(0)
+			}
+			if err == nil {
+				continue
+			}
+			b.Fatal(err)
+		}
+		numRows += int64(n)
+		if err := rows.SeekToRow(numRows + 10); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	maxInflight := r.maxInflight.Load()
+	if maxInflight <= 1 {
+		b.Errorf("max inflight requests: %d", maxInflight)
+	}
+
+	b.ReportMetric(float64(numRows), "rows")
+	b.ReportMetric(float64(r.reads.Load()), "reads")
+	b.ReportMetric(float64(r.bytes.Load()), "bytes")
 }
