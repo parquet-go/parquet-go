@@ -206,7 +206,6 @@ func readPages(pages Pages, read chan<- asyncPage, seek <-chan int64, done <-cha
 	version := int64(0)
 	for {
 		page, err := pages.ReadPage()
-
 		for {
 			select {
 			case <-done:
@@ -218,11 +217,12 @@ func readPages(pages Pages, read chan<- asyncPage, seek <-chan int64, done <-cha
 			}:
 			case rowIndex := <-seek:
 				version++
-				err = pages.SeekToRow(rowIndex)
+				Release(page)
+				if err = pages.SeekToRow(rowIndex); err != nil {
+					continue
+				}
 			}
-			if err == nil {
-				break
-			}
+			break
 		}
 	}
 }
