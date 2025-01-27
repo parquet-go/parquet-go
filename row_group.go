@@ -167,13 +167,13 @@ func (r *rowGroup) Schema() *Schema                 { return r.schema }
 func (r *rowGroup) Rows() Rows                      { return NewRowGroupRowReader(r, ReadModeSync, defaultValueBufferSize) }
 
 type rowGroupRows struct {
-	schema    *Schema
-	bufsize   int
-	buffers   []Value
-	columns   []columnChunkRows
-	closed    bool
-	done      chan<- struct{}
-	allocator rowAllocator
+	schema  *Schema
+	bufsize int
+	buffers []Value
+	columns []columnChunkRows
+	closed  bool
+	done    chan<- struct{}
+	alloc   rowAllocator
 }
 
 type columnChunkRows struct {
@@ -316,7 +316,7 @@ readColumnValues:
 				}
 
 				rowValues := values[:numValuesInRow]
-				r.allocator.capture(rowValues)
+				r.alloc.capture(rowValues)
 
 				rows[rowIndex] = append(rows[rowIndex], rowValues...)
 				rowCount = max(rowCount, rowIndex+1)
