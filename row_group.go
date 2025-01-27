@@ -173,7 +173,6 @@ type rowGroupRows struct {
 	columns []columnChunkRows
 	closed  bool
 	done    chan<- struct{}
-	alloc   rowAllocator
 }
 
 type columnChunkRows struct {
@@ -198,6 +197,18 @@ func NewRowGroupRowReader(rowGroup RowGroup, pageReadMode ReadMode, bufferSize i
 		columns: make([]columnChunkRows, len(columns)),
 	}
 
+	release := func(p Page) {
+		switch p.Type().Kind() {
+		case ByteArray:
+		case FixedLenByteArray:
+		default:
+			// Only release pages that are not byte array because the values
+			// that were read from the page might be retained by the program
+			// after calls to ReadRows.
+			Release(p)
+		}
+	}
+
 	switch pageReadMode {
 	case ReadModeAsync:
 		done := make(chan struct{})
@@ -206,10 +217,12 @@ func NewRowGroupRowReader(rowGroup RowGroup, pageReadMode ReadMode, bufferSize i
 		for i, column := range columns {
 			readers[i].init(column.Pages(), done)
 			r.columns[i].reader.pages = &readers[i]
+			r.columns[i].reader.release = release
 		}
 	case ReadModeSync:
 		for i, column := range columns {
 			r.columns[i].reader.pages = column.Pages()
+			r.columns[i].reader.release = release
 		}
 	default:
 		panic(fmt.Sprintf("parquet: invalid page read mode: %d", pageReadMode))
@@ -315,10 +328,7 @@ readColumnValues:
 					break
 				}
 
-				rowValues := values[:numValuesInRow]
-				r.alloc.capture(rowValues)
-
-				rows[rowIndex] = append(rows[rowIndex], rowValues...)
+				rows[rowIndex] = append(rows[rowIndex], values[:numValuesInRow]...)
 				rowCount = max(rowCount, rowIndex+1)
 				c.offset += int32(numValuesInRow)
 

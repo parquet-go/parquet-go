@@ -62,18 +62,19 @@ func NewColumnChunkValueReader(columnChunk ColumnChunk, readMode ReadMode) Colum
 	if readMode == ReadModeAsync {
 		pages = AsyncPages(pages)
 	}
-	return &columnChunkValueReader{pages: pages}
+	return &columnChunkValueReader{pages: pages, release: Release}
 }
 
 type columnChunkValueReader struct {
-	pages  Pages
-	page   Page
-	values ValueReader
+	pages   Pages
+	page    Page
+	values  ValueReader
+	release func(Page)
 }
 
 func (r *columnChunkValueReader) clear() {
 	if r.page != nil {
-		Release(r.page)
+		r.release(r.page)
 		r.page = nil
 		r.values = nil
 	}
