@@ -3,8 +3,6 @@ package parquet
 import (
 	"errors"
 	"io"
-
-	"github.com/parquet-go/parquet-go/internal/debug"
 )
 
 var (
@@ -65,34 +63,8 @@ func (c *asyncColumnChunk) Pages() Pages {
 
 // NewColumnChunkRowReader creates a new ColumnChunkRowReader for the given
 // column chunks.
-func NewColumnChunkRowReader(columns []ColumnChunk, bufferSize int) RowReadSeekCloser {
-	r := &rowGroupRows{
-		schema:  nil,
-		bufsize: bufferSize,
-		buffers: make([]Value, len(columns)*bufferSize),
-		columns: make([]columnChunkRows, len(columns)),
-	}
-
-	for i, column := range columns {
-		var release func(Page)
-		// Only release pages that are not byte array because the values
-		// that were read from the page might be retained by the program
-		// after calls to ReadRows.
-		switch column.Type().Kind() {
-		case ByteArray, FixedLenByteArray:
-			release = func(Page) {}
-		default:
-			release = Release
-		}
-		r.columns[i].reader.release = release
-		r.columns[i].reader.pages = column.Pages()
-	}
-
-	// This finalizer is used to ensure that the goroutines started by calling
-	// init on the underlying page readers will be shutdown in the event that
-	// Close isn't called and the rowGroupRows object is garbage collected.
-	debug.SetFinalizer(r, func(r *rowGroupRows) { r.Close() })
-	return r
+func NewColumnChunkRowReader(columns []ColumnChunk) RowReadSeekCloser {
+	return newRowGroupRows(nil, columns, defaultValueBufferSize)
 }
 
 // ColumnChunkValueReader is an interface for reading values from a column chunk.

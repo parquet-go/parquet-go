@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/parquet-go/parquet-go/internal/debug"
 )
 
 // RowGroup is an interface representing a parquet row group. From the Parquet
@@ -162,7 +164,7 @@ func (r *rowGroup) NumRows() int64                  { return r.numRows }
 func (r *rowGroup) ColumnChunks() []ColumnChunk     { return r.columns }
 func (r *rowGroup) SortingColumns() []SortingColumn { return r.sorting }
 func (r *rowGroup) Schema() *Schema                 { return r.schema }
-func (r *rowGroup) Rows() Rows                      { return newRowGroupRowReader(r, defaultValueBufferSize) }
+func (r *rowGroup) Rows() Rows                      { return NewRowGroupRowReader(r) }
 
 func (r *rowGroup) initAsync(rowGroup RowGroup) {
 	basicColumns := rowGroup.ColumnChunks()
@@ -205,19 +207,38 @@ func (r *rowGroupRows) buffer(i int) []Value {
 	return r.buffers[j:k:k]
 }
 
-// Deprecated: use RowGroup.Rows or NewColumnChunkRowReader instead.
-//
-// NewRowGroupRowReader constructs a new row reader for the given row group.
-func NewRowGroupRowReader(rowGroup RowGroup, readMode ReadMode, bufferSize int) Rows {
-	if readMode == ReadModeAsync {
-		rowGroup = AsyncRowGroup(rowGroup)
-	}
-	return newRowGroupRowReader(rowGroup, bufferSize)
+// / NewRowGroupRowReader constructs a new row reader for the given row group.
+func NewRowGroupRowReader(rowGroup RowGroup) Rows {
+	return newRowGroupRows(rowGroup.Schema(), rowGroup.ColumnChunks(), defaultValueBufferSize)
 }
 
-func newRowGroupRowReader(rowGroup RowGroup, bufferSize int) Rows {
-	r := NewColumnChunkRowReader(rowGroup.ColumnChunks(), bufferSize).(*rowGroupRows)
-	r.schema = rowGroup.Schema()
+func newRowGroupRows(schema *Schema, columns []ColumnChunk, bufferSize int) *rowGroupRows {
+	r := &rowGroupRows{
+		schema:  schema,
+		bufsize: bufferSize,
+		buffers: make([]Value, len(columns)*bufferSize),
+		columns: make([]columnChunkRows, len(columns)),
+	}
+
+	for i, column := range columns {
+		var release func(Page)
+		// Only release pages that are not byte array because the values
+		// that were read from the page might be retained by the program
+		// after calls to ReadRows.
+		switch column.Type().Kind() {
+		case ByteArray, FixedLenByteArray:
+			release = func(Page) {}
+		default:
+			release = Release
+		}
+		r.columns[i].reader.release = release
+		r.columns[i].reader.pages = column.Pages()
+	}
+
+	// This finalizer is used to ensure that the goroutines started by calling
+	// init on the underlying page readers will be shutdown in the event that
+	// Close isn't called and the rowGroupRows object is garbage collected.
+	debug.SetFinalizer(r, func(r *rowGroupRows) { r.Close() })
 	return r
 }
 
