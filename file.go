@@ -140,13 +140,6 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	for i := range rowGroups {
 		f.rowGroups[i] = &rowGroups[i]
 	}
-	if c.ReadMode == ReadModeAsync {
-		asyncRowGroups := make([]rowGroup, len(rowGroups))
-		for i, r := range f.rowGroups {
-			asyncRowGroups[i].initAsync(r)
-			f.rowGroups[i] = &asyncRowGroups[i]
-		}
-	}
 
 	if !c.SkipBloomFilters {
 		section := io.NewSectionReader(r, 0, size)
@@ -492,9 +485,13 @@ func (c *FileColumnChunk) Pages() Pages {
 }
 
 func (c *FileColumnChunk) PagesFrom(reader io.ReaderAt) Pages {
-	r := new(filePages)
-	r.init(c, reader)
-	return r
+	p := new(filePages)
+	p.init(c, reader)
+	pages := Pages(p)
+	if c.file.config.ReadMode == ReadModeAsync {
+		pages = AsyncPages(pages)
+	}
+	return pages
 }
 
 func (c *FileColumnChunk) ColumnIndex() (ColumnIndex, error) {
