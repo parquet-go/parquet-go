@@ -46,7 +46,7 @@ func TestOpenFile(t *testing.T) {
 			parquet.PrintSchema(b, root.Name(), root)
 			t.Log(b)
 
-			printColumns(t, p.Root(), "", path)
+			printColumns(t, p.Root(), "")
 		})
 	}
 }
@@ -118,7 +118,7 @@ func TestOpenFileWithoutPageIndex(t *testing.T) {
 	}
 }
 
-func printColumns(t *testing.T, col *parquet.Column, indent, filePath string) {
+func printColumns(t *testing.T, col *parquet.Column, indent string) {
 	if t.Failed() {
 		return
 	}
@@ -160,11 +160,11 @@ func printColumns(t *testing.T, col *parquet.Column, indent, filePath string) {
 			}
 			numValues += int64(n)
 			if err != nil {
-				if err == io.EOF {
-					break
+				if err != io.EOF {
+					t.Error(err)
+					return
 				}
-				t.Error(err)
-				return
+				break
 			}
 		}
 
@@ -182,7 +182,7 @@ func printColumns(t *testing.T, col *parquet.Column, indent, filePath string) {
 	}
 
 	for _, child := range col.Columns() {
-		printColumns(t, child, indent, filePath)
+		printColumns(t, child, indent)
 	}
 }
 
