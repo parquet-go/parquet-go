@@ -204,6 +204,7 @@ func readPages(pages Pages, read chan<- asyncPage, seek <-chan int64, done <-cha
 	}()
 
 	version := int64(0)
+readPages:
 	for {
 		page, err := pages.ReadPage()
 		for {
@@ -219,7 +220,7 @@ func readPages(pages Pages, read chan<- asyncPage, seek <-chan int64, done <-cha
 				version++
 				Release(page)
 				if err = pages.SeekToRow(rowIndex); err != nil {
-					continue
+					continue readPages
 				}
 			}
 			break
