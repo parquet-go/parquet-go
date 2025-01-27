@@ -4,7 +4,6 @@ go 1.22
 
 require (
 	github.com/andybalholm/brotli v1.1.0
-	github.com/google/go-cmp v0.5.5
 	github.com/google/uuid v1.6.0
 	github.com/hexops/gotextdiff v1.0.3
 	github.com/klauspost/compress v1.17.9
