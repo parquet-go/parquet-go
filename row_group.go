@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"github.com/parquet-go/parquet-go/internal/debug"
 )
 
 // RowGroup is an interface representing a parquet row group. From the Parquet
@@ -164,7 +162,27 @@ func (r *rowGroup) NumRows() int64                  { return r.numRows }
 func (r *rowGroup) ColumnChunks() []ColumnChunk     { return r.columns }
 func (r *rowGroup) SortingColumns() []SortingColumn { return r.sorting }
 func (r *rowGroup) Schema() *Schema                 { return r.schema }
-func (r *rowGroup) Rows() Rows                      { return NewRowGroupRowReader(r, ReadModeSync, defaultValueBufferSize) }
+func (r *rowGroup) Rows() Rows                      { return newRowGroupRowReader(r, defaultValueBufferSize) }
+
+func (r *rowGroup) initAsync(rowGroup RowGroup) {
+	basicColumns := rowGroup.ColumnChunks()
+	asyncColumns := make([]asyncColumnChunk, len(basicColumns))
+	finalColumns := make([]ColumnChunk, len(asyncColumns))
+	for i, column := range basicColumns {
+		asyncColumns[i].ColumnChunk = column
+		finalColumns[i] = &asyncColumns[i]
+	}
+	r.columns = finalColumns
+	r.sorting = rowGroup.SortingColumns()
+	r.numRows = rowGroup.NumRows()
+	r.schema = rowGroup.Schema()
+}
+
+func AsyncRowGroup(baseRowGroup RowGroup) RowGroup {
+	r := new(rowGroup)
+	r.initAsync(baseRowGroup)
+	return r
+}
 
 type rowGroupRows struct {
 	schema  *Schema
@@ -187,51 +205,19 @@ func (r *rowGroupRows) buffer(i int) []Value {
 	return r.buffers[j:k:k]
 }
 
-func NewRowGroupRowReader(rowGroup RowGroup, pageReadMode ReadMode, bufferSize int) Rows {
-	columns := rowGroup.ColumnChunks()
-
-	r := &rowGroupRows{
-		schema:  rowGroup.Schema(),
-		bufsize: bufferSize,
-		buffers: make([]Value, len(columns)*bufferSize),
-		columns: make([]columnChunkRows, len(columns)),
+// Deprecated: use RowGroup.Rows or NewColumnChunkRowReader instead.
+//
+// NewRowGroupRowReader constructs a new row reader for the given row group.
+func NewRowGroupRowReader(rowGroup RowGroup, readMode ReadMode, bufferSize int) Rows {
+	if readMode == ReadModeAsync {
+		rowGroup = AsyncRowGroup(rowGroup)
 	}
+	return newRowGroupRowReader(rowGroup, bufferSize)
+}
 
-	release := func(p Page) {
-		switch p.Type().Kind() {
-		case ByteArray:
-		case FixedLenByteArray:
-		default:
-			// Only release pages that are not byte array because the values
-			// that were read from the page might be retained by the program
-			// after calls to ReadRows.
-			Release(p)
-		}
-	}
-
-	switch pageReadMode {
-	case ReadModeAsync:
-		done := make(chan struct{})
-		r.done = done
-		readers := make([]asyncPages, len(columns))
-		for i, column := range columns {
-			readers[i].init(column.Pages(), done)
-			r.columns[i].reader.pages = &readers[i]
-			r.columns[i].reader.release = release
-		}
-	case ReadModeSync:
-		for i, column := range columns {
-			r.columns[i].reader.pages = column.Pages()
-			r.columns[i].reader.release = release
-		}
-	default:
-		panic(fmt.Sprintf("parquet: invalid page read mode: %d", pageReadMode))
-	}
-
-	// This finalizer is used to ensure that the goroutines started by calling
-	// init on the underlying page readers will be shutdown in the event that
-	// Close isn't called and the rowGroupRows object is garbage collected.
-	debug.SetFinalizer(r, func(r *rowGroupRows) { r.Close() })
+func newRowGroupRowReader(rowGroup RowGroup, bufferSize int) Rows {
+	r := NewColumnChunkRowReader(rowGroup.ColumnChunks(), bufferSize).(*rowGroupRows)
+	r.schema = rowGroup.Schema()
 	return r
 }
 

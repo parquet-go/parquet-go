@@ -140,6 +140,13 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	for i := range rowGroups {
 		f.rowGroups[i] = &rowGroups[i]
 	}
+	if c.ReadMode == ReadModeAsync {
+		asyncRowGroups := make([]rowGroup, len(rowGroups))
+		for i, r := range f.rowGroups {
+			asyncRowGroups[i].initAsync(r)
+			f.rowGroups[i] = &asyncRowGroups[i]
+		}
+	}
 
 	if !c.SkipBloomFilters {
 		section := io.NewSectionReader(r, 0, size)
@@ -436,9 +443,7 @@ func (g *fileRowGroup) Schema() *Schema                 { return g.schema }
 func (g *fileRowGroup) NumRows() int64                  { return g.rowGroup.NumRows }
 func (g *fileRowGroup) ColumnChunks() []ColumnChunk     { return g.columns }
 func (g *fileRowGroup) SortingColumns() []SortingColumn { return g.sorting }
-func (g *fileRowGroup) Rows() Rows {
-	return NewRowGroupRowReader(g, g.config.ReadMode, defaultValueBufferSize)
-}
+func (g *fileRowGroup) Rows() Rows                      { return newRowGroupRowReader(g, defaultValueBufferSize) }
 
 type fileSortingColumn struct {
 	column     *Column

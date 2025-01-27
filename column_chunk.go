@@ -3,6 +3,8 @@ package parquet
 import (
 	"errors"
 	"io"
+
+	"github.com/parquet-go/parquet-go/internal/debug"
 )
 
 var (
@@ -48,6 +50,51 @@ type ColumnChunk interface {
 	NumValues() int64
 }
 
+// AsyncColumnChunk returns a ColumnChunk that reads pages asynchronously.
+func AsyncColumnChunk(columnChunk ColumnChunk) ColumnChunk {
+	return &asyncColumnChunk{columnChunk}
+}
+
+type asyncColumnChunk struct {
+	ColumnChunk
+}
+
+func (c *asyncColumnChunk) Pages() Pages {
+	return AsyncPages(c.ColumnChunk.Pages())
+}
+
+// NewColumnChunkRowReader creates a new ColumnChunkRowReader for the given
+// column chunks.
+func NewColumnChunkRowReader(columns []ColumnChunk, bufferSize int) RowReadSeekCloser {
+	r := &rowGroupRows{
+		schema:  nil,
+		bufsize: bufferSize,
+		buffers: make([]Value, len(columns)*bufferSize),
+		columns: make([]columnChunkRows, len(columns)),
+	}
+
+	for i, column := range columns {
+		var release func(Page)
+		// Only release pages that are not byte array because the values
+		// that were read from the page might be retained by the program
+		// after calls to ReadRows.
+		switch column.Type().Kind() {
+		case ByteArray, FixedLenByteArray:
+			release = func(Page) {}
+		default:
+			release = Release
+		}
+		r.columns[i].reader.release = release
+		r.columns[i].reader.pages = column.Pages()
+	}
+
+	// This finalizer is used to ensure that the goroutines started by calling
+	// init on the underlying page readers will be shutdown in the event that
+	// Close isn't called and the rowGroupRows object is garbage collected.
+	debug.SetFinalizer(r, func(r *rowGroupRows) { r.Close() })
+	return r
+}
+
 // ColumnChunkValueReader is an interface for reading values from a column chunk.
 type ColumnChunkValueReader interface {
 	ValueReader
@@ -57,12 +104,8 @@ type ColumnChunkValueReader interface {
 
 // NewColumnChunkValueReader creates a new ColumnChunkValueReader for the given
 // column chunk.
-func NewColumnChunkValueReader(columnChunk ColumnChunk, readMode ReadMode) ColumnChunkValueReader {
-	pages := columnChunk.Pages()
-	if readMode == ReadModeAsync {
-		pages = AsyncPages(pages)
-	}
-	return &columnChunkValueReader{pages: pages, release: Release}
+func NewColumnChunkValueReader(column ColumnChunk) ColumnChunkValueReader {
+	return &columnChunkValueReader{pages: column.Pages(), release: Release}
 }
 
 type columnChunkValueReader struct {
