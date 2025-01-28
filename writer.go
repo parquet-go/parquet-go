@@ -221,6 +221,15 @@ func (w *GenericWriter[T]) Schema() *Schema {
 	return w.base.Schema()
 }
 
+// Size return the uncompressed size of objects in the writer buffer
+func (w *GenericWriter[T]) Size() int64 {
+	sum := int64(0)
+	for _, column := range w.columns {
+		sum += column.Size()
+	}
+	return sum
+}
+
 func (w *GenericWriter[T]) writeRows(rows []T) (int, error) {
 	if cap(w.base.rowbuf) < len(rows) {
 		w.base.rowbuf = make([]Row, len(rows))
