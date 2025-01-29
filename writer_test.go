@@ -1285,3 +1285,25 @@ func TestColumnSkipPageBounds(t *testing.T) {
 		t.Fatalf("wrong max value of row groups in parquet file: want='' got=%s", string(statistics.MaxValue))
 	}
 }
+
+func TestWriterSize(t *testing.T) {
+	type testStruct struct {
+		A int `parquet:"a,plain"`
+	}
+
+	tests := make([]testStruct, 100)
+	for i := 0; i < 100; i++ {
+		tests[i] = testStruct{A: i + 1}
+	}
+	schema := parquet.SchemaOf(&testStruct{})
+	b := bytes.NewBuffer(nil)
+	config := parquet.DefaultWriterConfig()
+	w := parquet.NewGenericWriter[testStruct](b, schema, config)
+	_, _ = w.Write(tests[0:50])
+	_, _ = w.Write(tests[50:100])
+	sz := w.Size()
+	if sz <= 0 {
+		t.Fatalf("the size of the data is less or equal zero: want= >0 got=%d",sz)
+	}
+
+}
