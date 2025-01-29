@@ -1302,6 +1302,7 @@ func TestWriterSize(t *testing.T) {
 	_, _ = w.Write(tests[0:50])
 	_, _ = w.Write(tests[50:100])
 	sz := w.Size()
+	_ = w.Close()
 	if sz <= 0 {
 		t.Fatalf("the size of the data is less or equal zero: want= >0 got=%d",sz)
 	}
