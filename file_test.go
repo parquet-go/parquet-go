@@ -211,3 +211,30 @@ func TestFileKeyValueMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestFileColumnChunks(t *testing.T) {
+	f, err := os.Open("testdata/file.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	s, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := parquet.OpenFile(f, s.Size(),
+		parquet.FileReadMode(parquet.ReadModeAsync),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rowGroup := range p.RowGroups() {
+		for _, columnChunk := range rowGroup.ColumnChunks() {
+			if _, ok := columnChunk.(*parquet.FileColumnChunk); !ok {
+				t.Fatalf("column chunk of parquet.File must be of type *parquet.FileColumnChunk but got %T", columnChunk)
+			}
+		}
+	}
+}

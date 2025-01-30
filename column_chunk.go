@@ -48,6 +48,25 @@ type ColumnChunk interface {
 	NumValues() int64
 }
 
+// AsyncColumnChunk returns a ColumnChunk that reads pages asynchronously.
+func AsyncColumnChunk(columnChunk ColumnChunk) ColumnChunk {
+	return &asyncColumnChunk{columnChunk}
+}
+
+type asyncColumnChunk struct {
+	ColumnChunk
+}
+
+func (c *asyncColumnChunk) Pages() Pages {
+	return AsyncPages(c.ColumnChunk.Pages())
+}
+
+// NewColumnChunkRowReader creates a new ColumnChunkRowReader for the given
+// column chunks.
+func NewColumnChunkRowReader(columns []ColumnChunk) RowReadSeekCloser {
+	return newRowGroupRows(nil, columns, defaultValueBufferSize)
+}
+
 // ColumnChunkValueReader is an interface for reading values from a column chunk.
 type ColumnChunkValueReader interface {
 	ValueReader
@@ -57,12 +76,8 @@ type ColumnChunkValueReader interface {
 
 // NewColumnChunkValueReader creates a new ColumnChunkValueReader for the given
 // column chunk.
-func NewColumnChunkValueReader(columnChunk ColumnChunk, readMode ReadMode) ColumnChunkValueReader {
-	pages := columnChunk.Pages()
-	if readMode == ReadModeAsync {
-		pages = AsyncPages(pages)
-	}
-	return &columnChunkValueReader{pages: pages, release: Release}
+func NewColumnChunkValueReader(column ColumnChunk) ColumnChunkValueReader {
+	return &columnChunkValueReader{pages: column.Pages(), release: Release}
 }
 
 type columnChunkValueReader struct {

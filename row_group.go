@@ -164,7 +164,27 @@ func (r *rowGroup) NumRows() int64                  { return r.numRows }
 func (r *rowGroup) ColumnChunks() []ColumnChunk     { return r.columns }
 func (r *rowGroup) SortingColumns() []SortingColumn { return r.sorting }
 func (r *rowGroup) Schema() *Schema                 { return r.schema }
-func (r *rowGroup) Rows() Rows                      { return NewRowGroupRowReader(r, ReadModeSync, defaultValueBufferSize) }
+func (r *rowGroup) Rows() Rows                      { return NewRowGroupRowReader(r) }
+
+func (r *rowGroup) initAsync(rowGroup RowGroup) {
+	basicColumns := rowGroup.ColumnChunks()
+	asyncColumns := make([]asyncColumnChunk, len(basicColumns))
+	finalColumns := make([]ColumnChunk, len(asyncColumns))
+	for i, column := range basicColumns {
+		asyncColumns[i].ColumnChunk = column
+		finalColumns[i] = &asyncColumns[i]
+	}
+	r.columns = finalColumns
+	r.sorting = rowGroup.SortingColumns()
+	r.numRows = rowGroup.NumRows()
+	r.schema = rowGroup.Schema()
+}
+
+func AsyncRowGroup(baseRowGroup RowGroup) RowGroup {
+	r := new(rowGroup)
+	r.initAsync(baseRowGroup)
+	return r
+}
 
 type rowGroupRows struct {
 	schema  *Schema
@@ -187,45 +207,32 @@ func (r *rowGroupRows) buffer(i int) []Value {
 	return r.buffers[j:k:k]
 }
 
-func NewRowGroupRowReader(rowGroup RowGroup, pageReadMode ReadMode, bufferSize int) Rows {
-	columns := rowGroup.ColumnChunks()
+// / NewRowGroupRowReader constructs a new row reader for the given row group.
+func NewRowGroupRowReader(rowGroup RowGroup) Rows {
+	return newRowGroupRows(rowGroup.Schema(), rowGroup.ColumnChunks(), defaultValueBufferSize)
+}
 
+func newRowGroupRows(schema *Schema, columns []ColumnChunk, bufferSize int) *rowGroupRows {
 	r := &rowGroupRows{
-		schema:  rowGroup.Schema(),
+		schema:  schema,
 		bufsize: bufferSize,
 		buffers: make([]Value, len(columns)*bufferSize),
 		columns: make([]columnChunkRows, len(columns)),
 	}
 
-	release := func(p Page) {
-		switch p.Type().Kind() {
-		case ByteArray:
-		case FixedLenByteArray:
+	for i, column := range columns {
+		var release func(Page)
+		// Only release pages that are not byte array because the values
+		// that were read from the page might be retained by the program
+		// after calls to ReadRows.
+		switch column.Type().Kind() {
+		case ByteArray, FixedLenByteArray:
+			release = func(Page) {}
 		default:
-			// Only release pages that are not byte array because the values
-			// that were read from the page might be retained by the program
-			// after calls to ReadRows.
-			Release(p)
+			release = Release
 		}
-	}
-
-	switch pageReadMode {
-	case ReadModeAsync:
-		done := make(chan struct{})
-		r.done = done
-		readers := make([]asyncPages, len(columns))
-		for i, column := range columns {
-			readers[i].init(column.Pages(), done)
-			r.columns[i].reader.pages = &readers[i]
-			r.columns[i].reader.release = release
-		}
-	case ReadModeSync:
-		for i, column := range columns {
-			r.columns[i].reader.pages = column.Pages()
-			r.columns[i].reader.release = release
-		}
-	default:
-		panic(fmt.Sprintf("parquet: invalid page read mode: %d", pageReadMode))
+		r.columns[i].reader.release = release
+		r.columns[i].reader.pages = column.Pages()
 	}
 
 	// This finalizer is used to ensure that the goroutines started by calling

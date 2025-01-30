@@ -445,9 +445,7 @@ func (g *fileRowGroup) Schema() *Schema                 { return g.schema }
 func (g *fileRowGroup) NumRows() int64                  { return g.rowGroup.NumRows }
 func (g *fileRowGroup) ColumnChunks() []ColumnChunk     { return g.columns }
 func (g *fileRowGroup) SortingColumns() []SortingColumn { return g.sorting }
-func (g *fileRowGroup) Rows() Rows {
-	return NewRowGroupRowReader(g, g.config.ReadMode, defaultValueBufferSize)
-}
+func (g *fileRowGroup) Rows() Rows                      { return NewRowGroupRowReader(g) }
 
 type fileSortingColumn struct {
 	column     *Column
@@ -496,9 +494,13 @@ func (c *FileColumnChunk) Pages() Pages {
 }
 
 func (c *FileColumnChunk) PagesFrom(reader io.ReaderAt) Pages {
-	r := new(filePages)
-	r.init(c, reader)
-	return r
+	p := new(filePages)
+	p.init(c, reader)
+	pages := Pages(p)
+	if c.file.config.ReadMode == ReadModeAsync {
+		pages = AsyncPages(pages)
+	}
+	return pages
 }
 
 func (c *FileColumnChunk) ColumnIndex() (ColumnIndex, error) {

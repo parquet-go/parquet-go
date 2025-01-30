@@ -163,6 +163,21 @@ type RowReadSeeker interface {
 	RowSeeker
 }
 
+// RowReadCloser is an interface implemented by row readers which require
+// closing when done.
+type RowReadCloser interface {
+	RowReader
+	io.Closer
+}
+
+// RowReadSeekCloser is an interface implemented by row readers which support
+// seeking to arbitrary row positions and required closing the reader when done.
+type RowReadSeekCloser interface {
+	RowReader
+	RowSeeker
+	io.Closer
+}
+
 // RowWriter writes parquet rows to an underlying medium.
 type RowWriter interface {
 	// Writes rows to the writer, returning the number of rows written and any
