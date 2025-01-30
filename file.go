@@ -75,13 +75,21 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		cast.SetMagicFooterSection(size-8, 8)
 	}
 
+	optimisticRead := c.OptimisticRead
 	optimisticFooterSize := min(int64(c.ReadBufferSize), size)
-	if !c.OptimisticRead || optimisticFooterSize < 8 {
+	if optimisticRead || optimisticFooterSize < 8 {
 		optimisticFooterSize = 8
 	}
 	optimisticFooterData := make([]byte, optimisticFooterSize)
+	if optimisticRead {
+		f.reader = &optimisticFileReaderAt{
+			reader: f.reader,
+			offset: size - optimisticFooterSize,
+			footer: make([]byte, optimisticFooterSize),
+		}
+	}
 
-	if n, err := r.ReadAt(optimisticFooterData, size-optimisticFooterSize); n != len(optimisticFooterData) {
+	if n, err := readAt(r, optimisticFooterData, size-optimisticFooterSize); n != len(optimisticFooterData) {
 		return nil, fmt.Errorf("reading magic footer of parquet file: %w (read: %d)", err, n)
 	}
 	optimisticFooterSize -= 8
@@ -181,6 +189,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	}
 
 	sortKeyValueMetadata(f.metadata.KeyValueMetadata)
+	f.reader = r // restore in case an optimistic reader was used
 	return f, nil
 }
 
@@ -894,4 +903,30 @@ func readAt(r io.ReaderAt, p []byte, off int64) (n int, err error) {
 		return
 	}
 	return
+}
+
+type optimisticFileReaderAt struct {
+	reader io.ReaderAt
+	offset int64
+	footer []byte
+}
+
+func (r *optimisticFileReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	length := r.offset + int64(len(r.footer))
+
+	if off >= length {
+		return 0, io.EOF
+	}
+
+	if off >= r.offset {
+		n = copy(p, r.footer[off-r.offset:])
+		p = p[n:]
+		off += int64(n)
+		if off == length {
+			return n, io.EOF
+		}
+	}
+
+	rn, err := r.reader.ReadAt(p, off)
+	return n + rn, err
 }
