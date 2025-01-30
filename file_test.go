@@ -238,3 +238,28 @@ func TestFileColumnChunks(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenFileOptimisticRead(t *testing.T) {
+	f, err := os.Open("testdata/alltypes_tiny_pages_plain.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	s, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := &measuredReaderAt{reader: f}
+	if _, err := parquet.OpenFile(r, s.Size(),
+		parquet.OptimisticRead(true),
+		parquet.SkipMagicBytes(true),
+		parquet.ReadBufferSize(int(s.Size()/2)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if reads := r.reads.Load(); reads != 1 {
+		t.Errorf("expected 1 read, got %d", reads)
+	}
+}
