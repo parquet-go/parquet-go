@@ -584,8 +584,7 @@ func TestNestedPointer(t *testing.T) {
 	pr := parquet.NewGenericReader[*Outer](bytes.NewReader(f.Bytes()))
 
 	out := make([]*Outer, 1)
-	_, err = pr.Read(out)
-	if err != nil {
+	if n, err := pr.Read(out); n != len(out) {
 		t.Fatal(err)
 	}
 	pr.Close()
@@ -1272,7 +1271,7 @@ func TestParquetAnyValueConversions(t *testing.T) {
 
 			pRdr := parquet.NewGenericReader[any](bytes.NewReader(buf.Bytes()))
 			outRows := make([]any, 1)
-			if _, err := pRdr.Read(outRows); err != nil {
+			if n, err := pRdr.Read(outRows); n != len(outRows) {
 				t.Fatal(err)
 			}
 			if err := pRdr.Close(); err != nil {

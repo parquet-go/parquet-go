@@ -639,6 +639,11 @@ func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer, dict Di
 		}
 		if repetitionLevels != nil {
 			defer repetitionLevels.unref()
+
+			if len(repetitionLevels.data) != 0 && repetitionLevels.data[0] != 0 {
+				return nil, fmt.Errorf("%w: first repetition level for column %d (%s) is %d instead of zero, indicating that the page contains trailing values from the previous page (this is forbidden for data pages v2)",
+					ErrMalformedRepetitionLevel, c.Index(), c.Name(), repetitionLevels.data[0])
+			}
 		}
 	}
 

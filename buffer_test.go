@@ -933,7 +933,7 @@ func TestNullsSortFirst(t *testing.T) {
 	rows := buffer.Rows()
 	defer rows.Close()
 	rowBuf := make([]parquet.Row, len(records))
-	if _, err := rows.ReadRows(rowBuf); err != nil {
+	if n, err := rows.ReadRows(rowBuf); n != len(records) {
 		t.Fatal(err)
 	}
 

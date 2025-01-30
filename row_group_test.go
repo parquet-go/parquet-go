@@ -84,7 +84,7 @@ func testSeekToRow(t *testing.T, newRowGroup func([]Person) parquet.RowGroup) {
 				t.Errorf("seeking to row %d: %+v", i, err)
 				return false
 			}
-			if _, err := rows.ReadRows(rbuf); err != nil {
+			if n, err := rows.ReadRows(rbuf); n != len(rbuf) {
 				t.Errorf("reading row %d: %+v", i, err)
 				return false
 			}

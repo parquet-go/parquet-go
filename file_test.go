@@ -14,10 +14,7 @@ import (
 var testdataFiles []string
 
 func init() {
-	entries, _ := os.ReadDir("testdata")
-	for _, e := range entries {
-		testdataFiles = append(testdataFiles, filepath.Join("testdata", e.Name()))
-	}
+	testdataFiles, _ = filepath.Glob("testdata/*.parquet")
 }
 
 func TestOpenFile(t *testing.T) {
