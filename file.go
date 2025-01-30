@@ -77,7 +77,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 
 	optimisticRead := c.OptimisticRead
 	optimisticFooterSize := min(int64(c.ReadBufferSize), size)
-	if optimisticRead || optimisticFooterSize < 8 {
+	if !optimisticRead || optimisticFooterSize < 8 {
 		optimisticFooterSize = 8
 	}
 	optimisticFooterData := make([]byte, optimisticFooterSize)
@@ -85,7 +85,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		f.reader = &optimisticFileReaderAt{
 			reader: f.reader,
 			offset: size - optimisticFooterSize,
-			footer: make([]byte, optimisticFooterSize),
+			footer: optimisticFooterData,
 		}
 	}
 
@@ -924,8 +924,8 @@ func (r *optimisticFileReaderAt) ReadAt(p []byte, off int64) (n int, err error) 
 		n = copy(p, r.footer[off-r.offset:])
 		p = p[n:]
 		off += int64(n)
-		if off == length {
-			return n, io.EOF
+		if len(p) == 0 {
+			return n, nil
 		}
 	}
 
