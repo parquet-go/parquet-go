@@ -132,7 +132,7 @@ func AsyncPages(pages Pages) Pages {
 type asyncPages struct {
 	base    Pages
 	read    chan asyncPage
-	seek    chan int64
+	seek    chan asyncSeek
 	done    chan struct{}
 	version int64
 }
@@ -143,9 +143,14 @@ type asyncPage struct {
 	version int64
 }
 
+type asyncSeek struct {
+	rowIndex int64
+	version  int64
+}
+
 func (pages *asyncPages) init(done chan struct{}) {
 	read := make(chan asyncPage)
-	seek := make(chan int64, 1)
+	seek := make(chan asyncSeek, 1)
 
 	pages.read = read
 	pages.seek = seek
@@ -200,9 +205,6 @@ func (pages *asyncPages) ReadPage() (Page, error) {
 }
 
 func (pages *asyncPages) SeekToRow(rowIndex int64) error {
-	if pages.read == nil {
-		pages.init(nil)
-	}
 	if pages.seek == nil {
 		return io.ErrClosedPipe
 	}
@@ -217,19 +219,20 @@ func (pages *asyncPages) SeekToRow(rowIndex int64) error {
 	//
 	// If SeekToRow calls are performed faster than they can be handled by the
 	// goroutine reading pages, this path might become a contention point.
-	pages.seek <- rowIndex
+	pages.seek <- asyncSeek{rowIndex: rowIndex, version: pages.version}
 	pages.version++
+	if pages.read == nil {
+		pages.init(nil)
+	}
 	return nil
 }
 
-func readPages(pages Pages, read chan<- asyncPage, seek <-chan int64, done <-chan struct{}) {
+func readPages(pages Pages, read chan<- asyncPage, seek <-chan asyncSeek, done <-chan struct{}) {
 	defer func() {
 		read <- asyncPage{err: pages.Close(), version: -1}
 		close(read)
 	}()
-
-	version := int64(0)
-readPages:
+	var version int64
 	for {
 		page, err := pages.ReadPage()
 		for {
@@ -241,11 +244,12 @@ readPages:
 				err:     err,
 				version: version,
 			}:
-			case rowIndex := <-seek:
-				version++
+			case seek := <-seek:
+				version = seek.version
 				Release(page)
-				if err = pages.SeekToRow(rowIndex); err != nil {
-					continue readPages
+
+				if err = pages.SeekToRow(seek.rowIndex); err != nil {
+					continue
 				}
 			}
 			break
