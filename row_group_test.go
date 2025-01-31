@@ -206,7 +206,7 @@ func BenchmarkReadModeAsync(b *testing.B) {
 	r := &measuredReaderAt{
 		reader: &highLatencyReaderAt{
 			reader:  bytes.NewReader(f),
-			latency: 100 * time.Microsecond,
+			latency: 10 * time.Millisecond,
 		},
 	}
 
@@ -216,7 +216,6 @@ func BenchmarkReadModeAsync(b *testing.B) {
 		parquet.SkipPageIndex(true),
 		parquet.SkipBloomFilters(true),
 		parquet.FileReadMode(parquet.ReadModeAsync),
-		parquet.ReadBufferSize(1024*1024),
 	)
 	if err != nil {
 		b.Fatal(err)
