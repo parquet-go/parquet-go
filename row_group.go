@@ -277,6 +277,7 @@ func (r *rowGroupRows) SeekToRow(rowIndex int64) error {
 				return err
 			}
 		}
+		r.clear()
 		r.rowIndex = rowIndex
 	}
 	return nil
