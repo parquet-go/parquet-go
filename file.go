@@ -439,6 +439,9 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 	}
 }
 
+// File returns the file that this row group belongs to.
+func (g *FileRowGroup) File() *File { return g.file }
+
 // Schema returns the schema of the row group.
 func (g *FileRowGroup) Schema() *Schema { return g.file.schema }
 
@@ -498,15 +501,17 @@ type FileColumnChunk struct {
 	bloomFilter atomic.Pointer[FileBloomFilter]
 }
 
+// File returns the file that this column chunk belongs to.
+func (c *FileColumnChunk) File() *File { return c.file }
+
+// Node returns the node that this column chunk belongs to in the parquet schema.
+func (c *FileColumnChunk) Node() Node { return c.column }
+
 // Type returns the type of the column chunk.
-func (c *FileColumnChunk) Type() Type {
-	return c.column.Type()
-}
+func (c *FileColumnChunk) Type() Type { return c.column.Type() }
 
 // Column returns the column index of this chunk in its parent row group.
-func (c *FileColumnChunk) Column() int {
-	return int(c.column.Index())
-}
+func (c *FileColumnChunk) Column() int { return int(c.column.Index()) }
 
 // Pages returns a page reader for the column chunk.
 func (c *FileColumnChunk) Pages() Pages {
