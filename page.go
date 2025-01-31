@@ -243,22 +243,21 @@ func readPages(pages Pages, read chan<- asyncPage, seek <-chan asyncSeek, init, 
 	// Note that we have a default case in this select because we don't want to
 	// block if the first call was ReadPage and no values were ever produced to
 	// the seek channel.
-	var rowIndex int64 = -1
-	var version int64
+	var seekTo asyncSeek
 	select {
-	case seek := <-seek:
-		rowIndex, version = seek.rowIndex, seek.version
+	case seekTo = <-seek:
 	default:
+		seekTo.rowIndex = -1
 	}
 
 	for {
 		var page Page
 		var err error
 
-		if rowIndex >= 0 {
-			err = pages.SeekToRow(rowIndex)
+		if seekTo.rowIndex >= 0 {
+			err = pages.SeekToRow(seekTo.rowIndex)
 			if err == nil {
-				rowIndex = -1
+				seekTo.rowIndex = -1
 				continue
 			}
 		} else {
@@ -269,14 +268,13 @@ func readPages(pages Pages, read chan<- asyncPage, seek <-chan asyncSeek, init, 
 		case read <- asyncPage{
 			page:    page,
 			err:     err,
-			version: version,
+			version: seekTo.version,
 		}:
+		case seekTo = <-seek:
+			Release(page)
 		case <-done:
 			Release(page)
 			return
-		case seek := <-seek:
-			Release(page)
-			rowIndex, version = seek.rowIndex, seek.version
 		}
 	}
 }

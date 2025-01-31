@@ -206,7 +206,7 @@ func BenchmarkReadModeAsync(b *testing.B) {
 	r := &measuredReaderAt{
 		reader: &highLatencyReaderAt{
 			reader:  bytes.NewReader(f),
-			latency: 100 * time.Microsecond,
+			latency: 10 * time.Millisecond,
 		},
 	}
 
