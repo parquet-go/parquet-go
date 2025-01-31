@@ -121,7 +121,20 @@ type Pages interface {
 // be reading pages from a high latency backend, and the last
 // page read may be processed while initiating reading of the next page.
 func AsyncPages(pages Pages) Pages {
-	p := new(asyncPages)
+	read := make(chan asyncPage)
+	seek := make(chan asyncSeek, 1)
+	done := make(chan struct{})
+	init := make(chan struct{})
+
+	go readPages(pages, read, seek, init, done)
+
+	p := &asyncPages{
+		read: read,
+		seek: seek,
+		init: init,
+		done: done,
+	}
+
 	// If the pages object gets garbage collected without Close being called,
 	// this finalizer would ensure that the goroutine is stopped and doesn't
 	// leak.
@@ -130,9 +143,9 @@ func AsyncPages(pages Pages) Pages {
 }
 
 type asyncPages struct {
-	base    Pages
 	read    chan asyncPage
 	seek    chan asyncSeek
+	init    chan struct{}
 	done    chan struct{}
 	version int64
 }
@@ -148,27 +161,10 @@ type asyncSeek struct {
 	version  int64
 }
 
-func (pages *asyncPages) init(done chan struct{}) {
-	read := make(chan asyncPage)
-	seek := make(chan asyncSeek, 1)
-
-	pages.read = read
-	pages.seek = seek
-
-	if done == nil {
-		done = make(chan struct{})
-		pages.done = done
-	}
-
-	go readPages(pages.base, read, seek, done)
-}
-
 func (pages *asyncPages) Close() (err error) {
-	if pages.read == nil {
-		read := make(chan asyncPage)
-		pages.read = read
-		close(read)
-		return pages.base.Close()
+	if pages.init != nil {
+		close(pages.init)
+		pages.init = nil
 	}
 	if pages.done != nil {
 		close(pages.done)
@@ -184,8 +180,9 @@ func (pages *asyncPages) Close() (err error) {
 }
 
 func (pages *asyncPages) ReadPage() (Page, error) {
-	if pages.read == nil {
-		pages.init(nil)
+	if pages.init != nil {
+		close(pages.init)
+		pages.init = nil
 	}
 	for {
 		p, ok := <-pages.read
@@ -220,41 +217,66 @@ func (pages *asyncPages) SeekToRow(rowIndex int64) error {
 	//
 	// If SeekToRow calls are performed faster than they can be handled by the
 	// goroutine reading pages, this path might become a contention point.
-	pages.seek <- asyncSeek{rowIndex: rowIndex, version: pages.version}
 	pages.version++
-	if pages.read == nil {
-		pages.init(nil)
-	}
+	pages.seek <- asyncSeek{rowIndex: rowIndex, version: pages.version}
 	return nil
 }
 
-func readPages(pages Pages, read chan<- asyncPage, seek <-chan asyncSeek, done <-chan struct{}) {
+func readPages(pages Pages, read chan<- asyncPage, seek <-chan asyncSeek, init, done <-chan struct{}) {
 	defer func() {
 		read <- asyncPage{err: pages.Close(), version: -1}
 		close(read)
 	}()
-	var version int64
-	for {
-		page, err := pages.ReadPage()
-		for {
-			select {
-			case <-done:
-				Release(page)
-				return
-			case read <- asyncPage{
-				page:    page,
-				err:     err,
-				version: version,
-			}:
-			case seek := <-seek:
-				version = seek.version
-				Release(page)
 
-				if err = pages.SeekToRow(seek.rowIndex); err != nil {
-					continue
-				}
+	// To avoid reading pages before the first SeekToRow call, we wait for the
+	// reader to be initialized, which means it either received a call to
+	// ReadPage, SeekToRow, or Close.
+	select {
+	case <-init:
+	case <-done:
+		return
+	}
+
+	// If SeekToRow was invoked before ReadPage, the seek channel contains the
+	// new position of the reader.
+	//
+	// Note that we have a default case in this select because we don't want to
+	// block if the first call was ReadPage and no values were ever produced to
+	// the seek channel.
+	var rowIndex int64 = -1
+	var version int64
+	select {
+	case seek := <-seek:
+		rowIndex, version = seek.rowIndex, seek.version
+	default:
+	}
+
+	for {
+		var page Page
+		var err error
+
+		if rowIndex >= 0 {
+			err = pages.SeekToRow(rowIndex)
+			if err == nil {
+				rowIndex = -1
+				continue
 			}
-			break
+		} else {
+			page, err = pages.ReadPage()
+		}
+
+		select {
+		case read <- asyncPage{
+			page:    page,
+			err:     err,
+			version: version,
+		}:
+		case <-done:
+			Release(page)
+			return
+		case seek := <-seek:
+			Release(page)
+			rowIndex, version = seek.rowIndex, seek.version
 		}
 	}
 }
