@@ -168,6 +168,7 @@ func (pages *asyncPages) Close() (err error) {
 		read := make(chan asyncPage)
 		pages.read = read
 		close(read)
+		return pages.base.Close()
 	}
 	if pages.done != nil {
 		close(pages.done)
@@ -238,6 +239,7 @@ func readPages(pages Pages, read chan<- asyncPage, seek <-chan asyncSeek, done <
 		for {
 			select {
 			case <-done:
+				Release(page)
 				return
 			case read <- asyncPage{
 				page:    page,
