@@ -122,7 +122,6 @@ type Pages interface {
 // page read may be processed while initiating reading of the next page.
 func AsyncPages(pages Pages) Pages {
 	p := new(asyncPages)
-	p.init(pages, nil)
 	// If the pages object gets garbage collected without Close being called,
 	// this finalizer would ensure that the goroutine is stopped and doesn't
 	// leak.
@@ -131,9 +130,10 @@ func AsyncPages(pages Pages) Pages {
 }
 
 type asyncPages struct {
-	read    <-chan asyncPage
-	seek    chan<- int64
-	done    chan<- struct{}
+	base    Pages
+	read    chan asyncPage
+	seek    chan int64
+	done    chan struct{}
 	version int64
 }
 
@@ -143,7 +143,7 @@ type asyncPage struct {
 	version int64
 }
 
-func (pages *asyncPages) init(base Pages, done chan struct{}) {
+func (pages *asyncPages) init(done chan struct{}) {
 	read := make(chan asyncPage)
 	seek := make(chan int64, 1)
 
@@ -155,10 +155,15 @@ func (pages *asyncPages) init(base Pages, done chan struct{}) {
 		pages.done = done
 	}
 
-	go readPages(base, read, seek, done)
+	go readPages(pages.base, read, seek, done)
 }
 
 func (pages *asyncPages) Close() (err error) {
+	if pages.read == nil {
+		read := make(chan asyncPage)
+		pages.read = read
+		close(read)
+	}
 	if pages.done != nil {
 		close(pages.done)
 		pages.done = nil
@@ -173,6 +178,9 @@ func (pages *asyncPages) Close() (err error) {
 }
 
 func (pages *asyncPages) ReadPage() (Page, error) {
+	if pages.read == nil {
+		pages.init(nil)
+	}
 	for {
 		p, ok := <-pages.read
 		if !ok {
@@ -192,8 +200,17 @@ func (pages *asyncPages) ReadPage() (Page, error) {
 }
 
 func (pages *asyncPages) SeekToRow(rowIndex int64) error {
+	if pages.read == nil {
+		pages.init(nil)
+	}
 	if pages.seek == nil {
 		return io.ErrClosedPipe
+	}
+	// First flush the channel in case SeekToRow is called twice or more in a
+	// row, otherwise we would block if readPages had already exited.
+	select {
+	case <-pages.seek:
+	default:
 	}
 	// The seek channel has a capacity of 1 to allow the first SeekToRow call to
 	// be non-blocking.

@@ -32,7 +32,9 @@ func TestOpenFile(t *testing.T) {
 			}
 
 			p, err := parquet.OpenFile(f, s.Size(),
-				parquet.OptimisticRead(true))
+				parquet.OptimisticRead(true),
+				parquet.FileReadMode(parquet.ReadModeAsync),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
