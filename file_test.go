@@ -214,8 +214,8 @@ func TestFileKeyValueMetadata(t *testing.T) {
 	}
 }
 
-func TestFileColumnChunks(t *testing.T) {
-	f, err := os.Open("testdata/file.parquet")
+func TestFileTypes(t *testing.T) {
+	f, err := os.Open("testdata/alltypes_plain.parquet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,6 +233,9 @@ func TestFileColumnChunks(t *testing.T) {
 	}
 
 	for _, rowGroup := range p.RowGroups() {
+		if _, ok := rowGroup.(*parquet.FileRowGroup); !ok {
+			t.Fatalf("row group of parquet.File must be of type *parquet.FileRowGroup but got %T", rowGroup)
+		}
 		for _, columnChunk := range rowGroup.ColumnChunks() {
 			if _, ok := columnChunk.(*parquet.FileColumnChunk); !ok {
 				t.Fatalf("column chunk of parquet.File must be of type *parquet.FileColumnChunk but got %T", columnChunk)
