@@ -215,7 +215,7 @@ func TestFileKeyValueMetadata(t *testing.T) {
 }
 
 func TestFileTypes(t *testing.T) {
-	f, err := os.Open("testdata/alltypes_plain.parquet")
+	f, err := os.Open("testdata/data_index_bloom_encoding_stats.parquet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,8 +237,20 @@ func TestFileTypes(t *testing.T) {
 			t.Fatalf("row group of parquet.File must be of type *parquet.FileRowGroup but got %T", rowGroup)
 		}
 		for _, columnChunk := range rowGroup.ColumnChunks() {
-			if _, ok := columnChunk.(*parquet.FileColumnChunk); !ok {
+			fcc, ok := columnChunk.(*parquet.FileColumnChunk)
+			if !ok {
 				t.Fatalf("column chunk of parquet.File must be of type *parquet.FileColumnChunk but got %T", columnChunk)
+			}
+			min, max, ok := fcc.Bounds()
+			if !ok {
+				t.Error("column chunk is missing statistics")
+			} else {
+				if min.IsNull() {
+					t.Error("column chunk has null min value")
+				}
+				if max.IsNull() {
+					t.Error("column chunk has null max value")
+				}
 			}
 		}
 	}
