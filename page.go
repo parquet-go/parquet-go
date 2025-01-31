@@ -123,8 +123,8 @@ type Pages interface {
 func AsyncPages(pages Pages) Pages {
 	read := make(chan asyncPage)
 	seek := make(chan asyncSeek, 1)
-	done := make(chan struct{})
 	init := make(chan struct{})
+	done := make(chan struct{})
 
 	go readPages(pages, read, seek, init, done)
 
