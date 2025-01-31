@@ -211,13 +211,13 @@ func (pages *asyncPages) SeekToRow(rowIndex int64) error {
 	select {
 	case <-pages.seek:
 	default:
+		pages.version++
 	}
 	// The seek channel has a capacity of 1 to allow the first SeekToRow call to
 	// be non-blocking.
 	//
 	// If SeekToRow calls are performed faster than they can be handled by the
 	// goroutine reading pages, this path might become a contention point.
-	pages.version++
 	pages.seek <- asyncSeek{rowIndex: rowIndex, version: pages.version}
 	return nil
 }
