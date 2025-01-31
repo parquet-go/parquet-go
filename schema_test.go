@@ -232,6 +232,20 @@ func TestSchemaOf(t *testing.T) {
 	required int64 time (TIMESTAMP(isAdjustedToUTC=true,unit=NANOS));
 }`,
 		},
+		{
+			value: new(struct {
+				Inner struct {
+					TimestampAdjusted    int64 `parquet:"timestamp_adjusted_utc,timestamp(millisecond:true)"`
+					TimestampNotAdjusted int64 `parquet:"timestamp_not_adjusted_utc,timestamp(millisecond:false)"`
+				} `parquet:"inner,optional"`
+			}),
+			print: `message {
+	optional group inner {
+		required int64 timestamp_adjusted_utc (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
+		required int64 timestamp_not_adjusted_utc (TIMESTAMP(isAdjustedToUTC=false,unit=MILLIS));
+	}
+}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -305,6 +319,12 @@ func TestInvalidSchemaOf(t *testing.T) {
 			}),
 			panic: `time(microsecond) is an invalid parquet tag: Time time.Duration [time(microsecond)]`,
 		},
+		{
+			value: new(struct {
+				Time int64 `parquet:",time(microsecond:notabool)"`
+			}),
+			panic: `time(microsecond:notabool) is an invalid parquet tag: Time int64 [time(microsecond:notabool)]`,
+		},
 
 		// Timestamp tags must be int64 or time.Time
 		// Additionally, if the unit is the problem, it is part of the message.
@@ -337,6 +357,18 @@ func TestInvalidSchemaOf(t *testing.T) {
 				Timestamp time.Time `parquet:",timestamp(notasecond)"`
 			}),
 			panic: `timestamp(notasecond) is an invalid parquet tag: Timestamp time.Time [timestamp(notasecond)]`,
+		},
+		{
+			value: new(struct {
+				Timestamp time.Time `parquet:",timestamp(millisecond:notabool)"`
+			}),
+			panic: `timestamp(millisecond:notabool) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:notabool)]`,
+		},
+		{
+			value: new(struct {
+				Timestamp time.Time `parquet:",timestamp(millisecond:true:false)"`
+			}),
+			panic: `timestamp(millisecond:true:false) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:true:false)]`,
 		},
 	}
 
@@ -395,15 +427,15 @@ func TestSchemaRoundTrip(t *testing.T) {
 			name: "dates_times",
 			schema: parquet.NewSchema("root", parquet.Group{
 				"dates_times": parquet.Optional(parquet.Group{
-					"date":             parquet.Date(),
-					"time_micros":      parquet.Time(parquet.Microsecond),
-					"time_millis":      parquet.Time(parquet.Millisecond),
-					"time_nanos":       parquet.Time(parquet.Nanosecond),
-					"timestamp_micros": parquet.Timestamp(parquet.Microsecond),
-					"timestamp_millis": parquet.Timestamp(parquet.Millisecond),
-					"timestamp_nanos":  parquet.Timestamp(parquet.Nanosecond),
-					// TODO: time and timestamp fields where IsAdjustedToUTC field is false?
-					//       (currently no way to construct them via exported API)
+					"date":                              parquet.Date(),
+					"time_micros":                       parquet.Time(parquet.Microsecond),
+					"time_millis":                       parquet.Time(parquet.Millisecond),
+					"time_millis_not_utc_adjusted":      parquet.TimeAdjusted(parquet.Millisecond, false),
+					"time_nanos":                        parquet.Time(parquet.Nanosecond),
+					"timestamp_micros":                  parquet.Timestamp(parquet.Microsecond),
+					"timestamp_millis":                  parquet.Timestamp(parquet.Millisecond),
+					"timestamp_millis_not_utc_adjusted": parquet.TimestampAdjusted(parquet.Millisecond, false),
+					"timestamp_nanos":                   parquet.Timestamp(parquet.Nanosecond),
 				}),
 			}),
 			roundTripped: `message root {
@@ -411,9 +443,11 @@ func TestSchemaRoundTrip(t *testing.T) {
 		required int32 date (DATE);
 		required int64 time_micros (TIME(isAdjustedToUTC=true,unit=MICROS));
 		required int32 time_millis (TIME(isAdjustedToUTC=true,unit=MILLIS));
+		required int32 time_millis_not_utc_adjusted (TIME(isAdjustedToUTC=false,unit=MILLIS));
 		required int64 time_nanos (TIME(isAdjustedToUTC=true,unit=NANOS));
 		required int64 timestamp_micros (TIMESTAMP(isAdjustedToUTC=true,unit=MICROS));
 		required int64 timestamp_millis (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
+		required int64 timestamp_millis_not_utc_adjusted (TIMESTAMP(isAdjustedToUTC=false,unit=MILLIS));
 		required int64 timestamp_nanos (TIMESTAMP(isAdjustedToUTC=true,unit=NANOS));
 	}
 }`,
