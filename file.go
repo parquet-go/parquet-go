@@ -513,6 +513,21 @@ func (c *FileColumnChunk) Type() Type { return c.column.Type() }
 // Column returns the column index of this chunk in its parent row group.
 func (c *FileColumnChunk) Column() int { return int(c.column.Index()) }
 
+// Bounds returns the min and max values found in the column chunk.
+func (c *FileColumnChunk) Bounds() (min, max Value, ok bool) {
+	stats := &c.chunk.MetaData.Statistics
+	columnKind := c.Type().Kind()
+	hasMinValue := stats.MinValue != nil
+	hasMaxValue := stats.MaxValue != nil
+	if hasMinValue {
+		min = columnKind.Value(stats.MinValue)
+	}
+	if hasMaxValue {
+		max = columnKind.Value(stats.MaxValue)
+	}
+	return min, max, hasMinValue && hasMaxValue
+}
+
 // Pages returns a page reader for the column chunk.
 func (c *FileColumnChunk) Pages() Pages {
 	pages := Pages(c.PagesFrom(c.file.reader))
@@ -609,6 +624,14 @@ func (c *FileColumnChunk) BloomFilterFrom(reader io.ReaderAt) (*FileBloomFilter,
 // NumValues returns the number of values in the column chunk.
 func (c *FileColumnChunk) NumValues() int64 {
 	return c.chunk.MetaData.NumValues
+}
+
+// NullCount returns the number of null values in the column chunk.
+//
+// This value is extracted from the column chunk statistics, parquet writers are
+// not required to populate it.
+func (c *FileColumnChunk) NullCount() int64 {
+	return c.chunk.MetaData.Statistics.NullCount
 }
 
 func (c *FileColumnChunk) readColumnIndex() (*FileColumnIndex, error) {
