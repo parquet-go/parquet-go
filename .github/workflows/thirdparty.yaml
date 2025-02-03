@@ -29,7 +29,7 @@ jobs:
       - name: Replace parquet-go with local version
         run: |
           cd tempo
-          go mod edit -replace github.com/parquet-go/parquet-go=${{ github.workspace }}/parquet-go
+          go mod edit -replace github.com/parquet-go/parquet-go=${{ github.workspace }}
           go mod vendor
 
       - name: Run Critical Tempo Tests
