@@ -1,4 +1,4 @@
-name: Tempo Tests
+name: Third Party Tests
 on:
   push:
     branches:
@@ -8,31 +8,29 @@ on:
       - "*"
 
 jobs:
-  test-tempo:
+  third-party-tests:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ['1.22.x']
 
     steps:
-      # Step 1: Checkout the parquet-go repository
       - name: Checkout parquet-go
         uses: actions/checkout@v3
 
-      # Step 2: Clone the Tempo repository
       - name: Clone Tempo
         run: git clone https://github.com/grafana/tempo.git
 
-      # Step 3: Set up Go (if not already set up in the runner)
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.20'  # Use the appropriate Go version for Tempo
+          go-version: ${{ matrix.go-version }}
 
-      # Step 4: Replace parquet-go with the local version
       - name: Replace parquet-go with local version
         run: |
           cd tempo
           go mod edit -replace github.com/parquet-go/parquet-go=../parquet-go
 
-      # Step 5: Run critical Tempo tests
       - name: Run Critical Tempo Tests
         run: |
           cd tempo
