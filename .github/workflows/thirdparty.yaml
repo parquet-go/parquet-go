@@ -30,6 +30,7 @@ jobs:
         run: |
           cd tempo
           go mod edit -replace github.com/parquet-go/parquet-go=../parquet-go
+          go mod vendor
 
       - name: Run Critical Tempo Tests
         run: |
