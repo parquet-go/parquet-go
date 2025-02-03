@@ -776,10 +776,8 @@ func parseUTCNormalization(arg string) (isUTCNormalized bool, err error) {
 	case "local":
 		return false, nil
 	default:
-
+		return false, fmt.Errorf("unknown utc normalization: %s", arg)
 	}
-
-	return false, fmt.Errorf("unknown utc normalization: %s", arg)
 }
 
 type goNode struct {
