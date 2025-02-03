@@ -235,8 +235,8 @@ func TestSchemaOf(t *testing.T) {
 		{
 			value: new(struct {
 				Inner struct {
-					TimestampAdjusted    int64 `parquet:"timestamp_adjusted_utc,timestamp(millisecond:true)"`
-					TimestampNotAdjusted int64 `parquet:"timestamp_not_adjusted_utc,timestamp(millisecond:false)"`
+					TimestampAdjusted    int64 `parquet:"timestamp_adjusted_utc,timestamp(millisecond:utc)"`
+					TimestampNotAdjusted int64 `parquet:"timestamp_not_adjusted_utc,timestamp(millisecond:local)"`
 				} `parquet:"inner,optional"`
 			}),
 			print: `message {
@@ -321,9 +321,9 @@ func TestInvalidSchemaOf(t *testing.T) {
 		},
 		{
 			value: new(struct {
-				Time int64 `parquet:",time(microsecond:notabool)"`
+				Time int64 `parquet:",time(microsecond:foo)"`
 			}),
-			panic: `time(microsecond:notabool) is an invalid parquet tag: Time int64 [time(microsecond:notabool)]`,
+			panic: `time(microsecond:foo) is an invalid parquet tag: Time int64 [time(microsecond:foo)]`,
 		},
 
 		// Timestamp tags must be int64 or time.Time
@@ -360,15 +360,15 @@ func TestInvalidSchemaOf(t *testing.T) {
 		},
 		{
 			value: new(struct {
-				Timestamp time.Time `parquet:",timestamp(millisecond:notabool)"`
+				Timestamp time.Time `parquet:",timestamp(millisecond:foo)"`
 			}),
-			panic: `timestamp(millisecond:notabool) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:notabool)]`,
+			panic: `timestamp(millisecond:foo) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:foo)]`,
 		},
 		{
 			value: new(struct {
-				Timestamp time.Time `parquet:",timestamp(millisecond:true:false)"`
+				Timestamp time.Time `parquet:",timestamp(millisecond:utc:local)"`
 			}),
-			panic: `timestamp(millisecond:true:false) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:true:false)]`,
+			panic: `timestamp(millisecond:utc:local) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:utc:local)]`,
 		},
 	}
 
