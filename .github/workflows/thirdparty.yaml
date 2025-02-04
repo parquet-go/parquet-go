@@ -1,4 +1,4 @@
-name: Third Party Tests
+name: Third Party Testss
 on:
   push:
     branches:
