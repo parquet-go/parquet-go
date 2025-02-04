@@ -1,5 +1,3 @@
-# This workflow is used to test the compatibility of the third-party who uses parquet-go with the latest changes in parquet-go.
-
 name: Third Party Tests
 on:
   push:
