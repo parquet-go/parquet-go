@@ -32,7 +32,9 @@ func TestOpenFile(t *testing.T) {
 			}
 
 			p, err := parquet.OpenFile(f, s.Size(),
-				parquet.OptimisticRead(true))
+				parquet.OptimisticRead(true),
+				parquet.FileReadMode(parquet.ReadModeAsync),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -212,8 +214,8 @@ func TestFileKeyValueMetadata(t *testing.T) {
 	}
 }
 
-func TestFileColumnChunks(t *testing.T) {
-	f, err := os.Open("testdata/file.parquet")
+func TestFileTypes(t *testing.T) {
+	f, err := os.Open("testdata/data_index_bloom_encoding_stats.parquet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,10 +233,200 @@ func TestFileColumnChunks(t *testing.T) {
 	}
 
 	for _, rowGroup := range p.RowGroups() {
+		if _, ok := rowGroup.(*parquet.FileRowGroup); !ok {
+			t.Fatalf("row group of parquet.File must be of type *parquet.FileRowGroup but got %T", rowGroup)
+		}
 		for _, columnChunk := range rowGroup.ColumnChunks() {
-			if _, ok := columnChunk.(*parquet.FileColumnChunk); !ok {
+			fcc, ok := columnChunk.(*parquet.FileColumnChunk)
+			if !ok {
 				t.Fatalf("column chunk of parquet.File must be of type *parquet.FileColumnChunk but got %T", columnChunk)
+			}
+			min, max, ok := fcc.Bounds()
+			if !ok {
+				t.Error("column chunk is missing statistics")
+			} else {
+				if min.IsNull() {
+					t.Error("column chunk has null min value")
+				}
+				if max.IsNull() {
+					t.Error("column chunk has null max value")
+				}
 			}
 		}
 	}
+}
+
+func TestOpenFileOptimisticRead(t *testing.T) {
+	f, err := os.Open("testdata/alltypes_tiny_pages_plain.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	s, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := &measuredReaderAt{reader: f}
+	if _, err := parquet.OpenFile(r, s.Size(),
+		parquet.OptimisticRead(true),
+		parquet.SkipMagicBytes(true),
+		parquet.ReadBufferSize(int(s.Size()/2)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if reads := r.reads.Load(); reads != 1 {
+		t.Errorf("expected 1 read, got %d", reads)
+	}
+}
+
+func TestIssue229(t *testing.T) {
+	// https://github.com/grafana/tempo/blob/5cae77c9cf8da51e0db7c5556b19d305130ea9c4/tempodb/encoding/vparquet2/schema.go
+	type Attribute struct {
+		Key string `parquet:",snappy,dict"`
+
+		// This is a bad design that leads to millions of null values. How can we fix this?
+		Value       *string  `parquet:",dict,snappy,optional"`
+		ValueInt    *int64   `parquet:",snappy,optional"`
+		ValueDouble *float64 `parquet:",snappy,optional"`
+		ValueBool   *bool    `parquet:",snappy,optional"`
+		ValueKVList string   `parquet:",snappy,optional"`
+		ValueArray  string   `parquet:",snappy,optional"`
+	}
+
+	type EventAttribute struct {
+		Key   string `parquet:",snappy,dict"`
+		Value []byte `parquet:",snappy"` // Was json-encoded data, is now proto encoded data
+	}
+
+	type Event struct {
+		TimeUnixNano           uint64           `parquet:",delta"`
+		Name                   string           `parquet:",snappy"`
+		Attrs                  []EventAttribute `parquet:",list"`
+		DroppedAttributesCount int32            `parquet:",snappy,delta"`
+		Test                   string           `parquet:",snappy,dict,optional"` // Always empty for testing
+	}
+
+	type Span struct {
+		// SpanID is []byte to save space. It doesn't need to be user
+		// friendly like trace ID, and []byte is half the size of string.
+		SpanID                 []byte      `parquet:","`
+		ParentSpanID           []byte      `parquet:","`
+		ParentID               int32       `parquet:",delta"` // can be zero for non-root spans, use IsRoot to check for root spans
+		NestedSetLeft          int32       `parquet:",delta"` // doubles as numeric ID and is used to fill ParentID of child spans
+		NestedSetRight         int32       `parquet:",delta"`
+		Name                   string      `parquet:",snappy,dict"`
+		Kind                   int         `parquet:",delta"`
+		TraceState             string      `parquet:",snappy"`
+		StartTimeUnixNano      uint64      `parquet:",delta"`
+		DurationNano           uint64      `parquet:",delta"`
+		StatusCode             int         `parquet:",delta"`
+		StatusMessage          string      `parquet:",snappy"`
+		Attrs                  []Attribute `parquet:",list"`
+		DroppedAttributesCount int32       `parquet:",snappy"`
+		Events                 []Event     `parquet:",list"`
+		DroppedEventsCount     int32       `parquet:",snappy"`
+		Links                  []byte      `parquet:",snappy"` // proto encoded []*v1_trace.Span_Link
+		DroppedLinksCount      int32       `parquet:",snappy"`
+
+		// Known attributes
+		HttpMethod     *string `parquet:",snappy,optional,dict"`
+		HttpUrl        *string `parquet:",snappy,optional,dict"`
+		HttpStatusCode *int64  `parquet:",snappy,optional"`
+	}
+
+	type InstrumentationScope struct {
+		Name    string `parquet:",snappy,dict"`
+		Version string `parquet:",snappy,dict"`
+	}
+
+	type ScopeSpans struct {
+		Scope InstrumentationScope `parquet:""`
+		Spans []Span               `parquet:",list"`
+	}
+
+	type Resource struct {
+		Attrs []Attribute `parquet:",list"`
+
+		// Known attributes
+		ServiceName      string  `parquet:",snappy,dict"`
+		Cluster          *string `parquet:",snappy,optional,dict"`
+		Namespace        *string `parquet:",snappy,optional,dict"`
+		Pod              *string `parquet:",snappy,optional,dict"`
+		Container        *string `parquet:",snappy,optional,dict"`
+		K8sClusterName   *string `parquet:",snappy,optional,dict"`
+		K8sNamespaceName *string `parquet:",snappy,optional,dict"`
+		K8sPodName       *string `parquet:",snappy,optional,dict"`
+		K8sContainerName *string `parquet:",snappy,optional,dict"`
+
+		Test string `parquet:",snappy,dict,optional"` // Always empty for testing
+	}
+
+	type ResourceSpans struct {
+		Resource   Resource     `parquet:""`
+		ScopeSpans []ScopeSpans `parquet:"ss,list"`
+	}
+
+	type Trace struct {
+		// TraceID is a byte slice as it helps maintain the sort order of traces within a parquet file
+		TraceID       []byte          `parquet:""`
+		ResourceSpans []ResourceSpans `parquet:"rs,list"`
+
+		// TraceIDText is for better usability on downstream systems i.e: something other than Tempo is reading these files.
+		// It will not be used as the primary traceID field within Tempo and is only helpful for debugging purposes.
+		TraceIDText string `parquet:",snappy"`
+
+		// Trace-level attributes for searching
+		StartTimeUnixNano uint64 `parquet:",delta"`
+		EndTimeUnixNano   uint64 `parquet:",delta"`
+		DurationNano      uint64 `parquet:",delta"`
+		RootServiceName   string `parquet:",dict"`
+		RootSpanName      string `parquet:",dict"`
+	}
+
+	file, err := os.Open("testdata/issue229.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := parquet.OpenFile(file, info.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := parquet.NewReader(pf)
+
+	if err := r.SeekToRow(3); err != nil {
+		t.Fatal(err)
+	}
+
+	firstRows := []parquet.Row{{}}
+	if n, err := r.ReadRows(firstRows); n != 1 {
+		t.Fatalf("expected 1 row, got %d", n)
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	tr := &Trace{}
+	sch := parquet.SchemaOf(tr)
+	sch.Reconstruct(tr, firstRows[0])
+
+	if err := r.SeekToRow(8); err != nil {
+		t.Fatal(err)
+	}
+
+	secondRows := []parquet.Row{{}}
+	if n, err := r.ReadRows(secondRows); n != 1 {
+		t.Fatalf("expected 1 row, got %d", n)
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	tr = &Trace{}
+	sch.Reconstruct(tr, secondRows[0])
 }
