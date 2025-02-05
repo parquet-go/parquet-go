@@ -1,0 +1,40 @@
+name: Third Party Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - "*"
+
+jobs:
+  third-party-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ['1.22.x']
+
+    steps:
+      - name: Checkout parquet-go
+        uses: actions/checkout@v3
+
+      - name: Clone Tempo
+        run: git clone https://github.com/grafana/tempo.git
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Replace parquet-go with local version
+        run: |
+          cd tempo
+          go mod edit -replace github.com/parquet-go/parquet-go=${{ github.workspace }}
+          go mod vendor
+      - name: Run Critical Tempo Tests
+        run: |
+          cd tempo
+          echo "Testing tempodb/wal..."
+          go test ./tempodb/wal/...
+          echo "Testing tempodb..."
+          go test ./tempodb/...
