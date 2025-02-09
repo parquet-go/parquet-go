@@ -749,6 +749,18 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 		}
 
 		elem := reflect.New(keyValueElem).Elem()
+
+		// keyValueElem has a type that is encoded in the schema. If the schema was created
+		// from a map with a value type that does not match the type being reconstructed, we
+		// need to create a new keyValue type that matches the target we read into.
+		if !elem.Field(1).CanConvert(v) {
+			fields := reflect.VisibleFields(keyValueElem)
+			fields[1].Type = v
+			kv := reflect.StructOf(fields)
+			elem = reflect.New(kv).Elem()
+			keyValueZero = reflect.Zero(kv)
+		}
+
 		for i := 0; i < n; i++ {
 			for j, column := range values {
 				column = column[:cap(column)]

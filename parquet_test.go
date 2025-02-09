@@ -593,6 +593,69 @@ func TestNestedPointer(t *testing.T) {
 	}
 }
 
+func TestNestedMapValueWithSchema(t *testing.T) {
+	// Main struct used to marshal/unmarshal data.
+	type NestedStructA struct {
+		Val string
+	}
+	type MapValueA struct {
+		Nested NestedStructA
+	}
+	type A struct {
+		TestMap map[string]MapValueA
+	}
+
+	// Clone of the main struct used exclusively to generate the schema.
+	type NestedStructB struct {
+		Val string
+	}
+	type MapValueB struct {
+		Nested NestedStructB
+	}
+	type B struct {
+		TestMap map[string]MapValueB
+	}
+
+	testKey, testValue := "test-key", "test-value"
+	in := A{
+		TestMap: map[string]MapValueA{
+			"test-key": {
+				Nested: NestedStructA{
+					Val: testValue,
+				},
+			},
+		},
+	}
+
+	var f bytes.Buffer
+
+	// Generate a schema for reading/writing using an exact clone of the type.
+	schema := parquet.SchemaOf(B{})
+
+	pw := parquet.NewGenericWriter[A](&f, schema)
+	_, err := pw.Write([]A{in})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = pw.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pr := parquet.NewGenericReader[*A](bytes.NewReader(f.Bytes()), schema)
+
+	out := make([]*A, 1)
+	_, err = pr.Read(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr.Close()
+	if want, got := testValue, out[0].TestMap[testKey].Nested.Val; want != got {
+		t.Error("failed to read map value")
+	}
+}
+
 type benchmarkRowType struct {
 	ID    [16]byte `parquet:"id,uuid"`
 	Value float64  `parquet:"value"`
