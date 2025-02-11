@@ -102,11 +102,17 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 
 	if schema == nil && t != nil {
 		schema = schemaOf(dereference(t))
+		if len(schema.Columns()) == 0 {
+			panic("generic writer must be instantiated with type that has at least one exported field.")
+		}
 		config.Schema = schema
 	}
 
 	if config.Schema == nil {
 		panic("generic writer must be instantiated with schema or concrete type.")
+	}
+	if len(config.Schema.Columns()) == 0 {
+		panic("generic writer must be instantiated with schema that has at least one column.")
 	}
 
 	return &GenericWriter[T]{
@@ -174,8 +180,11 @@ func (w *GenericWriter[T]) Reset(output io.Writer) {
 }
 
 func (w *GenericWriter[T]) Write(rows []T) (int, error) {
-	return w.base.writer.writeRows(len(rows), func(i, j int) (int, error) {
-		n, err := w.write(w, rows[i:j:j])
+	return w.base.writer.writeRows(len(rows), func(count int) (int, error) {
+		current := rows[:count:count]
+		rows = rows[count:]
+
+		n, err := w.write(w, current)
 		if err != nil {
 			return n, err
 		}
@@ -194,6 +203,10 @@ func (w *GenericWriter[T]) Write(rows []T) (int, error) {
 
 func (w *GenericWriter[T]) WriteRows(rows []Row) (int, error) {
 	return w.base.WriteRows(rows)
+}
+
+func (w *GenericWriter[T]) WriteColumns(columns [][]Value) (int, error) {
+	return w.base.WriteColumns(columns)
 }
 
 func (w *GenericWriter[T]) WriteRowGroup(rowGroup RowGroup) (int64, error) {
@@ -405,6 +418,21 @@ func (w *Writer) Write(row interface{}) error {
 // in the order produced by the parquet.(*Schema).Deconstruct method.
 func (w *Writer) WriteRows(rows []Row) (int, error) {
 	return w.writer.WriteRows(rows)
+}
+
+// WriteColumns is called to write data to the parquet file. It is like WriteRows
+// except that the data is provided in a transposed form. When directly writing
+// parquet.Value instances, this method will be more efficient than WriteRows
+// since the data is already arranged into columnar form.
+//
+// The slice passed in must have a length equal to the number of leaf columns in
+// the writer's schema and must be in the same order produced by the
+// parquet.(*Schema).Deconstruct method.
+//
+// The Writer must have been given a schema when NewWriter was called, otherwise
+// the structure of the parquet file cannot be determined from the row only.
+func (w *Writer) WriteColumns(columns [][]Value) (int, error) {
+	return w.writer.WriteColumns(columns)
 }
 
 // WriteRowGroup writes a row group to the parquet file.
@@ -1032,19 +1060,17 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 }
 
 func (w *writer) WriteRows(rows []Row) (int, error) {
-	return w.writeRows(len(rows), func(start, end int) (int, error) {
-		defer func() {
-			for i, values := range w.values {
-				clearValues(values)
-				w.values[i] = values[:0]
-			}
-		}()
+	return w.writeRows(len(rows), func(count int) (int, error) {
+		current := rows[:count]
+		rows = rows[count:]
+
+		defer w.resetValues()
 
 		// TODO: if an error occurs in this method the writer may be left in an
 		// partially functional state. Applications are not expected to continue
 		// using the writer after getting an error, but maybe we could ensure that
 		// we are preventing further use as well?
-		for _, row := range rows[start:end] {
+		for _, row := range current {
 			row.Range(func(columnIndex int, columnValues []Value) bool {
 				w.values[columnIndex] = append(w.values[columnIndex], columnValues...)
 				return true
@@ -1059,11 +1085,38 @@ func (w *writer) WriteRows(rows []Row) (int, error) {
 			}
 		}
 
-		return end - start, nil
+		return count, nil
 	})
 }
 
-func (w *writer) writeRows(numRows int, write func(i, j int) (int, error)) (int, error) {
+func (w *writer) WriteColumns(columns [][]Value) (int, error) {
+	var numRows int
+	for _, val := range columns[0] {
+		if val.RepetitionLevel() == 0 {
+			numRows++
+		}
+	}
+	return w.writeRows(numRows, func(count int) (int, error) {
+		for i, values := range columns {
+			if j := seek(values, count); j > 0 {
+				if err := w.columns[i].writeRows(values[:j]); err != nil {
+					return 0, err
+				}
+				columns[i] = values[j:]
+			}
+		}
+		return count, nil
+	})
+}
+
+func (w *writer) resetValues() {
+	for i, values := range w.values {
+		clearValues(values)
+		w.values[i] = values[:0]
+	}
+}
+
+func (w *writer) writeRows(numRows int, write func(count int) (int, error)) (int, error) {
 	written := 0
 
 	for written < numRows {
@@ -1095,7 +1148,7 @@ func (w *writer) writeRows(numRows int, write func(i, j int) (int, error)) (int,
 			length = maxRowsPerWrite
 		}
 
-		n, err := write(written, written+length)
+		n, err := write(length)
 		written += n
 		w.numRows += int64(n)
 		if err != nil {
@@ -1104,6 +1157,28 @@ func (w *writer) writeRows(numRows int, write func(i, j int) (int, error)) (int,
 	}
 
 	return written, nil
+}
+
+// seek finds the index in values of the start of the given row (zero-based).
+// Sp row zero should be at index zero (unless the given values have incorrect
+// repetition levels associated with them), and so on.
+func seek(values []Value, row int) int {
+	if row < 0 {
+		panic(fmt.Sprintf("out of range: row index %d < 0", row))
+	}
+	var rowsSeen int
+	for index, val := range values {
+		if val.RepetitionLevel() == 0 {
+			rowsSeen++
+			if rowsSeen > row {
+				return index
+			}
+		}
+	}
+	if rowsSeen < row {
+		panic(fmt.Sprintf("out of range: row index %d > %d", row, rowsSeen))
+	}
+	return len(values)
 }
 
 // The WriteValues method is intended to work in pair with WritePage to allow
