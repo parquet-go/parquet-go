@@ -743,6 +743,13 @@ type ColumnMetaData struct {
 
 	// Byte offset from beginning of file to Bloom filter data.
 	BloomFilterOffset int64 `thrift:"14,optional"`
+
+	// Size of Bloom filter data including the serialized header, in bytes.
+	// Added in 2.10 so readers may not read this field from old files and
+	// it can be obtained after the BloomFilterHeader has been deserialized.
+	// Writers should write this field so readers can read the bloom filter
+	// in a single I/O.
+	BloomFilterLength *int32 `thrift:"15,optional"`
 }
 
 type EncryptionWithFooterKey struct{}
