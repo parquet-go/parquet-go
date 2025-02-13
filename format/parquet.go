@@ -427,6 +427,14 @@ func (t *LogicalType) String() string {
 		return t.Bson.String()
 	case t.UUID != nil:
 		return t.UUID.String()
+	case t.Float16 != nil:
+		return t.Float16.String()
+	case t.Variant != nil:
+		return t.Variant.String()
+	case t.Geometry != nil:
+		return t.Geometry.String()
+	case t.Geography != nil:
+		return t.Geography.String()
 	default:
 		return ""
 	}
