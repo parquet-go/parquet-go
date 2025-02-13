@@ -110,6 +110,27 @@ type SizeStatistics struct {
 	DefinitionLevelHistogram []int64 `thrift:"3,optional"`
 }
 
+// Bounding box for GEOMETRY or GEOGRAPHY type in the representation of min/max
+// value pair of coordinates from each axis.
+type BoundingBox struct {
+	XMin float64  `thrift:"1,required"`
+	XMax float64  `thrift:"2,required"`
+	YMin float64  `thrift:"3,required"`
+	YMax float64  `thrift:"4,required"`
+	ZMin *float64 `thrift:"5,optional"`
+	ZMax *float64 `thrift:"6,optional"`
+	MMin *float64 `thrift:"7,optional"`
+	MMax *float64 `thrift:"8,optional"`
+}
+
+// Statistics specific to Geometry and Geography logical types
+type GeospatialStatistics struct {
+	// A bounding box of geospatial instances
+	BBox *BoundingBox `thrift:"1,optional"`
+	// Geospatial type codes of all instances, or an empty list if not known
+	GeoSpatialTypes []int32 `thrift:"2,optional"`
+}
+
 // Statistics per row group and per page.
 // All fields are optional.
 type Statistics struct {
@@ -265,6 +286,86 @@ type VariantType struct{}
 
 func (*VariantType) String() string { return "VARIANT" }
 
+// Edge interpolation algorithm for Geography logical type
+type EdgeInterpolationAlgorithm int32
+
+const (
+	Spherical EdgeInterpolationAlgorithm = 0
+	Vincenty  EdgeInterpolationAlgorithm = 1
+	Thomas    EdgeInterpolationAlgorithm = 2
+	Andoyer   EdgeInterpolationAlgorithm = 3
+	Karney    EdgeInterpolationAlgorithm = 4
+)
+
+func (e EdgeInterpolationAlgorithm) String() string {
+	switch e {
+	case Spherical:
+		return "SPHERICAL"
+	case Vincenty:
+		return "VINCENTY"
+	case Thomas:
+		return "THOMAS"
+	case Andoyer:
+		return "ANDOYER"
+	case Karney:
+		return "KARNEY"
+	default:
+		return "EdgeInterpolationAlgorithm(?)"
+	}
+}
+
+// Embedded Geometry logical type annotation
+//
+// Geospatial features in the Well-Known Binary (WKB) format and edges interpolation
+// is always linear/planar.
+//
+// A custom CRS can be set by the crs field. If unset, it defaults to "OGC:CRS84",
+// which means that the geometries must be stored in longitude, latitude based on
+// the WGS84 datum.
+//
+// Allowed for physical type: BYTE_ARRAY.
+//
+// See Geospatial.md for details.
+type GeometryType struct {
+	CRS string `thrift:"1,optional"`
+}
+
+func (t *GeometryType) String() string {
+	crs := t.CRS
+	if crs == "" {
+		crs = "OGC:CRS84"
+	}
+	return fmt.Sprintf("GEOMETRY(%q)", crs)
+}
+
+// Embedded Geography logical type annotation
+//
+// Geospatial features in the WKB format with an explicit (non-linear/non-planar)
+// edges interpolation algorithm.
+//
+// A custom geographic CRS can be set by the crs field, where longitudes are
+// bound by [-180, 180] and latitudes are bound by [-90, 90]. If unset, the CRS
+// defaults to "OGC:CRS84".
+//
+// An optional algorithm can be set to correctly interpret edges interpolation
+// of the geometries. If unset, the algorithm defaults to SPHERICAL.
+//
+// Allowed for physical type: BYTE_ARRAY.
+//
+// See Geospatial.md for details.
+type GeographyType struct {
+	CRS       string                     `thrift:"1,optional"`
+	Algorithm EdgeInterpolationAlgorithm `thrift:"2,optional"`
+}
+
+func (t *GeographyType) String() string {
+	crs := t.CRS
+	if crs == "" {
+		crs = "OGC:CRS84"
+	}
+	return fmt.Sprintf("GEOGRAPHY(%q, %s)", crs, t.Algorithm)
+}
+
 // LogicalType annotations to replace ConvertedType.
 //
 // To maintain compatibility, implementations using LogicalType for a
@@ -287,13 +388,15 @@ type LogicalType struct { // union
 	Timestamp *TimestampType `thrift:"8"`
 
 	// 9: reserved for Interval
-	Integer *IntType     `thrift:"10"` // use ConvertedType Int* or Uint*
-	Unknown *NullType    `thrift:"11"` // no compatible ConvertedType
-	Json    *JsonType    `thrift:"12"` // use ConvertedType JSON
-	Bson    *BsonType    `thrift:"13"` // use ConvertedType BSON
-	UUID    *UUIDType    `thrift:"14"` // no compatible ConvertedType
-	Float16 *Float16Type `thrift:"15"` // no compatible ConvertedType
-	Variant *VariantType `thrift:"16"` // no compatible ConvertedType
+	Integer   *IntType       `thrift:"10"` // use ConvertedType Int* or Uint*
+	Unknown   *NullType      `thrift:"11"` // no compatible ConvertedType
+	Json      *JsonType      `thrift:"12"` // use ConvertedType JSON
+	Bson      *BsonType      `thrift:"13"` // use ConvertedType BSON
+	UUID      *UUIDType      `thrift:"14"` // no compatible ConvertedType
+	Float16   *Float16Type   `thrift:"15"` // no compatible ConvertedType
+	Variant   *VariantType   `thrift:"16"` // no compatible ConvertedType
+	Geometry  *GeometryType  `thrift:"17"` // no compatible ConvertedType
+	Geography *GeographyType `thrift:"18"` // no compatible ConvertedType
 }
 
 func (t *LogicalType) String() string {
@@ -805,6 +908,9 @@ type ColumnMetaData struct {
 	// also be useful in some cases for more fine-grained nullability/list length
 	// filter pushdown.
 	SizeStatistics *SizeStatistics `thrift:"16,optional"`
+
+	// Optional statistics specific for Geometry and Geography logical types
+	GeospatialStatistics *GeospatialStatistics `thrift:"17,optional"`
 }
 
 type EncryptionWithFooterKey struct{}
@@ -919,6 +1025,8 @@ type ColumnOrder struct { // union
 	//   LIST - undefined
 	//   MAP - undefined
 	//   VARIANT - undefined
+	//   GEOMETRY - undefined
+	//   GEOGRAPHY - undefined
 	//
 	// In the absence of logical types, the sort order is determined by the physical type:
 	//   BOOLEAN - false, true
