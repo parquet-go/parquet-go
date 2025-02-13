@@ -99,19 +99,21 @@ type Statistics struct {
 }
 
 // Empty structs to use as logical type annotations.
-type StringType struct{} // allowed for BINARY, must be encoded with UTF-8
-type UUIDType struct{}   // allowed for FIXED[16], must encode raw UUID bytes
-type MapType struct{}    // see see LogicalTypes.md
-type ListType struct{}   // see LogicalTypes.md
-type EnumType struct{}   // allowed for BINARY, must be encoded with UTF-8
-type DateType struct{}   // allowed for INT32
+type StringType struct{}  // allowed for BINARY, must be encoded with UTF-8
+type UUIDType struct{}    // allowed for FIXED[16], must encode raw UUID bytes
+type MapType struct{}     // see LogicalTypes.md
+type ListType struct{}    // see LogicalTypes.md
+type EnumType struct{}    // allowed for BINARY, must be encoded with UTF-8
+type DateType struct{}    // allowed for INT32
+type Float16Type struct{} // allowed for FIXED[2], must encoded raw FLOAT16 bytes
 
-func (*StringType) String() string { return "STRING" }
-func (*UUIDType) String() string   { return "UUID" }
-func (*MapType) String() string    { return "MAP" }
-func (*ListType) String() string   { return "LIST" }
-func (*EnumType) String() string   { return "ENUM" }
-func (*DateType) String() string   { return "DATE" }
+func (*StringType) String() string  { return "STRING" }
+func (*UUIDType) String() string    { return "UUID" }
+func (*MapType) String() string     { return "MAP" }
+func (*ListType) String() string    { return "LIST" }
+func (*EnumType) String() string    { return "ENUM" }
+func (*DateType) String() string    { return "DATE" }
+func (*Float16Type) String() string { return "FLOAT16" }
 
 // Logical type to annotate a column that is always null.
 //
@@ -240,11 +242,12 @@ type LogicalType struct { // union
 	Timestamp *TimestampType `thrift:"8"`
 
 	// 9: reserved for Interval
-	Integer *IntType  `thrift:"10"` // use ConvertedType Int* or Uint*
-	Unknown *NullType `thrift:"11"` // no compatible ConvertedType
-	Json    *JsonType `thrift:"12"` // use ConvertedType JSON
-	Bson    *BsonType `thrift:"13"` // use ConvertedType BSON
-	UUID    *UUIDType `thrift:"14"` // no compatible ConvertedType
+	Integer *IntType     `thrift:"10"` // use ConvertedType Int* or Uint*
+	Unknown *NullType    `thrift:"11"` // no compatible ConvertedType
+	Json    *JsonType    `thrift:"12"` // use ConvertedType JSON
+	Bson    *BsonType    `thrift:"13"` // use ConvertedType BSON
+	UUID    *UUIDType    `thrift:"14"` // no compatible ConvertedType
+	Float16 *Float16Type `thrift:"15"` // no compatible ConvertedType
 }
 
 func (t *LogicalType) String() string {
