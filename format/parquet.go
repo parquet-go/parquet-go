@@ -70,6 +70,46 @@ func (t FieldRepetitionType) String() string {
 	}
 }
 
+// A structure for capturing metadata for estimating the unencoded,
+// uncompressed size of data written. This is useful for readers to estimate
+// how much memory is needed to reconstruct data in their memory model and for
+// fine grained filter pushdown on nested structures (the histograms contained
+// in this structure can help determine the number of nulls at a particular
+// nesting level and maximum length of lists).
+type SizeStatistics struct {
+	// The number of physical bytes stored for BYTE_ARRAY data values assuming
+	// no encoding. This is exclusive of the bytes needed to store the length of
+	// each byte array. In other words, this field is equivalent to the `(size
+	// of PLAIN-ENCODING the byte array values) - (4 bytes * number of values
+	// written)`. To determine unencoded sizes of other types readers can use
+	// schema information multiplied by the number of non-null and null values.
+	// The number of null/non-null values can be inferred from the histograms
+	// below.
+	//
+	// For example, if a column chunk is dictionary-encoded with dictionary
+	// ["a", "bc", "cde"], and a data page contains the indices [0, 0, 1, 2],
+	// then this value for that data page should be 7 (1 + 1 + 2 + 3).
+	//
+	// This field should only be set for types that use BYTE_ARRAY as their
+	// physical type.
+	UnencodedByteArrayDataBytes *int64 `thrift:"1,optional"`
+
+	// When present, there is expected to be one element corresponding to each
+	// repetition (i.e. size=max repetition_level+1) where each element
+	// represents the number of times the repetition level was observed in the
+	// data.
+	//
+	// This field may be omitted if max_repetition_level is 0 without loss
+	// of information.
+	RepetitionLevelHistogram []int64 `thrift:"2,optional"`
+
+	// Same as repetition_level_histogram except for definition levels.
+	//
+	// This field may be omitted if max_definition_level is 0 or 1 without
+	// loss of information.
+	DefinitionLevelHistogram []int64 `thrift:"3,optional"`
+}
+
 // Statistics per row group and per page.
 // All fields are optional.
 type Statistics struct {
@@ -753,6 +793,12 @@ type ColumnMetaData struct {
 	// Writers should write this field so readers can read the bloom filter
 	// in a single I/O.
 	BloomFilterLength *int32 `thrift:"15,optional"`
+
+	// Optional statistics to help estimate total memory when converted to in-memory
+	// representations. The histograms contained in these statistics can
+	// also be useful in some cases for more fine-grained nullability/list length
+	// filter pushdown.
+	SizeStatistics *SizeStatistics `thrift:"16,optional"`
 }
 
 type EncryptionWithFooterKey struct{}
@@ -905,6 +951,12 @@ type OffsetIndex struct {
 	// PageLocations, ordered by increasing PageLocation.offset. It is required
 	// that page_locations[i].first_row_index < page_locations[i+1].first_row_index.
 	PageLocations []PageLocation `thrift:"1,required"`
+
+	// Unencoded/uncompressed size for BYTE_ARRAY types.
+	//
+	// See documention for unencoded_byte_array_data_bytes in SizeStatistics for
+	// more details on this field.
+	UnencodedByteArrayDataBytes []int64 `thrift:"2,optional"`
 }
 
 // Description for ColumnIndex.
@@ -936,6 +988,21 @@ type ColumnIndex struct {
 
 	// A list containing the number of null values for each page.
 	NullCounts []int64 `thrift:"5,optional"`
+
+	// Contains repetition level histograms for each page
+	// concatenated together.  The repetition_level_histogram field on
+	// SizeStatistics contains more details.
+	//
+	// When present the length should always be (number of pages *
+	// (max_repetition_level + 1)) elements.
+	//
+	// Element 0 is the first element of the histogram for the first page.
+	// Element (max_repetition_level + 1) is the first element of the histogram
+	// for the second page.
+	RepetitionLevelHistogram []int64 `thrift:"6,optional"`
+
+	// Same as repetition_level_histograms except for definitions levels.
+	DefinitionLevelHistogram []int64 `thrift:"7,optional"`
 }
 
 type AesGcmV1 struct {
