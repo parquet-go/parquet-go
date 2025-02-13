@@ -260,6 +260,11 @@ type BsonType struct{}
 
 func (t *BsonType) String() string { return "BSON" }
 
+// Embedded Variant logical type annotation
+type VariantType struct{}
+
+func (*VariantType) String() string { return "VARIANT" }
+
 // LogicalType annotations to replace ConvertedType.
 //
 // To maintain compatibility, implementations using LogicalType for a
@@ -288,6 +293,7 @@ type LogicalType struct { // union
 	Bson    *BsonType    `thrift:"13"` // use ConvertedType BSON
 	UUID    *UUIDType    `thrift:"14"` // no compatible ConvertedType
 	Float16 *Float16Type `thrift:"15"` // no compatible ConvertedType
+	Variant *VariantType `thrift:"16"` // no compatible ConvertedType
 }
 
 func (t *LogicalType) String() string {
@@ -912,6 +918,7 @@ type ColumnOrder struct { // union
 	//   ENUM - unsigned byte-wise comparison
 	//   LIST - undefined
 	//   MAP - undefined
+	//   VARIANT - undefined
 	//
 	// In the absence of logical types, the sort order is determined by the physical type:
 	//   BOOLEAN - false, true
