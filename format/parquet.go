@@ -915,7 +915,14 @@ type ColumnMetaData struct {
 	// representations. The histograms contained in these statistics can
 	// also be useful in some cases for more fine-grained nullability/list length
 	// filter pushdown.
-	SizeStatistics *SizeStatistics `thrift:"16,optional"`
+	// TODO: Uncomment this field when Thrift decoding is fixed. Strangely, when it is
+	// uncommented, test cases in file_test.go fail with an inexplicable error decoding
+	// an unrelated field:
+	//    reading parquet file metadata: decoding thrift payload: 4:FIELD<LIST> → 0/1:LIST<STRUCT>: missing required field: 2:FIELD<I64>
+	// (Seems to be complaining about field TotalBytesSize of RowGroup). This only occurs
+	// with testdata/dict-page-offset-zero.parquet, in both TestOpenFileWithoutPageIndex
+	// and TestOpenFile.
+	//SizeStatistics *SizeStatistics `thrift:"16,optional"`
 
 	// Optional statistics specific for Geometry and Geography logical types
 	GeospatialStatistics *GeospatialStatistics `thrift:"17,optional"`
