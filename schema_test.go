@@ -628,6 +628,23 @@ func TestSchemaRoundTrip(t *testing.T) {
 	}
 }`,
 		},
+		{
+			name: "variants",
+			schema: parquet.NewSchema("root", parquet.Group{
+				"variants": parquet.Optional(parquet.Group{
+					"unshredded": parquet.Optional(parquet.Variant()),
+					// TODO: Also include shredded variants when they are implemented
+				}),
+			}),
+			roundTripped: `message root {
+	optional group variants {
+		optional group unshredded (VARIANT) {
+			required binary metadata;
+			required binary value;
+		}
+	}
+}`,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
