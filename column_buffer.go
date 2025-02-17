@@ -2007,11 +2007,14 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsF
 	case reflect.TypeOf(time.Time{}):
 		return writeRowsFuncOfTime(t, schema, path)
 	}
-
 	switch t.Kind() {
 	case reflect.Bool,
 		reflect.Int,
 		reflect.Uint,
+		reflect.Int8,
+		reflect.Uint8,
+		reflect.Int16,
+		reflect.Uint16,
 		reflect.Int32,
 		reflect.Uint32,
 		reflect.Int64,
