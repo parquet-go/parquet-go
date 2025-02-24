@@ -102,11 +102,17 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 
 	if schema == nil && t != nil {
 		schema = schemaOf(dereference(t))
+		if len(schema.Columns()) == 0 {
+			panic("generic writer must be instantiated with type that has at least one exported field.")
+		}
 		config.Schema = schema
 	}
 
 	if config.Schema == nil {
 		panic("generic writer must be instantiated with schema or concrete type.")
+	}
+	if len(config.Schema.Columns()) == 0 {
+		panic("generic writer must be instantiated with schema that has at least one column.")
 	}
 
 	return &GenericWriter[T]{
@@ -221,8 +227,8 @@ func (w *GenericWriter[T]) Schema() *Schema {
 	return w.base.Schema()
 }
 
-func (w *GenericWriter[T]) ColumnBuffers() []ValueWriter {
-	return w.base.ColumnBuffers()
+func (w *GenericWriter[T]) ColumnWriters() []ValueWriter {
+	return w.base.ColumnWriters()
 }
 
 func (w *GenericWriter[T]) writeRows(rows []T) (int, error) {
@@ -488,10 +494,10 @@ func (w *Writer) SetKeyValueMetadata(key, value string) {
 	})
 }
 
-// ColumnBuffers returns the buffer columns. This allows applications to
+// ColumnWriters returns writers for each column. This allows applications to
 // write values directly to each column instead of having to first assemble
 // values into rows to use WriteRows.
-func (w *Writer) ColumnBuffers() []ValueWriter { return w.writer.valueWriters }
+func (w *Writer) ColumnWriters() []ValueWriter { return w.writer.valueWriters }
 
 type writerFileView struct {
 	writer *writer
