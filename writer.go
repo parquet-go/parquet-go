@@ -102,17 +102,11 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 
 	if schema == nil && t != nil {
 		schema = schemaOf(dereference(t))
-		if len(schema.Columns()) == 0 {
-			panic("generic writer must be instantiated with type that has at least one exported field.")
-		}
 		config.Schema = schema
 	}
 
 	if config.Schema == nil {
 		panic("generic writer must be instantiated with schema or concrete type.")
-	}
-	if len(config.Schema.Columns()) == 0 {
-		panic("generic writer must be instantiated with schema that has at least one column.")
 	}
 
 	return &GenericWriter[T]{
