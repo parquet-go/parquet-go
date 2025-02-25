@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress"
+	"github.com/parquet-go/parquet-go/internal/unsafecast"
 )
 
 const (
@@ -98,6 +100,207 @@ func benchmarkGenericWriter[Row generator[Row]](b *testing.B) {
 			})
 		})
 	})
+}
+
+func TestWriteRowsColumns(t *testing.T) {
+	type simpleFlat struct {
+		A, B, C int64
+		S, T, U string
+	}
+	t.Run("simple", func(t *testing.T) {
+		testWriteRowsColumns[simpleFlat](t)
+	})
+	type complexNested struct {
+		A  []int64
+		S  []string
+		M  map[string]string
+		R1 []struct {
+			B  []int64
+			T  []string
+			R2 []simpleFlat
+		}
+	}
+	t.Run("complex", func(t *testing.T) {
+		testWriteRowsColumns[complexNested](t)
+	})
+}
+
+func testWriteRowsColumns[T any](t *testing.T) {
+	var zero T
+	const numRows = 1000
+	data := rowsOf(numRows, zero)
+	rowSlice := asRowSlice[T](t, data)
+	colSlice := transpose(rowSlice)
+	testCases := []struct {
+		name  string
+		write func(*testing.T, *parquet.GenericWriter[T], [][]parquet.Value) (int, error)
+		data  [][]parquet.Value
+	}{
+		{
+			name: "WriteRows",
+			write: func(_ *testing.T, w *parquet.GenericWriter[T], vals [][]parquet.Value) (int, error) {
+				// annoying that we can't use normal type conversions between
+				// []Row and [][]Value since they are structurally identical
+				rows := unsafecast.Slice[parquet.Row](vals)
+				return w.WriteRows(rows)
+			},
+			data: unsafecast.Slice[[]parquet.Value](rowSlice),
+		},
+		{
+			name: "ColumnWriters.WriteRows",
+			write: func(t *testing.T, w *parquet.GenericWriter[T], vals [][]parquet.Value) (int, error) {
+				t.Helper()
+				var numRows int
+				for i, col := range vals {
+					num, err := w.ColumnWriters()[i].WriteRows(col)
+					if err != nil {
+						return 0, err
+					}
+					if i == 0 {
+						numRows = num
+					} else if numRows != num {
+						t.Errorf("column %d disagrees with number of rows written in column %d", i, 0)
+					}
+				}
+				return numRows, nil
+			},
+			data: colSlice,
+		},
+		{
+			name: "ColumnWriters.WriteValues",
+			write: func(t *testing.T, w *parquet.GenericWriter[T], vals [][]parquet.Value) (int, error) {
+				t.Helper()
+				var numRows int
+				for i, col := range vals {
+					var rowsInCol int
+					for len(col) > 0 {
+						// We break the column into whole-row chunks and optionally flush
+						var boundary int
+						var rowsInChunk int
+						for j, val := range col {
+							if val.RepetitionLevel() == 0 {
+								rowsInChunk++
+								if rowsInChunk > 100 {
+									rowsInChunk-- // this latest row start goes in next chunk
+									boundary = j
+									break
+								}
+							}
+						}
+						var chunk []parquet.Value
+						if boundary == 0 {
+							chunk = col
+							col = nil
+						} else {
+							chunk = col[:boundary]
+							col = col[boundary:]
+						}
+						cw := w.ColumnWriters()[i]
+						_, err := cw.WriteValues(chunk)
+						if err != nil {
+							return 0, err
+						}
+						if cw.Size() > 10_000 {
+							if err := cw.Flush(); err != nil {
+								return 0, err
+							}
+						}
+						rowsInCol += rowsInChunk
+					}
+					if i == 0 {
+						numRows = rowsInCol
+					} else if numRows != rowsInCol {
+						t.Errorf("column %d disagrees with number of rows written in column %d", i, 0)
+					}
+				}
+				return numRows, nil
+			},
+			data: colSlice,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			w := parquet.NewGenericWriter[T](&buf)
+			n, err := testCase.write(t, w, testCase.data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n != numRows {
+				t.Errorf("wrote %d rows, but expected to write %d", n, numRows)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			// Now read the data back and make sure it matches the input data.
+			r := parquet.NewGenericReader[T](bytes.NewReader(buf.Bytes()))
+			roundTripped := readAllRows(t, r, numRows)
+			assertRowsEqualByRow(t, roundTripped, rowSlice)
+		})
+	}
+}
+
+func asRowSlice[T any](t testing.TB, data rows) []parquet.Row {
+	t.Helper()
+
+	typedRows := make([]T, len(data))
+	for i := range data {
+		typedRows[i] = data[i].(T)
+	}
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[T](&buf)
+	n, err := w.Write(typedRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(typedRows) {
+		t.Errorf("wrote %d rows, but expected to write %d", n, len(typedRows))
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := parquet.NewGenericReader[T](bytes.NewReader(buf.Bytes()))
+	return readAllRows(t, r, len(typedRows))
+}
+
+func readAllRows[T any](t testing.TB, r *parquet.GenericReader[T], numRows int) []parquet.Row {
+	t.Helper()
+	if r.NumRows() != int64(numRows) {
+		t.Errorf("reader reports %d rows, but expected %d", r.NumRows(), numRows)
+	}
+	rows := make([]parquet.Row, numRows)
+	n, err := r.ReadRows(rows)
+	if n != numRows {
+		t.Errorf("wrote %d rows, but expected to write %d", n, numRows)
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+func transpose(rows []parquet.Row) [][]parquet.Value {
+	var cols [][]parquet.Value
+	for i, row := range rows {
+		if i == 0 {
+			var columnCount int
+			row.Range(func(columnIndex int, columnValues []parquet.Value) bool {
+				columnCount++
+				return true
+			})
+			cols = make([][]parquet.Value, columnCount)
+		}
+		row.Range(func(columnIndex int, columnValues []parquet.Value) bool {
+			cols[columnIndex] = append(cols[columnIndex], columnValues...)
+			return true
+		})
+	}
+	return cols
 }
 
 func TestIssue272(t *testing.T) {

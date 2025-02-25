@@ -221,7 +221,7 @@ func (w *GenericWriter[T]) Schema() *Schema {
 	return w.base.Schema()
 }
 
-func (w *GenericWriter[T]) ColumnWriters() []ValueWriter {
+func (w *GenericWriter[T]) ColumnWriters() []ColumnWriter {
 	return w.base.ColumnWriters()
 }
 
@@ -491,7 +491,20 @@ func (w *Writer) SetKeyValueMetadata(key, value string) {
 // ColumnWriters returns writers for each column. This allows applications to
 // write values directly to each column instead of having to first assemble
 // values into rows to use WriteRows.
-func (w *Writer) ColumnWriters() []ValueWriter { return w.writer.valueWriters }
+func (w *Writer) ColumnWriters() []ColumnWriter { return w.writer.columnWriters }
+
+// ColumnWriter writes values for a single column to underlying medium.
+type ColumnWriter interface {
+	ValueWriter
+	// WriteRows writes entire rows to the column. The given values must represent values for whole
+	// rows. Unlike WriteValue, this will automatically handle flushing when the page is filled.
+	WriteRows([]Value) (int, error)
+	// Size returns the size of the column's buffer in bytes.
+	Size() int64
+	// Flush flushes buffered data to a page and starts a new page. This must be called manually
+	// when using WriteValues, but it is automatically handled when using WriteRows.
+	Flush() error
+}
 
 type writerFileView struct {
 	writer *writer
@@ -572,11 +585,11 @@ type writer struct {
 	createdBy string
 	metadata  []format.KeyValue
 
-	columns      []*writerColumn
-	valueWriters []ValueWriter
-	columnChunk  []format.ColumnChunk
-	columnIndex  []format.ColumnIndex
-	offsetIndex  []format.OffsetIndex
+	columns       []*writerColumn
+	columnWriters []ColumnWriter
+	columnChunk   []format.ColumnChunk
+	columnIndex   []format.ColumnIndex
+	offsetIndex   []format.OffsetIndex
 
 	columnOrders   []format.ColumnOrder
 	schemaElements []format.SchemaElement
@@ -764,9 +777,9 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 	for i, c := range w.columns {
 		w.columnOrders[i] = *c.columnType.ColumnOrder()
 	}
-	w.valueWriters = make([]ValueWriter, len(w.columns))
+	w.columnWriters = make([]ColumnWriter, len(w.columns))
 	for i, c := range w.columns {
-		w.valueWriters[i] = c
+		w.columnWriters[i] = c
 	}
 
 	return w
@@ -937,7 +950,7 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 	}()
 
 	for _, c := range w.columns {
-		if err := c.flush(); err != nil {
+		if err := c.Flush(); err != nil {
 			return 0, err
 		}
 		if err := c.flushFilterPages(); err != nil {
@@ -1067,7 +1080,7 @@ func (w *writer) WriteRows(rows []Row) (int, error) {
 
 		for i, values := range w.values {
 			if len(values) > 0 {
-				if err := w.columns[i].writeRows(values); err != nil {
+				if _, err := w.columns[i].WriteRows(values); err != nil {
 					return 0, err
 				}
 			}
@@ -1299,6 +1312,20 @@ func (c *writerColumn) totalRowCount() int64 {
 	return n
 }
 
+func (c *writerColumn) Size() int64 {
+	if c.columnBuffer == nil {
+		return 0
+	}
+	return c.columnBuffer.Size()
+}
+
+func (c *writerColumn) Flush() (err error) {
+	if c.columnBuffer == nil {
+		return nil
+	}
+	return c.flush()
+}
+
 func (c *writerColumn) flush() (err error) {
 	if c.columnBuffer.Len() > 0 {
 		defer c.columnBuffer.Reset()
@@ -1432,19 +1459,23 @@ func (c *writerColumn) newColumnBuffer() ColumnBuffer {
 	return column
 }
 
-func (c *writerColumn) writeRows(rows []Value) error {
+func (c *writerColumn) WriteRows(rows []Value) (int, error) {
+	var startingRows int64
 	if c.columnBuffer == nil {
 		// Lazily create the row group column so we don't need to allocate it if
 		// rows are not written individually to the column.
 		c.columnBuffer = c.newColumnBuffer()
+	} else {
+		startingRows = int64(c.columnBuffer.Len())
 	}
 	if _, err := c.columnBuffer.WriteValues(rows); err != nil {
-		return err
+		return 0, err
 	}
+	numRows := int(int64(c.columnBuffer.Len()) - startingRows)
 	if c.columnBuffer.Size() >= int64(c.bufferSize) {
-		return c.flush()
+		return numRows, c.flush()
 	}
-	return nil
+	return numRows, nil
 }
 
 func (c *writerColumn) WriteValues(values []Value) (numValues int, err error) {
