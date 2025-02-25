@@ -1431,12 +1431,14 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 	return column
 }
 
-// WriteRowValues writes entire rows to the column. Unlike ValueWriter,
-// where arbitrary values may be written regardless of row boundaries,
-// this method requires whole rows. This is because the written values
-// may be automatically flushed to a data page, based on the writer's
-// configured page buffer size, and a single row is not permitted to
-// span two pages.
+// WriteRowValues writes entire rows to the column. On success, this returns the
+// number of rows written (not the number of values).
+//
+// Unlike ValueWriter, where arbitrary values may be written regardless of row
+// boundaries, this method requires whole rows. This is because the written
+// values may be automatically flushed to a data page, based on the writer's
+// configured page buffer size, and a single row is not permitted to span two
+// pages.
 func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
 	var startingRows int64
 	if c.columnBuffer != nil {
