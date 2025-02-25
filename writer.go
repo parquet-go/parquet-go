@@ -221,7 +221,7 @@ func (w *GenericWriter[T]) Schema() *Schema {
 	return w.base.Schema()
 }
 
-func (w *GenericWriter[T]) ColumnWriters() []ColumnWriter {
+func (w *GenericWriter[T]) ColumnWriters() []*ColumnWriter {
 	return w.base.ColumnWriters()
 }
 
@@ -491,20 +491,7 @@ func (w *Writer) SetKeyValueMetadata(key, value string) {
 // ColumnWriters returns writers for each column. This allows applications to
 // write values directly to each column instead of having to first assemble
 // values into rows to use WriteRows.
-func (w *Writer) ColumnWriters() []ColumnWriter { return w.writer.columnWriters }
-
-// ColumnWriter writes values for a single column to underlying medium.
-type ColumnWriter interface {
-	ValueWriter
-	// WriteRows writes entire rows to the column. The given values must represent values for whole
-	// rows. Unlike WriteValue, this will automatically handle flushing when the page is filled.
-	WriteRows([]Value) (int, error)
-	// Size returns the size of the column's buffer in bytes.
-	Size() int64
-	// Flush flushes buffered data to a page and starts a new page. This must be called manually
-	// when using WriteValues, but it is automatically handled when using WriteRows.
-	Flush() error
-}
+func (w *Writer) ColumnWriters() []*ColumnWriter { return w.writer.columns }
 
 type writerFileView struct {
 	writer *writer
@@ -585,11 +572,10 @@ type writer struct {
 	createdBy string
 	metadata  []format.KeyValue
 
-	columns       []*writerColumn
-	columnWriters []ColumnWriter
-	columnChunk   []format.ColumnChunk
-	columnIndex   []format.ColumnIndex
-	offsetIndex   []format.OffsetIndex
+	columns     []*ColumnWriter
+	columnChunk []format.ColumnChunk
+	columnIndex []format.ColumnIndex
+	offsetIndex []format.OffsetIndex
 
 	columnOrders   []format.ColumnOrder
 	schemaElements []format.SchemaElement
@@ -690,7 +676,7 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 			columnType = dictionary.Type()
 		}
 
-		c := &writerColumn{
+		c := &ColumnWriter{
 			buffers:            buffers,
 			pool:               config.ColumnPageBuffers,
 			columnPath:         leaf.path,
@@ -776,10 +762,6 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 
 	for i, c := range w.columns {
 		w.columnOrders[i] = *c.columnType.ColumnOrder()
-	}
-	w.columnWriters = make([]ColumnWriter, len(w.columns))
-	for i, c := range w.columns {
-		w.columnWriters[i] = c
 	}
 
 	return w
@@ -950,7 +932,7 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 	}()
 
 	for _, c := range w.columns {
-		if err := c.Flush(); err != nil {
+		if err := c.flush(); err != nil {
 			return 0, err
 		}
 		if err := c.flushFilterPages(); err != nil {
@@ -1080,7 +1062,7 @@ func (w *writer) WriteRows(rows []Row) (int, error) {
 
 		for i, values := range w.values {
 			if len(values) > 0 {
-				if _, err := w.columns[i].WriteRows(values); err != nil {
+				if err := w.columns[i].writeRows(values); err != nil {
 					return 0, err
 				}
 			}
@@ -1136,7 +1118,7 @@ func (w *writer) writeRows(numRows int, write func(i, j int) (int, error)) (int,
 // The WriteValues method is intended to work in pair with WritePage to allow
 // programs to target writing values to specific columns of of the writer.
 func (w *writer) WriteValues(values []Value) (numValues int, err error) {
-	return w.columns[values[0].Column()].WriteValues(values)
+	return w.columns[values[0].Column()].writeValues(values)
 }
 
 // One writerBuffers is used by each writer instance, the memory buffers here
@@ -1234,7 +1216,8 @@ func (wb *writerBuffers) swapPageAndScratchBuffers() {
 	wb.page, wb.scratch = wb.scratch, wb.page[:0]
 }
 
-type writerColumn struct {
+// ColumnWriter writes values for a single column to underlying medium.
+type ColumnWriter struct {
 	pool       BufferPool
 	pageBuffer io.ReadWriteSeeker
 	numPages   int
@@ -1272,7 +1255,7 @@ type writerColumn struct {
 	offsetIndex *format.OffsetIndex
 }
 
-func (c *writerColumn) reset() {
+func (c *ColumnWriter) reset() {
 	if c.columnBuffer != nil {
 		c.columnBuffer.Reset()
 	}
@@ -1304,7 +1287,7 @@ func (c *writerColumn) reset() {
 	c.offsetIndex.PageLocations = c.offsetIndex.PageLocations[:0]
 }
 
-func (c *writerColumn) totalRowCount() int64 {
+func (c *ColumnWriter) totalRowCount() int64 {
 	n := c.numRows
 	if c.columnBuffer != nil {
 		n += int64(c.columnBuffer.Len())
@@ -1312,21 +1295,10 @@ func (c *writerColumn) totalRowCount() int64 {
 	return n
 }
 
-func (c *writerColumn) Size() int64 {
-	if c.columnBuffer == nil {
-		return 0
-	}
-	return c.columnBuffer.Size()
-}
-
-func (c *writerColumn) Flush() (err error) {
+func (c *ColumnWriter) flush() (err error) {
 	if c.columnBuffer == nil {
 		return nil
 	}
-	return c.flush()
-}
-
-func (c *writerColumn) flush() (err error) {
 	if c.columnBuffer.Len() > 0 {
 		defer c.columnBuffer.Reset()
 		_, err = c.writeDataPage(c.columnBuffer.Page())
@@ -1334,7 +1306,7 @@ func (c *writerColumn) flush() (err error) {
 	return err
 }
 
-func (c *writerColumn) flushFilterPages() (err error) {
+func (c *ColumnWriter) flushFilterPages() (err error) {
 	if c.columnFilter == nil {
 		return nil
 	}
@@ -1436,7 +1408,7 @@ func (c *writerColumn) flushFilterPages() (err error) {
 	return nil
 }
 
-func (c *writerColumn) resizeBloomFilter(numValues int64) {
+func (c *ColumnWriter) resizeBloomFilter(numValues int64) {
 	filterSize := c.columnFilter.Size(numValues)
 	if cap(c.filter) < filterSize {
 		c.filter = make([]byte, filterSize)
@@ -1448,7 +1420,7 @@ func (c *writerColumn) resizeBloomFilter(numValues int64) {
 	}
 }
 
-func (c *writerColumn) newColumnBuffer() ColumnBuffer {
+func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 	column := c.columnType.NewColumnBuffer(int(c.bufferIndex), c.columnType.EstimateNumValues(int(c.bufferSize)))
 	switch {
 	case c.maxRepetitionLevel > 0:
@@ -1459,33 +1431,47 @@ func (c *writerColumn) newColumnBuffer() ColumnBuffer {
 	return column
 }
 
-func (c *writerColumn) WriteRows(rows []Value) (int, error) {
+// WriteRowValues writes entire rows to the column. Unlike ValueWriter,
+// where arbitrary values may be written regardless of row boundaries,
+// this method requires whole rows. This is because the written values
+// may be automatically flushed to a data page, based on the writer's
+// configured page buffer size, and a single row is not permitted to
+// span two pages.
+func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
 	var startingRows int64
+	if c.columnBuffer != nil {
+		startingRows = int64(c.columnBuffer.Len())
+	}
+	if err := c.writeRows(rows); err != nil {
+		return 0, err
+	}
+	numRows := int(int64(c.columnBuffer.Len()) - startingRows)
+	return numRows, nil
+}
+
+func (c *ColumnWriter) writeRows(rows []Value) error {
 	if c.columnBuffer == nil {
 		// Lazily create the row group column so we don't need to allocate it if
 		// rows are not written individually to the column.
 		c.columnBuffer = c.newColumnBuffer()
-	} else {
-		startingRows = int64(c.columnBuffer.Len())
 	}
 	if _, err := c.columnBuffer.WriteValues(rows); err != nil {
-		return 0, err
+		return err
 	}
-	numRows := int(int64(c.columnBuffer.Len()) - startingRows)
 	if c.columnBuffer.Size() >= int64(c.bufferSize) {
-		return numRows, c.flush()
+		return c.flush()
 	}
-	return numRows, nil
+	return nil
 }
 
-func (c *writerColumn) WriteValues(values []Value) (numValues int, err error) {
+func (c *ColumnWriter) writeValues(values []Value) (numValues int, err error) {
 	if c.columnBuffer == nil {
 		c.columnBuffer = c.newColumnBuffer()
 	}
 	return c.columnBuffer.WriteValues(values)
 }
 
-func (c *writerColumn) writeBloomFilter(w io.Writer) error {
+func (c *ColumnWriter) writeBloomFilter(w io.Writer) error {
 	e := thrift.NewEncoder(c.header.protocol.NewWriter(w))
 	h := bloomFilterHeader(c.columnFilter)
 	h.NumBytes = int32(len(c.filter))
@@ -1496,7 +1482,7 @@ func (c *writerColumn) writeBloomFilter(w io.Writer) error {
 	return err
 }
 
-func (c *writerColumn) writeDataPage(page Page) (int64, error) {
+func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 	numValues := page.NumValues()
 	if numValues == 0 {
 		return 0, nil
@@ -1609,7 +1595,7 @@ func (c *writerColumn) writeDataPage(page Page) (int64, error) {
 	return numValues, nil
 }
 
-func (c *writerColumn) writeDictionaryPage(output io.Writer, dict Dictionary) (err error) {
+func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (err error) {
 	buf := c.buffers
 	buf.reset()
 
@@ -1654,14 +1640,14 @@ func (c *writerColumn) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	return nil
 }
 
-func (w *writerColumn) writePageToFilter(page Page) (err error) {
+func (w *ColumnWriter) writePageToFilter(page Page) (err error) {
 	pageType := page.Type()
 	pageData := page.Data()
 	w.filter, err = pageType.Encode(w.filter, pageData, w.columnFilter.Encoding())
 	return err
 }
 
-func (c *writerColumn) writePageTo(size int64, writeTo func(io.Writer) (int64, error)) (err error) {
+func (c *ColumnWriter) writePageTo(size int64, writeTo func(io.Writer) (int64, error)) (err error) {
 	if c.pageBuffer == nil {
 		c.pageBuffer = c.pool.GetBuffer()
 		defer func() {
@@ -1685,7 +1671,7 @@ func (c *writerColumn) writePageTo(size int64, writeTo func(io.Writer) (int64, e
 	return nil
 }
 
-func (c *writerColumn) makePageStatistics(page Page) format.Statistics {
+func (c *ColumnWriter) makePageStatistics(page Page) format.Statistics {
 	numNulls := page.NumNulls()
 	minValue, maxValue, _ := page.Bounds()
 	minValueBytes := minValue.Bytes()
@@ -1699,7 +1685,7 @@ func (c *writerColumn) makePageStatistics(page Page) format.Statistics {
 	}
 }
 
-func (c *writerColumn) recordPageStats(headerSize int32, header *format.PageHeader, page Page) {
+func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHeader, page Page) {
 	uncompressedSize := headerSize + header.UncompressedPageSize
 	compressedSize := headerSize + header.CompressedPageSize
 
@@ -1845,8 +1831,6 @@ var (
 
 	_ RowWriter   = (*writer)(nil)
 	_ ValueWriter = (*writer)(nil)
-
-	_ ValueWriter = (*writerColumn)(nil)
 
 	_ io.ReaderFrom   = (*offsetTrackingWriter)(nil)
 	_ io.StringWriter = (*offsetTrackingWriter)(nil)

@@ -147,69 +147,18 @@ func testWriteRowsColumns[T any](t *testing.T) {
 			data: unsafecast.Slice[[]parquet.Value](rowSlice),
 		},
 		{
-			name: "ColumnWriters.WriteRows",
+			name: "ColumnWriter.WriteRowValues",
 			write: func(t *testing.T, w *parquet.GenericWriter[T], vals [][]parquet.Value) (int, error) {
 				t.Helper()
 				var numRows int
 				for i, col := range vals {
-					num, err := w.ColumnWriters()[i].WriteRows(col)
+					num, err := w.ColumnWriters()[i].WriteRowValues(col)
 					if err != nil {
 						return 0, err
 					}
 					if i == 0 {
 						numRows = num
 					} else if numRows != num {
-						t.Errorf("column %d disagrees with number of rows written in column %d", i, 0)
-					}
-				}
-				return numRows, nil
-			},
-			data: colSlice,
-		},
-		{
-			name: "ColumnWriters.WriteValues",
-			write: func(t *testing.T, w *parquet.GenericWriter[T], vals [][]parquet.Value) (int, error) {
-				t.Helper()
-				var numRows int
-				for i, col := range vals {
-					var rowsInCol int
-					for len(col) > 0 {
-						// We break the column into whole-row chunks and optionally flush
-						var boundary int
-						var rowsInChunk int
-						for j, val := range col {
-							if val.RepetitionLevel() == 0 {
-								rowsInChunk++
-								if rowsInChunk > 100 {
-									rowsInChunk-- // this latest row start goes in next chunk
-									boundary = j
-									break
-								}
-							}
-						}
-						var chunk []parquet.Value
-						if boundary == 0 {
-							chunk = col
-							col = nil
-						} else {
-							chunk = col[:boundary]
-							col = col[boundary:]
-						}
-						cw := w.ColumnWriters()[i]
-						_, err := cw.WriteValues(chunk)
-						if err != nil {
-							return 0, err
-						}
-						if cw.Size() > 10_000 {
-							if err := cw.Flush(); err != nil {
-								return 0, err
-							}
-						}
-						rowsInCol += rowsInChunk
-					}
-					if i == 0 {
-						numRows = rowsInCol
-					} else if numRows != rowsInCol {
 						t.Errorf("column %d disagrees with number of rows written in column %d", i, 0)
 					}
 				}
