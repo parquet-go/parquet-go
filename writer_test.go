@@ -100,6 +100,26 @@ func benchmarkGenericWriter[Row generator[Row]](b *testing.B) {
 	})
 }
 
+func TestIssue249(t *testing.T) {
+	type noExportedFields struct {
+		a, b, c string
+		x, y, z []int32
+	}
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[*noExportedFields](&buf)
+	n, err := w.Write([]*noExportedFields{
+		{a: "a", b: "c", c: "c", x: []int32{0, 1, 2}},
+		{a: "a", b: "c", c: "c", x: []int32{0, 1, 2}},
+		{a: "a", b: "c", c: "c", x: []int32{0, 1, 2}},
+	})
+	if err == nil {
+		t.Fatal("expecting Write to return an error, but it did not")
+	}
+	if !strings.Contains(err.Error(), "noExportedFields has zero columns") {
+		t.Fatalf("expecting Write to return an error describing that the input type has no columns; instead got: %v", err)
+	}
+}
+
 func TestIssue272(t *testing.T) {
 	type T2 struct {
 		X string `parquet:",dict,optional"`
