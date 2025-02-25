@@ -100,20 +100,24 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 	schema := config.Schema
 	t := typeOf[T]()
 
+	var genWriteErr error
 	if schema == nil && t != nil {
 		schema = schemaOf(dereference(t))
+		if len(schema.Columns()) == 0 {
+			genWriteErr = fmt.Errorf("cannot write %v: it has no columns (maybe it has no exported fields)", t)
+		}
 		config.Schema = schema
+	} else if schema != nil && len(schema.Columns()) == 0 {
+		genWriteErr = fmt.Errorf("cannot write %v: schema has no columns", t)
 	}
 
 	if config.Schema == nil {
 		panic("generic writer must be instantiated with schema or concrete type.")
 	}
+
 	var writeFn writeFunc[T]
-	if len(schema.Columns()) == 0 {
-		writeFn = func(*GenericWriter[T], []T) (int, error) {
-			var zero T
-			return 0, fmt.Errorf("type %T has zero columns; maybe it has no exported fields?", zero)
-		}
+	if genWriteErr != nil {
+		writeFn = func(*GenericWriter[T], []T) (int, error) { return 0, genWriteErr }
 	} else {
 		writeFn = writeFuncOf[T](t, config.Schema)
 	}

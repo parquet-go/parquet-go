@@ -107,7 +107,7 @@ func TestIssue249(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	w := parquet.NewGenericWriter[*noExportedFields](&buf)
-	n, err := w.Write([]*noExportedFields{
+	_, err := w.Write([]*noExportedFields{
 		{a: "a", b: "c", c: "c", x: []int32{0, 1, 2}},
 		{a: "a", b: "c", c: "c", x: []int32{0, 1, 2}},
 		{a: "a", b: "c", c: "c", x: []int32{0, 1, 2}},
@@ -115,7 +115,7 @@ func TestIssue249(t *testing.T) {
 	if err == nil {
 		t.Fatal("expecting Write to return an error, but it did not")
 	}
-	if !strings.Contains(err.Error(), "noExportedFields has zero columns") {
+	if !strings.Contains(err.Error(), "noExportedFields: it has no columns (maybe it has no exported fields)") {
 		t.Fatalf("expecting Write to return an error describing that the input type has no columns; instead got: %v", err)
 	}
 }
