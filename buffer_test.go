@@ -175,7 +175,7 @@ func benchmarkGenericBuffer[Row generator[Row]](b *testing.B) {
 	})
 }
 
-func TestIssue327(t *testing.T) {
+func TestIssueSegmentio327(t *testing.T) {
 	t.Run("untagged nested lists should panic", func(t *testing.T) {
 		type testType struct {
 			ListOfLists [][]int
@@ -191,7 +191,7 @@ func TestIssue327(t *testing.T) {
 	})
 }
 
-func TestIssue346(t *testing.T) {
+func TestIssueSegmentio346(t *testing.T) {
 	type TestType struct {
 		Key int
 	}
@@ -204,7 +204,7 @@ func TestIssue346(t *testing.T) {
 	_, _ = buffer.Write(data)
 }
 
-func TestIssue347(t *testing.T) {
+func TestIssueSegmentio347(t *testing.T) {
 	type TestType struct {
 		Key int
 	}
