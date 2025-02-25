@@ -91,7 +91,7 @@ func testGenericReaderRows[Row any](rows []Row) error {
 	return nil
 }
 
-func TestIssue400(t *testing.T) {
+func TestIssueSegmentio400(t *testing.T) {
 	type B struct {
 		Name string
 	}

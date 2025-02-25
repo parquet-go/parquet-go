@@ -100,7 +100,7 @@ func benchmarkGenericWriter[Row generator[Row]](b *testing.B) {
 	})
 }
 
-func TestIssue272(t *testing.T) {
+func TestIssueSegmentio272(t *testing.T) {
 	type T2 struct {
 		X string `parquet:",dict,optional"`
 	}
@@ -160,7 +160,7 @@ func TestIssue272(t *testing.T) {
 	}
 }
 
-func TestIssue279(t *testing.T) {
+func TestIssueSegmentio279(t *testing.T) {
 	type T2 struct {
 		Id   int    `parquet:",plain,optional"`
 		Name string `parquet:",plain,optional"`
@@ -223,7 +223,7 @@ func TestIssue279(t *testing.T) {
 	}
 }
 
-func TestIssue302(t *testing.T) {
+func TestIssueSegmentio302(t *testing.T) {
 	tests := []struct {
 		name string
 		fn   func(t *testing.T)
@@ -310,7 +310,7 @@ func TestIssue302(t *testing.T) {
 	}
 }
 
-func TestIssue347Writer(t *testing.T) {
+func TestIssueSegmentio347Writer(t *testing.T) {
 	type TestType struct {
 		Key int
 	}
@@ -332,7 +332,7 @@ func TestIssue347Writer(t *testing.T) {
 	_ = parquet.NewGenericWriter[any](b)
 }
 
-func TestIssue375(t *testing.T) {
+func TestIssueSegmentio375(t *testing.T) {
 	type Row struct{ FirstName, LastName string }
 
 	output := new(bytes.Buffer)

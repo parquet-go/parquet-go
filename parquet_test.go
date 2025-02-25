@@ -199,7 +199,7 @@ func ExampleSearch() {
 	// {"Luke" "Skywalker"}
 }
 
-func TestIssue360(t *testing.T) {
+func TestIssueSegmentio360(t *testing.T) {
 	type TestType struct {
 		Key []int
 	}
@@ -239,7 +239,7 @@ func TestIssue360(t *testing.T) {
 	assertRowsEqual(t, expect, rows)
 }
 
-func TestIssue362ParquetReadFromGenericReaders(t *testing.T) {
+func TestIssueSegmentio362ParquetReadFromGenericReaders(t *testing.T) {
 	path := "testdata/dms_test_table_LOAD00000001.parquet"
 	fp, err := os.Open(path)
 	if err != nil {
@@ -262,7 +262,7 @@ func TestIssue362ParquetReadFromGenericReaders(t *testing.T) {
 	}
 }
 
-func TestIssue362ParquetReadFile(t *testing.T) {
+func TestIssueSegmentio362ParquetReadFile(t *testing.T) {
 	rows1, err := parquet.ReadFile[any]("testdata/dms_test_table_LOAD00000001.parquet")
 	if err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func TestIssue362ParquetReadFile(t *testing.T) {
 	assertRowsEqual(t, rows1, rows2)
 }
 
-func TestIssue368(t *testing.T) {
+func TestIssueSegmentio368(t *testing.T) {
 	f, err := os.Open("testdata/issue368.parquet")
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +305,7 @@ func TestIssue368(t *testing.T) {
 	}
 }
 
-func TestIssue377(t *testing.T) {
+func TestIssueSegmentio377(t *testing.T) {
 	type People struct {
 		Name string
 		Age  int
@@ -341,7 +341,7 @@ func TestIssue377(t *testing.T) {
 	assertRowsEqual(t, rows, ods)
 }
 
-func TestIssue423(t *testing.T) {
+func TestIssueSegmentio423(t *testing.T) {
 	type Inner struct {
 		Value string `parquet:","`
 	}

@@ -98,7 +98,7 @@ func TestWriteAndReadOptionalPointer(t *testing.T) {
 }
 
 // https://github.com/segmentio/parquet-go/issues/501
-func TestIssue501(t *testing.T) {
+func TestIssueSegmentio501(t *testing.T) {
 	col := newBooleanColumnBuffer(BooleanType, 0, 2055208)
 
 	// write all trues and then flush the buffer
