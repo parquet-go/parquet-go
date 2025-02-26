@@ -246,7 +246,7 @@ func assertRowsEqualByRow[T any](t *testing.T, rowsGot, rowsWant []T) {
 	}
 }
 
-func TestIssue_82(t *testing.T) {
+func TestIssue82(t *testing.T) {
 	type Record struct {
 		A string `parquet:"a"`
 	}
