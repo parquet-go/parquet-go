@@ -1062,7 +1062,7 @@ func (w *writer) WriteRows(rows []Row) (int, error) {
 
 		for i, values := range w.values {
 			if len(values) > 0 {
-				if err := w.columns[i].writeRows(values); err != nil {
+				if _, err := w.columns[i].WriteRowValues(values); err != nil {
 					return 0, err
 				}
 			}
@@ -1441,29 +1441,21 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 // pages.
 func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
 	var startingRows int64
-	if c.columnBuffer != nil {
-		startingRows = int64(c.columnBuffer.Len())
-	}
-	if err := c.writeRows(rows); err != nil {
-		return 0, err
-	}
-	numRows := int(int64(c.columnBuffer.Len()) - startingRows)
-	return numRows, nil
-}
-
-func (c *ColumnWriter) writeRows(rows []Value) error {
 	if c.columnBuffer == nil {
 		// Lazily create the row group column so we don't need to allocate it if
 		// rows are not written individually to the column.
 		c.columnBuffer = c.newColumnBuffer()
+	} else {
+		startingRows = int64(c.columnBuffer.Len())
 	}
 	if _, err := c.columnBuffer.WriteValues(rows); err != nil {
-		return err
+		return 0, err
 	}
+	numRows := int(int64(c.columnBuffer.Len()) - startingRows)
 	if c.columnBuffer.Size() >= int64(c.bufferSize) {
-		return c.flush()
+		return numRows, c.flush()
 	}
-	return nil
+	return numRows, nil
 }
 
 func (c *ColumnWriter) writeValues(values []Value) (numValues int, err error) {
