@@ -71,10 +71,12 @@ jobs:
       - name: Setup Go ${{ matrix.go }}
         uses: actions/setup-go@v3
         with:
-          go-version: 1.22.x
+          go-version: 1.24.x
 
       - name: Validate formatting
-        run: make format
+        run: |
+          make format
+          git diff --exit-code
 
   # https://github.com/golangci/golangci-lint/issues/2649
   # lint:
