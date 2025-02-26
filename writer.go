@@ -100,13 +100,26 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 	schema := config.Schema
 	t := typeOf[T]()
 
+	var genWriteErr error
 	if schema == nil && t != nil {
 		schema = schemaOf(dereference(t))
+		if len(schema.Columns()) == 0 {
+			genWriteErr = fmt.Errorf("cannot write %v: it has no columns (maybe it has no exported fields)", t)
+		}
 		config.Schema = schema
+	} else if schema != nil && len(schema.Columns()) == 0 {
+		genWriteErr = fmt.Errorf("cannot write %v: schema has no columns", t)
 	}
 
 	if config.Schema == nil {
 		panic("generic writer must be instantiated with schema or concrete type.")
+	}
+
+	var writeFn writeFunc[T]
+	if genWriteErr != nil {
+		writeFn = func(*GenericWriter[T], []T) (int, error) { return 0, genWriteErr }
+	} else {
+		writeFn = writeFuncOf[T](t, config.Schema)
 	}
 
 	return &GenericWriter[T]{
@@ -116,7 +129,7 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 			schema: schema,
 			writer: newWriter(output, config),
 		},
-		write: writeFuncOf[T](t, config.Schema),
+		write: writeFn,
 	}
 }
 
@@ -912,6 +925,9 @@ func (w *writer) writeFileFooter() error {
 }
 
 func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []SortingColumn) (int64, error) {
+	if len(w.columns) == 0 {
+		return 0, nil
+	}
 	numRows := w.columns[0].totalRowCount()
 	if numRows == 0 {
 		return 0, nil
