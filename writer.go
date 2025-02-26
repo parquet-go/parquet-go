@@ -398,7 +398,7 @@ func (w *Writer) Reset(output io.Writer) {
 // and decompose it into a set of columns and values. If no schema were passed
 // to NewWriter, it is deducted from the Go type of the row, which then have to
 // be a struct or pointer to struct.
-func (w *Writer) Write(row interface{}) error {
+func (w *Writer) Write(row any) error {
 	if w.schema == nil {
 		w.configure(SchemaOf(row))
 	}
@@ -1390,7 +1390,7 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 
 	decoder := thrift.NewDecoder(c.header.protocol.NewReader(pageReader))
 
-	for i := 0; i < c.numPages; i++ {
+	for range c.numPages {
 		header := new(format.PageHeader)
 		if err := decoder.Decode(header); err != nil {
 			return err
@@ -1770,10 +1770,8 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 }
 
 func addEncoding(encodings []format.Encoding, add format.Encoding) []format.Encoding {
-	for _, enc := range encodings {
-		if enc == add {
-			return encodings
-		}
+	if slices.Contains(encodings, add) {
+		return encodings
 	}
 	return append(encodings, add)
 }

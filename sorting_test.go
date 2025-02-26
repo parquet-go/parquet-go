@@ -316,7 +316,7 @@ func TestMergedRowsCorruptedString(t *testing.T) {
 
 	// Create two files each with half of the rows.
 	files := make([]*parquet.File, 2)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		buffer := bytes.NewBuffer(nil)
 
 		writer := parquet.NewSortingWriter[Row](buffer, int64(rowCount),

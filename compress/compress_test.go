@@ -92,7 +92,7 @@ func TestCompressionCodec(t *testing.T) {
 			const N = 10
 			// Run the test multiple times to exercise codecs that maintain
 			// state across compression/decompression.
-			for i := 0; i < N; i++ {
+			for i := range N {
 				var err error
 
 				buffer, err = test.codec.Encode(buffer[:0], testdata)

@@ -481,7 +481,7 @@ func TestReadFileGenericMultipleRowGroupsMultiplePages(t *testing.T) {
 	// The page buffer size ensures we get multiple pages out of this example.
 	w := parquet.NewGenericWriter[MyRow](tmp, parquet.PageBufferSize(maxPageBytes))
 	// Need to write 1 row at a time here as writing many at once disregards PageBufferSize option.
-	for i := 0; i < numRows; i++ {
+	for i := range numRows {
 		row := MyRow{
 			ID:    [16]byte{15: byte(i)},
 			File:  "hi" + fmt.Sprint(i),
@@ -741,7 +741,7 @@ type mapColumn struct {
 func (row mapColumn) generate(prng *rand.Rand) mapColumn {
 	n := prng.Intn(10)
 	row.Value = make(map[utf8string]int, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		row.Value[utf8string(generateString(prng, 8))] = prng.Intn(100)
 	}
 	return row
@@ -954,9 +954,9 @@ func writeParquetFileWithBuffer(w io.Writer, rows rows, options ...parquet.Write
 	return writer.Close()
 }
 
-type rows []interface{}
+type rows []any
 
-func makeRows(any interface{}) rows {
+func makeRows(any any) rows {
 	if v, ok := any.([]interface{}); ok {
 		return rows(v)
 	}
@@ -1052,7 +1052,7 @@ func benchmarkRowsPerSecond(b *testing.B, f func() int) {
 func generateString(r *rand.Rand, n int) string {
 	const characters = "1234567890qwertyuiopasdfghjklzxcvbnm"
 	b := new(strings.Builder)
-	for i := 0; i < n; i++ {
+	for range n {
 		b.WriteByte(characters[r.Intn(len(characters))])
 	}
 	return b.String()
@@ -1066,7 +1066,7 @@ var quickCheckConfig = quick.Config{
 	},
 }
 
-func quickCheck(f interface{}) error {
+func quickCheck(f any) error {
 	return quickCheckConfig.Check(f)
 }
 

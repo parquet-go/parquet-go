@@ -22,7 +22,7 @@ import (
 
 func repeatInt64(seq []int64, n int) []int64 {
 	rep := make([]int64, len(seq)*n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		copy(rep[i*len(seq):], seq)
 	}
 	return rep
@@ -921,7 +921,7 @@ func generateByteArrayValues(n int, r *rand.Rand) ([]byte, []uint32) {
 	values := make([]byte, n*maxLen)
 	length := 0
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		k := r.Intn(maxLen) + 1
 		io.ReadFull(r, values[length:length+k])
 		offsets[i] = uint32(length)

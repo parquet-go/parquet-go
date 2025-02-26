@@ -178,7 +178,7 @@ func TestBE128MinMaxSimilar(t *testing.T) {
 	//   ...
 	//   [0 0 ... 0 1]
 	//   [0 0 ... 0 0]
-	for i := 0; i < 17; i++ {
+	for i := range 17 {
 		var max [16]byte
 		for j := i; j < 16; j++ {
 			max[j] = 1
@@ -192,9 +192,9 @@ func TestBE128MinMaxSimilar(t *testing.T) {
 	//   ...
 	//   [1 1 ... 1 0]
 	//   [1 1 ... 1 1]
-	for i := 0; i < 17; i++ {
+	for i := range 17 {
 		var max [16]byte
-		for j := 0; j < i; j++ {
+		for j := range i {
 			max[j] = 1
 		}
 		testBE182MinMaxPerm(t, min, max)

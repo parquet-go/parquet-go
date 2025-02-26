@@ -256,7 +256,7 @@ func TestRowBuilder(t *testing.T) {
 		t.Run(test.scenario, func(t *testing.T) {
 			b := parquet.NewRowBuilder(test.schema)
 
-			for i := 0; i < 2; i++ {
+			for i := range 2 {
 				for _, op := range test.operations {
 					op(b)
 				}

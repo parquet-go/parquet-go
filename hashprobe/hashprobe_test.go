@@ -19,7 +19,7 @@ func TestUint32TableProbeOneByOne(t *testing.T) {
 	const N = 500
 	table := NewUint32Table(0, 0.9)
 
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		// Do two passes, both should behave the same.
 		for i := 1; i <= N; i++ {
 			k := [1]uint32{}
@@ -46,7 +46,7 @@ func TestUint32TableProbeBulk(t *testing.T) {
 		k[i] = uint32(i)
 	}
 
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		table.Probe(k, v)
 
 		for i := range v {
@@ -75,7 +75,7 @@ func TestUint64TableProbeOneByOne(t *testing.T) {
 	const N = 500
 	table := NewUint64Table(0, 0.9)
 
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		// Do two passes, both should behave the same.
 		for i := 1; i <= N; i++ {
 			k := [1]uint64{}
@@ -102,7 +102,7 @@ func TestUint64TableProbeBulk(t *testing.T) {
 		k[i] = uint64(i)
 	}
 
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		table.Probe(k, v)
 
 		for i := range v {
@@ -125,7 +125,7 @@ func TestUint128TableProbeOneByOne(t *testing.T) {
 	const N = 500
 	table := NewUint128Table(0, 0.9)
 
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		// Do two passes, both should behave the same.
 		for i := 1; i <= N; i++ {
 			k := [1][16]byte{}
@@ -152,7 +152,7 @@ func TestUint128TableProbeBulk(t *testing.T) {
 		binary.LittleEndian.PutUint64(k[i][:8], uint64(i))
 	}
 
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		table.Probe(k, v)
 
 		for i := range v {

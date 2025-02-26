@@ -63,8 +63,8 @@ type ListOfIDs struct {
 
 var conversionTests = [...]struct {
 	scenario string
-	from     interface{}
-	to       interface{}
+	from     any
+	to       any
 }{
 	{
 		scenario: "convert between rows which have the same schema",

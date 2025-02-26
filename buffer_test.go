@@ -138,7 +138,7 @@ func benchmarkGenericBuffer[Row generator[Row]](b *testing.B) {
 			buffer := parquet.NewBuffer(parquet.SchemaOf(rows[0]))
 			i := 0
 			benchmarkRowsPerSecond(b, func() int {
-				for j := 0; j < benchmarkRowsPerStep; j++ {
+				for range benchmarkRowsPerStep {
 					if err := buffer.Write(&rows[i]); err != nil {
 						b.Fatal(err)
 					}
@@ -260,7 +260,7 @@ func BenchmarkSortGenericBuffer(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		for j := 0; j < 10; j++ {
+		for range 10 {
 			buffer.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
 		}
 
@@ -271,12 +271,12 @@ func BenchmarkSortGenericBuffer(b *testing.B) {
 var bufferTests = [...]struct {
 	scenario string
 	typ      parquet.Type
-	values   [][]interface{}
+	values   [][]any
 }{
 	{
 		scenario: "boolean",
 		typ:      parquet.BooleanType,
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{false},
 			{true},
@@ -290,7 +290,7 @@ var bufferTests = [...]struct {
 	{
 		scenario: "int32",
 		typ:      parquet.Int32Type,
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{int32(0)},
 			{int32(1)},
@@ -305,7 +305,7 @@ var bufferTests = [...]struct {
 	{
 		scenario: "int64",
 		typ:      parquet.Int64Type,
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{int64(0)},
 			{int64(1)},
@@ -320,7 +320,7 @@ var bufferTests = [...]struct {
 	{
 		scenario: "float",
 		typ:      parquet.FloatType,
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{float32(0)},
 			{float32(1)},
@@ -335,7 +335,7 @@ var bufferTests = [...]struct {
 	{
 		scenario: "double",
 		typ:      parquet.DoubleType,
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{float64(0)},
 			{float64(1)},
@@ -350,7 +350,7 @@ var bufferTests = [...]struct {
 	{
 		scenario: "string",
 		typ:      parquet.ByteArrayType,
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{""},
 			{"Hello World!"},
@@ -365,7 +365,7 @@ var bufferTests = [...]struct {
 	{
 		scenario: "fixed length byte array",
 		typ:      parquet.FixedLenByteArrayType(10),
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{[10]byte{}},
 			{[10]byte{0: 1}},
@@ -380,7 +380,7 @@ var bufferTests = [...]struct {
 	{
 		scenario: "uuid",
 		typ:      parquet.UUID().Type(),
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{[16]byte{}},
 			{[16]byte{0: 1}},
@@ -395,7 +395,7 @@ var bufferTests = [...]struct {
 	{
 		scenario: "uint32",
 		typ:      parquet.Uint(32).Type(),
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{uint32(0)},
 			{uint32(1)},
@@ -410,7 +410,7 @@ var bufferTests = [...]struct {
 	{
 		scenario: "uint64",
 		typ:      parquet.Uint(64).Type(),
-		values: [][]interface{}{
+		values: [][]any{
 			{},
 			{uint64(0)},
 			{uint64(1)},
@@ -503,7 +503,7 @@ func descending(typ parquet.Type, values []parquet.Value) {
 	slices.Reverse(values)
 }
 
-func testBuffer(t *testing.T, node parquet.Node, buffer *parquet.Buffer, encoding encoding.Encoding, values []interface{}, sortFunc sortFunc) {
+func testBuffer(t *testing.T, node parquet.Node, buffer *parquet.Buffer, encoding encoding.Encoding, values []any, sortFunc sortFunc) {
 	repetitionLevel := 0
 	definitionLevel := 0
 	if !node.Required() {
@@ -707,7 +707,7 @@ func TestBufferRoundtripNestedRepeated(t *testing.T) {
 	// Write enough objects to exceed first page
 	buffer := parquet.NewBuffer()
 	var objs []A
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		o := A{[]B{{[]C{
 			{i},
 			{i},
@@ -753,7 +753,7 @@ func TestBufferRoundtripNestedRepeatedPointer(t *testing.T) {
 	// Write enough objects to exceed first page
 	buffer := parquet.NewBuffer()
 	var objs []A
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		j := i
 		o := A{[]B{{[]C{
 			{&j},
@@ -793,7 +793,7 @@ func TestRoundtripNestedRepeatedBytes(t *testing.T) {
 	}
 
 	var objs []A
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		o := A{
 			"test" + strconv.Itoa(i),
 			[]B{
@@ -839,7 +839,7 @@ func TestBufferSeekToRow(t *testing.T) {
 
 	buffer := parquet.NewBuffer()
 	var objs []A
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		o := A{
 			B: []B{
 				{I: i, C: []string{"foo", strconv.Itoa(i)}},

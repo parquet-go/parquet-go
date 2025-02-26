@@ -15,7 +15,7 @@ func TestSplitBlockFilter(t *testing.T) {
 	p := rand.New(rand.NewSource(S))
 
 	// Half of the values are inserted individually.
-	for i := 0; i < N/2; i++ {
+	for range N / 2 {
 		f.Insert(p.Uint64())
 	}
 	// The other half is inserted as a bulk operation.
@@ -40,7 +40,7 @@ func TestSplitBlockFilter(t *testing.T) {
 			p.Seed(S)
 			falsePositives := 0
 
-			for i := 0; i < N; i++ {
+			for i := range N {
 				x := p.Uint64()
 
 				if !test.filter.Check(x) {
