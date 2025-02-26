@@ -13,7 +13,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-func sortedRowGroup(options []parquet.RowGroupOption, rows ...interface{}) parquet.RowGroup {
+func sortedRowGroup(options []parquet.RowGroupOption, rows ...any) parquet.RowGroup {
 	buf := parquet.NewBuffer(options...)
 	for _, row := range rows {
 		buf.Write(row)

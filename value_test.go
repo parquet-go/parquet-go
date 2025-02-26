@@ -22,7 +22,7 @@ func BenchmarkValueAppend(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		row = row[:0]
-		for j := 0; j < N; j++ {
+		for range N {
 			row = append(row, val)
 		}
 	}
@@ -33,46 +33,46 @@ func BenchmarkValueAppend(b *testing.B) {
 func TestValueClone(t *testing.T) {
 	tests := []struct {
 		scenario string
-		values   []interface{}
+		values   []any
 	}{
 		{
 			scenario: "BOOLEAN",
-			values:   []interface{}{false, true},
+			values:   []any{false, true},
 		},
 
 		{
 			scenario: "INT32",
-			values:   []interface{}{int32(0), int32(1), int32(math.MinInt32), int32(math.MaxInt32)},
+			values:   []any{int32(0), int32(1), int32(math.MinInt32), int32(math.MaxInt32)},
 		},
 
 		{
 			scenario: "INT64",
-			values:   []interface{}{int64(0), int64(1), int64(math.MinInt64), int64(math.MaxInt64)},
+			values:   []any{int64(0), int64(1), int64(math.MinInt64), int64(math.MaxInt64)},
 		},
 
 		{
 			scenario: "FLOAT",
-			values:   []interface{}{float32(0), float32(1), float32(-1)},
+			values:   []any{float32(0), float32(1), float32(-1)},
 		},
 
 		{
 			scenario: "DOUBLE",
-			values:   []interface{}{float64(0), float64(1), float64(-1)},
+			values:   []any{float64(0), float64(1), float64(-1)},
 		},
 
 		{
 			scenario: "BYTE_ARRAY",
-			values:   []interface{}{"", "A", "ABC", "Hello World!"},
+			values:   []any{"", "A", "ABC", "Hello World!"},
 		},
 
 		{
 			scenario: "FIXED_LEN_BYTE_ARRAY",
-			values:   []interface{}{[1]byte{42}, [16]byte{0: 1}},
+			values:   []any{[1]byte{42}, [16]byte{0: 1}},
 		},
 
 		{
 			scenario: "TIME",
-			values: []interface{}{
+			values: []any{
 				time.Date(2020, 1, 2, 3, 4, 5, 7, time.UTC),
 				time.Date(2021, 2, 3, 4, 5, 6, 8, time.UTC),
 			},

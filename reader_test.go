@@ -161,7 +161,7 @@ func testReadMinPageSize(readSize int, t *testing.T) {
 	// The page buffer size ensures we get multiple pages out of this example.
 	w := parquet.NewGenericWriter[MyRow](tmp, parquet.PageBufferSize(maxPageBytes))
 	// Need to write 1 row at a time here as writing many at once disregards PageBufferSize option.
-	for i := 0; i < numRows; i++ {
+	for i := range numRows {
 		row := MyRow{
 			ID:    [16]byte{15: byte(i)},
 			File:  "hi" + fmt.Sprint(i),
@@ -292,12 +292,12 @@ func benchmarkGenericReader[Row generator[Row]](b *testing.B) {
 	})
 }
 
-func rowsOf(numRows int, model interface{}) rows {
+func rowsOf(numRows int, model any) rows {
 	prng := rand.New(rand.NewSource(0))
 	return randomRowsOf(prng, numRows, model)
 }
 
-func randomRowsOf(prng *rand.Rand, numRows int, model interface{}) rows {
+func randomRowsOf(prng *rand.Rand, numRows int, model any) rows {
 	typ := reflect.TypeOf(model)
 	rows := make(rows, numRows)
 	makeValue := quick.MakeValueFuncOf(typ)
@@ -311,7 +311,7 @@ func randomRowsOf(prng *rand.Rand, numRows int, model interface{}) rows {
 
 var readerTests = []struct {
 	scenario string
-	model    interface{}
+	model    any
 }{
 	{
 		scenario: "BOOLEAN",
@@ -515,7 +515,7 @@ func BenchmarkReaderReadType(b *testing.B) {
 			p := rowPtr.Interface()
 
 			benchmarkRowsPerSecond(b, func() (n int) {
-				for i := 0; i < benchmarkRowsPerStep; i++ {
+				for range benchmarkRowsPerStep {
 					if err := r.Read(p); err != nil {
 						if err == io.EOF {
 							r.Reset()
@@ -624,7 +624,7 @@ func TestReaderSeekToRow(t *testing.T) {
 	}
 
 	reader := parquet.NewReader(bytes.NewReader(buf.Bytes()))
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if err := reader.SeekToRow(int64(i)); err != nil {
 			t.Fatalf("seek to row %d: %v", i, err)
 		}
@@ -766,7 +766,7 @@ func TestSeekToRowDictReadMultiplePages(t *testing.T) {
 	}
 
 	// write enough rows to spill over a single page
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		w.Write(sample)
 	}
 	sample.Name = "foo2"

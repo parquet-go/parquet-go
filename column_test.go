@@ -30,74 +30,74 @@ func TestColumnPageIndex(t *testing.T) {
 		t.Run(config.name, func(t *testing.T) {
 			for _, test := range [...]struct {
 				scenario string
-				function func(*testing.T) interface{}
+				function func(*testing.T) any
 			}{
 				{
 					scenario: "boolean",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value bool }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
 
 				{
 					scenario: "int32",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value int32 }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
 
 				{
 					scenario: "int64",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value int64 }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
 
 				{
 					scenario: "int96",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value deprecated.Int96 }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
 
 				{
 					scenario: "uint32",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value uint32 }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
 
 				{
 					scenario: "uint64",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value uint64 }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
 
 				{
 					scenario: "float32",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value float32 }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
 
 				{
 					scenario: "float64",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value float64 }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
 
 				{
 					scenario: "string",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value string }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
 
 				{
 					scenario: "uuid",
-					function: func(t *testing.T) interface{} {
+					function: func(t *testing.T) any {
 						return func(rows []struct{ Value uuid.UUID }) bool { return config.test(t, makeRows(rows)) }
 					},
 				},
@@ -311,7 +311,7 @@ func checkFileColumnIndex(f *parquet.File) error {
 			return fmt.Errorf("number of pages mismatch: got=%d want=%d", numPages1, numPages2)
 		}
 
-		for j := 0; j < numPages1; j++ {
+		for j := range numPages1 {
 			nullCount1 := index1.NullCount(j)
 			nullCount2 := index2.NullCount(j)
 			if nullCount1 != nullCount2 {
@@ -375,7 +375,7 @@ func checkFileOffsetIndex(f *parquet.File) error {
 			return fmt.Errorf("number of pages mismatch: got=%d want=%d", numPages1, numPages2)
 		}
 
-		for j := 0; j < numPages1; j++ {
+		for j := range numPages1 {
 			offset1 := index1.Offset(j)
 			offset2 := index2.Offset(j)
 			if offset1 != offset2 {

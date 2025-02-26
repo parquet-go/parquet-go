@@ -54,10 +54,7 @@ func testDictionary(t *testing.T, typ parquet.Type, numValues int) {
 	mapping := make(map[int32]parquet.Value, numValues)
 
 	for i := 0; i < numValues; {
-		j := i + ((numValues-i)/2 + 1)
-		if j > numValues {
-			j = numValues
-		}
+		j := min(i+((numValues-i)/2+1), numValues)
 
 		dict.Insert(indexes[i:j], values[i:j])
 

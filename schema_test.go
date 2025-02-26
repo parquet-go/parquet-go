@@ -11,7 +11,7 @@ import (
 
 func TestSchemaOf(t *testing.T) {
 	tests := []struct {
-		value interface{}
+		value any
 		print string
 	}{
 		{
@@ -261,7 +261,7 @@ func TestSchemaOf(t *testing.T) {
 
 func TestInvalidSchemaOf(t *testing.T) {
 	tests := []struct {
-		value interface{}
+		value any
 		panic string
 	}{
 		// Date tags must be int32

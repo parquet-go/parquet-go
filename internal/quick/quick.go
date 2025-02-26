@@ -28,7 +28,7 @@ var DefaultConfig = Config{
 // Check is inspired by the standard quick.Check package, but enhances the
 // API and tests arrays of larger sizes than the maximum of 50 hardcoded in
 // testing/quick.
-func Check(f interface{}) error {
+func Check(f any) error {
 	return DefaultConfig.Check(f)
 }
 
@@ -37,7 +37,7 @@ type Config struct {
 	Seed  int64
 }
 
-func (c *Config) Check(f interface{}) error {
+func (c *Config) Check(f any) error {
 	v := reflect.ValueOf(f)
 	r := rand.New(rand.NewSource(c.Seed))
 	t := v.Type().In(0)
@@ -45,7 +45,7 @@ func (c *Config) Check(f interface{}) error {
 	makeValue := MakeValueFuncOf(t.Elem())
 	makeArray := func(n int) reflect.Value {
 		array := reflect.MakeSlice(t, n, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			makeValue(array.Index(i), r)
 		}
 		return array
@@ -56,7 +56,7 @@ func (c *Config) Check(f interface{}) error {
 	}
 
 	for _, n := range c.Sizes {
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			in := makeArray(n)
 			ok := v.Call([]reflect.Value{in})
 			if !ok[0].Bool() {
@@ -109,7 +109,7 @@ func MakeValueFuncOf(t reflect.Type) MakeValueFunc {
 			const characters = "1234567890qwertyuiopasdfghjklzxcvbnm"
 			s := new(strings.Builder)
 			n := r.Intn(10)
-			for i := 0; i < n; i++ {
+			for i := range n {
 				s.WriteByte(characters[i])
 			}
 			v.SetString(s.String())
@@ -136,7 +136,7 @@ func MakeValueFuncOf(t reflect.Type) MakeValueFunc {
 			return func(v reflect.Value, r *rand.Rand) {
 				n := r.Intn(10)
 				s := reflect.MakeSlice(t, n, n)
-				for i := 0; i < n; i++ {
+				for i := range n {
 					makeElem(s.Index(i), r)
 				}
 				v.Set(s)
@@ -151,7 +151,7 @@ func MakeValueFuncOf(t reflect.Type) MakeValueFunc {
 			n := r.Intn(10)
 			k := reflect.New(t.Key()).Elem()
 			e := reflect.New(t.Elem()).Elem()
-			for i := 0; i < n; i++ {
+			for range n {
 				makeKey(k, r)
 				makeElem(e, r)
 				m.SetMapIndex(k, e)

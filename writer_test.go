@@ -63,7 +63,7 @@ func benchmarkGenericWriter[Row generator[Row]](b *testing.B) {
 			writer := parquet.NewWriter(io.Discard, parquet.SchemaOf(rows[0]))
 			i := 0
 			benchmarkRowsPerSecond(b, func() int {
-				for j := 0; j < benchmarkRowsPerStep; j++ {
+				for range benchmarkRowsPerStep {
 					if err := writer.Write(&rows[i]); err != nil {
 						b.Fatal(err)
 					}
@@ -641,13 +641,13 @@ var writerTests = []struct {
 	scenario string
 	version  int
 	codec    compress.Codec
-	rows     []interface{}
+	rows     []any
 	dump     string
 }{
 	{
 		scenario: "page v1 with dictionary encoding",
 		version:  v1,
-		rows: []interface{}{
+		rows: []any{
 			&firstAndLastName{FirstName: "Han", LastName: "Solo"},
 			&firstAndLastName{FirstName: "Leia", LastName: "Skywalker"},
 			&firstAndLastName{FirstName: "Luke", LastName: "Skywalker"},
@@ -689,7 +689,7 @@ Column: last_name
 	{ // same as the previous test but uses page v2 where data pages aren't compressed
 		scenario: "page v2 with dictionary encoding",
 		version:  v2,
-		rows: []interface{}{
+		rows: []any{
 			&firstAndLastName{FirstName: "Han", LastName: "Solo"},
 			&firstAndLastName{FirstName: "Leia", LastName: "Skywalker"},
 			&firstAndLastName{FirstName: "Luke", LastName: "Skywalker"},
@@ -732,7 +732,7 @@ Column: last_name
 		scenario: "timeseries with delta encoding",
 		version:  v2,
 		codec:    &parquet.Gzip,
-		rows: []interface{}{
+		rows: []any{
 			timeseries{Name: "http_request_total", Timestamp: 1639444033, Value: 100},
 			timeseries{Name: "http_request_total", Timestamp: 1639444058, Value: 0},
 			timeseries{Name: "http_request_total", Timestamp: 1639444085, Value: 42},
@@ -795,7 +795,7 @@ Column: value
 	{
 		scenario: "example from the twitter blog (v1)",
 		version:  v1,
-		rows: []interface{}{
+		rows: []any{
 			AddressBook{
 				Owner: "Julien Le Dem",
 				OwnerPhoneNumbers: []string{
@@ -873,7 +873,7 @@ Column: contacts.phoneNumber
 	{
 		scenario: "example from the twitter blog (v2)",
 		version:  v2,
-		rows: []interface{}{
+		rows: []any{
 			AddressBook{
 				Owner: "Julien Le Dem",
 				OwnerPhoneNumbers: []string{
@@ -951,7 +951,7 @@ Column: contacts.phoneNumber
 	{
 		scenario: "omit `-` fields",
 		version:  v1,
-		rows: []interface{}{
+		rows: []any{
 			&event{Name: "customer1", Type: "request", Value: 42.0},
 			&event{Name: "customer2", Type: "access", Value: 1.0},
 		},
@@ -1247,7 +1247,7 @@ func TestWriterMaxRowsPerRowGroup(t *testing.T) {
 	output := new(bytes.Buffer)
 	writer := parquet.NewWriter(output, parquet.MaxRowsPerRowGroup(10))
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		err := writer.Write(struct{ FirstName, LastName string }{
 			FirstName: "0123456789"[i%10 : i%10+1],
 			LastName:  "foo",
@@ -1410,7 +1410,7 @@ func TestColumnSkipPageBounds(t *testing.T) {
 	}
 
 	tests := make([]testStruct, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		tests[i] = testStruct{A: i + 1}
 	}
 	schema := parquet.SchemaOf(&testStruct{})

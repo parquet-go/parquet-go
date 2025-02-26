@@ -291,7 +291,7 @@ func BenchmarkSortRowBuffer(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		for j := 0; j < 10; j++ {
+		for range 10 {
 			buffer.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
 		}
 
@@ -306,13 +306,13 @@ func BenchmarkMergeRowBuffers(b *testing.B) {
 
 	const (
 		numBuffers       = 100
-		numRowsPerBuffer = 10e3
+		numRowsPerBuffer = 10000
 	)
 
 	rows := [numBuffers][numRowsPerBuffer]Row{}
 	nextID := int64(0)
-	for i := 0; i < numRowsPerBuffer; i++ {
-		for j := 0; j < numBuffers; j++ {
+	for i := range numRowsPerBuffer {
+		for j := range numBuffers {
 			rows[j][i].ID = nextID
 			nextID++
 		}

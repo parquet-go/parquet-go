@@ -23,7 +23,7 @@ func TestSplitBlockFilter(t *testing.T) {
 
 	tests := []struct {
 		scenario string
-		function interface{}
+		function any
 	}{
 		{
 			scenario: "BOOLEAN",

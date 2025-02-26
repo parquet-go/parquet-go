@@ -116,7 +116,7 @@ func TestDeconstructionReconstruction(t *testing.T) {
 
 	tests := []struct {
 		scenario string
-		input    interface{}
+		input    any
 		values   [][]parquet.Value
 	}{
 		{
@@ -588,7 +588,7 @@ func assertEqualValues(t *testing.T, columnIndex int, want, got []parquet.Value)
 		}
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		v1, v2 := want[i], got[i]
 
 		if !parquet.Equal(v1, v2) {

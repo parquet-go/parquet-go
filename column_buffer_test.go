@@ -119,7 +119,7 @@ func TestIssueSegmentio501(t *testing.T) {
 		panic(err)
 	}
 
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		read := make([]Value, 1)
 		_, err = col.ReadValuesAt(read, int64(i))
 		if err != nil {

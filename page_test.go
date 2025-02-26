@@ -28,7 +28,7 @@ func testPageBoolean(t *testing.T) {
 
 	t.Run("parquet", func(t *testing.T) {
 		testPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := make([]bool, 50_000)
 				for i := range values {
 					values[i] = i%2 == 0
@@ -37,7 +37,7 @@ func testPageBoolean(t *testing.T) {
 				return values[:n], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]bool, 50_000)
 				n, err := r.(parquet.BooleanReader).ReadBooleans(values)
 				return values[:n], err
@@ -51,13 +51,13 @@ func testPageInt32(t *testing.T) {
 
 	t.Run("io", func(t *testing.T) {
 		testBufferPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 				n, err := w.(io.Writer).Write(unsafecast.Slice[byte](values))
 				return values[:n/4], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]int32, 10)
 				n, err := r.(io.Reader).Read(unsafecast.Slice[byte](values))
 				return values[:n/4], err
@@ -67,13 +67,13 @@ func testPageInt32(t *testing.T) {
 
 	t.Run("parquet", func(t *testing.T) {
 		testPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 				n, err := w.(parquet.Int32Writer).WriteInt32s(values)
 				return values[:n], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]int32, 10)
 				n, err := r.(parquet.Int32Reader).ReadInt32s(values)
 				return values[:n], err
@@ -87,13 +87,13 @@ func testPageInt64(t *testing.T) {
 
 	t.Run("io", func(t *testing.T) {
 		testBufferPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 				n, err := w.(io.Writer).Write(unsafecast.Slice[byte](values))
 				return values[:n/8], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]int64, 10)
 				n, err := r.(io.Reader).Read(unsafecast.Slice[byte](values))
 				return values[:n/8], err
@@ -103,13 +103,13 @@ func testPageInt64(t *testing.T) {
 
 	t.Run("parquet", func(t *testing.T) {
 		testPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 				n, err := w.(parquet.Int64Writer).WriteInt64s(values)
 				return values[:n], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]int64, 10)
 				n, err := r.(parquet.Int64Reader).ReadInt64s(values)
 				return values[:n], err
@@ -123,13 +123,13 @@ func testPageInt96(t *testing.T) {
 
 	t.Run("io", func(t *testing.T) {
 		testBufferPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []deprecated.Int96{{0: 0}, {0: 1}, {0: 2}}
 				n, err := w.(io.Writer).Write(unsafecast.Slice[byte](values))
 				return values[:n/12], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]deprecated.Int96, 3)
 				n, err := r.(io.Reader).Read(unsafecast.Slice[byte](values))
 				return values[:n/12], err
@@ -139,13 +139,13 @@ func testPageInt96(t *testing.T) {
 
 	t.Run("parquet", func(t *testing.T) {
 		testPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []deprecated.Int96{{0: 0}, {0: 1}, {0: 2}}
 				n, err := w.(parquet.Int96Writer).WriteInt96s(values)
 				return values[:n], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]deprecated.Int96, 3)
 				n, err := r.(parquet.Int96Reader).ReadInt96s(values)
 				return values[:n], err
@@ -159,13 +159,13 @@ func testPageFloat(t *testing.T) {
 
 	t.Run("io", func(t *testing.T) {
 		testBufferPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []float32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 				n, err := w.(io.Writer).Write(unsafecast.Slice[byte](values))
 				return values[:n/4], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]float32, 10)
 				n, err := r.(io.Reader).Read(unsafecast.Slice[byte](values))
 				return values[:n/4], err
@@ -175,13 +175,13 @@ func testPageFloat(t *testing.T) {
 
 	t.Run("parquet", func(t *testing.T) {
 		testPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []float32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 				n, err := w.(parquet.FloatWriter).WriteFloats(values)
 				return values[:n], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]float32, 10)
 				n, err := r.(parquet.FloatReader).ReadFloats(values)
 				return values[:n], err
@@ -195,13 +195,13 @@ func testPageDouble(t *testing.T) {
 
 	t.Run("io", func(t *testing.T) {
 		testBufferPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 				n, err := w.(io.Writer).Write(unsafecast.Slice[byte](values))
 				return values[:n/8], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]float64, 10)
 				n, err := r.(io.Reader).Read(unsafecast.Slice[byte](values))
 				return values[:n/8], err
@@ -211,13 +211,13 @@ func testPageDouble(t *testing.T) {
 
 	t.Run("parquet", func(t *testing.T) {
 		testPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 				n, err := w.(parquet.DoubleWriter).WriteDoubles(values)
 				return values[:n], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]float64, 10)
 				n, err := r.(parquet.DoubleReader).ReadDoubles(values)
 				return values[:n], err
@@ -231,7 +231,7 @@ func testPageByteArray(t *testing.T) {
 
 	t.Run("io", func(t *testing.T) {
 		testBufferPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []byte{}
 				values = plain.AppendByteArray(values, []byte("A"))
 				values = plain.AppendByteArray(values, []byte("B"))
@@ -240,7 +240,7 @@ func testPageByteArray(t *testing.T) {
 				return values[:n], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]byte, 3+3*plain.ByteArrayLengthSize)
 				n, err := r.(io.Reader).Read(values)
 				return values[:n], err
@@ -250,7 +250,7 @@ func testPageByteArray(t *testing.T) {
 
 	t.Run("parquet", func(t *testing.T) {
 		testPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []byte{}
 				values = plain.AppendByteArray(values, []byte("A"))
 				values = plain.AppendByteArray(values, []byte("B"))
@@ -259,7 +259,7 @@ func testPageByteArray(t *testing.T) {
 				return values, err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]byte, 3+3*plain.ByteArrayLengthSize)
 				n, err := r.(parquet.ByteArrayReader).ReadByteArrays(values)
 				return values[:n+n*plain.ByteArrayLengthSize], err
@@ -273,13 +273,13 @@ func testPageFixedLenByteArray(t *testing.T) {
 
 	t.Run("io", func(t *testing.T) {
 		testBufferPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []byte("123456789")
 				n, err := w.(io.Writer).Write(values)
 				return values[:n], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]byte, 3*3)
 				n, err := r.(io.Reader).Read(values)
 				return values[:n], err
@@ -289,13 +289,13 @@ func testPageFixedLenByteArray(t *testing.T) {
 
 	t.Run("parquet", func(t *testing.T) {
 		testPage(t, schema, pageTest{
-			write: func(w parquet.ValueWriter) (interface{}, error) {
+			write: func(w parquet.ValueWriter) (any, error) {
 				values := []byte("123456789")
 				n, err := w.(parquet.FixedLenByteArrayWriter).WriteFixedLenByteArrays(values)
 				return values[:3*n], err
 			},
 
-			read: func(r parquet.ValueReader) (interface{}, error) {
+			read: func(r parquet.ValueReader) (any, error) {
 				values := make([]byte, 3*3)
 				n, err := r.(parquet.FixedLenByteArrayReader).ReadFixedLenByteArrays(values)
 				return values[:3*n], err
@@ -305,8 +305,8 @@ func testPageFixedLenByteArray(t *testing.T) {
 }
 
 type pageTest struct {
-	write func(parquet.ValueWriter) (interface{}, error)
-	read  func(parquet.ValueReader) (interface{}, error)
+	write func(parquet.ValueWriter) (any, error)
+	read  func(parquet.ValueReader) (any, error)
 }
 
 func testPage(t *testing.T, schema *parquet.Schema, test pageTest) {
@@ -505,7 +505,7 @@ func TestReslicingBooleanPage(t *testing.T) {
 
 	numValues := 100
 	expected := []*testStruct{}
-	for i := 0; i < numValues; i++ {
+	for i := range numValues {
 		expected = append(expected, &testStruct{B: i%2 == 0})
 	}
 

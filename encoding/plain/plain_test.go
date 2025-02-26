@@ -10,7 +10,7 @@ import (
 func TestAppendBoolean(t *testing.T) {
 	values := []byte{}
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		values = plain.AppendBoolean(values, i, (i%2) != 0)
 	}
 

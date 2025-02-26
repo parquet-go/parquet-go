@@ -7,7 +7,7 @@ import (
 )
 
 func TestBinaryColumnIndexMinMax(t *testing.T) {
-	testCases := [][]interface{}{
+	testCases := [][]any{
 		// kind, type, page min, page max, size limit, [value to search, expected result]...
 		{parquet.ByteArray, parquet.ByteArrayType,
 			[]byte{0, 0, 0, 0, 0, 0}, []byte{1, 2, 3, 4, 5, 6}, 4,

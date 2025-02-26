@@ -493,8 +493,8 @@ func TestMergeRowGroupsSeekToRow(t *testing.T) {
 
 	counter := 0
 	for i := range rowGroups {
-		rows := make([]interface{}, 0, rowsPerGroup)
-		for j := 0; j < rowsPerGroup; j++ {
+		rows := make([]any, 0, rowsPerGroup)
+		for range rowsPerGroup {
 			rows = append(rows, model{A: counter})
 			counter++
 		}
