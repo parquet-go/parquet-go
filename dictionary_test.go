@@ -201,7 +201,7 @@ func BenchmarkDictionary(b *testing.B) {
 	}
 }
 
-func TestIssue312(t *testing.T) {
+func TestIssueSegmentio312(t *testing.T) {
 	node := parquet.String()
 	node = parquet.Encoded(node, &parquet.RLEDictionary)
 	g := parquet.Group{}
