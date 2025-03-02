@@ -94,16 +94,15 @@ func isDictionaryFormat(encoding format.Encoding) bool {
 	return encoding == format.PlainDictionary || encoding == format.RLEDictionary
 }
 
-func RegisterEncoding(enc encoding.Encoding) bool {
+func RegisterEncoding(enc encoding.Encoding) {
 	ns := encoding.NotSupported{}
 	if enc == ns {
-		return false
+		panic("cannot register parquet encoding as not-supported")
 	}
 	if LookupEncoding(enc.Encoding()) != ns {
-		return false
+		panic("cannot register parquet encoding that overrides the standard specification")
 	}
 	extraEncodings.Store(enc.Encoding(), enc)
-	return true
 }
 
 // LookupEncoding returns the parquet encoding associated with the given code.
