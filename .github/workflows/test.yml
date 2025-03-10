@@ -12,14 +12,13 @@ jobs:
     strategy:
       matrix:
         go:
-          - "1.22.x"
+          - "oldstable"
         tags:
           - ""
           - purego
         label:
-          # TODO: add back ARM64 runners
-          # https://github.com/parquet-go/parquet-go/issues/6
           - ubuntu-latest
+          - ubuntu-24.04-arm
 
     runs-on: ${{ matrix.label }}
 
@@ -27,10 +26,10 @@ jobs:
       PARQUETGODEBUG: tracebuf=1
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Setup Maven Action
-        uses: s4u/setup-maven-action@v1.2.1
+        uses: s4u/setup-maven-action@v1.18.0
         with:
           java-version: 17
           maven-version: 3.9.2
@@ -45,7 +44,7 @@ jobs:
           mvn --file parquet-java-apache-parquet-1.13.1/parquet-cli/pom.xml dependency:copy-dependencies
 
       - name: Setup Go ${{ matrix.go }}
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
 
@@ -66,10 +65,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Setup Go ${{ matrix.go }}
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version: 1.24.x
 
@@ -86,7 +85,7 @@ jobs:
 
   #     - uses: actions/setup-go@v3
   #       with:
-  #         go-version: 1.22.x
+  #         go-version: 1.24.x
 
   #     - name: golangci-lint
   #       uses: golangci/golangci-lint-action@v3
