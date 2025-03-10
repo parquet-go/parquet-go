@@ -12,14 +12,13 @@ jobs:
     strategy:
       matrix:
         go:
-          - "1.22.x"
+          - "oldstable"
         tags:
           - ""
           - purego
         label:
-          # TODO: add back ARM64 runners
-          # https://github.com/parquet-go/parquet-go/issues/6
           - ubuntu-latest
+          - ubuntu-24.04-arm
 
     runs-on: ${{ matrix.label }}
 
@@ -45,7 +44,7 @@ jobs:
           mvn --file parquet-java-apache-parquet-1.13.1/parquet-cli/pom.xml dependency:copy-dependencies
 
       - name: Setup Go ${{ matrix.go }}
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
 
@@ -86,7 +85,7 @@ jobs:
 
   #     - uses: actions/setup-go@v3
   #       with:
-  #         go-version: 1.22.x
+  #         go-version: 1.24.x
 
   #     - name: golangci-lint
   #       uses: golangci/golangci-lint-action@v3
