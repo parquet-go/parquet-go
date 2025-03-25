@@ -171,6 +171,8 @@ func (pages *asyncPages) Close() (err error) {
 		pages.done = nil
 	}
 	for p := range pages.read {
+		Release(p.page)
+
 		// Capture the last error, which is the value returned from closing the
 		// underlying Pages instance.
 		err = p.err
@@ -196,6 +198,9 @@ func (pages *asyncPages) ReadPage() (Page, error) {
 		if p.version == pages.version {
 			return p.page, p.err
 		}
+
+		// the page is being dropped here b/c it was the wrong version
+		Release(p.page)
 	}
 }
 
