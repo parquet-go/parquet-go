@@ -7,8 +7,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/parquet-go/parquet-go/compress"
 	"slices"
+
+	"github.com/parquet-go/parquet-go/compress"
+	"github.com/parquet-go/parquet-go/encoding"
 )
 
 // ReadMode is an enum that is used to configure the way that a File reads pages.
@@ -220,6 +222,7 @@ type WriterConfig struct {
 	Compression          compress.Codec
 	Sorting              SortingConfig
 	SkipPageBounds       [][]string
+	Encodings            map[Kind]encoding.Encoding
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -270,6 +273,16 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		}
 	}
 
+	encodings := config.Encodings
+	if len(c.Encodings) > 0 {
+		if encodings == nil {
+			encodings = make(map[Kind]encoding.Encoding, len(c.Encodings))
+		}
+		for k, v := range c.Encodings {
+			encodings[k] = v
+		}
+	}
+
 	*config = WriterConfig{
 		CreatedBy:            coalesceString(c.CreatedBy, config.CreatedBy),
 		ColumnPageBuffers:    coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
@@ -284,6 +297,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		BloomFilters:         coalesceBloomFilters(c.BloomFilters, config.BloomFilters),
 		Compression:          coalesceCompression(c.Compression, config.Compression),
 		Sorting:              coalesceSortingConfig(c.Sorting, config.Sorting),
+		Encodings:            encodings,
 	}
 }
 
@@ -656,6 +670,42 @@ func SortingWriterConfig(options ...SortingOption) WriterOption {
 // This option is additive, it may be used multiple times to skip multiple columns.
 func SkipPageBounds(path ...string) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.SkipPageBounds = append(config.SkipPageBounds, path) })
+}
+
+// DefaultEncodingFor creates a configuration option which sets the default encoding
+// used by a writer for columns with the specified primitive type where none were defined.
+//
+// It will fail if the specified enconding isn't compatible with the specified primitive type.
+func DefaultEncodingFor(kind Kind, enc encoding.Encoding) WriterOption {
+	return writerOption(func(config *WriterConfig) { defaultEncodingFor(config, kind, enc) })
+}
+
+func defaultEncodingFor(config *WriterConfig, kind Kind, enc encoding.Encoding) {
+	if !canEncode(enc, kind) {
+		panic("cannot use encoding " + enc.Encoding().String() + " for kind " + kind.String())
+	}
+	if config.Encodings == nil {
+		config.Encodings = map[Kind]encoding.Encoding{kind: enc}
+	} else {
+		config.Encodings[kind] = enc
+	}
+}
+
+// DefaultEncoding creates a configuration option which sets the default encoding
+// used by a writer for columns where none were defined.
+//
+// It will fail if the specified enconding isn't compatible with any of the primitive types.
+func DefaultEncoding(enc encoding.Encoding) WriterOption {
+	return writerOption(func(config *WriterConfig) {
+		defaultEncodingFor(config, Boolean, enc)
+		defaultEncodingFor(config, Int32, enc)
+		defaultEncodingFor(config, Int64, enc)
+		defaultEncodingFor(config, Int96, enc)
+		defaultEncodingFor(config, Float, enc)
+		defaultEncodingFor(config, Double, enc)
+		defaultEncodingFor(config, ByteArray, enc)
+		defaultEncodingFor(config, FixedLenByteArray, enc)
+	})
 }
 
 // ColumnBufferCapacity creates a configuration option which defines the size of

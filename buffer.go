@@ -239,7 +239,7 @@ func (buf *Buffer) configure(schema *Schema) {
 		columnType := leaf.node.Type()
 		bufferCap := buf.config.ColumnBufferCapacity
 		dictionary := (Dictionary)(nil)
-		encoding := encodingOf(leaf.node)
+		encoding := encodingOf(leaf.node, nil)
 
 		if isDictionaryEncoding(encoding) {
 			estimatedDictBufferSize := columnType.EstimateSize(bufferCap)

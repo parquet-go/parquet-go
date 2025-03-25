@@ -670,7 +670,7 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 	buffers := new(writerBuffers)
 
 	forEachLeafColumnOf(config.Schema, func(leaf leafColumn) {
-		encoding := encodingOf(leaf.node)
+		encoding := encodingOf(leaf.node, config.Encodings)
 		dictionary := Dictionary(nil)
 		columnType := leaf.node.Type()
 		columnIndex := int(leaf.columnIndex)
