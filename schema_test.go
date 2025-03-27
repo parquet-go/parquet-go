@@ -246,6 +246,20 @@ func TestSchemaOf(t *testing.T) {
 	}
 }`,
 		},
+		{
+			value: new(struct {
+				Byte          []byte `parquet:"b"`
+				String        string `parquet:"s"`
+				ByteAsString  []byte `parquet:"bs,string"`
+				StringAsBytes string `parquet:"sb,bytes"`
+			}),
+			print: `message {
+	required binary b;
+	required binary s (STRING);
+	required binary bs (STRING);
+	required binary sb;
+}`,
+		},
 	}
 
 	for _, test := range tests {
