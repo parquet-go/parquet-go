@@ -97,6 +97,15 @@ func binarySearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 		}
 	}
 
+	// for overlapping pages we need to backtrack to find the smallest page, it could be that the
+	// maximum of the previous page is larger then the value still since we discarded it by comparing
+	// to the min value of the page.
+	for ; curIdx != 0; curIdx-- {
+		if cmp(value, index.MinValue(curIdx-1)) > 0 && cmp(value, index.MaxValue(curIdx-1)) < 0 {
+			continue
+		}
+		break
+	}
 	return curIdx
 }
 
