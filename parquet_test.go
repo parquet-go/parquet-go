@@ -1333,3 +1333,33 @@ func TestReadMapAsAny(t *testing.T) {
 		t.Errorf("value mismatch: want=%+v got=%+v", anyd, anys)
 	}
 }
+
+func TestMapValueList(t *testing.T) {
+	type Top struct {
+		Map map[string][]string `parquet:"," parquet-value:",list"`
+	}
+
+	tops := []Top{
+		{
+			Map: map[string][]string{
+				"key1": {"value1", "value2"},
+			},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[Top](buf)
+	_, err := w.Write(tops)
+	if err != nil {
+		t.Fatal("write error: ", err)
+	}
+	w.Close()
+
+	file := bytes.NewReader(buf.Bytes())
+	rows, err := parquet.Read[Top](file, file.Size())
+	if err != nil {
+		t.Fatal("read error: ", err)
+	}
+
+	assertRowsEqual(t, rows, tops)
+}

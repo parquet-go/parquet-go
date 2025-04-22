@@ -1997,7 +1997,7 @@ type writeRowsFunc func(columns []ColumnBuffer, rows sparse.Array, levels column
 // writeRowsFuncOf generates a writeRowsFunc function for the given Go type and
 // parquet schema. The column path indicates the column that the function is
 // being generated for in the parquet schema.
-func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, mapValuePath []string) writeRowsFunc {
 	if leaf, exists := schema.Lookup(path...); exists && leaf.Node.Type().LogicalType() != nil && leaf.Node.Type().LogicalType().Json != nil {
 		return writeRowsFuncOfJSON(t, schema, path)
 	}
@@ -2041,7 +2041,7 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsF
 		return writeRowsFuncOfStruct(t, schema, path)
 
 	case reflect.Map:
-		return writeRowsFuncOfMap(t, schema, path)
+		return writeRowsFuncOfMap(t, schema, path, mapValuePath)
 	}
 
 	panic("cannot convert Go values of type " + typeNameOf(t) + " to parquet value")
@@ -2177,7 +2177,7 @@ func writeRowsFuncOfArray(t reflect.Type, schema *Schema, path columnPath) write
 func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	elemType := t.Elem()
 	elemSize := uintptr(elemType.Size())
-	writeRows := writeRowsFuncOf(elemType, schema, path)
+	writeRows := writeRowsFuncOf(elemType, schema, path, nil)
 
 	if len(path) == 0 {
 		// This code path is taken when generating a writeRowsFunc for a pointer
@@ -2229,7 +2229,7 @@ func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath) wri
 func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	elemType := t.Elem()
 	elemSize := uintptr(elemType.Size())
-	writeRows := writeRowsFuncOf(elemType, schema, path)
+	writeRows := writeRowsFuncOf(elemType, schema, path, nil)
 
 	// When the element is a pointer type, the writeRows function will be an
 	// instance returned by writeRowsFuncOfPointer, which handles incrementing
@@ -2285,8 +2285,9 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 
 	for i, f := range fields {
 		list, optional := false, false
+		var mapValuePath []string
 		columnPath := path.append(f.Name)
-		forEachStructTagOption(f, func(_ reflect.Type, option, _ string) {
+		forEachStructTagOption(f, "parquet", func(_ reflect.Type, option, _ string) {
 			switch option {
 			case "list":
 				list = true
@@ -2296,7 +2297,14 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 			}
 		})
 
-		writeRows := writeRowsFuncOf(f.Type, schema, columnPath)
+		forEachStructTagOption(f, "parquet-value", func(_ reflect.Type, option, _ string) {
+			switch option {
+			case "list":
+				mapValuePath = []string{"list", "element"}
+			}
+		})
+
+		writeRows := writeRowsFuncOf(f.Type, schema, columnPath, mapValuePath)
 		if optional {
 			kind := f.Type.Kind()
 			switch {
@@ -2331,16 +2339,18 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 	}
 }
 
-func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath, mapValuePath []string) writeRowsFunc {
 	keyPath := path.append("key_value", "key")
 	keyType := t.Key()
 	keySize := uintptr(keyType.Size())
-	writeKeys := writeRowsFuncOf(keyType, schema, keyPath)
+	writeKeys := writeRowsFuncOf(keyType, schema, keyPath, nil)
 
 	valuePath := path.append("key_value", "value")
+	valuePath = valuePath.append(mapValuePath...)
+
 	valueType := t.Elem()
 	valueSize := uintptr(valueType.Size())
-	writeValues := writeRowsFuncOf(valueType, schema, valuePath)
+	writeValues := writeRowsFuncOf(valueType, schema, valuePath, nil)
 
 	writeKeyValues := func(columns []ColumnBuffer, keys, values sparse.Array, levels columnLevels) error {
 		if err := writeKeys(columns, keys, levels); err != nil {
@@ -2434,7 +2444,7 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	t := reflect.TypeOf(int64(0))
 	elemSize := uintptr(t.Size())
-	writeRows := writeRowsFuncOf(t, schema, path)
+	writeRows := writeRowsFuncOf(t, schema, path, nil)
 
 	col, _ := schema.Lookup(path...)
 	unit := Nanosecond.TimeUnit()
