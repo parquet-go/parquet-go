@@ -810,6 +810,12 @@ func (f *FilePages) ReadPage() (Page, error) {
 		case format.DataPage:
 			page, err = f.readDataPageV1(header, data)
 		case format.DictionaryPage:
+			// If we have already read and decoded the dictionary page, we can skip it. This occurs when
+			// ReadDictionary is called before ReadPage.
+			if f.dictionary != nil {
+				continue
+			}
+
 			// Sometimes parquet files do not have the dictionary page offset
 			// recorded in the column metadata. We account for this by lazily
 			// reading dictionary pages when we encounter them.
