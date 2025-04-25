@@ -776,7 +776,7 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 				if t.Kind() == reflect.Slice {
 					if elementField, ok := t.Elem().FieldByName("Element"); ok {
 						valueField = reflect.MakeSlice(reflect.SliceOf(elementField.Type), 0, listField.Len())
-						for i := 0; i < listField.Len(); i++ {
+						for i := range listField.Len() {
 							item := listField.Index(i)
 							valueField = reflect.Append(valueField, item.FieldByName("Element"))
 						}
