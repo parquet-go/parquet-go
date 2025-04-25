@@ -772,13 +772,15 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 			valueField := elem.Field(1)
 			if valueField.Kind() == reflect.Struct {
 				listField := valueField.FieldByName("List")
-				t := reflect.TypeOf(listField.Interface())
-				if t.Kind() == reflect.Slice {
-					if elementField, ok := t.Elem().FieldByName("Element"); ok {
-						valueField = reflect.MakeSlice(reflect.SliceOf(elementField.Type), 0, listField.Len())
-						for i := range listField.Len() {
-							item := listField.Index(i)
-							valueField = reflect.Append(valueField, item.FieldByName("Element"))
+				if listField.Kind() == reflect.Struct {
+					t := reflect.TypeOf(listField.Interface())
+					if t.Kind() == reflect.Slice {
+						if elementField, ok := t.Elem().FieldByName("Element"); ok {
+							valueField = reflect.MakeSlice(reflect.SliceOf(elementField.Type), 0, listField.Len())
+							for i := range listField.Len() {
+								item := listField.Index(i)
+								valueField = reflect.Append(valueField, item.FieldByName("Element"))
+							}
 						}
 					}
 				}
