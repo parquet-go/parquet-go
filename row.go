@@ -769,7 +769,22 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 				values[j] = column[len(column):len(column):cap(column)]
 			}
 
-			value.SetMapIndex(elem.Field(0).Convert(k), elem.Field(1).Convert(v))
+			valueField := elem.Field(1)
+			if valueField.Kind() == reflect.Struct {
+				listField := valueField.FieldByName("List")
+				t := reflect.TypeOf(listField.Interface())
+				if t.Kind() == reflect.Slice {
+					if elementField, ok := t.Elem().FieldByName("Element"); ok {
+						valueField = reflect.MakeSlice(reflect.SliceOf(elementField.Type), 0, listField.Len())
+						for i := 0; i < listField.Len(); i++ {
+							item := listField.Index(i)
+							valueField = reflect.Append(valueField, item.FieldByName("Element"))
+						}
+					}
+				}
+			}
+
+			value.SetMapIndex(elem.Field(0).Convert(k), valueField.Convert(v))
 			elem.SetZero()
 			levels.repetitionLevel = levels.repetitionDepth
 		}
