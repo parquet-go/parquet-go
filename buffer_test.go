@@ -1039,16 +1039,14 @@ func TestBufferSortInvalidColumnPanic(t *testing.T) {
 		Name string
 	}
 
-	// This call should panic because "NonExistent" is not a valid column
 	_ = parquet.NewGenericBuffer[SortTestRow](
 		parquet.SortingRowGroupConfig(
 			parquet.SortingColumns(
 				parquet.Ascending("ID"),
-				parquet.Ascending("NonExistent"), // Invalid column name
+				parquet.Ascending("NonExistent"),
 			),
 		),
 	)
 
-	// If the code reaches here, the test failed because it didn't panic
 	t.Errorf("Code proceeded after creating buffer with invalid sorting column, expected panic")
 }

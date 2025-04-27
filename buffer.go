@@ -196,7 +196,6 @@ type Buffer struct {
 	sorted  []sortedColumn
 }
 
-// sortedColumn holds a buffer used for sorting and its original schema index.
 type sortedColumn struct {
 	buffer      ColumnBuffer
 	schemaIndex int
@@ -233,6 +232,9 @@ func NewBuffer(options ...RowGroupOption) *Buffer {
 	return buf
 }
 
+// configure sets up the buffer's columns and sorting columns based on the provided schema.
+// It ensures that all sorting columns are present in the schema and that the buffer's
+// columns are correctly configured for each leaf column in the schema.
 func (buf *Buffer) configure(schema *Schema) {
 	if schema == nil {
 		return
@@ -292,13 +294,10 @@ func (buf *Buffer) configure(schema *Schema) {
 		buf.chunks[i] = column
 	}
 
-	// Check if all sorting columns were found in the schema.
 	foundSortingColumns := make([]bool, len(sortingColumns))
 	for sortingSpecIndex, sc := range sortingColumns {
 		for _, sortedColEntry := range buf.sorted {
-			// Check if this sorted buffer corresponds to the current sorting spec.
-			if sortedColEntry.buffer != nil { // Ensure the entry was populated
-				// Find the leaf column corresponding to the stored schema index
+			if sortedColEntry.buffer != nil {
 				var targetLeaf *leafColumn
 				forEachLeafColumnOf(schema, func(leaf leafColumn) {
 					if int(leaf.columnIndex) == sortedColEntry.schemaIndex {
@@ -307,7 +306,6 @@ func (buf *Buffer) configure(schema *Schema) {
 				})
 
 				if targetLeaf != nil {
-					// Inline comparison logic for sc.Path() and targetLeaf.path
 					s1, s2 := sc.Path(), targetLeaf.path
 					n := min(len(s1), len(s2))
 					pathMatch := true
@@ -317,13 +315,12 @@ func (buf *Buffer) configure(schema *Schema) {
 							break
 						}
 					}
-					if pathMatch && len(s1) != len(s2) { // Check length difference if prefixes matched
+					if pathMatch && len(s1) != len(s2) {
 						pathMatch = false
 					}
 
 					if pathMatch {
-						// This sortedColEntry matches the sorting spec sc at sortingSpecIndex
-						if !foundSortingColumns[sortingSpecIndex] { // Mark only once
+						if !foundSortingColumns[sortingSpecIndex] {
 							foundSortingColumns[sortingSpecIndex] = true
 						}
 					}
@@ -396,11 +393,8 @@ func (buf *Buffer) Len() int {
 // Less returns true if row[i] < row[j] in the buffer.
 func (buf *Buffer) Less(i, j int) bool {
 	for _, entry := range buf.sorted {
-		// Check entry.buffer is not nil before calling Less, although configure should prevent this.
 		if entry.buffer == nil {
-			// This indicates a configuration mismatch wasn't caught or an internal error.
-			// Panic earlier during configure is preferred.
-			continue // Or panic? Let configure handle the panic for missing columns.
+			continue
 		}
 		col := entry.buffer
 		switch {
