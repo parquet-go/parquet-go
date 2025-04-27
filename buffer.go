@@ -4,6 +4,7 @@ import (
 	"log"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -235,7 +236,7 @@ func (buf *Buffer) configure(schema *Schema) {
 		return
 	}
 	sortingColumns := buf.config.Sorting.SortingColumns
-	sortedPlaceholders := make([]ColumnBuffer, len(sortingColumns))
+	buf.sorted = make([]ColumnBuffer, len(sortingColumns))
 
 	forEachLeafColumnOf(schema, func(leaf leafColumn) {
 		nullOrdering := nullsGoLast
@@ -273,16 +274,11 @@ func (buf *Buffer) configure(schema *Schema) {
 			if sortingColumns[sortingIndex].Descending() {
 				column = &reversedColumnBuffer{column}
 			}
-			sortedPlaceholders[sortingIndex] = column
+			buf.sorted[sortingIndex] = column
 		}
 	})
 
-	buf.sorted = make([]ColumnBuffer, 0, len(sortingColumns))
-	for _, placeholder := range sortedPlaceholders {
-		if placeholder != nil {
-			buf.sorted = append(buf.sorted, placeholder)
-		}
-	}
+	buf.sorted = slices.DeleteFunc(buf.sorted, func(cb ColumnBuffer) bool { return cb == nil })
 
 	buf.schema = schema
 	buf.rowbuf = make([]Row, 0, 1)
