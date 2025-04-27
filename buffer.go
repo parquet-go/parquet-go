@@ -311,7 +311,7 @@ func (buf *Buffer) configure(schema *Schema) {
 					s1, s2 := sc.Path(), targetLeaf.path
 					n := min(len(s1), len(s2))
 					pathMatch := true
-					for i := 0; i < n; i++ {
+					for i := range n {
 						if s1[i] != s2[i] {
 							pathMatch = false
 							break
