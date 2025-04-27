@@ -12,7 +12,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -1015,38 +1014,55 @@ func BenchmarkBufferWriteRows100x(b *testing.B) {
 	})
 }
 
-func TestBufferSortInvalidColumnPanic(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Errorf("The code did not panic when providing invalid sorting column")
-			return
-		}
-		errStr, ok := r.(string)
-		if !ok {
-			t.Errorf("Panic value is not a string: %v", r)
-			return
-		}
-		expectedMsg := "parquet: sorting column(s) not found in schema: NonExistent"
-		if !strings.Contains(errStr, expectedMsg) {
-			t.Errorf("Panic message does not contain expected string\nExpected: %s\nActual:   %s", expectedMsg, errStr)
-		}
-		t.Logf("Successfully caught expected panic: %s", errStr)
-	}()
-
+func TestBufferSortIgnoresInvalidColumn(t *testing.T) {
 	type SortTestRow struct {
-		ID   int64
-		Name string
+		FirstName string
+		LastName  string
 	}
 
-	_ = parquet.NewGenericBuffer[SortTestRow](
+	buffer := parquet.NewGenericBuffer[SortTestRow](
 		parquet.SortingRowGroupConfig(
 			parquet.SortingColumns(
-				parquet.Ascending("ID"),
+				parquet.Ascending("LastName"),
 				parquet.Ascending("NonExistent"),
+				parquet.Ascending("FirstName"),
 			),
 		),
 	)
 
-	t.Errorf("Code proceeded after creating buffer with invalid sorting column, expected panic")
+	inputRows := []SortTestRow{
+		{FirstName: "Han", LastName: "Solo"},
+		{FirstName: "Luke", LastName: "Skywalker"},
+		{FirstName: "Anakin", LastName: "Skywalker"},
+		{FirstName: "Leia", LastName: "Organa"},
+	}
+
+	_, err := buffer.Write(inputRows)
+	if err != nil {
+		t.Fatalf("Failed to write rows: %v", err)
+	}
+
+	sort.Sort(buffer)
+
+	reader := parquet.NewGenericRowGroupReader[SortTestRow](buffer)
+	defer reader.Close()
+	outputRows := make([]SortTestRow, len(inputRows))
+	n, err := reader.Read(outputRows)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Failed to read rows back: %v", err)
+	}
+	if n != len(inputRows) {
+		t.Fatalf("Read incorrect number of rows: got %d, want %d", n, len(inputRows))
+	}
+
+	expectedRows := []SortTestRow{
+		{FirstName: "Leia", LastName: "Organa"},
+		{FirstName: "Anakin", LastName: "Skywalker"},
+		{FirstName: "Luke", LastName: "Skywalker"},
+		{FirstName: "Han", LastName: "Solo"},
+	}
+
+	if !reflect.DeepEqual(outputRows, expectedRows) {
+		t.Errorf("Sorted rows mismatch:\nWant: %#v\nGot:  %#v", expectedRows, outputRows)
+	}
 }

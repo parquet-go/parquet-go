@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -240,7 +239,7 @@ func (buf *Buffer) configure(schema *Schema) {
 		return
 	}
 	sortingColumns := buf.config.Sorting.SortingColumns
-	buf.sorted = make([]sortedColumn, len(sortingColumns))
+	sortedPlaceholders := make([]*sortedColumn, len(sortingColumns))
 
 	forEachLeafColumnOf(schema, func(leaf leafColumn) {
 		nullOrdering := nullsGoLast
@@ -278,12 +277,19 @@ func (buf *Buffer) configure(schema *Schema) {
 			if sortingColumns[sortingIndex].Descending() {
 				column = &reversedColumnBuffer{column}
 			}
-			buf.sorted[sortingIndex] = sortedColumn{
+			sortedPlaceholders[sortingIndex] = &sortedColumn{
 				buffer:      column,
 				schemaIndex: columnIndex,
 			}
 		}
 	})
+
+	buf.sorted = make([]sortedColumn, 0, len(sortingColumns))
+	for _, placeholder := range sortedPlaceholders {
+		if placeholder != nil {
+			buf.sorted = append(buf.sorted, *placeholder)
+		}
+	}
 
 	buf.schema = schema
 	buf.rowbuf = make([]Row, 0, 1)
@@ -292,52 +298,6 @@ func (buf *Buffer) configure(schema *Schema) {
 
 	for i, column := range buf.columns {
 		buf.chunks[i] = column
-	}
-
-	foundSortingColumns := make([]bool, len(sortingColumns))
-	for sortingSpecIndex, sc := range sortingColumns {
-		for _, sortedColEntry := range buf.sorted {
-			if sortedColEntry.buffer != nil {
-				var targetLeaf *leafColumn
-				forEachLeafColumnOf(schema, func(leaf leafColumn) {
-					if int(leaf.columnIndex) == sortedColEntry.schemaIndex {
-						targetLeaf = &leaf
-					}
-				})
-
-				if targetLeaf != nil {
-					s1, s2 := sc.Path(), targetLeaf.path
-					n := min(len(s1), len(s2))
-					pathMatch := true
-					for i := range n {
-						if s1[i] != s2[i] {
-							pathMatch = false
-							break
-						}
-					}
-					if pathMatch && len(s1) != len(s2) {
-						pathMatch = false
-					}
-
-					if pathMatch {
-						if !foundSortingColumns[sortingSpecIndex] {
-							foundSortingColumns[sortingSpecIndex] = true
-						}
-					}
-				}
-			}
-		}
-	}
-
-	missingColumns := []string{}
-	for i, found := range foundSortingColumns {
-		if !found {
-			missingColumns = append(missingColumns, columnPath(sortingColumns[i].Path()).String())
-		}
-	}
-
-	if len(missingColumns) > 0 {
-		panic("parquet: sorting column(s) not found in schema: " + strings.Join(missingColumns, ", "))
 	}
 }
 
