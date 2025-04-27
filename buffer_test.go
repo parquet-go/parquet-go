@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -1012,4 +1013,42 @@ func BenchmarkBufferWriteRows100x(b *testing.B) {
 		}
 		return n
 	})
+}
+
+func TestBufferSortInvalidColumnPanic(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("The code did not panic when providing invalid sorting column")
+			return
+		}
+		errStr, ok := r.(string)
+		if !ok {
+			t.Errorf("Panic value is not a string: %v", r)
+			return
+		}
+		expectedMsg := "parquet: sorting column(s) not found in schema: NonExistent"
+		if !strings.Contains(errStr, expectedMsg) {
+			t.Errorf("Panic message does not contain expected string\nExpected: %s\nActual:   %s", expectedMsg, errStr)
+		}
+		t.Logf("Successfully caught expected panic: %s", errStr)
+	}()
+
+	type SortTestRow struct {
+		ID   int64
+		Name string
+	}
+
+	// This call should panic because "NonExistent" is not a valid column
+	_ = parquet.NewGenericBuffer[SortTestRow](
+		parquet.SortingRowGroupConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("ID"),
+				parquet.Ascending("NonExistent"), // Invalid column name
+			),
+		),
+	)
+
+	// If the code reaches here, the test failed because it didn't panic
+	t.Errorf("Code proceeded after creating buffer with invalid sorting column, expected panic")
 }

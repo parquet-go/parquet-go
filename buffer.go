@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -192,7 +193,13 @@ type Buffer struct {
 	colbuf  [][]Value
 	chunks  []ColumnChunk
 	columns []ColumnBuffer
-	sorted  []ColumnBuffer
+	sorted  []sortedColumn
+}
+
+// sortedColumn holds a buffer used for sorting and its original schema index.
+type sortedColumn struct {
+	buffer      ColumnBuffer
+	schemaIndex int
 }
 
 // NewBuffer constructs a new buffer, using the given list of buffer options
@@ -231,7 +238,7 @@ func (buf *Buffer) configure(schema *Schema) {
 		return
 	}
 	sortingColumns := buf.config.Sorting.SortingColumns
-	buf.sorted = make([]ColumnBuffer, len(sortingColumns))
+	buf.sorted = make([]sortedColumn, len(sortingColumns))
 
 	forEachLeafColumnOf(schema, func(leaf leafColumn) {
 		nullOrdering := nullsGoLast
@@ -269,7 +276,10 @@ func (buf *Buffer) configure(schema *Schema) {
 			if sortingColumns[sortingIndex].Descending() {
 				column = &reversedColumnBuffer{column}
 			}
-			buf.sorted[sortingIndex] = column
+			buf.sorted[sortingIndex] = sortedColumn{
+				buffer:      column,
+				schemaIndex: columnIndex,
+			}
 		}
 	})
 
@@ -280,6 +290,60 @@ func (buf *Buffer) configure(schema *Schema) {
 
 	for i, column := range buf.columns {
 		buf.chunks[i] = column
+	}
+
+	// Check if all sorting columns were found in the schema.
+	foundSortingColumns := make([]bool, len(sortingColumns))
+	for sortingSpecIndex, sc := range sortingColumns {
+		for _, sortedColEntry := range buf.sorted {
+			// Check if this sorted buffer corresponds to the current sorting spec.
+			if sortedColEntry.buffer != nil { // Ensure the entry was populated
+				// Find the leaf column corresponding to the stored schema index
+				var targetLeaf *leafColumn
+				forEachLeafColumnOf(schema, func(leaf leafColumn) {
+					if int(leaf.columnIndex) == sortedColEntry.schemaIndex {
+						targetLeaf = &leaf
+					}
+				})
+
+				if targetLeaf != nil {
+					// Inline comparison logic for sc.Path() and targetLeaf.path
+					s1, s2 := sc.Path(), targetLeaf.path
+					n := len(s1)
+					if n > len(s2) {
+						n = len(s2)
+					}
+					pathMatch := true
+					for i := 0; i < n; i++ {
+						if s1[i] != s2[i] {
+							pathMatch = false
+							break
+						}
+					}
+					if pathMatch && len(s1) != len(s2) { // Check length difference if prefixes matched
+						pathMatch = false
+					}
+
+					if pathMatch {
+						// This sortedColEntry matches the sorting spec sc at sortingSpecIndex
+						if !foundSortingColumns[sortingSpecIndex] { // Mark only once
+							foundSortingColumns[sortingSpecIndex] = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	missingColumns := []string{}
+	for i, found := range foundSortingColumns {
+		if !found {
+			missingColumns = append(missingColumns, columnPath(sortingColumns[i].Path()).String())
+		}
+	}
+
+	if len(missingColumns) > 0 {
+		panic("parquet: sorting column(s) not found in schema: " + strings.Join(missingColumns, ", "))
 	}
 }
 
@@ -334,7 +398,14 @@ func (buf *Buffer) Len() int {
 
 // Less returns true if row[i] < row[j] in the buffer.
 func (buf *Buffer) Less(i, j int) bool {
-	for _, col := range buf.sorted {
+	for _, entry := range buf.sorted {
+		// Check entry.buffer is not nil before calling Less, although configure should prevent this.
+		if entry.buffer == nil {
+			// This indicates a configuration mismatch wasn't caught or an internal error.
+			// Panic earlier during configure is preferred.
+			continue // Or panic? Let configure handle the panic for missing columns.
+		}
+		col := entry.buffer
 		switch {
 		case col.Less(i, j):
 			return true
