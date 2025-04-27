@@ -1013,3 +1013,56 @@ func BenchmarkBufferWriteRows100x(b *testing.B) {
 		return n
 	})
 }
+
+func TestBufferSortIgnoresInvalidColumn(t *testing.T) {
+	type SortTestRow struct {
+		FirstName string
+		LastName  string
+	}
+
+	buffer := parquet.NewGenericBuffer[SortTestRow](
+		parquet.SortingRowGroupConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("LastName"),
+				parquet.Ascending("NonExistent"),
+				parquet.Ascending("FirstName"),
+			),
+		),
+	)
+
+	inputRows := []SortTestRow{
+		{FirstName: "Han", LastName: "Solo"},
+		{FirstName: "Luke", LastName: "Skywalker"},
+		{FirstName: "Anakin", LastName: "Skywalker"},
+		{FirstName: "Leia", LastName: "Organa"},
+	}
+
+	_, err := buffer.Write(inputRows)
+	if err != nil {
+		t.Fatalf("Failed to write rows: %v", err)
+	}
+
+	sort.Sort(buffer)
+
+	reader := parquet.NewGenericRowGroupReader[SortTestRow](buffer)
+	defer reader.Close()
+	outputRows := make([]SortTestRow, len(inputRows))
+	n, err := reader.Read(outputRows)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Failed to read rows back: %v", err)
+	}
+	if n != len(inputRows) {
+		t.Fatalf("Read incorrect number of rows: got %d, want %d", n, len(inputRows))
+	}
+
+	expectedRows := []SortTestRow{
+		{FirstName: "Leia", LastName: "Organa"},
+		{FirstName: "Anakin", LastName: "Skywalker"},
+		{FirstName: "Luke", LastName: "Skywalker"},
+		{FirstName: "Han", LastName: "Solo"},
+	}
+
+	if !reflect.DeepEqual(outputRows, expectedRows) {
+		t.Errorf("Sorted rows mismatch:\nWant: %#v\nGot:  %#v", expectedRows, outputRows)
+	}
+}

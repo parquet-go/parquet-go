@@ -4,6 +4,7 @@ import (
 	"log"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -226,6 +227,10 @@ func NewBuffer(options ...RowGroupOption) *Buffer {
 	return buf
 }
 
+// configure sets up the buffer's columns based on the provided schema.
+// It also prepares the internal sorting logic by using only the requested sorting columns
+// (from buf.config.Sorting.SortingColumns) that are actually found within the schema,
+// preserving the requested order but ignoring missing columns.
 func (buf *Buffer) configure(schema *Schema) {
 	if schema == nil {
 		return
@@ -272,6 +277,8 @@ func (buf *Buffer) configure(schema *Schema) {
 			buf.sorted[sortingIndex] = column
 		}
 	})
+
+	buf.sorted = slices.DeleteFunc(buf.sorted, func(cb ColumnBuffer) bool { return cb == nil })
 
 	buf.schema = schema
 	buf.rowbuf = make([]Row, 0, 1)
