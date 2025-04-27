@@ -192,11 +192,7 @@ type Buffer struct {
 	colbuf  [][]Value
 	chunks  []ColumnChunk
 	columns []ColumnBuffer
-	sorted  []sortedColumn
-}
-
-type sortedColumn struct {
-	buffer      ColumnBuffer
+	sorted  []ColumnBuffer
 }
 
 // NewBuffer constructs a new buffer, using the given list of buffer options
@@ -239,7 +235,7 @@ func (buf *Buffer) configure(schema *Schema) {
 		return
 	}
 	sortingColumns := buf.config.Sorting.SortingColumns
-	sortedPlaceholders := make([]*sortedColumn, len(sortingColumns))
+	sortedPlaceholders := make([]ColumnBuffer, len(sortingColumns))
 
 	forEachLeafColumnOf(schema, func(leaf leafColumn) {
 		nullOrdering := nullsGoLast
@@ -277,16 +273,14 @@ func (buf *Buffer) configure(schema *Schema) {
 			if sortingColumns[sortingIndex].Descending() {
 				column = &reversedColumnBuffer{column}
 			}
-			sortedPlaceholders[sortingIndex] = &sortedColumn{
-				buffer:      column,
-			}
+			sortedPlaceholders[sortingIndex] = column
 		}
 	})
 
-	buf.sorted = make([]sortedColumn, 0, len(sortingColumns))
+	buf.sorted = make([]ColumnBuffer, 0, len(sortingColumns))
 	for _, placeholder := range sortedPlaceholders {
 		if placeholder != nil {
-			buf.sorted = append(buf.sorted, *placeholder)
+			buf.sorted = append(buf.sorted, placeholder)
 		}
 	}
 
@@ -353,9 +347,9 @@ func (buf *Buffer) Len() int {
 func (buf *Buffer) Less(i, j int) bool {
 	for _, col := range buf.sorted {
 		switch {
-		case col.buffer.Less(i, j):
+		case col.Less(i, j):
 			return true
-		case col.buffer.Less(j, i):
+		case col.Less(j, i):
 			return false
 		}
 	}
