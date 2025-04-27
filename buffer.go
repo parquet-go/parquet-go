@@ -309,10 +309,7 @@ func (buf *Buffer) configure(schema *Schema) {
 				if targetLeaf != nil {
 					// Inline comparison logic for sc.Path() and targetLeaf.path
 					s1, s2 := sc.Path(), targetLeaf.path
-					n := len(s1)
-					if n > len(s2) {
-						n = len(s2)
-					}
+					n := min(len(s1), len(s2))
 					pathMatch := true
 					for i := 0; i < n; i++ {
 						if s1[i] != s2[i] {
