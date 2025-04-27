@@ -231,9 +231,10 @@ func NewBuffer(options ...RowGroupOption) *Buffer {
 	return buf
 }
 
-// configure sets up the buffer's columns and sorting columns based on the provided schema.
-// It ensures that all sorting columns are present in the schema and that the buffer's
-// columns are correctly configured for each leaf column in the schema.
+// configure sets up the buffer's columns based on the provided schema.
+// It also prepares the internal sorting logic by using only the requested sorting columns
+// (from buf.config.Sorting.SortingColumns) that are actually found within the schema,
+// preserving the requested order but ignoring missing columns.
 func (buf *Buffer) configure(schema *Schema) {
 	if schema == nil {
 		return
