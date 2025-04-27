@@ -353,12 +353,11 @@ func (buf *Buffer) Len() int {
 
 // Less returns true if row[i] < row[j] in the buffer.
 func (buf *Buffer) Less(i, j int) bool {
-	for _, entry := range buf.sorted {
-		col := entry.buffer
+	for _, col := range buf.sorted {
 		switch {
-		case col.Less(i, j):
+		case col.buffer.Less(i, j):
 			return true
-		case col.Less(j, i):
+		case col.buffer.Less(j, i):
 			return false
 		}
 	}
