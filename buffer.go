@@ -197,7 +197,6 @@ type Buffer struct {
 
 type sortedColumn struct {
 	buffer      ColumnBuffer
-	schemaIndex int
 }
 
 // NewBuffer constructs a new buffer, using the given list of buffer options
@@ -280,7 +279,6 @@ func (buf *Buffer) configure(schema *Schema) {
 			}
 			sortedPlaceholders[sortingIndex] = &sortedColumn{
 				buffer:      column,
-				schemaIndex: columnIndex,
 			}
 		}
 	})
