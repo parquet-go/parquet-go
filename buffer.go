@@ -354,9 +354,6 @@ func (buf *Buffer) Len() int {
 // Less returns true if row[i] < row[j] in the buffer.
 func (buf *Buffer) Less(i, j int) bool {
 	for _, entry := range buf.sorted {
-		if entry.buffer == nil {
-			continue
-		}
 		col := entry.buffer
 		switch {
 		case col.Less(i, j):
