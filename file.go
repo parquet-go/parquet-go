@@ -781,6 +781,9 @@ func (f *FilePages) ReadPage() (Page, error) {
 		return nil, io.EOF
 	}
 
+	// seekToRowStart indicates whether we are in the process of seeking to the start
+	// of requested row to read, as opposed to reading sequentially values and moving through pages
+	seekToRowStart := f.skip > 0
 	for {
 		// Instantiate a new format.PageHeader for each page.
 		//
@@ -838,7 +841,27 @@ func (f *FilePages) ReadPage() (Page, error) {
 
 		f.index++
 		if f.skip == 0 {
-			return page, nil
+			// f.skip==0 can be true:
+			//  (1) while reading a row of a column which has multiple values (ie. X.list.element) and values continue
+			//  across pages. In that case we just want to keep reading without skipping any values.
+			//  (2) when seeking to a specific row and trying to reach the start offset of the first
+			//  row in a new page.
+			if !seekToRowStart {
+				// keep reading values from beginning of new page
+				return page, nil
+			} else {
+				if page.NumRows() == 0 {
+					// if current page does not have any rows, continue until a page with at least 1 row is reached
+					Release(page)
+					continue
+				}
+				// In V1 data pages, new page does not necessarily start with a new row.
+				// Since we are seeking to start of a row, we must fast-forward to the first value
+				// with repetition level 0: this may or may not be the first value in the new page.
+				tail := page.Slice(0, page.NumRows())
+				Release(page)
+				return tail, nil
+			}
 		}
 
 		// TODO: what about pages that don't embed the number of rows?
