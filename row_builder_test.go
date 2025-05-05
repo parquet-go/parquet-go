@@ -8,11 +8,11 @@ import (
 )
 
 func ExampleRowBuilder() {
-	builder := parquet.NewRowBuilder(parquet.Group{
-		"birth_date": parquet.Optional(parquet.Date()),
-		"first_name": parquet.String(),
-		"last_name":  parquet.String(),
-	})
+	builder := parquet.NewRowBuilder(parquet.GroupOfNodes(
+		"birth_date", parquet.Optional(parquet.Date()),
+		"first_name", parquet.String(),
+		"last_name", parquet.String(),
+	))
 
 	builder.Add(1, parquet.ByteArrayValue([]byte("Luke")))
 	builder.Add(2, parquet.ByteArrayValue([]byte("Skywalker")))
@@ -54,9 +54,9 @@ func TestRowBuilder(t *testing.T) {
 			want: parquet.Row{
 				parquet.Int64Value(0).Level(0, 0, 0),
 			},
-			schema: parquet.Group{
-				"id": parquet.Int(64),
-			},
+			schema: parquet.GroupOfNodes(
+				"id", parquet.Int(64),
+			),
 		},
 
 		{
@@ -67,9 +67,9 @@ func TestRowBuilder(t *testing.T) {
 			want: parquet.Row{
 				parquet.Int64Value(1).Level(0, 0, 0),
 			},
-			schema: parquet.Group{
-				"id": parquet.Int(64),
-			},
+			schema: parquet.GroupOfNodes(
+				"id", parquet.Int(64),
+			),
 		},
 
 		{
@@ -86,10 +86,10 @@ func TestRowBuilder(t *testing.T) {
 				parquet.ByteArrayValue([]byte(`2`)).Level(1, 1, 1),
 				parquet.ByteArrayValue([]byte(`3`)).Level(1, 1, 1),
 			},
-			schema: parquet.Group{
-				"id":    parquet.Int(64),
-				"names": parquet.Repeated(parquet.String()),
-			},
+			schema: parquet.GroupOfNodes(
+				"id", parquet.Int(64),
+				"names", parquet.Repeated(parquet.String()),
+			),
 		},
 
 		{
@@ -101,10 +101,10 @@ func TestRowBuilder(t *testing.T) {
 				parquet.Int64Value(1).Level(0, 0, 0),
 				parquet.NullValue().Level(0, 0, 1),
 			},
-			schema: parquet.Group{
-				"id":    parquet.Int(64),
-				"names": parquet.Repeated(parquet.String()),
-			},
+			schema: parquet.GroupOfNodes(
+				"id", parquet.Int(64),
+				"names", parquet.Repeated(parquet.String()),
+			),
 		},
 
 		{
@@ -116,10 +116,10 @@ func TestRowBuilder(t *testing.T) {
 				parquet.Int64Value(1).Level(0, 0, 0),
 				parquet.NullValue().Level(0, 0, 1),
 			},
-			schema: parquet.Group{
-				"id":   parquet.Int(64),
-				"name": parquet.Optional(parquet.String()),
-			},
+			schema: parquet.GroupOfNodes(
+				"id", parquet.Int(64),
+				"name", parquet.Optional(parquet.String()),
+			),
 		},
 
 		{
@@ -133,14 +133,14 @@ func TestRowBuilder(t *testing.T) {
 				parquet.ByteArrayValue(nil).Level(0, 0, 2),
 				parquet.ByteArrayValue(nil).Level(0, 0, 3),
 			},
-			schema: parquet.Group{
-				"id": parquet.Int(64),
-				"profile": parquet.Group{
-					"first_name": parquet.String(),
-					"last_name":  parquet.String(),
-					"birth_date": parquet.Optional(parquet.Date()),
-				},
-			},
+			schema: parquet.GroupOfNodes(
+				"id", parquet.Int(64),
+				"profile", parquet.GroupOfNodes(
+					"birth_date", parquet.Optional(parquet.Date()),
+					"first_name", parquet.String(),
+					"last_name", parquet.String(),
+				),
+			),
 		},
 
 		{
@@ -164,14 +164,14 @@ func TestRowBuilder(t *testing.T) {
 				parquet.NullValue().Level(0, 1, 3),
 				parquet.NullValue().Level(1, 1, 3),
 			},
-			schema: parquet.Group{
-				"id": parquet.Int(64),
-				"profiles": parquet.Repeated(parquet.Group{
-					"first_name": parquet.String(),
-					"last_name":  parquet.String(),
-					"birth_date": parquet.Optional(parquet.Date()),
-				}),
-			},
+			schema: parquet.GroupOfNodes(
+				"id", parquet.Int(64),
+				"profiles", parquet.Repeated(parquet.GroupOfNodes(
+					"birth_date", parquet.Optional(parquet.Date()),
+					"first_name", parquet.String(),
+					"last_name", parquet.String(),
+				)),
+			),
 		},
 
 		{
@@ -180,14 +180,14 @@ func TestRowBuilder(t *testing.T) {
 				parquet.Value{}.Level(0, 0, 0),
 				parquet.Value{}.Level(0, 0, 1),
 			},
-			schema: parquet.Group{
-				"map": parquet.Repeated(parquet.Group{
-					"key_value": parquet.Group{
-						"key":   parquet.String(),
-						"value": parquet.Optional(parquet.String()),
-					},
-				}),
-			},
+			schema: parquet.GroupOfNodes(
+				"map", parquet.Repeated(parquet.GroupOfNodes(
+					"key_value", parquet.GroupOfNodes(
+						"key", parquet.String(),
+						"value", parquet.Optional(parquet.String()),
+					),
+				)),
+			),
 		},
 
 		{
@@ -206,16 +206,16 @@ func TestRowBuilder(t *testing.T) {
 				parquet.ByteArrayValue([]byte(`1`)).Level(0, 3, 1),
 				parquet.ByteArrayValue([]byte(`2`)).Level(2, 3, 1),
 			},
-			schema: parquet.Group{
-				"objects": parquet.Repeated(parquet.Group{
-					"attributes": parquet.Repeated(parquet.Group{
-						"key_value": parquet.Group{
-							"key":   parquet.String(),
-							"value": parquet.Optional(parquet.String()),
-						},
-					}),
-				}),
-			},
+			schema: parquet.GroupOfNodes(
+				"objects", parquet.Repeated(parquet.GroupOfNodes(
+					"attributes", parquet.Repeated(parquet.GroupOfNodes(
+						"key_value", parquet.GroupOfNodes(
+							"key", parquet.String(),
+							"value", parquet.Optional(parquet.String()),
+						),
+					)),
+				)),
+			),
 		},
 
 		{
@@ -239,16 +239,16 @@ func TestRowBuilder(t *testing.T) {
 				parquet.ByteArrayValue([]byte(`2`)).Level(2, 3, 1),
 				parquet.ByteArrayValue([]byte(`3`)).Level(1, 3, 1),
 			},
-			schema: parquet.Group{
-				"objects": parquet.Repeated(parquet.Group{
-					"attributes": parquet.Repeated(parquet.Group{
-						"key_value": parquet.Group{
-							"key":   parquet.String(),
-							"value": parquet.Optional(parquet.String()),
-						},
-					}),
-				}),
-			},
+			schema: parquet.GroupOfNodes(
+				"objects", parquet.Repeated(parquet.GroupOfNodes(
+					"attributes", parquet.Repeated(parquet.GroupOfNodes(
+						"key_value", parquet.GroupOfNodes(
+							"key", parquet.String(),
+							"value", parquet.Optional(parquet.String()),
+						),
+					)),
+				)),
+			),
 		},
 	}
 
@@ -272,9 +272,9 @@ func TestRowBuilder(t *testing.T) {
 }
 
 func BenchmarkRowBuilderAdd(b *testing.B) {
-	builder := parquet.NewRowBuilder(parquet.Group{
-		"ids": parquet.Repeated(parquet.Int(64)),
-	})
+	builder := parquet.NewRowBuilder(parquet.GroupOfNodes(
+		"ids", parquet.Repeated(parquet.Int(64)),
+	))
 
 	for i := 0; i < b.N; i++ {
 		builder.Add(0, parquet.Int64Value(int64(i)))

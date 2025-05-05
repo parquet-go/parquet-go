@@ -420,9 +420,9 @@ func TestIssueSegmentio423(t *testing.T) {
 }
 
 func TestIssue178(t *testing.T) {
-	schema := parquet.NewSchema("testRow", parquet.Group{
-		"fixedField": parquet.Leaf(parquet.FixedLenByteArrayType(32)),
-	})
+	schema := parquet.NewSchema("testRow", parquet.GroupOfNodes(
+		"fixedField", parquet.Leaf(parquet.FixedLenByteArrayType(32)),
+	))
 
 	tests := []struct {
 		name string
@@ -1080,7 +1080,7 @@ func TestParquetAnyValueConversions(t *testing.T) {
 		name           string
 		input          any
 		explicitOutput any // Only set if we expect a difference from the input
-		schema         parquet.Group
+		schema         *parquet.GroupNode
 	}{
 		{
 			name: "simple strings",
@@ -1089,11 +1089,11 @@ func TestParquetAnyValueConversions(t *testing.T) {
 				"B": "bar",
 				"C": "baz",
 			},
-			schema: parquet.Group{
-				"A": parquet.String(),
-				"B": parquet.String(),
-				"C": parquet.String(),
-			},
+			schema: parquet.GroupOfNodes(
+				"A", parquet.String(),
+				"B", parquet.String(),
+				"C", parquet.String(),
+			),
 		},
 		{
 			name: "simple strings with nil",
@@ -1107,11 +1107,11 @@ func TestParquetAnyValueConversions(t *testing.T) {
 				"B": "",
 				"C": "",
 			},
-			schema: parquet.Group{
-				"A": parquet.String(),
-				"B": parquet.String(),
-				"C": parquet.String(),
-			},
+			schema: parquet.GroupOfNodes(
+				"A", parquet.String(),
+				"B", parquet.String(),
+				"C", parquet.String(),
+			),
 		},
 		{
 			name: "simple groups with nil",
@@ -1139,20 +1139,20 @@ func TestParquetAnyValueConversions(t *testing.T) {
 					"DA": "bar",
 				},
 			},
-			schema: parquet.Group{
-				"A": parquet.Group{
-					"AA": parquet.String(),
-				},
-				"B": parquet.Group{
-					"BA": parquet.String(),
-				},
-				"C": parquet.Group{
-					"CA": parquet.String(),
-				},
-				"D": parquet.Group{
-					"DA": parquet.String(),
-				},
-			},
+			schema: parquet.GroupOfNodes(
+				"A", parquet.GroupOfNodes(
+					"AA", parquet.String(),
+				),
+				"B", parquet.GroupOfNodes(
+					"BA", parquet.String(),
+				),
+				"C", parquet.GroupOfNodes(
+					"CA", parquet.String(),
+				),
+				"D", parquet.GroupOfNodes(
+					"DA", parquet.String(),
+				),
+			),
 		},
 		{
 			name: "simple values",
@@ -1161,11 +1161,11 @@ func TestParquetAnyValueConversions(t *testing.T) {
 				"B": int64(5),
 				"C": 0.5,
 			},
-			schema: parquet.Group{
-				"A": parquet.String(),
-				"B": parquet.Int(64),
-				"C": parquet.Leaf(parquet.DoubleType),
-			},
+			schema: parquet.GroupOfNodes(
+				"A", parquet.String(),
+				"B", parquet.Int(64),
+				"C", parquet.Leaf(parquet.DoubleType),
+			),
 		},
 		{
 			name: "repeated values",
@@ -1174,11 +1174,11 @@ func TestParquetAnyValueConversions(t *testing.T) {
 				"B": arr{int64(5), int64(6)},
 				"C": arr{0.5},
 			},
-			schema: parquet.Group{
-				"A": parquet.Repeated(parquet.String()),
-				"B": parquet.Repeated(parquet.Int(64)),
-				"C": parquet.Repeated(parquet.Leaf(parquet.DoubleType)),
-			},
+			schema: parquet.GroupOfNodes(
+				"A", parquet.Repeated(parquet.String()),
+				"B", parquet.Repeated(parquet.Int(64)),
+				"C", parquet.Repeated(parquet.Leaf(parquet.DoubleType)),
+			),
 		},
 		{
 			name: "nested groups",
@@ -1189,13 +1189,13 @@ func TestParquetAnyValueConversions(t *testing.T) {
 					},
 				},
 			},
-			schema: parquet.Group{
-				"A": parquet.Group{
-					"B": parquet.Group{
-						"C": parquet.String(),
-					},
-				},
-			},
+			schema: parquet.GroupOfNodes(
+				"A", parquet.GroupOfNodes(
+					"B", parquet.GroupOfNodes(
+						"C", parquet.String(),
+					),
+				),
+			),
 		},
 		{
 			name: "nested repeated groups",
@@ -1215,13 +1215,13 @@ func TestParquetAnyValueConversions(t *testing.T) {
 					},
 				},
 			},
-			schema: parquet.Group{
-				"A": parquet.Repeated(parquet.Group{
-					"B": parquet.Repeated(parquet.Group{
-						"C": parquet.Repeated(parquet.String()),
-					}),
-				}),
-			},
+			schema: parquet.GroupOfNodes(
+				"A", parquet.Repeated(parquet.GroupOfNodes(
+					"B", parquet.Repeated(parquet.GroupOfNodes(
+						"C", parquet.Repeated(parquet.String()),
+					)),
+				)),
+			),
 		},
 		{
 			name: "optional values",
@@ -1230,11 +1230,11 @@ func TestParquetAnyValueConversions(t *testing.T) {
 				"B": nil,
 				"C": "baz",
 			},
-			schema: parquet.Group{
-				"A": parquet.Optional(parquet.String()),
-				"B": parquet.Optional(parquet.String()),
-				"C": parquet.Optional(parquet.String()),
-			},
+			schema: parquet.GroupOfNodes(
+				"A", parquet.Optional(parquet.String()),
+				"B", parquet.Optional(parquet.String()),
+				"C", parquet.Optional(parquet.String()),
+			),
 		},
 		{
 			name: "nested optional groups",
@@ -1246,16 +1246,16 @@ func TestParquetAnyValueConversions(t *testing.T) {
 					"D": nil,
 				},
 			},
-			schema: parquet.Group{
-				"A": parquet.Group{
-					"B": parquet.Optional(parquet.Group{
-						"C": parquet.String(),
-					}),
-					"D": parquet.Optional(parquet.Group{
-						"E": parquet.String(),
-					}),
-				},
-			},
+			schema: parquet.GroupOfNodes(
+				"A", parquet.GroupOfNodes(
+					"B", parquet.Optional(parquet.GroupOfNodes(
+						"C", parquet.String(),
+					)),
+					"D", parquet.Optional(parquet.GroupOfNodes(
+						"E", parquet.String(),
+					)),
+				),
+			),
 		},
 	} {
 		test := test
@@ -1322,10 +1322,10 @@ func TestReadMapAsAny(t *testing.T) {
 		t.Errorf("value mismatch: want=%+v got=%+v", anyd, anys)
 	}
 
-	vals, err := parquet.Read[any](data, size, parquet.NewSchema("", parquet.Group{
-		"n": parquet.Int(64),
-		"m": parquet.Map(parquet.String(), parquet.Int(64)),
-	}))
+	vals, err := parquet.Read[any](data, size, parquet.NewSchema("", parquet.GroupOfNodes(
+		"n", parquet.Int(64),
+		"m", parquet.Map(parquet.String(), parquet.Int(64)),
+	)))
 	if err != nil {
 		t.Fatal(err)
 	}

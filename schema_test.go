@@ -398,18 +398,18 @@ func TestSchemaRoundTrip(t *testing.T) {
 	}{
 		{
 			name: "bytes_strings_etc",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"bytes_strings_etc": parquet.Optional(parquet.Group{
-					"bson":         parquet.BSON(),
-					"bytearray":    parquet.Leaf(parquet.ByteArrayType),
-					"enum":         parquet.Enum(),
-					"fixedbytes10": parquet.Leaf(parquet.FixedLenByteArrayType(10)),
-					"fixedbytes20": parquet.Leaf(parquet.FixedLenByteArrayType(20)),
-					"json":         parquet.JSON(),
-					"string":       parquet.String(),
-					"uuid":         parquet.UUID(),
-				}),
-			}),
+			schema: parquet.NewSchema("root", parquet.GroupOfNodes(
+				"bytes_strings_etc", parquet.Optional(parquet.GroupOfNodes(
+					"bson", parquet.BSON(),
+					"bytearray", parquet.Leaf(parquet.ByteArrayType),
+					"enum", parquet.Enum(),
+					"fixedbytes10", parquet.Leaf(parquet.FixedLenByteArrayType(10)),
+					"fixedbytes20", parquet.Leaf(parquet.FixedLenByteArrayType(20)),
+					"json", parquet.JSON(),
+					"string", parquet.String(),
+					"uuid", parquet.UUID(),
+				)),
+			)),
 			roundTripped: `message root {
 	optional group bytes_strings_etc {
 		required binary bson (BSON);
@@ -425,19 +425,19 @@ func TestSchemaRoundTrip(t *testing.T) {
 		},
 		{
 			name: "dates_times",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"dates_times": parquet.Optional(parquet.Group{
-					"date":                              parquet.Date(),
-					"time_micros":                       parquet.Time(parquet.Microsecond),
-					"time_millis":                       parquet.Time(parquet.Millisecond),
-					"time_millis_not_utc_adjusted":      parquet.TimeAdjusted(parquet.Millisecond, false),
-					"time_nanos":                        parquet.Time(parquet.Nanosecond),
-					"timestamp_micros":                  parquet.Timestamp(parquet.Microsecond),
-					"timestamp_millis":                  parquet.Timestamp(parquet.Millisecond),
-					"timestamp_millis_not_utc_adjusted": parquet.TimestampAdjusted(parquet.Millisecond, false),
-					"timestamp_nanos":                   parquet.Timestamp(parquet.Nanosecond),
-				}),
-			}),
+			schema: parquet.NewSchema("root", parquet.GroupOfNodes(
+				"dates_times", parquet.Optional(parquet.GroupOfNodes(
+					"date", parquet.Date(),
+					"time_micros", parquet.Time(parquet.Microsecond),
+					"time_millis", parquet.Time(parquet.Millisecond),
+					"time_millis_not_utc_adjusted", parquet.TimeAdjusted(parquet.Millisecond, false),
+					"time_nanos", parquet.Time(parquet.Nanosecond),
+					"timestamp_micros", parquet.Timestamp(parquet.Microsecond),
+					"timestamp_millis", parquet.Timestamp(parquet.Millisecond),
+					"timestamp_millis_not_utc_adjusted", parquet.TimestampAdjusted(parquet.Millisecond, false),
+					"timestamp_nanos", parquet.Timestamp(parquet.Nanosecond),
+				)),
+			)),
 			roundTripped: `message root {
 	optional group dates_times {
 		required int32 date (DATE);
@@ -454,15 +454,15 @@ func TestSchemaRoundTrip(t *testing.T) {
 		},
 		{
 			name: "field_ids",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"field_ids": parquet.Optional(parquet.Group{
-					"f1":  parquet.FieldID(parquet.String(), 1),
-					"f2":  parquet.FieldID(parquet.Int(32), 2),
-					"f3":  parquet.FieldID(parquet.Uint(64), 3),
-					"f4":  parquet.FieldID(parquet.Leaf(parquet.ByteArrayType), 4),
-					"f_1": parquet.FieldID(parquet.String(), -1),
-				}),
-			}),
+			schema: parquet.NewSchema("root", parquet.GroupOfNodes(
+				"field_ids", parquet.Optional(parquet.GroupOfNodes(
+					"f1", parquet.FieldID(parquet.String(), 1),
+					"f2", parquet.FieldID(parquet.Int(32), 2),
+					"f3", parquet.FieldID(parquet.Uint(64), 3),
+					"f4", parquet.FieldID(parquet.Leaf(parquet.ByteArrayType), 4),
+					"f_1", parquet.FieldID(parquet.String(), -1),
+				)),
+			)),
 			roundTripped: `message root {
 	optional group field_ids {
 		required binary f1 (STRING) = 1;
@@ -475,20 +475,20 @@ func TestSchemaRoundTrip(t *testing.T) {
 		},
 		{
 			name: "floats_and_decimals",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"floats_and_decimals": parquet.Optional(parquet.Group{
-					"decimal_fixed20": parquet.Decimal(2, 20, parquet.FixedLenByteArrayType(9)),
-					"decimal_int15":   parquet.Decimal(1, 15, parquet.Int64Type),
-					"decimal_int5":    parquet.Decimal(0, 5, parquet.Int32Type),
+			schema: parquet.NewSchema("root", parquet.GroupOfNodes(
+				"floats_and_decimals", parquet.Optional(parquet.GroupOfNodes(
+					"decimal_fixed20", parquet.Decimal(2, 20, parquet.FixedLenByteArrayType(9)),
+					"decimal_int15", parquet.Decimal(1, 15, parquet.Int64Type),
+					"decimal_int5", parquet.Decimal(0, 5, parquet.Int32Type),
 					// TODO: Decimal field backed by byte array.
 					//       Spec allows it (https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal),
 					//       but parquet-go currently panics:
 					//			DECIMAL node must annotate Int32, Int64 or FixedLenByteArray but got BYTE_ARRAY
-					//"decimal_bytes30": parquet.Decimal(3, 30, parquet.ByteArrayType),
-					"double": parquet.Leaf(parquet.DoubleType),
-					"float":  parquet.Leaf(parquet.FloatType),
-				}),
-			}),
+					//"decimal_bytes30", parquet.Decimal(3, 30, parquet.ByteArrayType),
+					"double", parquet.Leaf(parquet.DoubleType),
+					"float", parquet.Leaf(parquet.FloatType),
+				)),
+			)),
 			roundTripped: `message root {
 	optional group floats_and_decimals {
 		required fixed_len_byte_array(9) decimal_fixed20 (DECIMAL(20,2));
@@ -501,49 +501,49 @@ func TestSchemaRoundTrip(t *testing.T) {
 		},
 		{
 			name: "ints",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"ints": parquet.Optional(parquet.Group{
-					"int16":  parquet.Int(16),
-					"int32":  parquet.Leaf(parquet.Int32Type),
-					"int32l": parquet.Int(32),
-					"int64l": parquet.Int(64),
-					"int64":  parquet.Leaf(parquet.Int64Type),
-					"int8":   parquet.Int(8),
-					"int96":  parquet.Leaf(parquet.Int96Type),
-					"uint16": parquet.Uint(16),
-					"uint32": parquet.Uint(32),
-					"uint8":  parquet.Uint(8),
-					"uint64": parquet.Uint(64),
-				}),
-			}),
+			schema: parquet.NewSchema("root", parquet.GroupOfNodes(
+				"ints", parquet.Optional(parquet.GroupOfNodes(
+					"int16", parquet.Int(16),
+					"int32", parquet.Leaf(parquet.Int32Type),
+					"int32l", parquet.Int(32),
+					"int64l", parquet.Int(64),
+					"int64", parquet.Leaf(parquet.Int64Type),
+					"int8", parquet.Int(8),
+					"int96", parquet.Leaf(parquet.Int96Type),
+					"uint16", parquet.Uint(16),
+					"uint32", parquet.Uint(32),
+					"uint8", parquet.Uint(8),
+					"uint64", parquet.Uint(64),
+				)),
+			)),
 			roundTripped: `message root {
 	optional group ints {
 		required int32 int16 (INT(16,true));
 		required int32 int32;
 		required int32 int32l (INT(32,true));
-		required int64 int64;
 		required int64 int64l (INT(64,true));
+		required int64 int64;
 		required int32 int8 (INT(8,true));
 		required int96 int96;
 		required int32 uint16 (INT(16,false));
 		required int32 uint32 (INT(32,false));
-		required int64 uint64 (INT(64,false));
 		required int32 uint8 (INT(8,false));
+		required int64 uint64 (INT(64,false));
 	}
 }`,
 		},
 		{
 			name: "lists",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"lists": parquet.Optional(parquet.Group{
-					"groups": parquet.List(parquet.Optional(parquet.Group{
-						"a": parquet.String(),
-						"b": parquet.Int(32),
-					})),
-					"ints":    parquet.List(parquet.Int(32)),
-					"strings": parquet.Optional(parquet.List(parquet.String())),
-				}),
-			}),
+			schema: parquet.NewSchema("root", parquet.GroupOfNodes(
+				"lists", parquet.Optional(parquet.GroupOfNodes(
+					"groups", parquet.List(parquet.Optional(parquet.GroupOfNodes(
+						"a", parquet.String(),
+						"b", parquet.Int(32),
+					))),
+					"ints", parquet.List(parquet.Int(32)),
+					"strings", parquet.Optional(parquet.List(parquet.String())),
+				)),
+			)),
 			roundTripped: `message root {
 	optional group lists {
 		required group groups (LIST) {
@@ -569,16 +569,16 @@ func TestSchemaRoundTrip(t *testing.T) {
 		},
 		{
 			name: "maps",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"maps": parquet.Optional(parquet.Group{
-					"ints2ints":    parquet.Map(parquet.Int(32), parquet.Int(32)),
-					"ints2strings": parquet.Optional(parquet.Map(parquet.Int(32), parquet.String())),
-					"strings2groups": parquet.Map(parquet.String(), parquet.Optional(parquet.Group{
-						"a": parquet.String(),
-						"b": parquet.Int(32),
-					})),
-				}),
-			}),
+			schema: parquet.NewSchema("root", parquet.GroupOfNodes(
+				"maps", parquet.Optional(parquet.GroupOfNodes(
+					"ints2ints", parquet.Map(parquet.Int(32), parquet.Int(32)),
+					"ints2strings", parquet.Optional(parquet.Map(parquet.Int(32), parquet.String())),
+					"strings2groups", parquet.Map(parquet.String(), parquet.Optional(parquet.GroupOfNodes(
+						"a", parquet.String(),
+						"b", parquet.Int(32),
+					))),
+				)),
+			)),
 			roundTripped: `message root {
 	optional group maps {
 		required group ints2ints (MAP) {
@@ -607,16 +607,16 @@ func TestSchemaRoundTrip(t *testing.T) {
 		},
 		{
 			name: "repeated_fields",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"repeated_fields": parquet.Optional(parquet.Group{
-					"groups": parquet.Repeated(parquet.Group{
-						"a": parquet.String(),
-						"b": parquet.Int(32),
-					}),
-					"ints":    parquet.Repeated(parquet.Int(32)),
-					"strings": parquet.Repeated(parquet.String()),
-				}),
-			}),
+			schema: parquet.NewSchema("root", parquet.GroupOfNodes(
+				"repeated_fields", parquet.Optional(parquet.GroupOfNodes(
+					"groups", parquet.Repeated(parquet.GroupOfNodes(
+						"a", parquet.String(),
+						"b", parquet.Int(32),
+					)),
+					"ints", parquet.Repeated(parquet.Int(32)),
+					"strings", parquet.Repeated(parquet.String()),
+				)),
+			)),
 			roundTripped: `message root {
 	optional group repeated_fields {
 		repeated group groups {
@@ -630,12 +630,12 @@ func TestSchemaRoundTrip(t *testing.T) {
 		},
 		{
 			name: "variants",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"variants": parquet.Optional(parquet.Group{
-					"unshredded": parquet.Optional(parquet.Variant()),
+			schema: parquet.NewSchema("root", parquet.GroupOfNodes(
+				"variants", parquet.Optional(parquet.GroupOfNodes(
+					"unshredded", parquet.Optional(parquet.Variant()),
 					// TODO: Also include shredded variants when they are implemented
-				}),
-			}),
+				)),
+			)),
 			roundTripped: `message root {
 	optional group variants {
 		optional group unshredded (VARIANT) {

@@ -201,9 +201,7 @@ func BenchmarkDictionary(b *testing.B) {
 func TestIssueSegmentio312(t *testing.T) {
 	node := parquet.String()
 	node = parquet.Encoded(node, &parquet.RLEDictionary)
-	g := parquet.Group{}
-	g["mystring"] = node
-	schema := parquet.NewSchema("test", g)
+	schema := parquet.NewSchema("test", parquet.GroupOfNodes("mystring", node))
 
 	rows := []parquet.Row{[]parquet.Value{parquet.ValueOf("hello").Level(0, 0, 0)}}
 
