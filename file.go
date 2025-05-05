@@ -846,22 +846,20 @@ func (f *FilePages) ReadPage() (Page, error) {
 			//  across pages. In that case we just want to keep reading without skipping any values.
 			//  (2) when seeking to a specific row and trying to reach the start offset of the first
 			//  row in a new page.
-			if !seekToRowStart {
+			if !seekToRowStart || header.Type != format.DataPage {
 				// keep reading values from beginning of new page
 				return page, nil
-			} else {
-				if page.NumRows() == 0 {
-					// if current page does not have any rows, continue until a page with at least 1 row is reached
-					Release(page)
-					continue
-				}
-				// In V1 data pages, new page does not necessarily start with a new row.
-				// Since we are seeking to start of a row, we must fast-forward to the first value
-				// with repetition level 0: this may or may not be the first value in the new page.
-				tail := page.Slice(0, page.NumRows())
-				Release(page)
-				return tail, nil
 			}
+			// We need to seek to beginning of row.
+			// V1 data pages do not necessarily start at a row boundary.
+			if page.NumRows() == 0 {
+				// if current page does not have any rows, continue until a page with at least 1 row is reached
+				Release(page)
+				continue
+			}
+			tail := page.Slice(0, page.NumRows())
+			Release(page)
+			return tail, nil
 		}
 
 		// TODO: what about pages that don't embed the number of rows?
