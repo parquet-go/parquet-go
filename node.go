@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"cmp"
 	"reflect"
 	"slices"
 	"strings"
@@ -533,6 +534,12 @@ func groupNodesAreEqual(node1, node2 Node) bool {
 		return false
 	}
 
+	slices.SortFunc(fields1, func(a, b Field) int {
+		return cmp.Compare(a.Name(), b.Name())
+	})
+	slices.SortFunc(fields2, func(a, b Field) int {
+		return cmp.Compare(a.Name(), b.Name())
+	})
 	for i := range fields1 {
 		f1 := fields1[i]
 		f2 := fields2[i]
