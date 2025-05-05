@@ -523,8 +523,8 @@ func leafNodesAreEqual(node1, node2 Node) bool {
 }
 
 func groupNodesAreEqual(node1, node2 Node) bool {
-	fields1 := node1.Fields()
-	fields2 := node2.Fields()
+	fields1 := slices.Clone(node1.Fields())
+	fields2 := slices.Clone(node2.Fields())
 
 	if len(fields1) != len(fields2) {
 		return false
