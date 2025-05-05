@@ -519,9 +519,9 @@ func TestSchemaRoundTrip(t *testing.T) {
 			roundTripped: `message root {
 	optional group ints {
 		required int32 int16 (INT(16,true));
-		required int32 int32;
+		required int32 int32 (INT(32,true));
 		required int32 int32l (INT(32,true));
-		required int64 int64;
+		required int64 int64 (INT(64,true));
 		required int64 int64l (INT(64,true));
 		required int32 int8 (INT(8,true));
 		required int96 int96;
