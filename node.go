@@ -1,7 +1,6 @@
 package parquet
 
 import (
-	"cmp"
 	"reflect"
 	"slices"
 	"strings"
@@ -98,6 +97,12 @@ type Field interface {
 	// Given a reference to the Go value matching the structure of the parent
 	// node, returns the Go value of the field.
 	Value(base reflect.Value) reflect.Value
+}
+
+func sortFields(fields []Field) {
+	slices.SortFunc(fields, func(a, b Field) int {
+		return strings.Compare(a.Name(), b.Name())
+	})
 }
 
 // Encoded wraps the node passed as argument to use the given encoding.
@@ -283,20 +288,14 @@ func (g Group) Required() bool { return true }
 func (g Group) Leaf() bool { return false }
 
 func (g Group) Fields() []Field {
-	groupFields := make([]groupField, 0, len(g))
+	fields := make([]Field, 0, len(g))
 	for name, node := range g {
-		groupFields = append(groupFields, groupField{
+		fields = append(fields, &groupField{
 			Node: node,
 			name: name,
 		})
 	}
-	slices.SortFunc(groupFields, func(a, b groupField) int {
-		return strings.Compare(a.name, b.name)
-	})
-	fields := make([]Field, len(groupFields))
-	for i := range groupFields {
-		fields[i] = &groupFields[i]
-	}
+	sortFields(fields)
 	return fields
 }
 
@@ -534,12 +533,8 @@ func groupNodesAreEqual(node1, node2 Node) bool {
 		return false
 	}
 
-	slices.SortFunc(fields1, func(a, b Field) int {
-		return cmp.Compare(a.Name(), b.Name())
-	})
-	slices.SortFunc(fields2, func(a, b Field) int {
-		return cmp.Compare(a.Name(), b.Name())
-	})
+	sortFields(fields1)
+	sortFields(fields2)
 	for i := range fields1 {
 		f1 := fields1[i]
 		f2 := fields2[i]
