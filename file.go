@@ -857,6 +857,11 @@ func (f *FilePages) ReadPage() (Page, error) {
 				Release(page)
 				continue
 			}
+			repLvls := page.RepetitionLevels()
+			if len(repLvls) > 0 && repLvls[0] == 0 {
+				// avoid page slice if page starts at a row boundary
+				return page, nil
+			}
 			tail := page.Slice(0, page.NumRows())
 			Release(page)
 			return tail, nil
