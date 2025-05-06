@@ -979,7 +979,7 @@ func TestListElementsAcrossPages(t *testing.T) {
 				}
 			}
 
-			for i := 0; i < int(pr.NumRows()); i++ {
+			for i := range int(pr.NumRows()) {
 				for n := 1; n < int(pr.NumRows())-i; n += 1 {
 					t.Run(fmt.Sprintf("seek %d, n=%d", i, n), func(t *testing.T) {
 						if err := pr.SeekToRow(int64(i)); err != nil {
