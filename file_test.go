@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -514,4 +516,126 @@ func TestReadDictionaryPage(t *testing.T) {
 	if foundRows != totalRows {
 		t.Fatalf("expected %d rows, got %d", totalRows, foundRows)
 	}
+}
+
+func TestSeekToRowReally(t *testing.T) {
+	type A struct {
+		IndexDict string `parquet:",dict"`
+		//		IndexNoDict string `parquet:""`
+	}
+
+	b := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[A](b, parquet.PageBufferSize(10))
+
+	// Create and write 1000 rows with index-based names
+	const totalRows = 1000
+	for i := range totalRows {
+		val := fmt.Sprintf("%d", i)
+
+		_, err := w.Write([]A{
+			{
+				IndexDict: val,
+				//IndexNoDict: val,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if i+1%3 == 0 {
+			err := w.Flush()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := parquet.OpenFile(bytes.NewReader(b.Bytes()), int64(b.Len()), parquet.ReadBufferSize(3), parquet.SkipPageIndex(true)) // read buffer size of 3 should expose any issues with buffer overread
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seekTos := make([]int, 999)
+	for i := range seekTos {
+		seekTos[i] = i + 1
+	}
+	slices.Reverse(seekTos)
+	rand.Shuffle(len(seekTos), func(i, j int) {
+		seekTos[i], seekTos[j] = seekTos[j], seekTos[i]
+	})
+
+	// test dict column
+	rg := pf.RowGroups()[0]
+	cc := rg.ColumnChunks()[0]
+	pages := cc.Pages()
+
+	for _, seekTo := range seekTos {
+		if err := pages.SeekToRow(int64(seekTo)); err != nil {
+			t.Fatal(err)
+		}
+
+		page, err := pages.ReadPage()
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if page == nil {
+			t.Fatalf("expected page, got nil: %d", seekTo)
+		}
+
+		vr := page.Values()
+		values := make([]parquet.Value, 1)
+		n, err := vr.ReadValues(values)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("expected 1 value, got %d", n)
+		}
+
+		actual := values[0].String()
+		expected := fmt.Sprintf("%d", seekTo)
+		if actual != expected {
+			t.Fatalf("expected %s, got %s", expected, actual)
+		}
+		parquet.Release(page)
+	}
+	pages.Close()
+
+	// test row reader
+	pf, err = parquet.OpenFile(bytes.NewReader(b.Bytes()), int64(b.Len()), parquet.ReadBufferSize(3)) // read buffer size of 3 should expose any issues with buffer overread
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader := parquet.NewGenericReader[A](pf)
+	for _, seekTo := range seekTos {
+		if err := reader.SeekToRow(int64(seekTo)); err != nil {
+			t.Fatal(err)
+		}
+
+		var n int
+		rows := make([]A, 1)
+		if n, err = reader.Read(rows); err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("expected 1 row, got %d, seekTo: %d", n, seekTo)
+		}
+
+		actual := rows[0].IndexDict
+		expected := fmt.Sprintf("%d", seekTo)
+		if actual != expected {
+			t.Fatalf("expected %s, got %s, seekTos: %v", expected, actual, seekTos)
+		}
+
+		/*		actual = rows[0].IndexNoDict
+				expected = fmt.Sprintf("%d", seekTo)
+				if actual != expected {
+					t.Fatalf("expected %s, got %s", expected, actual)
+				}*/
+	}
+	reader.Close()
 }

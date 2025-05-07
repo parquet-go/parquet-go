@@ -738,8 +738,11 @@ type FilePages struct {
 	dataOffset int64
 	dictOffset int64
 	index      int
-	skip       int64
 	dictionary Dictionary
+
+	row  int64 // min row of the current page
+	skip int64 // number of rows to skip. set by SeekToRow and used by ReadPage
+	page Page  // current page
 
 	bufferSize int
 }
@@ -781,6 +784,29 @@ func (f *FilePages) ReadPage() (Page, error) {
 		return nil, io.EOF
 	}
 
+	if f.page != nil && f.skip > 0 && f.page.NumRows() > 0 {
+		if f.skip < f.page.NumRows() {
+			tail := f.page.Slice(f.skip, f.page.NumRows())
+			Release(f.page)
+			f.row += f.skip
+			f.skip = 0
+			f.page = tail // we have to retain a page everytime we store it locally
+			Retain(tail)
+
+			return tail, nil
+		}
+	}
+
+	if f.page != nil {
+		f.row += f.page.NumRows()
+		f.skip -= f.page.NumRows()
+		if f.skip < 0 {
+			f.skip = 0
+		}
+		Release(f.page)
+		f.page = nil
+	}
+
 	for {
 		// Instantiate a new format.PageHeader for each page.
 		//
@@ -803,6 +829,21 @@ func (f *FilePages) ReadPage() (Page, error) {
 		// call f.rbuf.Discard to skip the page data and realign f.rbuf with the next page header
 		if header.Type == format.DictionaryPage && f.dictionary != nil {
 			f.rbuf.Discard(int(header.CompressedPageSize))
+		}
+
+		if header.Type != format.DictionaryPage &&
+			header.DataPageHeaderV2 != nil &&
+			header.DataPageHeaderV2.NumRows > 0 &&
+			f.skip >= int64(header.DataPageHeaderV2.NumRows) {
+
+			f.skip -= int64(header.DataPageHeaderV2.NumRows)
+			f.rbuf.Discard(int(header.CompressedPageSize))
+
+			f.index++
+			f.row += int64(header.DataPageHeaderV2.NumRows)
+			Release(f.page)
+			f.page = nil // jpe - necssary?
+
 			continue
 		}
 
@@ -838,22 +879,29 @@ func (f *FilePages) ReadPage() (Page, error) {
 
 		f.index++
 		if f.skip == 0 {
+			//f.row += page.NumRows()
+			Release(f.page)
+			f.page = page // jpe - do we need to call buffer.ref()? add to test
+			Retain(page)
 			return page, nil
 		}
 
 		// TODO: what about pages that don't embed the number of rows?
 		// (data page v1 with no offset index in the column chunk).
 		numRows := page.NumRows()
-
 		if numRows <= f.skip {
 			Release(page)
 		} else {
 			tail := page.Slice(f.skip, numRows)
 			Release(page)
+			f.row += f.skip
 			f.skip = 0
+			f.page = tail
+			Retain(tail)
 			return tail, nil
 		}
 
+		f.row += numRows
 		f.skip -= numRows
 	}
 }
@@ -960,9 +1008,19 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 		return io.ErrClosedPipe
 	}
 	if index := f.chunk.offsetIndex.Load(); index == nil {
+		if rowIndex >= f.row {
+			// we don't need to seek back to the beginning
+			// JPE we need f.page to accompany f.row? in ReadPage if in ReadPage f.page != nil and f.skip < f.page.NumRows() then we can slice the page else ditch the page and read a new one
+			f.skip = rowIndex - f.row // JPE - columnChunkValueReader calls SeekToRow then ReadPage. this will decode the header on the wrong page if SeekToRow(rowIndex) did not cross a page boundary. See TestRowIterator in Tempo
+			return nil
+		}
+
 		_, err = f.section.Seek(f.dataOffset-f.baseOffset, io.SeekStart)
 		f.skip = rowIndex
+		f.row = 0
 		f.index = 0
+		Release(f.page)
+		f.page = nil
 		if f.dictOffset > 0 {
 			f.index = 1
 		}
@@ -977,6 +1035,8 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 		_, err = f.section.Seek(pages[index].Offset-f.baseOffset, io.SeekStart)
 		f.skip = rowIndex - pages[index].FirstRowIndex
 		f.index = index
+		f.page = nil
+		f.row = pages[index].FirstRowIndex
 	}
 	f.rbuf.Reset(&f.section)
 	return err
@@ -992,9 +1052,12 @@ func (f *FilePages) Close() error {
 	f.baseOffset = 0
 	f.dataOffset = 0
 	f.dictOffset = 0
+	f.row = 0
 	f.index = 0
 	f.skip = 0
 	f.dictionary = nil
+	Release(f.page)
+	f.page = nil
 	return nil
 }
 
