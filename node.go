@@ -99,6 +99,12 @@ type Field interface {
 	Value(base reflect.Value) reflect.Value
 }
 
+func sortFields(fields []Field) {
+	slices.SortFunc(fields, func(a, b Field) int {
+		return strings.Compare(a.Name(), b.Name())
+	})
+}
+
 // Encoded wraps the node passed as argument to use the given encoding.
 //
 // The function panics if it is called on a non-leaf node, or if the
@@ -282,20 +288,14 @@ func (g Group) Required() bool { return true }
 func (g Group) Leaf() bool { return false }
 
 func (g Group) Fields() []Field {
-	groupFields := make([]groupField, 0, len(g))
+	fields := make([]Field, 0, len(g))
 	for name, node := range g {
-		groupFields = append(groupFields, groupField{
+		fields = append(fields, &groupField{
 			Node: node,
 			name: name,
 		})
 	}
-	slices.SortFunc(groupFields, func(a, b groupField) int {
-		return strings.Compare(a.name, b.name)
-	})
-	fields := make([]Field, len(groupFields))
-	for i := range groupFields {
-		fields[i] = &groupFields[i]
-	}
+	sortFields(fields)
 	return fields
 }
 
@@ -533,6 +533,10 @@ func groupNodesAreEqual(node1, node2 Node) bool {
 		return false
 	}
 
+	fields1 = slices.Clone(fields1)
+	fields2 = slices.Clone(fields2)
+	sortFields(fields1)
+	sortFields(fields2)
 	for i := range fields1 {
 		f1 := fields1[i]
 		f2 := fields2[i]

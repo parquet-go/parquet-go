@@ -104,3 +104,25 @@ func TestEncodingOf(t *testing.T) {
 		})
 	}
 }
+
+func TestEqualGroupNodes(t *testing.T) {
+	type RowType struct {
+		Name string `parquet:"name"`
+		Id   string `parquet:"id"`
+	}
+	schemaViaOf := SchemaOf(RowType{})
+
+	group := Group{
+		"name": String(),
+		"id":   String(),
+	}
+	schemaViaNew := NewSchema("", group)
+
+	if schemaViaOf.String() == schemaViaNew.String() {
+		t.Fatal("this test needs two nodes with equal fields in different orders")
+	}
+
+	if !EqualNodes(schemaViaOf, schemaViaNew) {
+		t.Fatal("nodes are not equal")
+	}
+}
