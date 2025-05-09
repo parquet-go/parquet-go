@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -265,6 +266,11 @@ func applyFieldRepetitionType(t format.FieldRepetitionType, repetitionLevel, def
 	return repetitionLevel, definitionLevel
 }
 
+// Deprecated: Group is group node, modeled as a map.
+//
+// The GroupNode type supersedes this type because the iteration order of Golang map elements is arbitrary,
+// and the Group implementation makes the order deterministic by sorting the results of Fields() by the field name,
+// alphabetically. This can lead to problems for applications that require specific field order.
 type Group map[string]Node
 
 func (g Group) ID() int { return 0 }
@@ -304,6 +310,54 @@ func (g Group) Encoding() encoding.Encoding { return nil }
 func (g Group) Compression() compress.Codec { return nil }
 
 func (g Group) GoType() reflect.Type { return goTypeOfGroup(g) }
+
+// GroupNode is a group node, modeled as a slice of fields.
+type GroupNode struct {
+	fields []Field
+}
+
+// GroupOfFields constructs a new GroupNode from Fields.
+func GroupOfFields(fields ...Field) *GroupNode {
+	return &GroupNode{fields: fields}
+}
+
+// GroupOfNodes constructs a new GroupNode from args alternating between (fieldName string, fieldNode Node).
+func GroupOfNodes(v ...any) *GroupNode {
+	fields := make([]Field, 0, len(v)/2)
+	for len(v) > 0 {
+		name, ok := v[0].(string)
+		if !ok {
+			panic(fmt.Sprintf("expect group field name type string, got type %T", v[0]))
+		}
+		if len(v) == 0 {
+			panic(fmt.Sprintf("node missing for group field '%s'", name))
+		}
+		node, ok := v[1].(Node)
+		if !ok {
+			panic(fmt.Sprintf("expect group field node type Node, got type %T", v[1]))
+		}
+		fields = append(fields, &groupField{
+			Node: node,
+			name: name,
+		})
+		v = v[2:]
+	}
+	return &GroupNode{
+		fields: fields,
+	}
+}
+
+func (g GroupNode) ID() int                     { return 0 }
+func (g GroupNode) String() string              { return sprint("", g) }
+func (g GroupNode) Type() Type                  { return groupType{} }
+func (g GroupNode) Optional() bool              { return false }
+func (g GroupNode) Repeated() bool              { return false }
+func (g GroupNode) Required() bool              { return true }
+func (g GroupNode) Leaf() bool                  { return false }
+func (g GroupNode) Fields() []Field             { return g.fields }
+func (g GroupNode) Encoding() encoding.Encoding { return nil }
+func (g GroupNode) Compression() compress.Codec { return nil }
+func (g GroupNode) GoType() reflect.Type        { return goTypeOfGroup(g) }
 
 type groupField struct {
 	Node

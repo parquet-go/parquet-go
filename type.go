@@ -2055,10 +2055,10 @@ func (t *timestampType) ConvertValue(val Value, typ Type) (Value, error) {
 //
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
 func List(of Node) Node {
-	return listNode{Group{"list": Repeated(Group{"element": of})}}
+	return listNode{GroupOfNodes("list", Repeated(GroupOfNodes("element", of)))}
 }
 
-type listNode struct{ Group }
+type listNode struct{ *GroupNode }
 
 func (listNode) Type() Type { return &listType{} }
 
@@ -2132,15 +2132,15 @@ func (t *listType) ConvertValue(Value, Type) (Value, error) {
 //
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
 func Map(key, value Node) Node {
-	return mapNode{Group{
-		"key_value": Repeated(Group{
-			"key":   Required(key),
-			"value": value,
-		}),
-	}}
+	return mapNode{GroupOfNodes(
+		"key_value", Repeated(GroupOfNodes(
+			"key", Required(key),
+			"value", value,
+		)),
+	)}
 }
 
-type mapNode struct{ Group }
+type mapNode struct{ *GroupNode }
 
 func (mapNode) Type() Type { return &mapType{} }
 
@@ -2286,13 +2286,13 @@ func (t *nullType) ConvertValue(val Value, _ Type) (Value, error) {
 //
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#variant
 func Variant() Node {
-	return variantNode{Group{"metadata": Required(Leaf(ByteArrayType)), "value": Required(Leaf(ByteArrayType))}}
+	return variantNode{GroupOfNodes("metadata", Required(Leaf(ByteArrayType)), "value", Required(Leaf(ByteArrayType)))}
 }
 
 // TODO: add ShreddedVariant(Node) function, to create a shredded variant
 //  where the argument defines the type/structure of the shredded value(s).
 
-type variantNode struct{ Group }
+type variantNode struct{ *GroupNode }
 
 func (variantNode) Type() Type { return &variantType{} }
 
