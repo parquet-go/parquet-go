@@ -155,7 +155,7 @@ func writeFuncOf[T any](t reflect.Type, schema *Schema) writeFunc[T] {
 }
 
 func makeWriteFunc[T any](t reflect.Type, schema *Schema) writeFunc[T] {
-	writeRows := writeRowsFuncOf(t, schema, nil)
+	writeRows := writeRowsFuncOf(t, schema, nil, nil)
 	return func(w *GenericWriter[T], rows []T) (n int, err error) {
 		if w.columns == nil {
 			w.columns = make([]ColumnBuffer, len(w.base.writer.columns))

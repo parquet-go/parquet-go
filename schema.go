@@ -555,8 +555,8 @@ func decimalFixedLenByteArraySize(precision int) int {
 	return int(math.Ceil((math.Log10(2) + float64(precision)) / math.Log10(256)))
 }
 
-func forEachStructTagOption(sf reflect.StructField, do func(t reflect.Type, option, args string)) {
-	if tag := sf.Tag.Get("parquet"); tag != "" {
+func forEachStructTagOption(sf reflect.StructField, tag string, do func(t reflect.Type, option, args string)) {
+	if tag := sf.Tag.Get(tag); tag != "" {
 		_, tag = split(tag) // skip the field name
 		for tag != "" {
 			option := ""
