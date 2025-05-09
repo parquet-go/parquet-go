@@ -390,6 +390,13 @@ func TestInvalidSchemaOf(t *testing.T) {
 }
 
 func TestSchemaRoundTrip(t *testing.T) {
+	shreddedVariant := func(n parquet.Node) parquet.Node {
+		v, err := parquet.ShreddedVariant(n)
+		if err != nil {
+			t.Fatalf("ShreddedVariant(%v) should not have failed but did: %v", n, err)
+		}
+		return v
+	}
 	// We create a schemas with all supported kinds, cardinalities, logical types, etc
 	tests := []struct {
 		name         string
@@ -632,12 +639,155 @@ func TestSchemaRoundTrip(t *testing.T) {
 			name: "variants",
 			schema: parquet.NewSchema("root", parquet.Group{
 				"variants": parquet.Optional(parquet.Group{
+					"shredded": parquet.Group{
+						"bool":    parquet.Optional(shreddedVariant(parquet.Leaf(parquet.BooleanType))),
+						"date":    parquet.Optional(shreddedVariant(parquet.Date())),
+						"decimal": parquet.Optional(shreddedVariant(parquet.Decimal(5, 9, parquet.Int32Type))),
+						"double":  parquet.Optional(shreddedVariant(parquet.Leaf(parquet.DoubleType))),
+						"float":   parquet.Optional(shreddedVariant(parquet.Leaf(parquet.FloatType))),
+						"group": parquet.Optional(shreddedVariant(parquet.Group{
+							"extra": parquet.List(parquet.Group{
+								"name": parquet.String(),
+								"num":  parquet.Leaf(parquet.Int64Type),
+							}),
+							"id":   parquet.String(),
+							"tags": parquet.List(parquet.String()),
+						})),
+						"int8":      parquet.Optional(shreddedVariant(parquet.Int(8))),
+						"int16":     parquet.Optional(shreddedVariant(parquet.Int(16))),
+						"int32":     parquet.Optional(shreddedVariant(parquet.Int(32))),
+						"int64":     parquet.Optional(shreddedVariant(parquet.Int(64))),
+						"list":      parquet.Optional(shreddedVariant(parquet.List(parquet.String()))),
+						"string":    parquet.Optional(shreddedVariant(parquet.String())),
+						"time":      parquet.Optional(shreddedVariant(parquet.Time(parquet.Microsecond))),
+						"timestamp": parquet.Optional(shreddedVariant(parquet.Timestamp(parquet.Microsecond))),
+						"uuid":      parquet.Optional(shreddedVariant(parquet.UUID())),
+					},
 					"unshredded": parquet.Optional(parquet.Variant()),
-					// TODO: Also include shredded variants when they are implemented
 				}),
 			}),
 			roundTripped: `message root {
 	optional group variants {
+		required group shredded {
+			optional group bool (VARIANT) {
+				required binary metadata;
+				optional boolean typed_value;
+				optional binary value;
+			}
+			optional group date (VARIANT) {
+				required binary metadata;
+				optional int32 typed_value (DATE);
+				optional binary value;
+			}
+			optional group decimal (VARIANT) {
+				required binary metadata;
+				optional int32 typed_value (DECIMAL(9,5));
+				optional binary value;
+			}
+			optional group double (VARIANT) {
+				required binary metadata;
+				optional double typed_value;
+				optional binary value;
+			}
+			optional group float (VARIANT) {
+				required binary metadata;
+				optional float typed_value;
+				optional binary value;
+			}
+			optional group group (VARIANT) {
+				required binary metadata;
+				optional group typed_value {
+					required group extra {
+						optional group typed_value (LIST) {
+							repeated group list {
+								required group element {
+									optional group typed_value {
+										required group name {
+											optional binary typed_value (STRING);
+											optional binary value;
+										}
+										required group num {
+											optional int64 typed_value;
+											optional binary value;
+										}
+									}
+									optional binary value;
+								}
+							}
+						}
+						optional binary value;
+					}
+					required group id {
+						optional binary typed_value (STRING);
+						optional binary value;
+					}
+					required group tags {
+						optional group typed_value (LIST) {
+							repeated group list {
+								required group element {
+									optional binary typed_value (STRING);
+									optional binary value;
+								}
+							}
+						}
+						optional binary value;
+					}
+				}
+				optional binary value;
+			}
+			optional group int16 (VARIANT) {
+				required binary metadata;
+				optional int32 typed_value (INT(16,true));
+				optional binary value;
+			}
+			optional group int32 (VARIANT) {
+				required binary metadata;
+				optional int32 typed_value (INT(32,true));
+				optional binary value;
+			}
+			optional group int64 (VARIANT) {
+				required binary metadata;
+				optional int64 typed_value (INT(64,true));
+				optional binary value;
+			}
+			optional group int8 (VARIANT) {
+				required binary metadata;
+				optional int32 typed_value (INT(8,true));
+				optional binary value;
+			}
+			optional group list (VARIANT) {
+				required binary metadata;
+				optional group typed_value (LIST) {
+					repeated group list {
+						required group element {
+							optional binary typed_value (STRING);
+							optional binary value;
+						}
+					}
+				}
+				optional binary value;
+			}
+			optional group string (VARIANT) {
+				required binary metadata;
+				optional binary typed_value (STRING);
+				optional binary value;
+			}
+			optional group time (VARIANT) {
+				required binary metadata;
+				optional int64 typed_value (TIME(isAdjustedToUTC=true,unit=MICROS));
+				optional binary value;
+			}
+			optional group timestamp (VARIANT) {
+				required binary metadata;
+				optional int64 typed_value (TIMESTAMP(isAdjustedToUTC=true,unit=MICROS));
+				optional binary value;
+			}
+			optional group uuid (VARIANT) {
+				required binary metadata;
+				optional fixed_len_byte_array(16) typed_value (UUID);
+				optional binary value;
+			}
+		}
 		optional group unshredded (VARIANT) {
 			required binary metadata;
 			required binary value;
