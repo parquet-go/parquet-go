@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -1671,4 +1672,149 @@ func TestIssueNotAllowedDefaultEncodingFor(t *testing.T) {
 	_ = parquet.NewGenericWriter[TestType](b,
 		parquet.DefaultEncodingFor(parquet.ByteArray, &parquet.DeltaBinaryPacked),
 	)
+}
+
+func TestMapKeySorting(t *testing.T) {
+	// Test that map keys are sorted correctly when written to parquet files
+	tests := []struct {
+		name     string
+		input    any
+		validate func(t *testing.T, row parquet.Row)
+	}{
+		{
+			name: "string keys",
+			input: struct {
+				StringMap map[string]int `parquet:"string_map"`
+			}{
+				StringMap: map[string]int{
+					"z": 26,
+					"a": 1,
+					"m": 13,
+					"c": 3,
+					"x": 24,
+				},
+			},
+			validate: func(t *testing.T, row parquet.Row) {
+				var keys []string
+				row.Range(func(columnIndex int, columnValues []parquet.Value) bool {
+					if len(columnValues) == 0 {
+						return true
+					}
+					if columnIndex%2 == 0 {
+						key := columnValues[0].ByteArray()
+						keys = append(keys, string(key))
+					}
+					return true
+				})
+
+				sortedKeys := make([]string, len(keys))
+				copy(sortedKeys, keys)
+				sort.Strings(sortedKeys)
+
+				if !reflect.DeepEqual(keys, sortedKeys) {
+					t.Errorf("string map keys not sorted, got: %v, want: %v", keys, sortedKeys)
+				}
+			},
+		},
+		{
+			name: "int keys",
+			input: struct {
+				IntMap map[int]string `parquet:"int_map"`
+			}{
+				IntMap: map[int]string{
+					5: "five",
+					1: "one",
+					3: "three",
+					2: "two",
+					4: "four",
+				},
+			},
+			validate: func(t *testing.T, row parquet.Row) {
+				var keys []int32
+				row.Range(func(columnIndex int, columnValues []parquet.Value) bool {
+					if len(columnValues) == 0 {
+						return true
+					}
+					if columnIndex%2 == 0 {
+						key := columnValues[0].Int32()
+						keys = append(keys, key)
+					}
+					return true
+				})
+
+				sortedKeys := make([]int32, len(keys))
+				copy(sortedKeys, keys)
+				sort.Slice(sortedKeys, func(i, j int) bool { return sortedKeys[i] < sortedKeys[j] })
+
+				if !reflect.DeepEqual(keys, sortedKeys) {
+					t.Errorf("int map keys not sorted, got: %v, want: %v", keys, sortedKeys)
+				}
+			},
+		},
+		{
+			name: "float keys",
+			input: struct {
+				FloatMap map[float64]string `parquet:"float_map"`
+			}{
+				FloatMap: map[float64]string{
+					5.5: "five point five",
+					1.1: "one point one",
+					3.3: "three point three",
+					2.2: "two point two",
+					4.4: "four point four",
+				},
+			},
+			validate: func(t *testing.T, row parquet.Row) {
+				var keys []float64
+				row.Range(func(columnIndex int, columnValues []parquet.Value) bool {
+					if len(columnValues) == 0 {
+						return true
+					}
+					if columnIndex%2 == 0 {
+						key := columnValues[0].Double()
+						keys = append(keys, key)
+					}
+					return true
+				})
+
+				sortedKeys := make([]float64, len(keys))
+				copy(sortedKeys, keys)
+				sort.Float64s(sortedKeys)
+
+				if !reflect.DeepEqual(keys, sortedKeys) {
+					t.Errorf("float map keys not sorted, got: %v, want: %v", keys, sortedKeys)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			w := parquet.NewWriter(buf, parquet.SchemaOf(tc.input))
+
+			if err := w.Write(tc.input); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			rows := f.RowGroups()[0].Rows()
+			defer rows.Close()
+
+			parquetRows := make([]parquet.Row, 1)
+			_, err = rows.ReadRows(parquetRows)
+			if err != nil && err != io.EOF {
+				t.Fatal(err)
+			}
+
+			tc.validate(t, parquetRows[0])
+		})
+	}
 }
