@@ -8,11 +8,10 @@ import (
 	"io"
 	"math/bits"
 	"reflect"
+	"slices"
 	"sort"
 	"time"
 	"unsafe"
-
-	"slices"
 
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/plain"
