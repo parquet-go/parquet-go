@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,12 +12,13 @@ import (
 	"time"
 	"unsafe"
 
+	"slices"
+
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/internal/bitpack"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
 	"github.com/parquet-go/parquet-go/sparse"
-	"slices"
 )
 
 // ColumnBuffer is an interface representing columns of a row group.
@@ -2358,8 +2360,13 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 		}
 
 		levels.repetitionDepth++
-		mapKey := reflect.New(keyType).Elem()
-		mapValue := reflect.New(valueType).Elem()
+		mapKey := reflect.Value{}
+		mapValue := reflect.Value{}
+		compareKeys := compareFuncOf(keyType)
+		if compareKeys == nil {
+			mapKey = reflect.New(keyType).Elem()
+			mapValue = reflect.New(valueType).Elem()
+		}
 
 		for i := range rows.Len() {
 			m := reflect.NewAt(t, rows.Index(i)).Elem()
@@ -2369,10 +2376,29 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 				if err := writeKeyValues(columns, empty, empty, levels); err != nil {
 					return err
 				}
-			} else {
-				elemLevels := levels
-				elemLevels.definitionLevel++
+				continue
+			}
 
+			elemLevels := levels
+			elemLevels.definitionLevel++
+
+			if compareKeys != nil {
+				keys := m.MapKeys()
+				slices.SortFunc(keys, compareKeys)
+
+				for _, key := range keys {
+					value := m.MapIndex(key)
+
+					k := makeArray(reflectValueData(key), 1, keySize)
+					v := makeArray(reflectValueData(value), 1, valueSize)
+
+					if err := writeKeyValues(columns, k, v, elemLevels); err != nil {
+						return err
+					}
+
+					elemLevels.repetitionLevel = elemLevels.repetitionDepth
+				}
+			} else {
 				for it := m.MapRange(); it.Next(); {
 					mapKey.SetIterKey(it)
 					mapValue.SetIterValue(it)
@@ -2389,6 +2415,29 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 			}
 		}
 
+		return nil
+	}
+}
+
+func compareFuncOf(t reflect.Type) func(reflect.Value, reflect.Value) int {
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return func(a, b reflect.Value) int {
+			return cmp.Compare(a.Int(), b.Int())
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return func(a, b reflect.Value) int {
+			return cmp.Compare(a.Uint(), b.Uint())
+		}
+	case reflect.Float32, reflect.Float64:
+		return func(a, b reflect.Value) int {
+			return cmp.Compare(a.Float(), b.Float())
+		}
+	case reflect.String:
+		return func(a, b reflect.Value) int {
+			return cmp.Compare(a.String(), b.String())
+		}
+	default:
 		return nil
 	}
 }
