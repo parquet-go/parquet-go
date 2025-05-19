@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,7 +18,6 @@ import (
 	"github.com/hexops/gotextdiff"
 	"github.com/hexops/gotextdiff/myers"
 	"github.com/hexops/gotextdiff/span"
-
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/encoding"
@@ -1709,7 +1708,7 @@ func TestMapKeySorting(t *testing.T) {
 
 				sortedKeys := make([]string, len(keys))
 				copy(sortedKeys, keys)
-				sort.Strings(sortedKeys)
+				slices.Sort(sortedKeys)
 
 				if !reflect.DeepEqual(keys, sortedKeys) {
 					t.Errorf("string map keys not sorted, got: %v, want: %v", keys, sortedKeys)
@@ -1744,7 +1743,7 @@ func TestMapKeySorting(t *testing.T) {
 
 				sortedKeys := make([]int32, len(keys))
 				copy(sortedKeys, keys)
-				sort.Slice(sortedKeys, func(i, j int) bool { return sortedKeys[i] < sortedKeys[j] })
+				slices.Sort(sortedKeys)
 
 				if !reflect.DeepEqual(keys, sortedKeys) {
 					t.Errorf("int map keys not sorted, got: %v, want: %v", keys, sortedKeys)
@@ -1779,7 +1778,7 @@ func TestMapKeySorting(t *testing.T) {
 
 				sortedKeys := make([]float64, len(keys))
 				copy(sortedKeys, keys)
-				sort.Float64s(sortedKeys)
+				slices.Sort(sortedKeys)
 
 				if !reflect.DeepEqual(keys, sortedKeys) {
 					t.Errorf("float map keys not sorted, got: %v, want: %v", keys, sortedKeys)
