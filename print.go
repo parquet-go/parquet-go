@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/olekukonko/tablewriter"
+	"github.com/olekukonko/tablewriter/tw"
 )
 
 func PrintSchema(w io.Writer, name string, node Node) error {
@@ -209,12 +210,12 @@ func sprint(name string, node Node) string {
 func PrintRowGroup(w io.Writer, rowGroup RowGroup) error {
 	schema := rowGroup.Schema()
 	pw := &printWriter{writer: w}
-	tw := tablewriter.NewWriter(pw)
+	thisTw := tablewriter.NewWriter(pw)
 
 	columns := schema.Columns()
 	header := make([]string, len(columns))
 	footer := make([]string, len(columns))
-	alignment := make([]int, len(columns))
+	alignment := make([]tw.Align, len(columns))
 
 	for i, column := range columns {
 		leaf, _ := schema.Lookup(column...)
@@ -225,9 +226,9 @@ func PrintRowGroup(w io.Writer, rowGroup RowGroup) error {
 
 		switch columnType.Kind() {
 		case ByteArray:
-			alignment[i] = tablewriter.ALIGN_LEFT
+			alignment[i] = tw.AlignLeft
 		default:
-			alignment[i] = tablewriter.ALIGN_RIGHT
+			alignment[i] = tw.AlignRight
 		}
 	}
 
@@ -253,11 +254,14 @@ func PrintRowGroup(w io.Writer, rowGroup RowGroup) error {
 					cells[columnIndex] = value.String()
 				} else {
 					cells[columnIndex] += "," + value.String()
-					alignment[columnIndex] = tablewriter.ALIGN_LEFT
+					alignment[columnIndex] = tw.AlignLeft
 				}
 			}
 
-			tw.Append(cells)
+			err = thisTw.Append(cells)
+			if err != nil {
+				return err
+			}
 		}
 
 		if err != nil {
@@ -268,15 +272,29 @@ func PrintRowGroup(w io.Writer, rowGroup RowGroup) error {
 		}
 	}
 
-	tw.SetAutoFormatHeaders(false)
-	tw.SetColumnAlignment(alignment)
-	tw.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
-	tw.SetFooterAlignment(tablewriter.ALIGN_LEFT)
-	tw.SetHeader(header)
-	tw.SetFooter(footer)
-	tw.Render()
+	thisTw.Configure(func(cfg *tablewriter.Config) {
+		cfg.Header = tw.CellConfig{
+			Formatting: tw.CellFormatting{AutoFormat: tw.Off, Alignment: tw.AlignLeft},
+		}
+		cfg.Footer = tw.CellConfig{
+			Formatting: tw.CellFormatting{Alignment: tw.AlignLeft},
+		}
+		cfg.Row = tw.CellConfig{
+			ColumnAligns: alignment,
+		}
+	})
 
-	fmt.Fprintf(pw, "%d rows\n\n", rowGroup.NumRows())
+	thisTw.Header(header)
+	thisTw.Footer(footer)
+	err := thisTw.Render()
+	if err != nil {
+		return err
+	}
+
+	_, err = fmt.Fprintf(pw, "%d rows\n\n", rowGroup.NumRows())
+	if err != nil {
+		return err
+	}
 	return pw.err
 }
 
