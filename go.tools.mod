@@ -11,16 +11,18 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hexops/gotextdiff v1.0.3
 	github.com/klauspost/compress v1.18.0
-	github.com/olekukonko/tablewriter v0.0.5
+	github.com/olekukonko/tablewriter v1.0.7
 	github.com/pierrec/lz4/v4 v4.1.22
-	golang.org/x/sys v0.30.0
-	google.golang.org/protobuf v1.36.5
+	golang.org/x/sys v0.33.0
+	google.golang.org/protobuf v1.36.6
 )
 
 require (
-	github.com/mattn/go-runewidth v0.0.9 // indirect
-	golang.org/x/mod v0.23.0 // indirect
-	golang.org/x/sync v0.11.0 // indirect
-	golang.org/x/tools v0.30.1-0.20250221230316-5055f70f240c // indirect
-	golang.org/x/tools/gopls v0.18.1 // indirect
+	github.com/fatih/color v1.18.0 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/olekukonko/errors v1.1.0 // indirect
+	github.com/olekukonko/ll v0.0.8 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 )
