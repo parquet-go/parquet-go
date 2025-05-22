@@ -187,6 +187,29 @@ func testWriteRowsColumns[T any](t *testing.T) {
 			},
 			data: colSlice,
 		},
+		{
+			name: "ColumnWriter.WriteRowValues followed by Close",
+			write: func(t *testing.T, w *parquet.GenericWriter[T], vals [][]parquet.Value) (int, error) {
+				t.Helper()
+				var numRows int
+				for i, col := range vals {
+					num, err := w.ColumnWriters()[i].WriteRowValues(col)
+					if err != nil {
+						return 0, err
+					}
+					if i == 0 {
+						numRows = num
+					} else if numRows != num {
+						t.Errorf("column %d disagrees with number of rows written in column %d", i, 0)
+					}
+					if w.ColumnWriters()[i].Close() != nil {
+						t.Errorf("ColumnWriter[%d].Close() an error: %v", i, err)
+					}
+				}
+				return numRows, nil
+			},
+			data: colSlice,
+		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
