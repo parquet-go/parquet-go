@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -26,6 +27,8 @@ const (
 	// maximum int32 value (see format.PageHeader).
 	maxUncompressedPageSize = math.MaxInt32
 )
+
+var ErrColumnWriterClosed = errors.New("the ColumnWriter is closed and new values cannot be written to it")
 
 // GenericWriter is similar to a Writer but uses a type parameter to define the
 // Go type representing the schema of rows being written.
@@ -1269,6 +1272,7 @@ type ColumnWriter struct {
 
 	columnChunk *format.ColumnChunk
 	offsetIndex *format.OffsetIndex
+	closed      bool
 }
 
 func (c *ColumnWriter) reset() {
@@ -1456,6 +1460,9 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 // configured page buffer size, and a single row is not permitted to span two
 // pages.
 func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
+	if c.closed {
+		return 0, ErrColumnWriterClosed
+	}
 	var startingRows int64
 	if c.columnBuffer == nil {
 		// Lazily create the row group column so we don't need to allocate it if
@@ -1472,6 +1479,27 @@ func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
 		return numRows, c.flush()
 	}
 	return numRows, nil
+}
+
+// Close closes the column writer and releases all dependent resources.
+// New values cannot be written after the ColumnWriter is closed.
+func (c *ColumnWriter) Close() (err error) {
+	if c.closed {
+		return nil
+	}
+	if c.columnBuffer == nil {
+		return nil
+	}
+	if err := c.flush(); err != nil {
+		return err
+	}
+	if c.dictionary != nil {
+		c.dictionary.Reset()
+		c.dictionary = nil
+	}
+	c.columnBuffer = nil
+	c.closed = true
+	return nil
 }
 
 func (c *ColumnWriter) writeValues(values []Value) (numValues int, err error) {
@@ -1650,10 +1678,10 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	return nil
 }
 
-func (w *ColumnWriter) writePageToFilter(page Page) (err error) {
+func (c *ColumnWriter) writePageToFilter(page Page) (err error) {
 	pageType := page.Type()
 	pageData := page.Data()
-	w.filter, err = pageType.Encode(w.filter, pageData, w.columnFilter.Encoding())
+	c.filter, err = pageType.Encode(c.filter, pageData, c.columnFilter.Encoding())
 	return err
 }
 
