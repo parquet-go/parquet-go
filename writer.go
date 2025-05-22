@@ -1493,10 +1493,6 @@ func (c *ColumnWriter) Close() (err error) {
 	if err := c.flush(); err != nil {
 		return err
 	}
-	if c.dictionary != nil {
-		c.dictionary.Reset()
-		c.dictionary = nil
-	}
 	c.columnBuffer = nil
 	c.closed = true
 	return nil
