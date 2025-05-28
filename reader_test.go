@@ -9,8 +9,10 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -932,5 +934,99 @@ func TestIssue206(t *testing.T) {
 			t.Errorf("rows[%d].Asks != want[%d].Asks:\ngot:  %+v\nwant: %+v", i, i, g.Asks, w.Asks)
 			break
 		}
+	}
+}
+
+func TestListElementsAcrossPages(t *testing.T) {
+	// Test for https://github.com/parquet-go/parquet-go/issues/276
+	// Each testdata/issue276_* parquet file has 5 rows.
+	// Each row of the int64_array column has 13 int64 values.
+	// One file is written with 4 values per page, the other has 9 per page.
+	// The actual distribution of values per page is printed out by printColumnLayout.
+	type Row struct {
+		Id       string  `parquet:"id"`
+		IntArray []int64 `parquet:"int64_array,optional,list"`
+	}
+
+	testFiles, _ := filepath.Glob("testdata/issue276_*.parquet")
+	for _, testFile := range testFiles {
+		t.Run(testFile, func(t *testing.T) {
+			f, err := os.Open(testFile)
+			if err != nil {
+				t.Fatalf("Failed to open file: %v", err)
+			}
+			defer f.Close()
+
+			// print layout of int64_array.list.element column/pages
+			printColumnLayout(t, f)
+
+			pr := parquet.NewGenericReader[*Row](f)
+			expectedArrayLength := 13
+
+			assertRow := func(t *testing.T, got *Row, idx int) {
+				if got.Id != strconv.Itoa(idx) {
+					t.Fatalf("ID mismatch: want=%d got=%s", idx, got.Id)
+				}
+				if len(got.IntArray) != expectedArrayLength {
+					t.Fatalf("expected %d values, got %d", expectedArrayLength, len(got.IntArray))
+				}
+				if got.IntArray[0] != int64(idx) {
+					t.Fatalf("expected value %d, got %d", idx, got.IntArray[idx])
+				}
+
+				if got.IntArray[expectedArrayLength-1] != int64(idx+expectedArrayLength-1) {
+					t.Fatalf("expected last element to be %v, got %v", int64(idx+expectedArrayLength), got.IntArray[expectedArrayLength-1])
+				}
+			}
+
+			for i := range int(pr.NumRows()) {
+				for n := 1; n < int(pr.NumRows())-i; n += 1 {
+					t.Run(fmt.Sprintf("seek %d, n=%d", i, n), func(t *testing.T) {
+						if err := pr.SeekToRow(int64(i)); err != nil {
+							t.Fatal(err)
+						}
+						rows := make([]*Row, n)
+						nRead, err := pr.Read(rows)
+						if nRead != n {
+							t.Fatalf("expected to read %d rows", n)
+						}
+						if err != nil && err != io.EOF {
+							t.Fatal(err)
+						}
+						for j := i; j < i+nRead; j++ {
+							assertRow(t, rows[j-i], j)
+						}
+					})
+				}
+			}
+		})
+	}
+}
+
+func printColumnLayout(t *testing.T, f *os.File) {
+	if t.Failed() {
+		return
+	}
+	stats, _ := f.Stat()
+	pqFile, err := parquet.OpenFile(f, stats.Size())
+	if err != nil {
+		t.Fatalf("Failed to open file: %v", err)
+	}
+	col := pqFile.Root()
+	col = col.Column("int64_array").Column("list").Column("element")
+	pages := col.Pages()
+	defer pages.Close()
+	pageCounter := 0
+	for {
+		pageCounter++
+		p, err := pages.ReadPage()
+		if err != nil {
+			if err != io.EOF {
+				t.Error(err)
+			}
+			break
+		}
+		t.Logf("page: %d, num rows in page: %d, num values in page: %d", pageCounter, p.NumRows(), p.NumValues())
+		parquet.Release(p)
 	}
 }

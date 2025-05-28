@@ -20,6 +20,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress"
+	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
 )
 
@@ -650,6 +651,12 @@ type timeseries struct {
 	Value     float64 `parquet:"value"`
 }
 
+type timeseriesNoEncoding struct {
+	Name      string  `parquet:"name"`
+	Timestamp int64   `parquet:"timestamp"`
+	Value     float64 `parquet:"value"`
+}
+
 type event struct {
 	Name     string  `parquet:"name,dict"`
 	Type     string  `parquet:"-"`
@@ -658,11 +665,13 @@ type event struct {
 }
 
 var writerTests = []struct {
-	scenario string
-	version  int
-	codec    compress.Codec
-	rows     []any
-	dump     string
+	scenario           string
+	version            int
+	codec              compress.Codec
+	defaultEncoding    encoding.Encoding
+	defaultEncodingFor map[parquet.Kind]encoding.Encoding
+	rows               []any
+	dump               string
 }{
 	{
 		scenario: "page v1 with dictionary encoding",
@@ -1007,6 +1016,151 @@ Column: value
 
 `,
 	},
+
+	{
+		scenario: "no encoding (v2)",
+		version:  v2,
+		rows: []any{
+			timeseriesNoEncoding{Name: "http_request_total", Timestamp: 1639444033, Value: 100},
+		},
+		dump: `
+File path:  {file-path}
+Created by: github.com/parquet-go/parquet-go
+Properties: (none)
+Schema:
+message timeseriesNoEncoding {
+  required binary name (STRING);
+  required int64 timestamp (INTEGER(64,true));
+  required double value;
+}
+
+
+Row group 0:  count: 1  289.00 B records  start: 4  total(compressed): 289 B total(uncompressed):289 B
+--------------------------------------------------------------------------------
+           type      encodings count     avg size   nulls   min / max
+name       BINARY    _         1         133.00 B           "http_request_total" / "http_request_total"
+timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+
+
+Column: name
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ D  1       23.00 B    23 B       1        0       "http_request_total" / "http_request_total"
+
+
+Column: timestamp
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ _  1       8.00 B     8 B        1        0       "1639444033" / "1639444033"
+
+
+Column: value
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ _  1       8.00 B     8 B        1        0       "100.0" / "100.0"
+
+`,
+	},
+
+	{
+		scenario: "default encoding (plain) (v2)",
+		version:  v2,
+		rows: []any{
+			timeseriesNoEncoding{Name: "http_request_total", Timestamp: 1639444033, Value: 100},
+		},
+		defaultEncoding: &parquet.Plain,
+		dump: `
+File path:  {file-path}
+Created by: github.com/parquet-go/parquet-go
+Properties: (none)
+Schema:
+message timeseriesNoEncoding {
+  required binary name (STRING);
+  required int64 timestamp (INTEGER(64,true));
+  required double value;
+}
+
+
+Row group 0:  count: 1  288.00 B records  start: 4  total(compressed): 288 B total(uncompressed):288 B
+--------------------------------------------------------------------------------
+           type      encodings count     avg size   nulls   min / max
+name       BINARY    _   _     1         132.00 B           "http_request_total" / "http_request_total"
+timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+
+
+Column: name
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ _  1       22.00 B    22 B       1        0       "http_request_total" / "http_request_total"
+
+
+Column: timestamp
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ _  1       8.00 B     8 B        1        0       "1639444033" / "1639444033"
+
+
+Column: value
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ _  1       8.00 B     8 B        1        0       "100.0" / "100.0"
+
+`,
+	},
+
+	{
+		scenario: "default encoding for (v2)",
+		version:  v2,
+		rows: []any{
+			timeseriesNoEncoding{Name: "http_request_total", Timestamp: 1639444033, Value: 100},
+		},
+		defaultEncodingFor: map[parquet.Kind]encoding.Encoding{
+			parquet.ByteArray: &parquet.DeltaByteArray,
+			parquet.Int64:     &parquet.DeltaBinaryPacked,
+			parquet.Double:    &parquet.RLEDictionary,
+		},
+		dump: `
+File path:  {file-path}
+Created by: github.com/parquet-go/parquet-go
+Properties: (none)
+Schema:
+message timeseriesNoEncoding {
+  required binary name (STRING);
+  required int64 timestamp (INTEGER(64,true));
+  required double value;
+}
+
+
+Row group 0:  count: 1  316.00 B records  start: 4  total(compressed): 316 B total(uncompressed):316 B
+--------------------------------------------------------------------------------
+           type      encodings count     avg size   nulls   min / max
+name       BINARY    _   D     1         138.00 B           "http_request_total" / "http_request_total"
+timestamp  INT64     _   D     1         79.00 B            "1639444033" / "1639444033"
+value      DOUBLE    _ _ R     1         99.00 B            "100.0" / "100.0"
+
+
+Column: name
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ D  1       28.00 B    28 B       1        0       "http_request_total" / "http_request_total"
+
+
+Column: timestamp
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-0    data  _ D  1       9.00 B     9 B        1        0       "1639444033" / "1639444033"
+
+
+Column: value
+--------------------------------------------------------------------------------
+  page   type  enc  count   avg size   size       rows     nulls   min / max
+  0-D    dict  _ _  1       8.00 B     8 B
+  0-1    data  _ R  1       2.00 B     2 B        1        0       "100.0" / "100.0"
+
+`,
+	},
 }
 
 // TestWriter uses the Apache parquet-cli tool to validate generated parquet files.
@@ -1027,13 +1181,30 @@ func TestWriter(t *testing.T) {
 		codec := test.codec
 		rows := test.rows
 		dump := test.dump
+		defaultEncoding := test.defaultEncoding
+		defaultEncodingFor := test.defaultEncodingFor
 
 		t.Run(test.scenario, func(t *testing.T) {
 			t.Parallel()
 
-			path, b, err := generateParquetFile(makeRows(rows),
+			writerOptions := []parquet.WriterOption{
 				parquet.DataPageVersion(dataPageVersion),
 				parquet.Compression(codec),
+			}
+
+			if defaultEncoding != nil {
+				writerOptions = append(writerOptions,
+					parquet.DefaultEncoding(defaultEncoding),
+				)
+			}
+			for kind, enc := range defaultEncodingFor {
+				writerOptions = append(writerOptions,
+					parquet.DefaultEncodingFor(kind, enc),
+				)
+			}
+
+			path, b, err := generateParquetFile(makeRows(rows),
+				writerOptions...,
 			)
 			if err != nil {
 				t.Logf("\n%s", string(b))
@@ -1456,4 +1627,48 @@ func TestColumnSkipPageBounds(t *testing.T) {
 	if string(statistics.MaxValue) != "" {
 		t.Fatalf("wrong max value of row groups in parquet file: want='' got=%s", string(statistics.MaxValue))
 	}
+}
+
+func TestIssueNotAllowedDefaultEncoding(t *testing.T) {
+	const expectedPanic = "cannot use encoding DELTA_LENGTH_BYTE_ARRAY for kind BOOLEAN"
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("using default encoding not compatible with one of the primitive types should panic")
+		}
+		if r.(string) != expectedPanic {
+			t.Fatalf(`panic should return "%s", but returned "%s"`, expectedPanic, r.(string))
+		}
+	}()
+
+	type TestType struct {
+		Key int
+	}
+
+	b := new(bytes.Buffer)
+	_ = parquet.NewGenericWriter[TestType](b, parquet.DefaultEncoding(&parquet.DeltaLengthByteArray))
+}
+
+func TestIssueNotAllowedDefaultEncodingFor(t *testing.T) {
+	const expectedPanic = "cannot use encoding DELTA_BINARY_PACKED for kind BYTE_ARRAY"
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("using a default encoding not compatible with a primitive type should panic")
+		}
+		if r.(string) != expectedPanic {
+			t.Fatalf(`panic should return "%s", but returned "%s"`, expectedPanic, r.(string))
+		}
+	}()
+
+	type TestType struct {
+		Key int
+	}
+
+	b := new(bytes.Buffer)
+	_ = parquet.NewGenericWriter[TestType](b,
+		parquet.DefaultEncodingFor(parquet.ByteArray, &parquet.DeltaBinaryPacked),
+	)
 }

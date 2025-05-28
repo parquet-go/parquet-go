@@ -1,7 +1,9 @@
 package parquet_test
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -429,4 +431,87 @@ func TestIssue229(t *testing.T) {
 	}
 	tr = &Trace{}
 	sch.Reconstruct(tr, secondRows[0])
+}
+
+func TestReadDictionaryPage(t *testing.T) {
+	type A struct {
+		Index string `parquet:",dict"`
+	}
+
+	b := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[A](b)
+
+	// Create and write 1000 rows with index-based names
+	const totalRows = 1000
+	for i := range totalRows {
+		_, err := w.Write([]A{{Index: fmt.Sprintf("%d", i)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if (i+1)%37 == 0 { // force row group flush at purposefully unaligned rows
+			if err := w.Flush(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := parquet.OpenFile(bytes.NewReader(b.Bytes()), int64(b.Len()), parquet.ReadBufferSize(2)) // read buffer size of 3 should expose any issues with buffer overread
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	foundRows := 0
+	for _, rg := range pf.RowGroups() {
+		cc := rg.ColumnChunks()[0]
+		pages := cc.Pages()
+
+		filePages := pages.(*parquet.FilePages)
+		dict, err := filePages.ReadDictionary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dict == nil {
+			t.Fatal("expected dictionary page to be available")
+		}
+
+		for {
+			page, err := pages.ReadPage()
+			if err != nil && err != io.EOF {
+				t.Fatal(err)
+			}
+			if page == nil {
+				break
+			}
+
+			vr := page.Values()
+			values := make([]parquet.Value, 1)
+
+			for {
+				n, err := vr.ReadValues(values)
+				if err != nil && err != io.EOF {
+					t.Fatal(err)
+				}
+				if n == 0 {
+					break
+				}
+
+				actual := values[0].String()
+				expected := fmt.Sprintf("%d", foundRows)
+				if actual != expected {
+					t.Fatalf("expected value %s, got %s", expected, actual)
+				}
+				foundRows++
+			}
+		}
+
+		pages.Close()
+	}
+
+	if foundRows != totalRows {
+		t.Fatalf("expected %d rows, got %d", totalRows, foundRows)
+	}
 }

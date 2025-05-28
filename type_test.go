@@ -52,3 +52,19 @@ type logicalType struct {
 func (l logicalType) LogicalType() *format.LogicalType {
 	return &l.lt
 }
+
+func TestLogicalTypesEqual(t *testing.T) {
+	tests := []struct {
+		a, b Node
+	}{
+		{Leaf(Int32Type), Int(32)},
+		{Leaf(Int64Type), Int(64)},
+	}
+
+	for _, test := range tests {
+		eq := EqualNodes(test.a, test.b)
+		if !eq {
+			t.Errorf("expected %v to be equal to %v", test.a, test.b)
+		}
+	}
+}
