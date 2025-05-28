@@ -11,6 +11,7 @@ import (
 
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/encoding"
+	"maps"
 )
 
 // ReadMode is an enum that is used to configure the way that a File reads pages.
