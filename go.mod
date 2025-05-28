@@ -2,8 +2,6 @@ module github.com/parquet-go/parquet-go
 
 go 1.23.0
 
-toolchain go1.24.0
-
 require (
 	github.com/andybalholm/brotli v1.1.1
 	github.com/google/uuid v1.6.0
