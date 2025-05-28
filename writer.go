@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -27,8 +26,6 @@ const (
 	// maximum int32 value (see format.PageHeader).
 	maxUncompressedPageSize = math.MaxInt32
 )
-
-var ErrColumnWriterClosed = errors.New("the ColumnWriter is closed and new values cannot be written to it")
 
 // GenericWriter is similar to a Writer but uses a type parameter to define the
 // Go type representing the schema of rows being written.
@@ -198,7 +195,7 @@ func (w *GenericWriter[T]) Write(rows []T) (int, error) {
 
 		for _, c := range w.base.writer.columns {
 			if c.columnBuffer.Size() >= int64(c.bufferSize) {
-				if err := c.flush(); err != nil {
+				if err := c.Flush(); err != nil {
 					return n, err
 				}
 			}
@@ -951,7 +948,7 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 	}()
 
 	for _, c := range w.columns {
-		if err := c.flush(); err != nil {
+		if err := c.Flush(); err != nil {
 			return 0, err
 		}
 		if err := c.flushFilterPages(); err != nil {
@@ -1272,7 +1269,6 @@ type ColumnWriter struct {
 
 	columnChunk *format.ColumnChunk
 	offsetIndex *format.OffsetIndex
-	closed      bool
 }
 
 func (c *ColumnWriter) reset() {
@@ -1315,7 +1311,8 @@ func (c *ColumnWriter) totalRowCount() int64 {
 	return n
 }
 
-func (c *ColumnWriter) flush() (err error) {
+// Flush writes any buffered data to the underlying [io.Writer].
+func (c *ColumnWriter) Flush() (err error) {
 	if c.columnBuffer == nil {
 		return nil
 	}
@@ -1460,9 +1457,6 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 // configured page buffer size, and a single row is not permitted to span two
 // pages.
 func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
-	if c.closed {
-		return 0, ErrColumnWriterClosed
-	}
 	var startingRows int64
 	if c.columnBuffer == nil {
 		// Lazily create the row group column so we don't need to allocate it if
@@ -1476,25 +1470,21 @@ func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
 	}
 	numRows := int(int64(c.columnBuffer.Len()) - startingRows)
 	if c.columnBuffer.Size() >= int64(c.bufferSize) {
-		return numRows, c.flush()
+		return numRows, c.Flush()
 	}
 	return numRows, nil
 }
 
 // Close closes the column writer and releases all dependent resources.
-// New values cannot be written after the ColumnWriter is closed.
+// New values should not be written after the ColumnWriter is closed.
 func (c *ColumnWriter) Close() (err error) {
-	if c.closed {
-		return nil
-	}
 	if c.columnBuffer == nil {
 		return nil
 	}
-	if err := c.flush(); err != nil {
+	if err := c.Flush(); err != nil {
 		return err
 	}
 	c.columnBuffer = nil
-	c.closed = true
 	return nil
 }
 
