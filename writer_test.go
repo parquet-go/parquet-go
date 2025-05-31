@@ -1840,3 +1840,41 @@ func TestMapKeySorting(t *testing.T) {
 		})
 	}
 }
+
+func TestIssue275(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatal("require no panic")
+		}
+	}()
+
+	type testStruct struct {
+		A int `parquet:"value,plain"`
+	}
+
+	tests := make([]testStruct, 100)
+	for i := range 100 {
+		tests[i] = testStruct{A: i + 1}
+	}
+
+	b := bytes.NewBuffer(nil)
+	w := parquet.NewGenericWriter[testStruct](b, parquet.MaxRowsPerRowGroup(10))
+
+	if _, err := w.Write(tests[0:50]); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// test panic after reset writer
+	b = bytes.NewBuffer(nil)
+	w.Reset(b)
+
+	if _, err := w.Write(tests[50:100]); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
