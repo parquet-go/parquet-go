@@ -1842,6 +1842,12 @@ func TestMapKeySorting(t *testing.T) {
 }
 
 func TestIssue275(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatal("require no panic")
+		}
+	}()
+
 	type testStruct struct {
 		A int `parquet:"value,plain"`
 	}
@@ -1853,11 +1859,22 @@ func TestIssue275(t *testing.T) {
 
 	b := bytes.NewBuffer(nil)
 	w := parquet.NewGenericWriter[testStruct](b, parquet.MaxRowsPerRowGroup(10))
-	_, _ = w.Write(tests[0:50])
-	_ = w.Close()
 
+	if _, err := w.Write(tests[0:50]); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// test panic after reset writer
 	b = bytes.NewBuffer(nil)
 	w.Reset(b)
-	_, _ = w.Write(tests[50:100])
-	_ = w.Close()
+
+	if _, err := w.Write(tests[50:100]); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
