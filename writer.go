@@ -861,7 +861,6 @@ func (w *writer) writeFileFooter() error {
 	protocol := new(thrift.CompactProtocol)
 	encoder := thrift.NewEncoder(protocol.NewWriter(&w.writer))
 
-	w.columnIndex = w.columnIndex[:0]
 	for i, columnIndexes := range w.columnIndexes {
 		rowGroup := &w.rowGroups[i]
 		for j := range columnIndexes {
@@ -872,10 +871,8 @@ func (w *writer) writeFileFooter() error {
 			}
 			column.ColumnIndexLength = int32(w.writer.offset - column.ColumnIndexOffset)
 		}
-		w.columnIndex = append(w.columnIndex, columnIndexes...)
 	}
 
-	w.offsetIndex = w.offsetIndex[:0]
 	for i, offsetIndexes := range w.offsetIndexes {
 		rowGroup := &w.rowGroups[i]
 		for j := range offsetIndexes {
@@ -886,7 +883,6 @@ func (w *writer) writeFileFooter() error {
 			}
 			column.OffsetIndexLength = int32(w.writer.offset - column.OffsetIndexOffset)
 		}
-		w.offsetIndex = append(w.offsetIndex, offsetIndexes...)
 	}
 
 	numRows := int64(0)

@@ -1840,3 +1840,24 @@ func TestMapKeySorting(t *testing.T) {
 		})
 	}
 }
+
+func TestIssue275(t *testing.T) {
+	type testStruct struct {
+		A int `parquet:"value,plain"`
+	}
+
+	tests := make([]testStruct, 100)
+	for i := range 100 {
+		tests[i] = testStruct{A: i + 1}
+	}
+
+	b := bytes.NewBuffer(nil)
+	w := parquet.NewGenericWriter[testStruct](b, parquet.MaxRowsPerRowGroup(10))
+	_, _ = w.Write(tests[0:50])
+	_ = w.Close()
+
+	b = bytes.NewBuffer(nil)
+	w.Reset(b)
+	_, _ = w.Write(tests[50:100])
+	_ = w.Close()
+}
