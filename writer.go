@@ -1692,14 +1692,17 @@ func (c *ColumnWriter) writePageTo(size int64, writeTo func(io.Writer) (int64, e
 }
 
 func (c *ColumnWriter) makePageStatistics(page Page) format.Statistics {
-	numNulls := page.NumNulls()
-	minValue, maxValue, _ := page.Bounds()
-	minValueBytes := minValue.Bytes()
-	maxValueBytes := maxValue.Bytes()
+	var minValueBytes, maxValueBytes []byte
+	if c.writePageBounds {
+		minValue, maxValue, _ := page.Bounds()
+		minValueBytes = minValue.Bytes()
+		maxValueBytes = maxValue.Bytes()
+	}
+
 	return format.Statistics{
 		Min:       minValueBytes, // deprecated
 		Max:       maxValueBytes, // deprecated
-		NullCount: numNulls,
+		NullCount: page.NumNulls(),
 		MinValue:  minValueBytes,
 		MaxValue:  maxValueBytes,
 	}
