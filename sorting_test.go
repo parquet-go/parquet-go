@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -376,6 +377,65 @@ func TestMergedRowsCorruptedString(t *testing.T) {
 			if rowsWant[i+j].Tag != r[0].String() {
 				t.Fatalf("corruption at row %v: want %s but got %s", i+j, rowsWant[i+j].Tag, r[0].String())
 			}
+		}
+	}
+}
+
+func TestIssue293(t *testing.T) {
+	type Row struct {
+		Value1 string `parquet:"value1"`
+		Value2 string `parquet:"value2"`
+		Value3 string `parquet:"value3"`
+	}
+
+	rows := make([]Row, 10)
+	for i := range rows {
+		rows[i].Value1 = strconv.Itoa(-i)
+		rows[i].Value2 = strconv.Itoa(i)
+		rows[i].Value3 = strconv.Itoa(i * i)
+	}
+
+	buffer := bytes.NewBuffer(nil)
+	writer := parquet.NewSortingWriter[Row](buffer, 9,
+		parquet.SkipPageBounds("value1"),
+		parquet.SkipPageBounds("value3"),
+		parquet.SortingWriterConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("value1"),
+				parquet.Descending("value2"),
+			),
+		),
+	)
+
+	if _, err := writer.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := parquet.OpenFile(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bounds := [][2]string{
+		{"", ""},
+		{"0", "9"},
+		{"", ""},
+	}
+	for i := range 3 {
+		stats := f.Metadata().RowGroups[0].Columns[i].MetaData.Statistics
+
+		min := string(stats.MinValue)
+		if bounds[i][0] != min {
+			t.Fatalf("wrong `min` value in column %d, expected %q, actual %q", i, bounds[i][0], min)
+		}
+
+		max := string(stats.MaxValue)
+		if bounds[i][1] != max {
+			t.Fatalf("wrong `max` value in column %d, expected %q, actual %q", i, bounds[i][1], max)
 		}
 	}
 }
