@@ -266,7 +266,12 @@ func (buf *Buffer) configure(schema *Schema) {
 		case leaf.maxRepetitionLevel > 0:
 			column = newRepeatedColumnBuffer(column, leaf.maxRepetitionLevel, leaf.maxDefinitionLevel, nullOrdering)
 		case leaf.maxDefinitionLevel > 0:
-			column = newOptionalColumnBuffer(column, leaf.maxDefinitionLevel, nullOrdering)
+			// The Buffer implementation does not have a Close method, so we should do direct
+			// allocation to avoid breaking existing users.
+			n := column.Cap()
+			rows := make([]int32, 0, n)
+			definitionLevels := make([]byte, 0, n)
+			column = newOptionalColumnBuffer(column, rows, definitionLevels, leaf.maxDefinitionLevel, nullOrdering)
 		}
 		buf.columns = append(buf.columns, column)
 
@@ -467,22 +472,22 @@ var (
 	_ ValueWriter = (*bufferWriter)(nil)
 )
 
-type buffer struct {
-	data  []byte
+type genericBuffer[T any] struct {
+	data  []T
 	refc  uintptr
-	pool  *bufferPool
+	pool  *bufferPool[T]
 	stack []byte
 }
 
-func (b *buffer) refCount() int {
+func (b *genericBuffer[T]) refCount() int {
 	return int(atomic.LoadUintptr(&b.refc))
 }
 
-func (b *buffer) ref() {
+func (b *genericBuffer[T]) ref() {
 	atomic.AddUintptr(&b.refc, +1)
 }
 
-func (b *buffer) unref() {
+func (b *genericBuffer[T]) unref() {
 	if atomic.AddUintptr(&b.refc, ^uintptr(0)) == 0 {
 		if b.pool != nil {
 			b.pool.put(b)
@@ -490,13 +495,15 @@ func (b *buffer) unref() {
 	}
 }
 
-func monitorBufferRelease(b *buffer) {
+type buffer = genericBuffer[byte]
+
+func monitorBufferRelease[T any](b *genericBuffer[T]) {
 	if rc := b.refCount(); rc != 0 {
 		log.Printf("PARQUETGODEBUG: buffer garbage collected with non-zero reference count\n%s", string(b.stack))
 	}
 }
 
-type bufferPool struct {
+type bufferPool[T any] struct {
 	// Buckets are split in two groups for short and large buffers. In the short
 	// buffer group (below 256KB), the growth rate between each bucket is 2. The
 	// growth rate changes to 1.5 in the larger buffer group.
@@ -512,27 +519,27 @@ type bufferPool struct {
 	buckets [bufferPoolBucketCount]sync.Pool
 }
 
-func (p *bufferPool) newBuffer(bufferSize, bucketSize int) *buffer {
-	b := &buffer{
-		data: make([]byte, bufferSize, bucketSize),
+func (p *bufferPool[T]) newBuffer(bufferSize, bucketSize int) *genericBuffer[T] {
+	b := &genericBuffer[T]{
+		data: make([]T, bufferSize, bucketSize),
 		refc: 1,
 		pool: p,
 	}
 	if debug.TRACEBUF > 0 {
 		b.stack = make([]byte, 4096)
-		runtime.SetFinalizer(b, monitorBufferRelease)
+		runtime.SetFinalizer(b, monitorBufferRelease[T])
 	}
 	return b
 }
 
 // get returns a buffer from the levelled buffer pool. size is used to choose
 // the appropriate pool.
-func (p *bufferPool) get(bufferSize int) *buffer {
+func (p *bufferPool[T]) get(bufferSize int) *genericBuffer[T] {
 	bucketIndex, bucketSize := bufferPoolBucketIndexAndSizeOfGet(bufferSize)
 
-	b := (*buffer)(nil)
+	var b *genericBuffer[T] = nil
 	if bucketIndex >= 0 {
-		b, _ = p.buckets[bucketIndex].Get().(*buffer)
+		b, _ = p.buckets[bucketIndex].Get().(*genericBuffer[T])
 	}
 
 	if b == nil {
@@ -548,7 +555,7 @@ func (p *bufferPool) get(bufferSize int) *buffer {
 	return b
 }
 
-func (p *bufferPool) put(b *buffer) {
+func (p *bufferPool[T]) put(b *genericBuffer[T]) {
 	if b.pool != p {
 		panic("BUG: buffer returned to a different pool than the one it was allocated from")
 	}
@@ -605,7 +612,8 @@ func bufferPoolBucketIndexAndSizeOfPut(size int) (int, int) {
 }
 
 var (
-	buffers bufferPool
+	buffers      bufferPool[byte]
+	int32Buffers bufferPool[int32]
 )
 
 type bufferedPage struct {
