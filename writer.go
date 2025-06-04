@@ -181,12 +181,11 @@ func makeWriteFunc[T any](t reflect.Type, schema *Schema) writeFunc[T] {
 }
 
 func (w *GenericWriter[T]) Close() error {
-	for _, c := range w.ColumnWriters() {
-		if err := c.Close(); err != nil {
-			return err
-		}
+	if err := w.base.Close(); err != nil {
+		return err
 	}
-	return w.base.Close()
+	w.columns = nil
+	return nil
 }
 
 func (w *GenericWriter[T]) Flush() error {
@@ -371,6 +370,11 @@ func (w *Writer) configure(schema *Schema) {
 // Close must be called after all values were produced to the writer in order to
 // flush all buffers and write the parquet footer.
 func (w *Writer) Close() error {
+	for _, c := range w.ColumnWriters() {
+		if err := c.Close(); err != nil {
+			return err
+		}
+	}
 	if w.writer != nil {
 		return w.writer.close()
 	}
