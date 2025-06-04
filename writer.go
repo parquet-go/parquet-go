@@ -1281,7 +1281,7 @@ type ColumnWriter struct {
 	columnChunk *format.ColumnChunk
 	offsetIndex *format.OffsetIndex
 
-	closers []io.Closer
+	closer io.Closer
 }
 
 func (c *ColumnWriter) reset() {
@@ -1463,11 +1463,11 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 			rows             = int32Buffers.get(size)
 			definitionLevels = buffers.get(size)
 		)
-		c.closers = append(c.closers, closerFunc(func() error {
+		c.closer = closerFunc(func() error {
 			rows.unref()
 			definitionLevels.unref()
 			return nil
-		}))
+		})
 		column = newOptionalColumnBuffer(column, rows.data[:0], definitionLevels.data[:0], c.maxDefinitionLevel, nullsGoLast)
 	}
 	return column
@@ -1509,11 +1509,13 @@ func (c *ColumnWriter) Close() (err error) {
 	if err := c.Flush(); err != nil {
 		return err
 	}
-	for _, closer := range c.closers {
-		if err := closer.Close(); err != nil {
+	if c.closer != nil {
+		if err := c.closer.Close(); err != nil {
 			return err
 		}
+		c.closer = nil
 	}
+
 	c.columnBuffer = nil
 	return nil
 }
