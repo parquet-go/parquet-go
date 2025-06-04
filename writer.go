@@ -1395,7 +1395,7 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 		pageReader = rbuf
 	}
 
-	pbuf := (*buffer)(nil)
+	pbuf := (*buffer[byte])(nil)
 	defer func() {
 		if pbuf != nil {
 			pbuf.unref()
