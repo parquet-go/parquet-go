@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -514,4 +516,40 @@ func TestReadDictionaryPage(t *testing.T) {
 	if foundRows != totalRows {
 		t.Fatalf("expected %d rows, got %d", totalRows, foundRows)
 	}
+}
+
+func TestCopyFilePages(t *testing.T) {
+	type A struct {
+		OptionalField *string
+	}
+	b := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[A](b)
+	val := "test-val"
+	if _, err := w.Write([]A{{OptionalField: &val}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := parquet.OpenFile(bytes.NewReader(b.Bytes()), int64(b.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages := pf.RowGroups()[0].ColumnChunks()[0].Pages()
+	if _, err := parquet.CopyPages(nopPageWriter{}, pages); err != nil {
+		t.Fatal(err)
+	}
+	if err := pages.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Sleep and run GC to trigger collection of buffer.
+	time.Sleep(time.Second)
+	runtime.GC()
+}
+
+type nopPageWriter struct{}
+
+func (n nopPageWriter) WritePage(page parquet.Page) (int64, error) {
+	return page.NumValues(), nil
 }
