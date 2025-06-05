@@ -130,3 +130,23 @@ func TestIssueSegmentio501(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteRowsFuncOfRequiredColumnNotFound(t *testing.T) {
+	schema := NewSchema("test", Group{
+		"name": String(),
+		"age":  Int(32),
+	})
+
+	defer func() {
+		if r := recover(); r != nil {
+			expected := "parquet: column not found: nonexistent"
+			if r != expected {
+				t.Fatalf("expected panic message %q, got %q", expected, r)
+			}
+		} else {
+			t.Fatal("expected panic but none occurred")
+		}
+	}()
+
+	writeRowsFuncOfRequired(reflect.TypeOf(""), schema, columnPath{"nonexistent"})
+}
