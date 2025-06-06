@@ -1,0 +1,11 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/parquet-go/parquet-go/sparse
+cpu: Apple M2 Pro
+BenchmarkGather128-12    	 3885992	       297.0 ns/op	53876.90 MB/s	3367394941 gather/s
+BenchmarkGather128-12    	 4046218	       295.0 ns/op	54236.48 MB/s	3389807250 gather/s
+BenchmarkGather128-12    	 4041753	       295.5 ns/op	54136.74 MB/s	3383570207 gather/s
+BenchmarkGather128-12    	 4043380	       297.7 ns/op	53750.67 MB/s	3359449196 gather/s
+BenchmarkGather128-12    	 4070217	       293.9 ns/op	54445.96 MB/s	3402890233 gather/s
+PASS
+ok  	github.com/parquet-go/parquet-go/sparse	7.630s

@@ -1,0 +1,21 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/parquet-go/parquet-go/internal/bytealg
+cpu: Apple M2 Pro
+BenchmarkCount/4KiB-12         	  871809	      1399 ns/op	2927.45 MB/s
+BenchmarkCount/4KiB-12         	  870142	      1439 ns/op	2845.73 MB/s
+BenchmarkCount/4KiB-12         	  800911	      1472 ns/op	2781.92 MB/s
+BenchmarkCount/4KiB-12         	  843987	      1395 ns/op	2936.03 MB/s
+BenchmarkCount/4KiB-12         	  875397	      1385 ns/op	2958.23 MB/s
+BenchmarkCount/256KiB-12       	   13574	     88420 ns/op	2964.77 MB/s
+BenchmarkCount/256KiB-12       	   13351	     89292 ns/op	2935.81 MB/s
+BenchmarkCount/256KiB-12       	   13467	     90533 ns/op	2895.56 MB/s
+BenchmarkCount/256KiB-12       	   13254	     94678 ns/op	2768.79 MB/s
+BenchmarkCount/256KiB-12       	   13117	     92632 ns/op	2829.96 MB/s
+BenchmarkCount/2048KiB-12      	    1588	    728122 ns/op	2880.22 MB/s
+BenchmarkCount/2048KiB-12      	    1648	    733588 ns/op	2858.76 MB/s
+BenchmarkCount/2048KiB-12      	    1578	    729327 ns/op	2875.46 MB/s
+BenchmarkCount/2048KiB-12      	    1668	    707322 ns/op	2964.92 MB/s
+BenchmarkCount/2048KiB-12      	    1690	    701439 ns/op	2989.79 MB/s
+PASS
+ok  	github.com/parquet-go/parquet-go/internal/bytealg	54.120s

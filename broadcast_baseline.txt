@@ -1,0 +1,31 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/parquet-go/parquet-go/internal/bytealg
+cpu: Apple M2 Pro
+BenchmarkBroadcast/size=0-12         	1000000000	         0.5959 ns/op
+BenchmarkBroadcast/size=0-12         	1000000000	         0.6000 ns/op
+BenchmarkBroadcast/size=0-12         	1000000000	         0.5934 ns/op
+BenchmarkBroadcast/size=0-12         	1000000000	         0.5889 ns/op
+BenchmarkBroadcast/size=0-12         	1000000000	         0.5886 ns/op
+BenchmarkBroadcast/size=10-12        	286245201	         4.145 ns/op	2412.28 MB/s
+BenchmarkBroadcast/size=10-12        	286835305	         4.178 ns/op	2393.32 MB/s
+BenchmarkBroadcast/size=10-12        	285470926	         4.204 ns/op	2378.47 MB/s
+BenchmarkBroadcast/size=10-12        	287918431	         4.200 ns/op	2381.12 MB/s
+BenchmarkBroadcast/size=10-12        	286257009	         4.230 ns/op	2364.17 MB/s
+BenchmarkBroadcast/size=100-12       	38184536	        31.34 ns/op	3190.34 MB/s
+BenchmarkBroadcast/size=100-12       	39198498	        31.05 ns/op	3220.64 MB/s
+BenchmarkBroadcast/size=100-12       	38350960	        30.88 ns/op	3238.43 MB/s
+BenchmarkBroadcast/size=100-12       	38085514	        31.22 ns/op	3203.46 MB/s
+BenchmarkBroadcast/size=100-12       	38072775	        31.12 ns/op	3213.35 MB/s
+BenchmarkBroadcast/size=1000-12      	 3933885	       312.8 ns/op	3196.84 MB/s
+BenchmarkBroadcast/size=1000-12      	 3947786	       305.0 ns/op	3278.25 MB/s
+BenchmarkBroadcast/size=1000-12      	 3963855	       301.7 ns/op	3315.02 MB/s
+BenchmarkBroadcast/size=1000-12      	 3955017	       302.4 ns/op	3307.08 MB/s
+BenchmarkBroadcast/size=1000-12      	 3973420	       300.9 ns/op	3322.83 MB/s
+BenchmarkBroadcast/size=10000-12     	  403744	      2937 ns/op	3404.27 MB/s
+BenchmarkBroadcast/size=10000-12     	  404306	      2954 ns/op	3385.21 MB/s
+BenchmarkBroadcast/size=10000-12     	  401878	      2938 ns/op	3403.27 MB/s
+BenchmarkBroadcast/size=10000-12     	  406197	      2974 ns/op	3362.10 MB/s
+BenchmarkBroadcast/size=10000-12     	  391982	      2948 ns/op	3391.64 MB/s
+PASS
+ok  	github.com/parquet-go/parquet-go/internal/bytealg	34.638s

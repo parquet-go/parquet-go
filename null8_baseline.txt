@@ -1,0 +1,1159 @@
+name > C:0 D:0 R:0 V:customer1
+name > C:0 D:0 R:0 V:customer2
+value > C:1 D:0 R:0 V:42
+value > C:1 D:0 R:0 V:1
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+timestamp > C:1 D:0 R:0 V:1639444058
+timestamp > C:1 D:0 R:0 V:1639444085
+first_name > C:0 D:0 R:0 V:Han
+timestamp > C:1 D:0 R:0 V:1639444093
+timestamp > C:1 D:0 R:0 V:1639444101
+timestamp > C:1 D:0 R:0 V:1639444108
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+timestamp > C:1 D:0 R:0 V:1639444133
+timestamp > C:1 D:0 R:0 V:1639444137
+timestamp > C:1 D:0 R:0 V:1639444141
+timestamp > C:1 D:0 R:0 V:1639444144
+value > C:2 D:0 R:0 V:100
+value > C:2 D:0 R:0 V:0
+value > C:2 D:0 R:0 V:42
+value > C:2 D:0 R:0 V:1
+value > C:2 D:0 R:0 V:2
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:4
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:6
+value > C:2 D:0 R:0 V:10
+first_name > C:0 D:0 R:0 V:Han
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+last_name > C:1 D:0 R:0 V:Skywalker
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+last_name > C:1 D:0 R:0 V:Skywalker
+owner > C:0 D:0 R:0 V:Julien Le Dem
+owner > C:0 D:0 R:0 V:A. Nonymous
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+contacts.name > C:2 D:0 R:0 V:<null>
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+owner > C:0 D:0 R:0 V:Julien Le Dem
+owner > C:0 D:0 R:0 V:A. Nonymous
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+contacts.name > C:2 D:0 R:0 V:<null>
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+--- FAIL: TestWriter (0.00s)
+    --- FAIL: TestWriter/no_encoding_(v2) (2.10s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/204395104.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/default_encoding_for_(v2) (2.23s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1473146746.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   D     1         79.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _ _ R     1         99.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/omit_`-`_fields (2.25s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2793429260.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             name   BINARY    _ _ R     2         59.50 B            "customer1" / "customer2"
+             value  DOUBLE    _   _     2         40.50 B            "1.0" / "42.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/timeseries_with_delta_encoding (2.26s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2949970038.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     G   D     10        46.70 B            "1639444033" / "1639444144"
+             value      DOUBLE    G   _     10        46.00 B            "-0.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/default_encoding_(plain)_(v2) (2.26s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/770730451.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v2_with_dictionary_encoding (2.40s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/3557304811.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         36.67 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v1) (2.52s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/120882561.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         70.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v1_with_dictionary_encoding (2.63s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2632219924.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         38.00 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v2) (2.75s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/3455245957.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         68.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+name > C:0 D:0 R:0 V:customer1
+name > C:0 D:0 R:0 V:customer2
+value > C:1 D:0 R:0 V:42
+value > C:1 D:0 R:0 V:1
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+value > C:2 D:0 R:0 V:100
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+timestamp > C:1 D:0 R:0 V:1639444058
+timestamp > C:1 D:0 R:0 V:1639444085
+timestamp > C:1 D:0 R:0 V:1639444093
+timestamp > C:1 D:0 R:0 V:1639444101
+timestamp > C:1 D:0 R:0 V:1639444108
+timestamp > C:1 D:0 R:0 V:1639444133
+timestamp > C:1 D:0 R:0 V:1639444137
+timestamp > C:1 D:0 R:0 V:1639444141
+timestamp > C:1 D:0 R:0 V:1639444144
+value > C:2 D:0 R:0 V:100
+value > C:2 D:0 R:0 V:0
+value > C:2 D:0 R:0 V:42
+value > C:2 D:0 R:0 V:1
+value > C:2 D:0 R:0 V:2
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:4
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:6
+value > C:2 D:0 R:0 V:10
+first_name > C:0 D:0 R:0 V:Han
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+last_name > C:1 D:0 R:0 V:Skywalker
+owner > C:0 D:0 R:0 V:Julien Le Dem
+owner > C:0 D:0 R:0 V:A. Nonymous
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+contacts.name > C:2 D:0 R:0 V:<null>
+owner > C:0 D:0 R:0 V:Julien Le Dem
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+first_name > C:0 D:0 R:0 V:Han
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+owner > C:0 D:0 R:0 V:A. Nonymous
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+last_name > C:1 D:0 R:0 V:Skywalker
+contacts.name > C:2 D:0 R:0 V:<null>
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+--- FAIL: TestWriter (0.00s)
+    --- FAIL: TestWriter/default_encoding_for_(v2) (2.12s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/203434446.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   D     1         79.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _ _ R     1         99.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/omit_`-`_fields (2.13s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/3882412638.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             name   BINARY    _ _ R     2         59.50 B            "customer1" / "customer2"
+             value  DOUBLE    _   _     2         40.50 B            "1.0" / "42.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/default_encoding_(plain)_(v2) (2.13s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2742174502.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/timeseries_with_delta_encoding (2.14s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/863685931.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     G   D     10        46.70 B            "1639444033" / "1639444144"
+             value      DOUBLE    G   _     10        46.00 B            "-0.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/no_encoding_(v2) (2.15s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2396410830.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v2_with_dictionary_encoding (2.20s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/3836775177.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         36.67 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v1_with_dictionary_encoding (2.33s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2235134756.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         38.00 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v2) (2.45s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1912144578.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         68.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v1) (2.56s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1796540559.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         70.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+name > C:0 D:0 R:0 V:customer1
+name > C:0 D:0 R:0 V:customer2
+value > C:1 D:0 R:0 V:42
+value > C:1 D:0 R:0 V:1
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+timestamp > C:1 D:0 R:0 V:1639444033
+timestamp > C:1 D:0 R:0 V:1639444058
+timestamp > C:1 D:0 R:0 V:1639444085
+value > C:2 D:0 R:0 V:100
+timestamp > C:1 D:0 R:0 V:1639444093
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444101
+timestamp > C:1 D:0 R:0 V:1639444108
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+timestamp > C:1 D:0 R:0 V:1639444133
+timestamp > C:1 D:0 R:0 V:1639444137
+timestamp > C:1 D:0 R:0 V:1639444141
+timestamp > C:1 D:0 R:0 V:1639444144
+value > C:2 D:0 R:0 V:100
+value > C:2 D:0 R:0 V:0
+value > C:2 D:0 R:0 V:42
+value > C:2 D:0 R:0 V:1
+value > C:2 D:0 R:0 V:2
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:4
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:6
+value > C:2 D:0 R:0 V:10
+first_name > C:0 D:0 R:0 V:Han
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+first_name > C:0 D:0 R:0 V:Han
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+last_name > C:1 D:0 R:0 V:Skywalker
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+last_name > C:1 D:0 R:0 V:Skywalker
+owner > C:0 D:0 R:0 V:Julien Le Dem
+owner > C:0 D:0 R:0 V:A. Nonymous
+owner > C:0 D:0 R:0 V:Julien Le Dem
+owner > C:0 D:0 R:0 V:A. Nonymous
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+contacts.name > C:2 D:0 R:0 V:<null>
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+contacts.name > C:2 D:0 R:0 V:<null>
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+--- FAIL: TestWriter (0.00s)
+    --- FAIL: TestWriter/timeseries_with_delta_encoding (1.98s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2949669329.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     G   D     10        46.70 B            "1639444033" / "1639444144"
+             value      DOUBLE    G   _     10        46.00 B            "-0.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/default_encoding_for_(v2) (2.10s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1986990846.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   D     1         79.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _ _ R     1         99.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/no_encoding_(v2) (2.13s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/170284164.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/omit_`-`_fields (2.14s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1064276237.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             name   BINARY    _ _ R     2         59.50 B            "customer1" / "customer2"
+             value  DOUBLE    _   _     2         40.50 B            "1.0" / "42.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/default_encoding_(plain)_(v2) (2.16s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2766030273.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v2_with_dictionary_encoding (2.25s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1257200323.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         36.67 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v1) (2.38s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1537831125.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         70.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v1_with_dictionary_encoding (2.51s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/144875586.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         38.00 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v2) (2.62s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1305154681.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         68.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+name > C:0 D:0 R:0 V:customer1
+name > C:0 D:0 R:0 V:customer2
+value > C:1 D:0 R:0 V:42
+value > C:1 D:0 R:0 V:1
+first_name > C:0 D:0 R:0 V:Han
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+name > C:0 D:0 R:0 V:http_request_total
+last_name > C:1 D:0 R:0 V:Skywalker
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+first_name > C:0 D:0 R:0 V:Han
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+last_name > C:1 D:0 R:0 V:Skywalker
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+timestamp > C:1 D:0 R:0 V:1639444058
+timestamp > C:1 D:0 R:0 V:1639444085
+timestamp > C:1 D:0 R:0 V:1639444093
+timestamp > C:1 D:0 R:0 V:1639444101
+timestamp > C:1 D:0 R:0 V:1639444108
+timestamp > C:1 D:0 R:0 V:1639444133
+timestamp > C:1 D:0 R:0 V:1639444137
+timestamp > C:1 D:0 R:0 V:1639444141
+timestamp > C:1 D:0 R:0 V:1639444144
+value > C:2 D:0 R:0 V:100
+value > C:2 D:0 R:0 V:0
+value > C:2 D:0 R:0 V:42
+value > C:2 D:0 R:0 V:1
+value > C:2 D:0 R:0 V:2
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:4
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:6
+value > C:2 D:0 R:0 V:10
+owner > C:0 D:0 R:0 V:Julien Le Dem
+owner > C:0 D:0 R:0 V:Julien Le Dem
+owner > C:0 D:0 R:0 V:A. Nonymous
+owner > C:0 D:0 R:0 V:A. Nonymous
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+contacts.name > C:2 D:0 R:0 V:<null>
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+contacts.name > C:2 D:0 R:0 V:<null>
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+--- FAIL: TestWriter (0.00s)
+    --- FAIL: TestWriter/omit_`-`_fields (1.82s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1685610040.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             name   BINARY    _ _ R     2         59.50 B            "customer1" / "customer2"
+             value  DOUBLE    _   _     2         40.50 B            "1.0" / "42.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/default_encoding_(plain)_(v2) (1.99s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/4007499317.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/default_encoding_for_(v2) (2.00s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/300291543.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   D     1         79.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _ _ R     1         99.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/timeseries_with_delta_encoding (2.00s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/182780177.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     G   D     10        46.70 B            "1639444033" / "1639444144"
+             value      DOUBLE    G   _     10        46.00 B            "-0.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/no_encoding_(v2) (2.03s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2003133186.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v1) (2.14s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1971944604.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         70.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v1_with_dictionary_encoding (2.25s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/3856371336.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         38.00 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v2_with_dictionary_encoding (2.36s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1204610967.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         36.67 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v2) (2.49s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/3135002494.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         68.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+name > C:0 D:0 R:0 V:customer1
+name > C:0 D:0 R:0 V:customer2
+value > C:1 D:0 R:0 V:42
+value > C:1 D:0 R:0 V:1
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+timestamp > C:1 D:0 R:0 V:1639444033
+value > C:2 D:0 R:0 V:100
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+owner > C:0 D:0 R:0 V:Julien Le Dem
+owner > C:0 D:0 R:0 V:A. Nonymous
+timestamp > C:1 D:0 R:0 V:1639444033
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+name > C:0 D:0 R:0 V:http_request_total
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+contacts.name > C:2 D:0 R:0 V:<null>
+timestamp > C:1 D:0 R:0 V:1639444033
+timestamp > C:1 D:0 R:0 V:1639444058
+timestamp > C:1 D:0 R:0 V:1639444085
+timestamp > C:1 D:0 R:0 V:1639444093
+timestamp > C:1 D:0 R:0 V:1639444101
+timestamp > C:1 D:0 R:0 V:1639444108
+value > C:2 D:0 R:0 V:100
+timestamp > C:1 D:0 R:0 V:1639444133
+timestamp > C:1 D:0 R:0 V:1639444137
+timestamp > C:1 D:0 R:0 V:1639444141
+timestamp > C:1 D:0 R:0 V:1639444144
+value > C:2 D:0 R:0 V:100
+value > C:2 D:0 R:0 V:0
+value > C:2 D:0 R:0 V:42
+value > C:2 D:0 R:0 V:1
+value > C:2 D:0 R:0 V:2
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:4
+value > C:2 D:0 R:0 V:5
+value > C:2 D:0 R:0 V:6
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+value > C:2 D:0 R:0 V:10
+first_name > C:0 D:0 R:0 V:Han
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+first_name > C:0 D:0 R:0 V:Han
+first_name > C:0 D:0 R:0 V:Leia
+first_name > C:0 D:0 R:0 V:Luke
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+owner > C:0 D:0 R:0 V:Julien Le Dem
+owner > C:0 D:0 R:0 V:A. Nonymous
+last_name > C:1 D:0 R:0 V:Solo
+last_name > C:1 D:0 R:0 V:Skywalker
+ownerPhoneNumbers > C:1 D:1 R:0 V:555 123 4567
+ownerPhoneNumbers > C:1 D:1 R:1 V:555 666 1337
+ownerPhoneNumbers > C:1 D:0 R:0 V:<null>
+contacts.name > C:2 D:1 R:0 V:Dmitriy Ryaboy
+contacts.name > C:2 D:1 R:1 V:Chris Aniszczyk
+contacts.name > C:2 D:0 R:0 V:<null>
+contacts.phoneNumber > C:3 D:2 R:0 V:555 987 6543
+contacts.phoneNumber > C:3 D:1 R:1 V:<null>
+contacts.phoneNumber > C:3 D:0 R:0 V:<null>
+last_name > C:1 D:0 R:0 V:Skywalker
+last_name > C:1 D:0 R:0 V:Skywalker
+--- FAIL: TestWriter (0.00s)
+    --- FAIL: TestWriter/default_encoding_(plain)_(v2) (2.05s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2715289964.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/default_encoding_for_(v2) (2.08s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/268824663.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   D     1         79.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _ _ R     1         99.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/omit_`-`_fields (2.08s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/1041908059.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             name   BINARY    _ _ R     2         59.50 B            "customer1" / "customer2"
+             value  DOUBLE    _   _     2         40.50 B            "1.0" / "42.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/no_encoding_(v2) (2.09s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/3385685163.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
+             value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v2) (2.10s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2781070192.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         68.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/timeseries_with_delta_encoding (2.10s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/4009257695.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -17,6 +18,7 @@
+             timestamp  INT64     G   D     10        46.70 B            "1639444033" / "1639444144"
+             value      DOUBLE    G   _     10        46.00 B            "-0.0" / "100.0"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v1_with_dictionary_encoding (2.22s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/759564526.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         38.00 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/page_v2_with_dictionary_encoding (2.35s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/3273538518.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -15,6 +16,7 @@
+             first_name  BINARY    Z _ R     3         36.67 B            "Han" / "Luke"
+             last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Solo"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: first_name
+             --------------------------------------------------------------------------------
+    --- FAIL: TestWriter/example_from_the_twitter_blog_(v1) (2.48s)
+        writer_test.go:1245: 
+            --- want.txt
+            +++ got.txt
+            @@ -1,3 +1,4 @@
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             File path:  /tmp/2313854505.parquet
+             Created by: github.com/parquet-go/parquet-go
+            @@ -21,6 +22,7 @@
+             contacts.name         BINARY    _         3         70.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+             contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
+             
+            +Picked up _JAVA_OPTIONS: -Djava.security.manager=allow
+             
+             Column: owner
+             --------------------------------------------------------------------------------
+FAIL
+exit status 1
+FAIL	github.com/parquet-go/parquet-go	27.754s
+FAIL

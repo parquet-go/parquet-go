@@ -1,4 +1,4 @@
-//go:build purego || (!amd64 && !arm64)
+//go:build !purego && arm64
 
 package sparse
 
@@ -61,12 +61,5 @@ func gather64(dst []uint64, src Uint64Array) int {
 	return n
 }
 
-func gather128(dst [][16]byte, src Uint128Array) int {
-	n := min(len(dst), src.Len())
-
-	for i := range dst[:n] {
-		dst[i] = src.Index(i)
-	}
-
-	return n
-}
+//go:noescape
+func gather128(dst [][16]byte, src Uint128Array) int
