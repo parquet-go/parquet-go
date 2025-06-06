@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -207,6 +208,45 @@ func testWriteRowsColumns[T any](t *testing.T) {
 					}
 				}
 				return numRows, nil
+			},
+			data: colSlice,
+		},
+		{
+			name: "Parallel ColumnWriter.WriteRowValues",
+			write: func(t *testing.T, w *parquet.GenericWriter[T], vals [][]parquet.Value) (int, error) {
+				t.Helper()
+				var (
+					rowCounts []int
+					errs      []error
+					mu        sync.Mutex
+					wg        sync.WaitGroup
+				)
+				for i, col := range vals {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						num, err := w.ColumnWriters()[i].WriteRowValues(col)
+						if err != nil {
+							mu.Lock()
+							errs = append(errs, err)
+							mu.Unlock()
+							return
+						}
+						if w.ColumnWriters()[i].Close() != nil {
+							t.Errorf("ColumnWriter[%d].Close() an error: %v", i, err)
+						}
+						mu.Lock()
+						rowCounts = append(rowCounts, num)
+						mu.Unlock()
+					}()
+				}
+				wg.Wait()
+				for i, n := range rowCounts[1:] {
+					if n != rowCounts[0] {
+						t.Errorf("column %d disagrees with number of rows written in column %d", i, 0)
+					}
+				}
+				return rowCounts[0], errors.Join(errs...)
 			},
 			data: colSlice,
 		},
