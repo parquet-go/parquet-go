@@ -163,13 +163,12 @@ type optionalColumnBuffer struct {
 	nullOrdering       nullOrdering
 }
 
-func newOptionalColumnBuffer(base ColumnBuffer, maxDefinitionLevel byte, nullOrdering nullOrdering) *optionalColumnBuffer {
-	n := base.Cap()
+func newOptionalColumnBuffer(base ColumnBuffer, rows []int32, levels []byte, maxDefinitionLevel byte, nullOrdering nullOrdering) *optionalColumnBuffer {
 	return &optionalColumnBuffer{
 		base:               base,
+		rows:               rows,
 		maxDefinitionLevel: maxDefinitionLevel,
-		rows:               make([]int32, 0, n),
-		definitionLevels:   make([]byte, 0, n),
+		definitionLevels:   levels,
 		nullOrdering:       nullOrdering,
 	}
 }

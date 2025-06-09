@@ -7,7 +7,7 @@ import (
 )
 
 func TestBufferAlwaysCorrectSize(t *testing.T) {
-	var p bufferPool
+	var p bufferPool[byte]
 	for range 1000 {
 		n := rand.Intn(1024 * 1024)
 		b := p.get(n)
