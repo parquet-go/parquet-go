@@ -591,6 +591,319 @@ func BenchmarkMergeRowGroups(b *testing.B) {
 	}
 }
 
+func TestMerge(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodes    []parquet.Node
+		expected func(result parquet.Node) bool
+	}{
+		{
+			name:  "empty input",
+			nodes: []parquet.Node{},
+			expected: func(result parquet.Node) bool {
+				return result == nil
+			},
+		},
+		{
+			name:  "single node",
+			nodes: []parquet.Node{parquet.Leaf(parquet.Int32Type)},
+			expected: func(result parquet.Node) bool {
+				return result != nil && result.Leaf() && result.Type().Kind() == parquet.Int32
+			},
+		},
+		{
+			name: "merge two simple leaf nodes",
+			nodes: []parquet.Node{
+				parquet.Leaf(parquet.Int32Type),
+				parquet.Leaf(parquet.Int64Type),
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil && result.Leaf() && result.Type().Kind() == parquet.Int64
+			},
+		},
+		{
+			name: "merge nodes with compression - keep last",
+			nodes: []parquet.Node{
+				parquet.Compressed(parquet.Leaf(parquet.Int32Type), &parquet.Snappy),
+				parquet.Compressed(parquet.Leaf(parquet.Int32Type), &parquet.Gzip),
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil && result.Compression() == &parquet.Gzip
+			},
+		},
+		{
+			name: "merge nodes with encoding - keep last non-plain",
+			nodes: []parquet.Node{
+				parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.DeltaBinaryPacked),
+				parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.RLEDictionary),
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil && result.Encoding() == &parquet.RLEDictionary
+			},
+		},
+		{
+			name: "merge nodes with field IDs - keep last non-zero",
+			nodes: []parquet.Node{
+				parquet.FieldID(parquet.Leaf(parquet.Int32Type), 1),
+				parquet.FieldID(parquet.Leaf(parquet.Int32Type), 2),
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil && result.ID() == 2
+			},
+		},
+		{
+			name: "merge repetition types - most permissive (repeated)",
+			nodes: []parquet.Node{
+				parquet.Required(parquet.Leaf(parquet.Int32Type)),
+				parquet.Repeated(parquet.Leaf(parquet.Int32Type)),
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil && result.Repeated() && !result.Optional() && !result.Required()
+			},
+		},
+		{
+			name: "merge repetition types - optional over required",
+			nodes: []parquet.Node{
+				parquet.Required(parquet.Leaf(parquet.Int32Type)),
+				parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil && result.Optional() && !result.Repeated() && !result.Required()
+			},
+		},
+		{
+			name: "merge complex nodes with all properties",
+			nodes: []parquet.Node{
+				parquet.FieldID(
+					parquet.Compressed(
+						parquet.Encoded(
+							parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+							&parquet.DeltaBinaryPacked,
+						),
+						&parquet.Snappy,
+					),
+					1,
+				),
+				parquet.FieldID(
+					parquet.Compressed(
+						parquet.Encoded(
+							parquet.Repeated(parquet.Leaf(parquet.Int64Type)),
+							&parquet.RLEDictionary,
+						),
+						&parquet.Gzip,
+					),
+					2,
+				),
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil &&
+					result.Type().Kind() == parquet.Int64 &&
+					result.Compression() == &parquet.Gzip &&
+					result.Encoding() == &parquet.RLEDictionary &&
+					result.ID() == 2 &&
+					result.Repeated()
+			},
+		},
+		{
+			name: "merge group nodes - union of fields",
+			nodes: []parquet.Node{
+				parquet.Group{
+					"field1": parquet.Leaf(parquet.Int32Type),
+					"field2": parquet.Leaf(parquet.ByteArrayType),
+				},
+				parquet.Group{
+					"field2": parquet.Leaf(parquet.Int64Type), // Will override
+					"field3": parquet.Leaf(parquet.FloatType),
+				},
+			},
+			expected: func(result parquet.Node) bool {
+				if result == nil || result.Leaf() {
+					return false
+				}
+				fields := result.Fields()
+				if len(fields) != 3 {
+					return false
+				}
+
+				fieldMap := make(map[string]parquet.Node)
+				for _, field := range fields {
+					fieldMap[field.Name()] = field
+				}
+
+				// Check that all expected fields exist
+				field1, has1 := fieldMap["field1"]
+				field2, has2 := fieldMap["field2"]
+				field3, has3 := fieldMap["field3"]
+
+				return has1 && has2 && has3 &&
+					field1.Type().Kind() == parquet.Int32 &&
+					field2.Type().Kind() == parquet.Int64 && // Should be overridden
+					field3.Type().Kind() == parquet.Float
+			},
+		},
+		{
+			name: "merge nested group nodes",
+			nodes: []parquet.Node{
+				parquet.Group{
+					"group1": parquet.Group{
+						"nested1": parquet.Leaf(parquet.Int32Type),
+					},
+				},
+				parquet.Group{
+					"group1": parquet.Group{
+						"nested1": parquet.Leaf(parquet.Int64Type), // Will override
+						"nested2": parquet.Leaf(parquet.ByteArrayType),
+					},
+					"group2": parquet.Group{
+						"nested3": parquet.Leaf(parquet.FloatType),
+					},
+				},
+			},
+			expected: func(result parquet.Node) bool {
+				if result == nil || result.Leaf() {
+					return false
+				}
+				fields := result.Fields()
+				if len(fields) != 2 {
+					return false
+				}
+
+				fieldMap := make(map[string]parquet.Node)
+				for _, field := range fields {
+					fieldMap[field.Name()] = field
+				}
+
+				group1, hasGroup1 := fieldMap["group1"]
+				group2, hasGroup2 := fieldMap["group2"]
+
+				if !hasGroup1 || !hasGroup2 || group1.Leaf() || group2.Leaf() {
+					return false
+				}
+
+				// Check group1 fields
+				group1Fields := group1.Fields()
+				if len(group1Fields) != 2 {
+					return false
+				}
+
+				group1FieldMap := make(map[string]parquet.Node)
+				for _, field := range group1Fields {
+					group1FieldMap[field.Name()] = field
+				}
+
+				nested1, hasNested1 := group1FieldMap["nested1"]
+				nested2, hasNested2 := group1FieldMap["nested2"]
+
+				return hasNested1 && hasNested2 &&
+					nested1.Type().Kind() == parquet.Int64 &&
+					nested2.Type().Kind() == parquet.ByteArray
+			},
+		},
+		{
+			name: "merge leaf with group - returns last",
+			nodes: []parquet.Node{
+				parquet.Leaf(parquet.Int32Type),
+				parquet.Group{
+					"field1": parquet.Leaf(parquet.ByteArrayType),
+				},
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil && !result.Leaf()
+			},
+		},
+		{
+			name: "merge with plain encoding - should prefer non-plain",
+			nodes: []parquet.Node{
+				parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.Plain),
+				parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.DeltaBinaryPacked),
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil && result.Encoding() == &parquet.DeltaBinaryPacked
+			},
+		},
+		{
+			name: "merge with mixed properties on groups",
+			nodes: []parquet.Node{
+				parquet.FieldID(
+					parquet.Optional(
+						parquet.Group{
+							"field1": parquet.Leaf(parquet.Int32Type),
+						},
+					),
+					1,
+				),
+				parquet.FieldID(
+					parquet.Repeated(
+						parquet.Group{
+							"field2": parquet.Leaf(parquet.ByteArrayType),
+						},
+					),
+					2,
+				),
+			},
+			expected: func(result parquet.Node) bool {
+				return result != nil && !result.Leaf() &&
+					result.ID() == 2 &&
+					result.Repeated() &&
+					len(result.Fields()) == 2
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := parquet.Merge(test.nodes...)
+			if !test.expected(result) {
+				t.Errorf("Merge result did not match expectations")
+				if result != nil {
+					t.Logf("Result: %s", result.String())
+					if !result.Leaf() {
+						t.Logf("Fields: %d", len(result.Fields()))
+						for _, field := range result.Fields() {
+							t.Logf("  %s: %s", field.Name(), field.String())
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkMerge(b *testing.B) {
+	// Create test nodes for benchmarking
+	nodes := []parquet.Node{
+		parquet.FieldID(
+			parquet.Compressed(
+				parquet.Encoded(
+					parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+					&parquet.DeltaBinaryPacked,
+				),
+				&parquet.Snappy,
+			),
+			1,
+		),
+		parquet.FieldID(
+			parquet.Compressed(
+				parquet.Encoded(
+					parquet.Repeated(parquet.Leaf(parquet.Int64Type)),
+					&parquet.RLEDictionary,
+				),
+				&parquet.Gzip,
+			),
+			2,
+		),
+		parquet.Group{
+			"field1": parquet.Leaf(parquet.ByteArrayType),
+			"field2": parquet.Leaf(parquet.FloatType),
+		},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = parquet.Merge(nodes...)
+	}
+}
+
 func BenchmarkMergeFiles(b *testing.B) {
 	rowGroupBuffers := make([]bytes.Buffer, numRowGroups)
 

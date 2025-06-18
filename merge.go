@@ -1,11 +1,15 @@
 package parquet
 
 import (
+	"cmp"
 	"container/heap"
 	"errors"
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 // MergeRowGroups constructs a row group which is a merged view of rowGroups. If
@@ -491,6 +495,103 @@ func (m *mergeBuffer) read() (n int64) {
 		}
 	}
 	return
+}
+
+// Merge takes a list of nodes and greedily retains properties of the schemas:
+// - keeps last compression that is not nil
+// - keeps last non-plain encoding that is not nil
+// - keeps last non-zero field id
+// - union of all columns for group nodes
+// - retains the most permissive repetition (required < optional < repeated)
+func Merge(nodes ...Node) Node {
+	switch len(nodes) {
+	case 0:
+		return nil
+	case 1:
+		return nodes[0]
+	default:
+		merged := nodes[0]
+		for _, node := range nodes[1:] {
+			merged = mergeTwoNodes(merged, node)
+		}
+		return merged
+	}
+}
+
+// mergeTwoNodes merges two nodes using greedy property retention
+func mergeTwoNodes(a, b Node) Node {
+	leaf1 := a.Leaf()
+	leaf2 := b.Leaf()
+	// Both must be either leaf or group nodes
+	if leaf1 != leaf2 {
+		// Cannot merge leaf with group - return the last one
+		return b
+	}
+
+	var merged Node
+	if leaf1 {
+		merged = Leaf(b.Type())
+
+		// Apply compression (keep last non-nil)
+		compression1 := a.Compression()
+		compression2 := b.Compression()
+		compression := cmp.Or(compression2, compression1)
+		if compression != nil {
+			merged = Compressed(merged, compression)
+		}
+
+		// Apply encoding (keep last non-plain, non-nil)
+		encoding := encoding.Encoding(&Plain)
+		encoding1 := a.Encoding()
+		encoding2 := b.Encoding()
+		if !isPlainEncoding(encoding1) {
+			encoding = encoding1
+		}
+		if !isPlainEncoding(encoding2) {
+			encoding = encoding2
+		}
+		if encoding != nil {
+			merged = Encoded(merged, encoding)
+		}
+	} else {
+		// Create a map to track all fields
+		group := make(Group)
+
+		// Add all fields from first node
+		for _, field := range a.Fields() {
+			group[field.Name()] = field
+		}
+
+		// Add/merge fields from second node
+		for _, field := range b.Fields() {
+			fieldName := field.Name()
+			if existing, exists := group[fieldName]; exists {
+				// Merge the existing field with the new one
+				group[fieldName] = mergeTwoNodes(existing, field)
+			} else {
+				// Add new field
+				group[fieldName] = field
+			}
+		}
+		merged = group
+	}
+
+	// Apply repetition (most permissive: required < optional < repeated)
+	if a.Repeated() || b.Repeated() {
+		merged = Repeated(merged)
+	} else if a.Optional() || b.Optional() {
+		merged = Optional(merged)
+	} else {
+		merged = Required(merged)
+	}
+
+	// Apply field ID (keep last non-zero)
+	return FieldID(merged, cmp.Or(b.ID(), a.ID()))
+}
+
+// isPlainEncoding checks if the encoding is plain encoding
+func isPlainEncoding(enc encoding.Encoding) bool {
+	return enc == nil || enc.Encoding() == format.Plain
 }
 
 var (
