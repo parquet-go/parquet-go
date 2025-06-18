@@ -8,7 +8,7 @@ func MultiSum64Uint32(h []uint64, v []uint32) int
 //go:noescape
 func MultiSum64Uint64(h []uint64, v []uint64) int
 
-// Fallback to Go implementations for other functions
+// Fallback to Go implementations for other functions (simpler and more reliable)
 func MultiSum64Uint8(h []uint64, v []uint8) int {
 	n := min(len(h), len(v))
 	h = h[:n]
