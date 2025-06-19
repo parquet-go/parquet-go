@@ -337,7 +337,7 @@ func TestMergeRowGroups(t *testing.T) {
 					if merged.NumRows() != test.output.NumRows() {
 						t.Fatalf("the number of rows mismatch: want=%d got=%d", merged.NumRows(), test.output.NumRows())
 					}
-					if merged.Schema() != test.output.Schema() {
+					if !parquet.SameNodes(merged.Schema(), test.output.Schema()) {
 						t.Fatalf("the row group schemas mismatch:\n%v\n%v", test.output.Schema(), merged.Schema())
 					}
 

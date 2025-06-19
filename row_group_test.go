@@ -23,9 +23,9 @@ func sortedRowGroup(options []parquet.RowGroupOption, rows ...any) parquet.RowGr
 }
 
 type Person struct {
+	Age       int
 	FirstName utf8string
 	LastName  utf8string
-	Age       int
 }
 
 type LastNameOnly struct {

@@ -37,10 +37,16 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 		schema = rowGroups[0].Schema()
 
 		for _, rowGroup := range rowGroups[1:] {
-			if !EqualNodes(schema, rowGroup.Schema()) {
+			if !SameNodes(schema, rowGroup.Schema()) {
 				return nil, ErrRowGroupSchemaMismatch
 			}
 		}
+
+		schemas := make([]Node, len(rowGroups))
+		for i, rowGroup := range rowGroups {
+			schemas[i] = rowGroup.Schema()
+		}
+		schema = NewSchema(schema.Name(), MergeNodes(schemas...))
 	}
 
 	mergedRowGroups := make([]RowGroup, len(rowGroups))

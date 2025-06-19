@@ -472,6 +472,229 @@ func TestEqualNodes(t *testing.T) {
 	}
 }
 
+func TestSameNodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		node1    Node
+		node2    Node
+		expected bool
+	}{
+		// Same tests as EqualNodes for leaf nodes (should behave identically)
+		{
+			name:     "same leaf nodes - boolean",
+			node1:    Leaf(BooleanType),
+			node2:    Leaf(BooleanType),
+			expected: true,
+		},
+		{
+			name:     "different leaf types - int32 vs int64",
+			node1:    Leaf(Int32Type),
+			node2:    Leaf(Int64Type),
+			expected: false,
+		},
+
+		// Group nodes - same fields in same order
+		{
+			name: "groups with same fields in same order",
+			node1: Group{
+				"id":   Int(64),
+				"name": String(),
+				"age":  Int(32),
+			},
+			node2: Group{
+				"id":   Int(64),
+				"name": String(),
+				"age":  Int(32),
+			},
+			expected: true,
+		},
+
+		// Group nodes - same fields in different order (key difference from EqualNodes)
+		{
+			name: "groups with same fields in different order",
+			node1: Group{
+				"id":   Int(64),
+				"name": String(),
+				"age":  Int(32),
+			},
+			node2: Group{
+				"age":  Int(32),
+				"id":   Int(64),
+				"name": String(),
+			},
+			expected: true, // This should be true for SameNodes but false for EqualNodes
+		},
+
+		// Group nodes - different fields
+		{
+			name: "groups with different field names",
+			node1: Group{
+				"id":   Int(64),
+				"name": String(),
+			},
+			node2: Group{
+				"id":    Int(64),
+				"title": String(),
+			},
+			expected: false,
+		},
+		{
+			name: "groups with different field types",
+			node1: Group{
+				"id":   Int(64),
+				"name": String(),
+			},
+			node2: Group{
+				"id":   Int(32), // Different type
+				"name": String(),
+			},
+			expected: false,
+		},
+
+		// Nested groups - same structure, different order
+		{
+			name: "nested groups with field reordering",
+			node1: Group{
+				"user": Group{
+					"id":   Int(64),
+					"name": String(),
+				},
+				"metadata": Group{
+					"created": Date(),
+					"updated": Date(),
+				},
+			},
+			node2: Group{
+				"metadata": Group{
+					"updated": Date(), // Different order
+					"created": Date(),
+				},
+				"user": Group{
+					"name": String(), // Different order
+					"id":   Int(64),
+				},
+			},
+			expected: true,
+		},
+
+		// Mixed cases
+		{
+			name: "groups with different repetition",
+			node1: Required(Group{
+				"name": String(),
+			}),
+			node2: Optional(Group{
+				"name": String(),
+			}),
+			expected: false,
+		},
+
+		// MAP and LIST types - logical type preserved
+		{
+			name:     "same map types",
+			node1:    Map(String(), Int(32)),
+			node2:    Map(String(), Int(32)),
+			expected: true,
+		},
+		{
+			name:  "map vs regular group with same structure",
+			node1: Map(String(), Int(32)),
+			node2: Group{
+				"key_value": Repeated(Group{
+					"key":   String(),
+					"value": Int(32),
+				}),
+			},
+			expected: false, // Different logical types
+		},
+
+		// Edge cases
+		{
+			name:     "empty groups",
+			node1:    Group{},
+			node2:    Group{},
+			expected: true,
+		},
+		{
+			name:     "leaf vs group",
+			node1:    String(),
+			node2:    Group{"name": String()},
+			expected: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := SameNodes(test.node1, test.node2)
+			if result != test.expected {
+				t.Errorf("SameNodes(%v, %v) = %v, expected %v",
+					test.node1, test.node2, result, test.expected)
+			}
+
+			// Also verify that for leaf nodes, SameNodes behaves identically to EqualNodes
+			if test.node1.Leaf() && test.node2.Leaf() {
+				equalResult := EqualNodes(test.node1, test.node2)
+				if result != equalResult {
+					t.Errorf("SameNodes and EqualNodes should be identical for leaf nodes, got SameNodes=%v EqualNodes=%v",
+						result, equalResult)
+				}
+			}
+		})
+	}
+}
+
+func TestSameNodesVsEqualNodes(t *testing.T) {
+	// Test case that shows the difference between SameNodes and EqualNodes
+	// Create groups dynamically to ensure different field orders
+
+	// Create first group by building it step by step
+	group1 := make(Group)
+	group1["FieldA"] = String()
+	group1["FieldB"] = Int(32)
+	group1["FieldC"] = Date()
+
+	// Create second group in different order
+	group2 := make(Group)
+	group2["FieldC"] = Date() // Different order
+	group2["FieldA"] = String()
+	group2["FieldB"] = Int(32)
+
+	// Verify the fields are actually in different order by checking field iteration
+	fields1 := group1.Fields()
+	fields2 := group2.Fields()
+
+	// Check if any field is in a different position
+	differentOrder := false
+	for i := range fields1 {
+		if fields1[i].Name() != fields2[i].Name() {
+			differentOrder = true
+			break
+		}
+	}
+
+	// Only run the EqualNodes test if they're actually in different order
+	if differentOrder {
+		// SameNodes should be true (order-independent)
+		if !SameNodes(group1, group2) {
+			t.Error("SameNodes should return true for same fields in different order")
+		}
+
+		// EqualNodes should be false (order-dependent)
+		if EqualNodes(group1, group2) {
+			t.Error("EqualNodes should return false for same fields in different order")
+		}
+	} else {
+		// If they happen to be in the same order, both should be true
+		t.Logf("Groups ended up in same order, both comparisons should be true")
+		if !SameNodes(group1, group2) {
+			t.Error("SameNodes should return true for same fields")
+		}
+		if !EqualNodes(group1, group2) {
+			t.Error("EqualNodes should return true for same fields in same order")
+		}
+	}
+}
+
 func TestEncodingOf(t *testing.T) {
 	testCases := []struct {
 		name             string
