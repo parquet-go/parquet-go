@@ -265,7 +265,7 @@ func Convert(to, from Node) (conv Conversion, err error) {
 		if sourceColumn.node != nil {
 			targetType := targetColumn.node.Type()
 			sourceType := sourceColumn.node.Type()
-			if !typesAreEqual(targetType, sourceType) {
+			if !EqualTypes(targetType, sourceType) {
 				conversions = append(conversions,
 					convertToType(targetType, sourceType),
 				)

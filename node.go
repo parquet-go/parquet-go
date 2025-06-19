@@ -493,12 +493,17 @@ func fieldByName(node Node, name string) Field {
 
 // EqualNodes returns true if node1 and node2 are equal.
 //
-// Nodes that are not of the same repetition type (optional, required, repeated) or
-// of the same hierarchical type (leaf, group) are considered not equal.
+// Nodes that are not of the same repetition type (optional, required, repeated)
+// or of the same hierarchical type (leaf, group) are considered not equal.
 // Leaf nodes are considered equal if they are of the same data type.
-// Group nodes are considered equal if their fields have the same names and are recursively equal.
 //
-// Note that the encoding and compression of the nodes are not considered by this function.
+// Groups are compared recursively, taking the order of fields into account
+// (because it influences the column index of each leaf node), and comparing
+// their logical types: for example, a MAP node is not equal to a GROUP node
+// with the same fields, because MAP nodes have a specific logical type.
+//
+// Note that the encoding and compression of the nodes are not considered by this
+// function.
 func EqualNodes(node1, node2 Node) bool {
 	if node1.Leaf() {
 		return node2.Leaf() && leafNodesAreEqual(node1, node2)
@@ -507,18 +512,12 @@ func EqualNodes(node1, node2 Node) bool {
 	}
 }
 
-func typesAreEqual(type1, type2 Type) bool {
-	return type1.Kind() == type2.Kind() &&
-		type1.Length() == type2.Length() &&
-		reflect.DeepEqual(type1.LogicalType(), type2.LogicalType())
-}
-
 func repetitionsAreEqual(node1, node2 Node) bool {
 	return node1.Optional() == node2.Optional() && node1.Repeated() == node2.Repeated()
 }
 
 func leafNodesAreEqual(node1, node2 Node) bool {
-	return typesAreEqual(node1.Type(), node2.Type()) && repetitionsAreEqual(node1, node2)
+	return EqualTypes(node1.Type(), node2.Type()) && repetitionsAreEqual(node1, node2)
 }
 
 func groupNodesAreEqual(node1, node2 Node) bool {
@@ -546,5 +545,5 @@ func groupNodesAreEqual(node1, node2 Node) bool {
 		}
 	}
 
-	return true
+	return equalLogicalTypes(node1.Type(), node2.Type())
 }
