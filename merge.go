@@ -37,7 +37,7 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 		schema = rowGroups[0].Schema()
 
 		for _, rowGroup := range rowGroups[1:] {
-			if !SameNodes(schema, rowGroup.Schema()) {
+			if !EqualNodes(schema, rowGroup.Schema()) {
 				return nil, ErrRowGroupSchemaMismatch
 			}
 		}
