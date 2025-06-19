@@ -315,6 +315,84 @@ func TestMergeRowGroups(t *testing.T) {
 		},
 	}
 
+	// Additional tests for different field ordering scenarios
+	fieldOrderTests := []struct {
+		scenario string
+		input    []parquet.RowGroup
+		output   parquet.RowGroup
+	}{
+		{
+			scenario: "two row groups with same fields in different order",
+			input: []parquet.RowGroup{
+				createRowGroupWithFieldOrder([]string{"Age", "FirstName", "LastName"},
+					Person{Age: 25, FirstName: "John", LastName: "Doe"},
+					Person{Age: 30, FirstName: "Jane", LastName: "Smith"},
+				),
+				createRowGroupWithFieldOrder([]string{"LastName", "Age", "FirstName"},
+					Person{Age: 35, FirstName: "Bob", LastName: "Johnson"},
+					Person{Age: 40, FirstName: "Alice", LastName: "Brown"},
+				),
+			},
+			output: createExpectedMergedRowGroup(
+				Person{Age: 25, FirstName: "John", LastName: "Doe"},
+				Person{Age: 30, FirstName: "Jane", LastName: "Smith"},
+				Person{Age: 35, FirstName: "Bob", LastName: "Johnson"},
+				Person{Age: 40, FirstName: "Alice", LastName: "Brown"},
+			),
+		},
+		{
+			scenario: "three row groups with mixed field ordering",
+			input: []parquet.RowGroup{
+				createRowGroupWithFieldOrder([]string{"FirstName", "LastName", "Age"},
+					Person{Age: 20, FirstName: "Charlie", LastName: "Wilson"},
+				),
+				createRowGroupWithFieldOrder([]string{"Age", "LastName", "FirstName"},
+					Person{Age: 25, FirstName: "David", LastName: "Taylor"},
+				),
+				createRowGroupWithFieldOrder([]string{"LastName", "FirstName", "Age"},
+					Person{Age: 30, FirstName: "Eve", LastName: "Anderson"},
+				),
+			},
+			output: createExpectedMergedRowGroup(
+				Person{Age: 20, FirstName: "Charlie", LastName: "Wilson"},
+				Person{Age: 25, FirstName: "David", LastName: "Taylor"},
+				Person{Age: 30, FirstName: "Eve", LastName: "Anderson"},
+			),
+		},
+		{
+			scenario: "nested groups with field reordering",
+			input: []parquet.RowGroup{
+				createNestedRowGroupWithFieldOrder(
+					map[string][]string{
+						"":         {"user", "metadata"},
+						"user":     {"id", "name"},
+						"metadata": {"created", "updated"},
+					},
+					map[string]interface{}{
+						"user.id":          int64(1),
+						"user.name":        "Alice",
+						"metadata.created": "2023-01-01",
+						"metadata.updated": "2023-01-02",
+					},
+				),
+				createNestedRowGroupWithFieldOrder(
+					map[string][]string{
+						"":         {"metadata", "user"},
+						"user":     {"name", "id"},
+						"metadata": {"updated", "created"},
+					},
+					map[string]interface{}{
+						"user.id":          int64(2),
+						"user.name":        "Bob",
+						"metadata.created": "2023-02-01",
+						"metadata.updated": "2023-02-02",
+					},
+				),
+			},
+			output: createNestedRowGroupExpected(),
+		},
+	}
+
 	for _, adapter := range []struct {
 		scenario string
 		function func(parquet.RowGroup) parquet.RowGroup
@@ -412,6 +490,90 @@ func TestMergeRowGroups(t *testing.T) {
 						})
 					}
 
+				})
+			}
+		})
+	}
+
+	// Test field ordering scenarios
+	for _, adapter := range []struct {
+		scenario string
+		function func(parquet.RowGroup) parquet.RowGroup
+	}{
+		{scenario: "buffer", function: selfRowGroup},
+		{scenario: "file", function: fileRowGroup},
+	} {
+		t.Run("field-order-"+adapter.scenario, func(t *testing.T) {
+			for _, test := range fieldOrderTests {
+				t.Run(test.scenario, func(t *testing.T) {
+					input := make([]parquet.RowGroup, len(test.input))
+					for i := range test.input {
+						if test.input[i] != nil {
+							input[i] = adapter.function(test.input[i])
+						}
+					}
+
+					merged, err := parquet.MergeRowGroups(input)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					if merged.NumRows() != test.output.NumRows() {
+						t.Fatalf("the number of rows mismatch: want=%d got=%d", test.output.NumRows(), merged.NumRows())
+					}
+
+					// For field ordering tests, we just verify that:
+					// 1. The merge succeeded
+					// 2. We got the expected number of rows
+					// 3. The schema has the same fields (using SameNodes which ignores order)
+					// 4. We can read the data correctly
+
+					// Verify schema compatibility (field order independent)
+					if !parquet.SameNodes(merged.Schema(), test.output.Schema()) {
+						t.Fatalf("the row group schemas are not equivalent:\nmerged=%v\nexpected=%v", merged.Schema(), test.output.Schema())
+					}
+
+					// Verify we can read all rows without error
+					var mergedRows = merged.Rows()
+					var rowBuf = make([]parquet.Row, 1)
+					var readRows int64
+
+					defer mergedRows.Close()
+
+					for {
+						n, err := mergedRows.ReadRows(rowBuf)
+
+						// Process any data we got first
+						if n > 0 {
+							readRows++
+
+							// For nested tests, expect more columns
+							expectedCols := 3
+							if test.scenario == "nested groups with field reordering" {
+								expectedCols = 4 // nested structure has more columns
+							}
+
+							// Verify the row has the expected number of values
+							if len(rowBuf[0]) != expectedCols {
+								t.Errorf("row %d has wrong number of values: want=%d got=%d", readRows-1, expectedCols, len(rowBuf[0]))
+							}
+						}
+
+						// Then check for errors or end conditions
+						if err != nil {
+							if err == io.EOF {
+								break
+							}
+							t.Fatalf("error reading merged rows at index %d: %v", readRows, err)
+						}
+						if n == 0 {
+							break
+						}
+					}
+
+					if readRows != test.output.NumRows() {
+						t.Errorf("expected to read %d rows but %d were found", test.output.NumRows(), readRows)
+					}
 				})
 			}
 		})
@@ -921,6 +1083,187 @@ func BenchmarkMergeNodes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = parquet.MergeNodes(nodes...)
 	}
+}
+
+// Helper functions for field ordering tests
+
+// Define struct types with same fields but different declaration order
+type PersonAgeFirst struct {
+	Age       int
+	FirstName utf8string
+	LastName  utf8string
+}
+
+type PersonLastNameFirst struct {
+	LastName  utf8string
+	Age       int
+	FirstName utf8string
+}
+
+type PersonFirstNameFirst struct {
+	FirstName utf8string
+	LastName  utf8string
+	Age       int
+}
+
+// createRowGroupWithFieldOrder creates a row group using different struct orders
+func createRowGroupWithFieldOrder(fieldOrder []string, rows ...Person) parquet.RowGroup {
+	switch {
+	case len(fieldOrder) >= 1 && fieldOrder[0] == "Age":
+		// Age first
+		buf := parquet.NewBuffer()
+		for _, row := range rows {
+			buf.Write(PersonAgeFirst{
+				Age:       row.Age,
+				FirstName: row.FirstName,
+				LastName:  row.LastName,
+			})
+		}
+		return buf
+	case len(fieldOrder) >= 1 && fieldOrder[0] == "LastName":
+		// LastName first
+		buf := parquet.NewBuffer()
+		for _, row := range rows {
+			buf.Write(PersonLastNameFirst{
+				LastName:  row.LastName,
+				Age:       row.Age,
+				FirstName: row.FirstName,
+			})
+		}
+		return buf
+	case len(fieldOrder) >= 1 && fieldOrder[0] == "FirstName":
+		// FirstName first
+		buf := parquet.NewBuffer()
+		for _, row := range rows {
+			buf.Write(PersonFirstNameFirst{
+				FirstName: row.FirstName,
+				LastName:  row.LastName,
+				Age:       row.Age,
+			})
+		}
+		return buf
+	default:
+		// Default order
+		buf := parquet.NewBuffer()
+		for _, row := range rows {
+			buf.Write(row)
+		}
+		return buf
+	}
+}
+
+// Define nested struct types with different field orders
+type UserType1 struct {
+	ID   int64
+	Name utf8string
+}
+
+type UserType2 struct {
+	Name utf8string
+	ID   int64
+}
+
+type MetadataType1 struct {
+	Created utf8string
+	Updated utf8string
+}
+
+type MetadataType2 struct {
+	Updated utf8string
+	Created utf8string
+}
+
+type NestedType1 struct {
+	User     UserType1
+	Metadata MetadataType1
+}
+
+type NestedType2 struct {
+	Metadata MetadataType2
+	User     UserType2
+}
+
+// createNestedRowGroupWithFieldOrder creates a nested row group using different struct orders
+func createNestedRowGroupWithFieldOrder(fieldOrders map[string][]string, values map[string]interface{}) parquet.RowGroup {
+	userID := values["user.id"].(int64)
+	userName := utf8string(values["user.name"].(string))
+	created := utf8string(values["metadata.created"].(string))
+	updated := utf8string(values["metadata.updated"].(string))
+
+	// Check root field order to determine which struct type to use
+	if rootOrder, exists := fieldOrders[""]; exists && len(rootOrder) > 0 && rootOrder[0] == "user" {
+		// User first
+		buf := parquet.NewBuffer()
+		buf.Write(NestedType1{
+			User: UserType1{
+				ID:   userID,
+				Name: userName,
+			},
+			Metadata: MetadataType1{
+				Created: created,
+				Updated: updated,
+			},
+		})
+		return buf
+	} else {
+		// Metadata first
+		buf := parquet.NewBuffer()
+		buf.Write(NestedType2{
+			Metadata: MetadataType2{
+				Updated: updated,
+				Created: created,
+			},
+			User: UserType2{
+				Name: userName,
+				ID:   userID,
+			},
+		})
+		return buf
+	}
+}
+
+// createNestedRowGroupExpected creates the expected result for nested field ordering test
+func createNestedRowGroupExpected() parquet.RowGroup {
+	// Use one of the struct types as the expected format - after merge,
+	// the schemas should be equivalent regardless of original field order
+	buf := parquet.NewBuffer()
+
+	// Add expected rows using consistent struct type
+	buf.Write(NestedType1{
+		User: UserType1{
+			ID:   int64(1),
+			Name: utf8string("Alice"),
+		},
+		Metadata: MetadataType1{
+			Created: utf8string("2023-01-01"),
+			Updated: utf8string("2023-01-02"),
+		},
+	})
+	buf.Write(NestedType1{
+		User: UserType1{
+			ID:   int64(2),
+			Name: utf8string("Bob"),
+		},
+		Metadata: MetadataType1{
+			Created: utf8string("2023-02-01"),
+			Updated: utf8string("2023-02-02"),
+		},
+	})
+
+	return buf
+}
+
+// createExpectedMergedRowGroup creates a simple expected result for comparison
+// For field ordering tests, we just need to verify the merge works and produces the right number of rows
+// The actual field order will be handled by SameNodes comparison
+func createExpectedMergedRowGroup(rows ...Person) parquet.RowGroup {
+	// Just create a simple row group with the same data
+	// The test will use SameNodes for schema comparison which handles field order differences
+	buf := parquet.NewBuffer()
+	for _, row := range rows {
+		buf.Write(row)
+	}
+	return buf
 }
 
 func BenchmarkMergeFiles(b *testing.B) {
