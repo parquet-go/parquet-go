@@ -317,7 +317,7 @@ func TestEqualNodes(t *testing.T) {
 			name: "complex nested structure - same",
 			node1: Group{
 				"user": Group{
-					"id":      Int(64),
+					"id": Int(64),
 					"profile": Group{
 						"name":  String(),
 						"email": String(),
@@ -334,7 +334,7 @@ func TestEqualNodes(t *testing.T) {
 			},
 			node2: Group{
 				"user": Group{
-					"id":      Int(64),
+					"id": Int(64),
 					"profile": Group{
 						"name":  String(),
 						"email": String(),
@@ -355,7 +355,7 @@ func TestEqualNodes(t *testing.T) {
 			name: "complex nested structure - different deep field",
 			node1: Group{
 				"user": Group{
-					"id":      Int(64),
+					"id": Int(64),
 					"profile": Group{
 						"name":  String(),
 						"email": String(),
@@ -368,7 +368,7 @@ func TestEqualNodes(t *testing.T) {
 			},
 			node2: Group{
 				"user": Group{
-					"id":      Int(64),
+					"id": Int(64),
 					"profile": Group{
 						"name":  String(),
 						"email": String(),
@@ -418,7 +418,7 @@ func TestEqualNodes(t *testing.T) {
 
 		// Logical types vs non-logical groups with same structure
 		{
-			name: "logical map vs regular group with same structure",
+			name:  "logical map vs regular group with same structure",
 			node1: Map(String(), Int(32)),
 			node2: Group{
 				"key_value": Repeated(Group{
@@ -429,7 +429,7 @@ func TestEqualNodes(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "logical list vs regular group with same structure",
+			name:  "logical list vs regular group with same structure",
 			node1: List(String()),
 			node2: Group{
 				"list": Repeated(Group{
@@ -446,7 +446,7 @@ func TestEqualNodes(t *testing.T) {
 					"value": Int(32),
 				}),
 			},
-			node2: Map(String(), Int(32)),
+			node2:    Map(String(), Int(32)),
 			expected: false,
 		},
 		{
@@ -456,7 +456,7 @@ func TestEqualNodes(t *testing.T) {
 					"element": String(),
 				}),
 			},
-			node2: List(String()),
+			node2:    List(String()),
 			expected: false,
 		},
 	}

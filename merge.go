@@ -554,16 +554,16 @@ func mergeTwoNodes(a, b Node) Node {
 			merged = Encoded(merged, encoding)
 		}
 	} else {
-		// Create a map to track all fields
-		group := make(Group)
+		fields1 := a.Fields()
+		fields2 := b.Fields()
 
-		// Add all fields from first node
-		for _, field := range a.Fields() {
+		group := make(Group, len(fields1))
+		for _, field := range fields1 {
 			group[field.Name()] = field
 		}
 
 		// Add/merge fields from second node
-		for _, field := range b.Fields() {
+		for _, field := range fields2 {
 			fieldName := field.Name()
 			if existing, exists := group[fieldName]; exists {
 				// Merge the existing field with the new one
@@ -573,7 +573,17 @@ func mergeTwoNodes(a, b Node) Node {
 				group[fieldName] = field
 			}
 		}
+
 		merged = group
+
+		if logicalType := b.Type().LogicalType(); logicalType != nil {
+			switch {
+			case logicalType.List != nil:
+				merged = &listNode{group}
+			case logicalType.Map != nil:
+				merged = &mapNode{group}
+			}
+		}
 	}
 
 	// Apply repetition (most permissive: required < optional < repeated)

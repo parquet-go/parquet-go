@@ -312,20 +312,19 @@ func TestEqualTypes(t *testing.T) {
 			type2:    parquet.Decimal(10, 2, parquet.Int64Type).Type(),
 			expected: false,
 		},
-
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result := parquet.EqualTypes(test.type1, test.type2)
 			if result != test.expected {
-				t.Errorf("EqualTypes(%v, %v) = %v, expected %v", 
+				t.Errorf("EqualTypes(%v, %v) = %v, expected %v",
 					test.type1, test.type2, result, test.expected)
-				
+
 				// Additional debugging info
-				t.Logf("Type1: Kind=%v, Length=%v, LogicalType=%v", 
+				t.Logf("Type1: Kind=%v, Length=%v, LogicalType=%v",
 					test.type1.Kind(), test.type1.Length(), test.type1.LogicalType())
-				t.Logf("Type2: Kind=%v, Length=%v, LogicalType=%v", 
+				t.Logf("Type2: Kind=%v, Length=%v, LogicalType=%v",
 					test.type2.Kind(), test.type2.Length(), test.type2.LogicalType())
 			}
 		})
