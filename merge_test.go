@@ -1109,12 +1109,12 @@ func TestMergeNodes(t *testing.T) {
 func TestMergeRowGroupsWithOverlappingAndMissingFields(t *testing.T) {
 	// Define structs for testing overlapping and missing fields
 	type UserProfile struct {
-		UserID   int         // Overlapping field - present in both schemas
-		Username utf8string  // Unique to first schema - missing from second
+		UserID   int        // Overlapping field - present in both schemas
+		Username utf8string // Unique to first schema - missing from second
 	}
 
 	type UserStats struct {
-		UserID    int // Overlapping field - present in both schemas  
+		UserID     int // Overlapping field - present in both schemas
 		LoginCount int // Unique to second schema - missing from first
 	}
 
@@ -1190,10 +1190,10 @@ func TestMergeRowGroupsWithOverlappingAndMissingFields(t *testing.T) {
 	// Validate that all rows have values for the merged schema's fields
 	schemaFields := schema.Fields()
 	expectedFieldCount := len(schemaFields)
-	
+
 	for i := 0; i < n; i++ {
 		row := readBuffer[i]
-		
+
 		// Each row should have values for all fields in the merged schema
 		if len(row) != expectedFieldCount {
 			t.Errorf("Row %d has %d values, expected %d for merged schema", i, len(row), expectedFieldCount)
@@ -1213,12 +1213,12 @@ func TestMergeRowGroupsWithOverlappingAndMissingFields(t *testing.T) {
 	// The detailed field-level validation is covered by the schema structure tests above
 
 	// Also validate that the merge process correctly handled the overlapping and missing fields:
-	// - UserProfile rows (0,1) should have UserID and Username, with LoginCount as zero/default  
+	// - UserProfile rows (0,1) should have UserID and Username, with LoginCount as zero/default
 	// - UserStats rows (2,3) should have UserID and LoginCount, with Username as zero/default
 	// The exact value handling depends on how parquet processes missing fields
 
 	t.Logf("Successfully merged %d rows with overlapping and missing fields", n)
-	t.Logf("Schema validation passed: UserID=required, Username=optional, LoginCount=optional") 
+	t.Logf("Schema validation passed: UserID=required, Username=optional, LoginCount=optional")
 	t.Logf("Merge behavior: Missing fields are handled through schema conversion during merge")
 }
 
