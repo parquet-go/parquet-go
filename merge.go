@@ -497,13 +497,13 @@ func (m *mergeBuffer) read() (n int64) {
 	return
 }
 
-// Merge takes a list of nodes and greedily retains properties of the schemas:
+// MergeNodes takes a list of nodes and greedily retains properties of the schemas:
 // - keeps last compression that is not nil
 // - keeps last non-plain encoding that is not nil
 // - keeps last non-zero field id
 // - union of all columns for group nodes
 // - retains the most permissive repetition (required < optional < repeated)
-func Merge(nodes ...Node) Node {
+func MergeNodes(nodes ...Node) Node {
 	switch len(nodes) {
 	case 0:
 		return nil

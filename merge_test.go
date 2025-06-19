@@ -591,25 +591,21 @@ func BenchmarkMergeRowGroups(b *testing.B) {
 	}
 }
 
-func TestMerge(t *testing.T) {
+func TestMergeNodes(t *testing.T) {
 	tests := []struct {
 		name     string
 		nodes    []parquet.Node
-		expected func(result parquet.Node) bool
+		expected parquet.Node
 	}{
 		{
-			name:  "empty input",
-			nodes: []parquet.Node{},
-			expected: func(result parquet.Node) bool {
-				return result == nil
-			},
+			name:     "empty input",
+			nodes:    []parquet.Node{},
+			expected: nil,
 		},
 		{
-			name:  "single node",
-			nodes: []parquet.Node{parquet.Leaf(parquet.Int32Type)},
-			expected: func(result parquet.Node) bool {
-				return result != nil && result.Leaf() && result.Type().Kind() == parquet.Int32
-			},
+			name:     "single node",
+			nodes:    []parquet.Node{parquet.Leaf(parquet.Int32Type)},
+			expected: parquet.Required(parquet.Leaf(parquet.Int32Type)),
 		},
 		{
 			name: "merge two simple leaf nodes",
@@ -617,9 +613,7 @@ func TestMerge(t *testing.T) {
 				parquet.Leaf(parquet.Int32Type),
 				parquet.Leaf(parquet.Int64Type),
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil && result.Leaf() && result.Type().Kind() == parquet.Int64
-			},
+			expected: parquet.Required(parquet.Leaf(parquet.Int64Type)),
 		},
 		{
 			name: "merge nodes with compression - keep last",
@@ -627,9 +621,12 @@ func TestMerge(t *testing.T) {
 				parquet.Compressed(parquet.Leaf(parquet.Int32Type), &parquet.Snappy),
 				parquet.Compressed(parquet.Leaf(parquet.Int32Type), &parquet.Gzip),
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil && result.Compression() == &parquet.Gzip
-			},
+			expected: parquet.Required(
+				parquet.Compressed(
+					parquet.Leaf(parquet.Int32Type),
+					&parquet.Gzip,
+				),
+			),
 		},
 		{
 			name: "merge nodes with encoding - keep last non-plain",
@@ -637,9 +634,12 @@ func TestMerge(t *testing.T) {
 				parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.DeltaBinaryPacked),
 				parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.RLEDictionary),
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil && result.Encoding() == &parquet.RLEDictionary
-			},
+			expected: parquet.Required(
+				parquet.Encoded(
+					parquet.Leaf(parquet.Int32Type),
+					&parquet.RLEDictionary,
+				),
+			),
 		},
 		{
 			name: "merge nodes with field IDs - keep last non-zero",
@@ -647,9 +647,10 @@ func TestMerge(t *testing.T) {
 				parquet.FieldID(parquet.Leaf(parquet.Int32Type), 1),
 				parquet.FieldID(parquet.Leaf(parquet.Int32Type), 2),
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil && result.ID() == 2
-			},
+			expected: parquet.FieldID(
+				parquet.Required(parquet.Leaf(parquet.Int32Type)),
+				2,
+			),
 		},
 		{
 			name: "merge repetition types - most permissive (repeated)",
@@ -657,9 +658,7 @@ func TestMerge(t *testing.T) {
 				parquet.Required(parquet.Leaf(parquet.Int32Type)),
 				parquet.Repeated(parquet.Leaf(parquet.Int32Type)),
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil && result.Repeated() && !result.Optional() && !result.Required()
-			},
+			expected: parquet.Repeated(parquet.Leaf(parquet.Int32Type)),
 		},
 		{
 			name: "merge repetition types - optional over required",
@@ -667,9 +666,7 @@ func TestMerge(t *testing.T) {
 				parquet.Required(parquet.Leaf(parquet.Int32Type)),
 				parquet.Optional(parquet.Leaf(parquet.Int32Type)),
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil && result.Optional() && !result.Repeated() && !result.Required()
-			},
+			expected: parquet.Optional(parquet.Leaf(parquet.Int32Type)),
 		},
 		{
 			name: "merge complex nodes with all properties",
@@ -695,14 +692,18 @@ func TestMerge(t *testing.T) {
 					2,
 				),
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil &&
-					result.Type().Kind() == parquet.Int64 &&
-					result.Compression() == &parquet.Gzip &&
-					result.Encoding() == &parquet.RLEDictionary &&
-					result.ID() == 2 &&
-					result.Repeated()
-			},
+			expected: parquet.FieldID(
+				parquet.Repeated(
+					parquet.Compressed(
+						parquet.Encoded(
+							parquet.Leaf(parquet.Int64Type),
+							&parquet.RLEDictionary,
+						),
+						&parquet.Gzip,
+					),
+				),
+				2,
+			),
 		},
 		{
 			name: "merge group nodes - union of fields",
@@ -716,30 +717,11 @@ func TestMerge(t *testing.T) {
 					"field3": parquet.Leaf(parquet.FloatType),
 				},
 			},
-			expected: func(result parquet.Node) bool {
-				if result == nil || result.Leaf() {
-					return false
-				}
-				fields := result.Fields()
-				if len(fields) != 3 {
-					return false
-				}
-
-				fieldMap := make(map[string]parquet.Node)
-				for _, field := range fields {
-					fieldMap[field.Name()] = field
-				}
-
-				// Check that all expected fields exist
-				field1, has1 := fieldMap["field1"]
-				field2, has2 := fieldMap["field2"]
-				field3, has3 := fieldMap["field3"]
-
-				return has1 && has2 && has3 &&
-					field1.Type().Kind() == parquet.Int32 &&
-					field2.Type().Kind() == parquet.Int64 && // Should be overridden
-					field3.Type().Kind() == parquet.Float
-			},
+			expected: parquet.Required(parquet.Group{
+				"field1": parquet.Required(parquet.Leaf(parquet.Int32Type)),
+				"field2": parquet.Required(parquet.Leaf(parquet.Int64Type)), // Should be overridden
+				"field3": parquet.Required(parquet.Leaf(parquet.FloatType)),
+			}),
 		},
 		{
 			name: "merge nested group nodes",
@@ -759,45 +741,15 @@ func TestMerge(t *testing.T) {
 					},
 				},
 			},
-			expected: func(result parquet.Node) bool {
-				if result == nil || result.Leaf() {
-					return false
-				}
-				fields := result.Fields()
-				if len(fields) != 2 {
-					return false
-				}
-
-				fieldMap := make(map[string]parquet.Node)
-				for _, field := range fields {
-					fieldMap[field.Name()] = field
-				}
-
-				group1, hasGroup1 := fieldMap["group1"]
-				group2, hasGroup2 := fieldMap["group2"]
-
-				if !hasGroup1 || !hasGroup2 || group1.Leaf() || group2.Leaf() {
-					return false
-				}
-
-				// Check group1 fields
-				group1Fields := group1.Fields()
-				if len(group1Fields) != 2 {
-					return false
-				}
-
-				group1FieldMap := make(map[string]parquet.Node)
-				for _, field := range group1Fields {
-					group1FieldMap[field.Name()] = field
-				}
-
-				nested1, hasNested1 := group1FieldMap["nested1"]
-				nested2, hasNested2 := group1FieldMap["nested2"]
-
-				return hasNested1 && hasNested2 &&
-					nested1.Type().Kind() == parquet.Int64 &&
-					nested2.Type().Kind() == parquet.ByteArray
-			},
+			expected: parquet.Required(parquet.Group{
+				"group1": parquet.Required(parquet.Group{
+					"nested1": parquet.Required(parquet.Leaf(parquet.Int64Type)),
+					"nested2": parquet.Required(parquet.Leaf(parquet.ByteArrayType)),
+				}),
+				"group2": parquet.Required(parquet.Group{
+					"nested3": parquet.Required(parquet.Leaf(parquet.FloatType)),
+				}),
+			}),
 		},
 		{
 			name: "merge leaf with group - returns last",
@@ -807,9 +759,9 @@ func TestMerge(t *testing.T) {
 					"field1": parquet.Leaf(parquet.ByteArrayType),
 				},
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil && !result.Leaf()
-			},
+			expected: parquet.Required(parquet.Group{
+				"field1": parquet.Required(parquet.Leaf(parquet.ByteArrayType)),
+			}),
 		},
 		{
 			name: "merge with plain encoding - should prefer non-plain",
@@ -817,9 +769,12 @@ func TestMerge(t *testing.T) {
 				parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.Plain),
 				parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.DeltaBinaryPacked),
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil && result.Encoding() == &parquet.DeltaBinaryPacked
-			},
+			expected: parquet.Required(
+				parquet.Encoded(
+					parquet.Leaf(parquet.Int32Type),
+					&parquet.DeltaBinaryPacked,
+				),
+			),
 		},
 		{
 			name: "merge with mixed properties on groups",
@@ -841,27 +796,91 @@ func TestMerge(t *testing.T) {
 					2,
 				),
 			},
-			expected: func(result parquet.Node) bool {
-				return result != nil && !result.Leaf() &&
-					result.ID() == 2 &&
-					result.Repeated() &&
-					len(result.Fields()) == 2
+			expected: parquet.FieldID(
+				parquet.Repeated(
+					parquet.Group{
+						"field1": parquet.Required(parquet.Leaf(parquet.Int32Type)),
+						"field2": parquet.Required(parquet.Leaf(parquet.ByteArrayType)),
+					},
+				),
+				2,
+			),
+		},
+		{
+			name: "merge logical map types directly",
+			nodes: []parquet.Node{
+				parquet.Map(parquet.String(), parquet.Int(32)),
+				parquet.Map(parquet.String(), parquet.Int(64)),
 			},
+			expected: parquet.Map(parquet.String(), parquet.Int(64)),
+		},
+		{
+			name: "merge complex map with field properties",
+			nodes: []parquet.Node{
+				parquet.FieldID(
+					parquet.Map(parquet.String(), parquet.Group{
+						"name": parquet.String(),
+						"age":  parquet.Int(32),
+					}),
+					10,
+				),
+				parquet.FieldID(
+					parquet.Optional(
+						parquet.Map(parquet.String(), parquet.Group{
+							"name":   parquet.String(),
+							"age":    parquet.Int(64),                   // Override age type
+							"active": parquet.Leaf(parquet.BooleanType), // Add new field
+						}),
+					),
+					20,
+				),
+			},
+			expected: parquet.FieldID(
+				parquet.Optional(
+					parquet.Map(parquet.String(), parquet.Group{
+						"name":   parquet.Required(parquet.String()),
+						"age":    parquet.Required(parquet.Int(64)),                   // Should be overridden to Int64
+						"active": parquet.Required(parquet.Leaf(parquet.BooleanType)), // New field
+					}),
+				),
+				20,
+			),
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := parquet.Merge(test.nodes...)
-			if !test.expected(result) {
-				t.Errorf("Merge result did not match expectations")
+			result := parquet.MergeNodes(test.nodes...)
+
+			// Handle nil cases
+			if test.expected == nil {
 				if result != nil {
-					t.Logf("Result: %s", result.String())
-					if !result.Leaf() {
-						t.Logf("Fields: %d", len(result.Fields()))
-						for _, field := range result.Fields() {
-							t.Logf("  %s: %s", field.Name(), field.String())
-						}
+					t.Errorf("Expected nil result, got: %s", result.String())
+				}
+				return
+			}
+
+			if result == nil {
+				t.Errorf("Expected non-nil result, got nil")
+				return
+			}
+
+			if !parquet.EqualNodes(result, test.expected) {
+				t.Errorf("MergeNodes result did not match expected node")
+				t.Logf("Expected: %s", test.expected.String())
+				t.Logf("Got:      %s", result.String())
+
+				// Additional debugging for group nodes
+				if !result.Leaf() {
+					t.Logf("Result fields: %d", len(result.Fields()))
+					for _, field := range result.Fields() {
+						t.Logf("  %s: %s", field.Name(), field.String())
+					}
+				}
+				if !test.expected.Leaf() {
+					t.Logf("Expected fields: %d", len(test.expected.Fields()))
+					for _, field := range test.expected.Fields() {
+						t.Logf("  %s: %s", field.Name(), field.String())
 					}
 				}
 			}
@@ -869,7 +888,7 @@ func TestMerge(t *testing.T) {
 	}
 }
 
-func BenchmarkMerge(b *testing.B) {
+func BenchmarkMergeNodes(b *testing.B) {
 	// Create test nodes for benchmarking
 	nodes := []parquet.Node{
 		parquet.FieldID(
@@ -900,7 +919,7 @@ func BenchmarkMerge(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = parquet.Merge(nodes...)
+		_ = parquet.MergeNodes(nodes...)
 	}
 }
 
