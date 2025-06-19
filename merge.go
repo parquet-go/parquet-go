@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 
 	"github.com/parquet-go/parquet-go/encoding"
@@ -552,24 +553,37 @@ func mergeTwoNodes(a, b Node) Node {
 			merged = Encoded(merged, encoding)
 		}
 	} else {
-		fields1 := a.Fields()
-		fields2 := b.Fields()
+		fields1 := slices.Clone(a.Fields())
+		fields2 := slices.Clone(b.Fields())
+		sortFields(fields1)
+		sortFields(fields2)
 
 		group := make(Group, len(fields1))
-		for _, field := range fields1 {
-			group[field.Name()] = field
+		i1 := 0
+		i2 := 0
+		for i1 < len(fields1) && i2 < len(fields2) {
+			name1 := fields1[i1].Name()
+			name2 := fields2[i2].Name()
+			switch {
+			case name1 < name2:
+				group[name1] = nullable(fields1[i1])
+				i1++
+			case name1 > name2:
+				group[name2] = nullable(fields2[i2])
+				i2++
+			default:
+				group[name1] = mergeTwoNodes(fields1[i1], fields2[i2])
+				i1++
+				i2++
+			}
 		}
 
-		// Add/merge fields from second node
-		for _, field := range fields2 {
-			fieldName := field.Name()
-			if existing, exists := group[fieldName]; exists {
-				// Merge the existing field with the new one
-				group[fieldName] = mergeTwoNodes(existing, field)
-			} else {
-				// Add new field
-				group[fieldName] = field
-			}
+		for _, field := range fields1[i1:] {
+			group[field.Name()] = nullable(field)
+		}
+
+		for _, field := range fields2[i2:] {
+			group[field.Name()] = nullable(field)
 		}
 
 		merged = group
@@ -600,6 +614,13 @@ func mergeTwoNodes(a, b Node) Node {
 // isPlainEncoding checks if the encoding is plain encoding
 func isPlainEncoding(enc encoding.Encoding) bool {
 	return enc == nil || enc.Encoding() == format.Plain
+}
+
+func nullable(n Node) Node {
+	if !n.Repeated() {
+		return Optional(n)
+	}
+	return n
 }
 
 var (
