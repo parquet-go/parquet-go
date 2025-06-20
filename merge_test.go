@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"slices"
 	"sort"
 	"testing"
 
@@ -52,6 +53,101 @@ func TestMergeRowGroups(t *testing.T) {
 				[]parquet.RowGroupOption{
 					parquet.SchemaOf(Person{}),
 				},
+			),
+		},
+
+		{
+			scenario: "two sorted row groups with common sorting",
+			options: []parquet.RowGroupOption{
+				parquet.SortingRowGroupConfig(
+					parquet.SortingColumns(
+						parquet.Ascending("FirstName"),
+						parquet.Ascending("LastName"),
+					),
+				),
+			},
+			input: []parquet.RowGroup{
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("FirstName"),
+								parquet.Ascending("LastName"),
+							),
+						),
+					},
+					Person{FirstName: "Alice", LastName: "Brown", Age: 25},
+					Person{FirstName: "Bob", LastName: "Smith", Age: 30},
+				),
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("FirstName"),
+								parquet.Ascending("LastName"),
+							),
+						),
+					},
+					Person{FirstName: "Charlie", LastName: "Johnson", Age: 35},
+					Person{FirstName: "David", LastName: "Wilson", Age: 40},
+				),
+			},
+			output: sortedRowGroup(
+				[]parquet.RowGroupOption{
+					parquet.SortingRowGroupConfig(
+						parquet.SortingColumns(
+							parquet.Ascending("FirstName"),
+							parquet.Ascending("LastName"),
+						),
+					),
+				},
+				Person{FirstName: "Alice", LastName: "Brown", Age: 25},
+				Person{FirstName: "Bob", LastName: "Smith", Age: 30},
+				Person{FirstName: "Charlie", LastName: "Johnson", Age: 35},
+				Person{FirstName: "David", LastName: "Wilson", Age: 40},
+			),
+		},
+
+		{
+			scenario: "two sorted row groups with partial common sorting",
+			input: []parquet.RowGroup{
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("FirstName"),
+								parquet.Ascending("LastName"),
+							),
+						),
+					},
+					Person{FirstName: "Alice", LastName: "Brown", Age: 25},
+					Person{FirstName: "Bob", LastName: "Smith", Age: 30},
+				),
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("FirstName"),
+								parquet.Descending("Age"), // Different second column
+							),
+						),
+					},
+					Person{FirstName: "Charlie", LastName: "Johnson", Age: 35},
+					Person{FirstName: "David", LastName: "Wilson", Age: 40},
+				),
+			},
+			output: sortedRowGroup(
+				[]parquet.RowGroupOption{
+					parquet.SortingRowGroupConfig(
+						parquet.SortingColumns(
+							parquet.Ascending("FirstName"), // Only FirstName should be preserved
+						),
+					),
+				},
+				Person{FirstName: "Alice", LastName: "Brown", Age: 25},
+				Person{FirstName: "Bob", LastName: "Smith", Age: 30},
+				Person{FirstName: "Charlie", LastName: "Johnson", Age: 35},
+				Person{FirstName: "David", LastName: "Wilson", Age: 40},
 			),
 		},
 
@@ -438,6 +534,14 @@ func TestMergeRowGroups(t *testing.T) {
 						t.Fatalf("the row group schemas mismatch:\n%v\n%v", test.output.Schema(), merged.Schema())
 					}
 
+					// Validate sorting columns are properly propagated
+					expectedSortingColumns := determineMergedSortingColumns(test.input, test.options)
+					actualSortingColumns := merged.SortingColumns()
+					if !equalSortingColumns(expectedSortingColumns, actualSortingColumns) {
+						t.Errorf("sorting columns not properly propagated:\nexpected: %v\nactual: %v",
+							expectedSortingColumns, actualSortingColumns)
+					}
+
 					options := []parquet.RowGroupOption{parquet.SchemaOf(Person{})}
 					options = append(options, test.options...)
 					// We test two views of the resulting row group: the one originally
@@ -631,6 +735,79 @@ func TestMergeRowGroups(t *testing.T) {
 			}
 		})
 	}
+}
+
+// determineMergedSortingColumns calculates what the sorting columns should be
+// after merging row groups with given options
+func determineMergedSortingColumns(input []parquet.RowGroup, options []parquet.RowGroupOption) []parquet.SortingColumn {
+	// If explicit sorting is specified in options, use that
+	for _, option := range options {
+		if config, ok := option.(interface {
+			SortingColumns() []parquet.SortingColumn
+		}); ok {
+			sortingCols := config.SortingColumns()
+			if len(sortingCols) > 0 {
+				return sortingCols
+			}
+		}
+	}
+
+	// Otherwise, determine the common prefix of sorting columns from input row groups
+	if len(input) == 0 {
+		return nil
+	}
+
+	// Start with the sorting columns of the first row group
+	commonSorting := input[0].SortingColumns()
+
+	// Find the common prefix with all other row groups
+	for _, rowGroup := range input[1:] {
+		rowGroupSorting := rowGroup.SortingColumns()
+		commonSorting = commonSortingPrefix(commonSorting, rowGroupSorting)
+		if len(commonSorting) == 0 {
+			break // No common sorting
+		}
+	}
+
+	return commonSorting
+}
+
+// commonSortingPrefix returns the common prefix of two sorting column slices
+func commonSortingPrefix(a, b []parquet.SortingColumn) []parquet.SortingColumn {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+
+	for i := 0; i < minLen; i++ {
+		if !equalSortingColumn(a[i], b[i]) {
+			return a[:i]
+		}
+	}
+
+	return a[:minLen]
+}
+
+// equalSortingColumn compares two sorting columns for equality
+func equalSortingColumn(a, b parquet.SortingColumn) bool {
+	return slices.Equal(a.Path(), b.Path()) &&
+		a.Descending() == b.Descending() &&
+		a.NullsFirst() == b.NullsFirst()
+}
+
+// equalSortingColumns compares two slices of sorting columns for equality
+func equalSortingColumns(a, b []parquet.SortingColumn) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if !equalSortingColumn(a[i], b[i]) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func TestMergeRowGroupsCursorsAreClosed(t *testing.T) {
@@ -1859,4 +2036,152 @@ func BenchmarkMergeFiles(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestMergeSortingColumns(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    [][]parquet.SortingColumn
+		expected []parquet.SortingColumn
+	}{
+		{
+			name:     "empty input",
+			input:    [][]parquet.SortingColumn{},
+			expected: nil,
+		},
+		{
+			name:     "single empty slice",
+			input:    [][]parquet.SortingColumn{{}},
+			expected: nil,
+		},
+		{
+			name:     "one slice with empty slice",
+			input:    [][]parquet.SortingColumn{{parquet.Ascending("A")}, {}},
+			expected: nil,
+		},
+		{
+			name: "identical single column",
+			input: [][]parquet.SortingColumn{
+				{parquet.Ascending("A")},
+				{parquet.Ascending("A")},
+			},
+			expected: []parquet.SortingColumn{parquet.Ascending("A")},
+		},
+		{
+			name: "identical multi-column",
+			input: [][]parquet.SortingColumn{
+				{parquet.Ascending("A"), parquet.Descending("B")},
+				{parquet.Ascending("A"), parquet.Descending("B")},
+			},
+			expected: []parquet.SortingColumn{parquet.Ascending("A"), parquet.Descending("B")},
+		},
+		{
+			name: "common prefix - partial match",
+			input: [][]parquet.SortingColumn{
+				{parquet.Ascending("A"), parquet.Ascending("B"), parquet.Descending("C")},
+				{parquet.Ascending("A"), parquet.Ascending("B"), parquet.Ascending("D")},
+			},
+			expected: []parquet.SortingColumn{parquet.Ascending("A"), parquet.Ascending("B")},
+		},
+		{
+			name: "no common prefix - different first column",
+			input: [][]parquet.SortingColumn{
+				{parquet.Ascending("A"), parquet.Ascending("B")},
+				{parquet.Ascending("X"), parquet.Ascending("B")},
+			},
+			expected: []parquet.SortingColumn{},
+		},
+		{
+			name: "different direction on same column",
+			input: [][]parquet.SortingColumn{
+				{parquet.Ascending("A"), parquet.Ascending("B")},
+				{parquet.Descending("A"), parquet.Ascending("B")},
+			},
+			expected: []parquet.SortingColumn{},
+		},
+		{
+			name: "different nulls first setting",
+			input: [][]parquet.SortingColumn{
+				{parquet.NullsFirst(parquet.Ascending("A"))},
+				{parquet.Ascending("A")}, // defaults to nulls last
+			},
+			expected: []parquet.SortingColumn{},
+		},
+		{
+			name: "three inputs with common prefix",
+			input: [][]parquet.SortingColumn{
+				{parquet.Ascending("A"), parquet.Ascending("B"), parquet.Descending("C")},
+				{parquet.Ascending("A"), parquet.Ascending("B"), parquet.Ascending("D")},
+				{parquet.Ascending("A"), parquet.Ascending("B"), parquet.Descending("E")},
+			},
+			expected: []parquet.SortingColumn{parquet.Ascending("A"), parquet.Ascending("B")},
+		},
+		{
+			name: "unequal length inputs - shorter wins",
+			input: [][]parquet.SortingColumn{
+				{parquet.Ascending("A"), parquet.Ascending("B")},
+				{parquet.Ascending("A")},
+				{parquet.Ascending("A"), parquet.Ascending("B"), parquet.Descending("C")},
+			},
+			expected: []parquet.SortingColumn{parquet.Ascending("A")},
+		},
+		{
+			name: "complex paths",
+			input: [][]parquet.SortingColumn{
+				{parquet.Ascending("nested.field.a")},
+				{parquet.Ascending("nested.field.a")},
+			},
+			expected: []parquet.SortingColumn{parquet.Ascending("nested.field.a")},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := parquet.MergeSortingColumns(test.input...)
+
+			if !equalSortingColumnsSlices(result, test.expected) {
+				t.Errorf("MergeSortingColumns() = %v, expected %v", result, test.expected)
+				t.Logf("Result length: %d, Expected length: %d", len(result), len(test.expected))
+				for i, col := range result {
+					t.Logf("  Result[%d]: Path=%v, Desc=%v, NullsFirst=%v", i, col.Path(), col.Descending(), col.NullsFirst())
+				}
+				for i, col := range test.expected {
+					t.Logf("  Expected[%d]: Path=%v, Desc=%v, NullsFirst=%v", i, col.Path(), col.Descending(), col.NullsFirst())
+				}
+			}
+		})
+	}
+}
+
+// Helper function to compare slices of sorting columns
+func equalSortingColumnsSlices(a, b []parquet.SortingColumn) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if !equalSortingColumnsTest(a[i], b[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// Helper function to compare two sorting columns
+func equalSortingColumnsTest(a, b parquet.SortingColumn) bool {
+	aPath := a.Path()
+	bPath := b.Path()
+
+	if len(aPath) != len(bPath) {
+		return false
+	}
+
+	for i, pathElement := range aPath {
+		if pathElement != bPath[i] {
+			return false
+		}
+	}
+
+	return a.Descending() == b.Descending() && a.NullsFirst() == b.NullsFirst()
 }

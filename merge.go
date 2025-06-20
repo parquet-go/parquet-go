@@ -42,9 +42,7 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 		schema = NewSchema(rowGroups[0].Schema().Name(), MergeNodes(schemas...))
 	}
 
-	mergedRowGroups := make([]RowGroup, len(rowGroups))
-	copy(mergedRowGroups, rowGroups)
-
+	mergedRowGroups := slices.Clone(rowGroups)
 	for i, rowGroup := range mergedRowGroups {
 		rowGroupSchema := rowGroup.Schema()
 		// Always apply conversion when merging multiple row groups to ensure
@@ -57,8 +55,19 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 		mergedRowGroups[i] = ConvertRowGroup(rowGroup, conv)
 	}
 
-	if len(config.Sorting.SortingColumns) == 0 {
-		// When the row group has no ordering, use a simpler version of the
+	// Determine the effective sorting columns for the merge
+	mergedSortingColumns := slices.Clone(config.Sorting.SortingColumns)
+	if len(mergedSortingColumns) == 0 {
+		// Auto-detect common sorting columns from input row groups
+		sortingColumns := make([][]SortingColumn, len(mergedRowGroups))
+		for i, rowGroup := range mergedRowGroups {
+			sortingColumns[i] = rowGroup.SortingColumns()
+		}
+		mergedSortingColumns = MergeSortingColumns(sortingColumns...)
+	}
+
+	if len(mergedSortingColumns) == 0 {
+		// When there are no effective sorting columns, use a simpler version of the
 		// merger which simply concatenates rows from each of the row groups.
 		// This is preferable because it makes the output deterministic, the
 		// heap merge may otherwise reorder rows across groups.
@@ -72,7 +81,7 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 		return c, nil
 	}
 
-	m := &mergedRowGroup{sorting: config.Sorting.SortingColumns}
+	m := &mergedRowGroup{sorting: mergedSortingColumns}
 	m.init(schema, mergedRowGroups)
 
 	for _, rowGroup := range m.rowGroups {
@@ -91,7 +100,11 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 // of directly from column chunks.
 type concatRowGroup struct {
 	multiRowGroup
-	//rowGroups []RowGroup // The converted row groups
+	sorting []SortingColumn
+}
+
+func (s *concatRowGroup) SortingColumns() []SortingColumn {
+	return s.sorting
 }
 
 func (s *concatRowGroup) Rows() Rows {
@@ -569,6 +582,13 @@ func (m *mergeBuffer) read() (n int64) {
 	return
 }
 
+var (
+	_ RowReaderWithSchema = (*mergedRowGroupRows)(nil)
+	_ RowWriterTo         = (*mergedRowGroupRows)(nil)
+	_ heap.Interface      = (*mergeBuffer)(nil)
+	_ RowWriterTo         = (*mergeBuffer)(nil)
+)
+
 // MergeNodes takes a list of nodes and greedily retains properties of the schemas:
 // - keeps last compression that is not nil
 // - keeps last non-plain encoding that is not nil
@@ -696,9 +716,38 @@ func nullable(n Node) Node {
 	return n
 }
 
-var (
-	_ RowReaderWithSchema = (*mergedRowGroupRows)(nil)
-	_ RowWriterTo         = (*mergedRowGroupRows)(nil)
-	_ heap.Interface      = (*mergeBuffer)(nil)
-	_ RowWriterTo         = (*mergeBuffer)(nil)
-)
+// MergeSortingColumns returns the common prefix of all sorting columns passed as arguments.
+// This function is used to determine the resulting sorting columns when merging multiple
+// row groups that each have their own sorting columns.
+//
+// The function returns the longest common prefix where all sorting columns match exactly
+// (same path, same descending flag, same nulls first flag). If any row group has no
+// sorting columns, or if there's no common prefix, an empty slice is returned.
+//
+// Example:
+//
+//	columns1 := []SortingColumn{Ascending("A"), Ascending("B"), Descending("C")}
+//	columns2 := []SortingColumn{Ascending("A"), Ascending("B"), Ascending("D")}
+//	result := MergeSortingColumns(columns1, columns2)
+//	// result will be []SortingColumn{Ascending("A"), Ascending("B")}
+func MergeSortingColumns(sortingColumns ...[]SortingColumn) []SortingColumn {
+	if len(sortingColumns) == 0 {
+		return nil
+	}
+	merged := slices.Clone(sortingColumns[0])
+	for _, columns := range sortingColumns[1:] {
+		merged = commonSortingPrefix(merged, columns)
+	}
+	return merged
+}
+
+// commonSortingPrefix returns the common prefix of two sorting column slices
+func commonSortingPrefix(a, b []SortingColumn) []SortingColumn {
+	minLen := min(len(a), len(b))
+	for i := range minLen {
+		if !equalSortingColumn(a[i], b[i]) {
+			return a[:i]
+		}
+	}
+	return a[:minLen]
+}
