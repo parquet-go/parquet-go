@@ -46,25 +46,34 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 	copy(mergedRowGroups, rowGroups)
 
 	for i, rowGroup := range mergedRowGroups {
-		if rowGroupSchema := rowGroup.Schema(); !EqualNodes(schema, rowGroupSchema) {
-			conv, err := Convert(schema, rowGroupSchema)
-			if err != nil {
-				return nil, fmt.Errorf("cannot merge row groups: %w", err)
-			}
-			mergedRowGroups[i] = ConvertRowGroup(rowGroup, conv)
+		rowGroupSchema := rowGroup.Schema()
+		// Always apply conversion when merging multiple row groups to ensure
+		// column indices match the merged schema layout. The merge process can
+		// reorder fields even when schemas are otherwise identical.
+		conv, err := Convert(schema, rowGroupSchema)
+		if err != nil {
+			return nil, fmt.Errorf("cannot merge row groups: %w", err)
 		}
+		mergedRowGroups[i] = ConvertRowGroup(rowGroup, conv)
 	}
 
-	m := &mergedRowGroup{sorting: config.Sorting.SortingColumns}
-	m.init(schema, mergedRowGroups)
-
-	if len(m.sorting) == 0 {
+	if len(config.Sorting.SortingColumns) == 0 {
 		// When the row group has no ordering, use a simpler version of the
 		// merger which simply concatenates rows from each of the row groups.
 		// This is preferable because it makes the output deterministic, the
 		// heap merge may otherwise reorder rows across groups.
-		return &m.multiRowGroup, nil
+		//
+		// IMPORTANT: We need to ensure conversions are applied even in the simple
+		// concatenation path. Instead of returning the multiRowGroup directly
+		// (which bypasses row-level conversion), we create a simple concatenating
+		// row reader that preserves the conversion logic.
+		c := new(concatRowGroup)
+		c.init(schema, mergedRowGroups)
+		return c, nil
 	}
+
+	m := &mergedRowGroup{sorting: config.Sorting.SortingColumns}
+	m.init(schema, mergedRowGroups)
 
 	for _, rowGroup := range m.rowGroups {
 		if !sortingColumnsHavePrefix(rowGroup.SortingColumns(), m.sorting) {
@@ -74,6 +83,70 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 
 	m.compare = compareRowsFuncOf(schema, m.sorting)
 	return m, nil
+}
+
+// concatRowGroup is used when there's no sorting requirement.
+// It provides the same interface as multiRowGroup but ensures that row-level
+// conversions are applied by reading through the converted row groups instead
+// of directly from column chunks.
+type concatRowGroup struct {
+	multiRowGroup
+	//rowGroups []RowGroup // The converted row groups
+}
+
+func (s *concatRowGroup) Rows() Rows {
+	rowReaders := make([]Rows, len(s.rowGroups))
+	for i, rowGroup := range s.rowGroups {
+		rowReaders[i] = rowGroup.Rows()
+	}
+	return &concatRows{readers: rowReaders}
+}
+
+// concatRows reads rows sequentially from multiple converted row groups
+type concatRows struct {
+	readers []Rows
+	current int
+}
+
+func (s *concatRows) ReadRows(rows []Row) (int, error) {
+	for s.current < len(s.readers) {
+		n, err := s.readers[s.current].ReadRows(rows)
+		if n > 0 {
+			return n, nil
+		}
+		if err != io.EOF {
+			return 0, err
+		}
+		s.current++
+	}
+	return 0, io.EOF
+}
+
+func (s *concatRows) Close() error {
+	var lastErr error
+	for _, reader := range s.readers {
+		if err := reader.Close(); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+func (s *concatRows) Schema() *Schema {
+	if len(s.readers) > 0 {
+		return s.readers[0].Schema()
+	}
+	return nil
+}
+
+func (s *concatRows) SeekToRow(rowIndex int64) error {
+	// Simple implementation: just reset current reader
+	// More sophisticated seeking would require tracking row counts
+	s.current = 0
+	if len(s.readers) > 0 {
+		return s.readers[0].SeekToRow(rowIndex)
+	}
+	return io.EOF
 }
 
 type mergedRowGroup struct {

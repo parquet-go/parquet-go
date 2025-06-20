@@ -1174,14 +1174,22 @@ func TestMergeRowGroupsWithOverlappingAndMissingFields(t *testing.T) {
 	rows := merged.Rows()
 	defer rows.Close()
 
+	readRows := make([]parquet.Row, 0, 4)
 	readBuffer := make([]parquet.Row, 10)
-	n, err := rows.ReadRows(readBuffer)
-	if err != nil && err != io.EOF {
-		t.Fatalf("Failed to read merged rows: %v", err)
+	for {
+		n, err := rows.ReadRows(readBuffer)
+		for _, row := range readBuffer[:n] {
+			readRows = append(readRows, row.Clone())
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Failed to read merged rows: %v", err)
+		}
 	}
-
-	if n != 4 {
-		t.Fatalf("Expected 4 rows, got %d", n)
+	if len(readRows) != 4 {
+		t.Fatalf("Expected 4 rows, got %d", len(readRows))
 	}
 
 	// Validate the merged data by examining row structure
@@ -1191,9 +1199,7 @@ func TestMergeRowGroupsWithOverlappingAndMissingFields(t *testing.T) {
 	schemaFields := schema.Fields()
 	expectedFieldCount := len(schemaFields)
 
-	for i := 0; i < n; i++ {
-		row := readBuffer[i]
-
+	for i, row := range readRows {
 		// Each row should have values for all fields in the merged schema
 		if len(row) != expectedFieldCount {
 			t.Errorf("Row %d has %d values, expected %d for merged schema", i, len(row), expectedFieldCount)
@@ -1217,9 +1223,305 @@ func TestMergeRowGroupsWithOverlappingAndMissingFields(t *testing.T) {
 	// - UserStats rows (2,3) should have UserID and LoginCount, with Username as zero/default
 	// The exact value handling depends on how parquet processes missing fields
 
-	t.Logf("Successfully merged %d rows with overlapping and missing fields", n)
+	t.Logf("Successfully merged %d rows with overlapping and missing fields", len(readRows))
 	t.Logf("Schema validation passed: UserID=required, Username=optional, LoginCount=optional")
 	t.Logf("Merge behavior: Missing fields are handled through schema conversion during merge")
+}
+
+// TestMergeFixedSizeByteArrayMinimalReproduction creates a minimal test case
+// to reproduce the FIXED_LEN_BYTE_ARRAY validation issue with different field orders
+func TestMergeFixedSizeByteArrayMinimalReproduction(t *testing.T) {
+	// Link struct for repeated field testing
+	type Link struct {
+		SpanID [8]byte `parquet:"span_id"` // Fixed[8] in repeated group
+	}
+
+	// First struct with span_id first, parent_span_id second, links third
+	type SpanRecord1 struct {
+		SpanID       [8]byte  `parquet:"span_id"`        // Required fixed[8]
+		ParentSpanID *[8]byte `parquet:"parent_span_id"` // Optional fixed[8]
+		Links        []Link   `parquet:"links"`          // Repeated group with fixed[8]
+		Name         string   `parquet:"name"`
+	}
+
+	// Second struct with different field order: parent_span_id first, span_id second, links third
+	type SpanRecord2 struct {
+		ParentSpanID *[8]byte `parquet:"parent_span_id"` // Optional fixed[8]
+		SpanID       [8]byte  `parquet:"span_id"`        // Required fixed[8]
+		Links        []Link   `parquet:"links"`          // Repeated group with fixed[8]
+		Name         string   `parquet:"name"`
+	}
+
+	// Create test data with repeated links to exercise the third reordering condition
+	spanID1 := [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	parentSpanID1 := [8]byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18}
+	linkSpanID1 := [8]byte{0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38}
+
+	spanID2 := [8]byte{0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28}
+	linkSpanID2 := [8]byte{0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48}
+	// parentSpanID2 is nil (optional field)
+
+	records1 := []SpanRecord1{
+		{
+			SpanID:       spanID1,
+			ParentSpanID: &parentSpanID1,
+			Links:        []Link{{SpanID: linkSpanID1}}, // Non-empty links
+			Name:         "span1",
+		},
+	}
+
+	records2 := []SpanRecord2{
+		{
+			SpanID:       spanID2,
+			ParentSpanID: nil,                           // nil parent_span_id
+			Links:        []Link{{SpanID: linkSpanID2}}, // Non-empty links
+			Name:         "span2",
+		},
+	}
+
+	// Create first row group
+	buffer1 := &bytes.Buffer{}
+	writer1 := parquet.NewGenericWriter[SpanRecord1](buffer1)
+	_, err := writer1.Write(records1)
+	if err != nil {
+		t.Fatalf("Failed to write records1: %v", err)
+	}
+	writer1.Close()
+
+	// Create second row group
+	buffer2 := &bytes.Buffer{}
+	writer2 := parquet.NewGenericWriter[SpanRecord2](buffer2)
+	_, err = writer2.Write(records2)
+	if err != nil {
+		t.Fatalf("Failed to write records2: %v", err)
+	}
+	writer2.Close()
+
+	// Read back the row groups
+	reader1 := parquet.NewReader(bytes.NewReader(buffer1.Bytes()))
+	reader2 := parquet.NewReader(bytes.NewReader(buffer2.Bytes()))
+
+	file1 := reader1.File()
+	file2 := reader2.File()
+
+	schema1 := file1.Schema()
+	schema2 := file2.Schema()
+
+	fmt.Printf("\nMinimal reproduction test:\n")
+	fmt.Printf("Schema 1 columns: %d\n", len(schema1.Columns()))
+	fmt.Printf("Schema 2 columns: %d\n", len(schema2.Columns()))
+
+	// Print field order for both schemas
+	for i, columnPath := range schema1.Columns() {
+		leaf, found := schema1.Lookup(columnPath...)
+		if found {
+			fmt.Printf("Schema1 col %d: %v, type: %s\n", i, columnPath, leaf.Node.Type())
+		}
+	}
+
+	for i, columnPath := range schema2.Columns() {
+		leaf, found := schema2.Lookup(columnPath...)
+		if found {
+			fmt.Printf("Schema2 col %d: %v, type: %s\n", i, columnPath, leaf.Node.Type())
+		}
+	}
+
+	// Create row groups and merge them - this will automatically merge schemas
+	rowGroup1 := file1.RowGroups()[0]
+	rowGroup2 := file2.RowGroups()[0]
+
+	fmt.Printf("\nAttempting to merge row groups...\n")
+	mergedRowGroup, err := parquet.MergeRowGroups([]parquet.RowGroup{rowGroup1, rowGroup2})
+	if err != nil {
+		t.Fatalf("Failed to merge row groups: %v", err)
+	}
+
+	// Get the merged schema from the merged row group
+	mergedSchema := mergedRowGroup.Schema()
+	fmt.Printf("Merged schema columns: %d\n", len(mergedSchema.Columns()))
+
+	// Print merged field order
+	for i, columnPath := range mergedSchema.Columns() {
+		leaf, found := mergedSchema.Lookup(columnPath...)
+		if found {
+			fmt.Printf("Merged col %d: %v, type: %s\n", i, columnPath, leaf.Node.Type())
+		}
+	}
+
+	// Try to write the merged result
+	buffer3 := &bytes.Buffer{}
+	writer3 := parquet.NewWriter(buffer3, mergedSchema)
+
+	rows := mergedRowGroup.Rows()
+	defer rows.Close()
+
+	// Use CopyRows for efficient copying
+	fmt.Printf("\nCopying rows from merged row group to writer...\n")
+
+	// Debug: Let's manually read a few rows to see what's wrong
+	rowBuf := make([]parquet.Row, 1)
+	for i := 0; i < 3; i++ {
+		n, err := rows.ReadRows(rowBuf)
+		if err != nil && err != io.EOF {
+			t.Fatalf("Failed to read debug row %d: %v", i, err)
+		}
+		if n == 0 {
+			break
+		}
+
+		row := rowBuf[0]
+		fmt.Printf("Debug row %d has %d values:\n", i, len(row))
+		for j, val := range row {
+			fmt.Printf("  [%d] col=%d, kind=%s, bytes=%d, value=%q\n",
+				j, val.Column(), val.Kind(), len(val.ByteArray()), val.String())
+			if j >= 10 { // Limit output
+				break
+			}
+		}
+	}
+	rows.Close()
+
+	// Now try the actual copy
+	numCopied, err := parquet.CopyRows(writer3, mergedRowGroup.Rows())
+	if err != nil {
+		t.Fatalf("Failed to copy rows: %v", err)
+	}
+
+	writer3.Close()
+	fmt.Printf("Successfully merged %d rows\n", numCopied)
+}
+
+// TestMergeFixedSizeByteArrayNullValues tests merging with null fixed-size byte arrays
+// This reproduces the specific issue where all parent_span_id and links.span_id are null
+func TestMergeFixedSizeByteArrayNullValues(t *testing.T) {
+	// Link struct for repeated field testing
+	type Link struct {
+		SpanID [8]byte `parquet:"span_id"` // Fixed[8] in repeated group - will be null
+	}
+
+	// First struct with span_id first, parent_span_id second, links third
+	type SpanRecord1 struct {
+		SpanID       [8]byte  `parquet:"span_id"`        // Required fixed[8] - NOT null
+		ParentSpanID *[8]byte `parquet:"parent_span_id"` // Optional fixed[8] - NULL
+		Links        []Link   `parquet:"links"`          // Repeated group with fixed[8] - EMPTY (so span_id is null)
+		Name         string   `parquet:"name"`
+	}
+
+	// Second struct with different field order
+	type SpanRecord2 struct {
+		ParentSpanID *[8]byte `parquet:"parent_span_id"` // Optional fixed[8] - NULL
+		SpanID       [8]byte  `parquet:"span_id"`        // Required fixed[8] - NOT null
+		Links        []Link   `parquet:"links"`          // Repeated group with fixed[8] - EMPTY (so span_id is null)
+		Name         string   `parquet:"name"`
+	}
+
+	// Create test data with NULL values matching the problematic parquet files
+	spanID1 := [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	spanID2 := [8]byte{0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28}
+
+	records1 := []SpanRecord1{
+		{
+			SpanID:       spanID1,
+			ParentSpanID: nil,      // NULL parent_span_id (like in the problematic files)
+			Links:        []Link{}, // EMPTY links (so all link span_ids are null)
+			Name:         "span1",
+		},
+	}
+
+	records2 := []SpanRecord2{
+		{
+			SpanID:       spanID2,
+			ParentSpanID: nil,      // NULL parent_span_id (like in the problematic files)
+			Links:        []Link{}, // EMPTY links (so all link span_ids are null)
+			Name:         "span2",
+		},
+	}
+
+	// Create first row group
+	buffer1 := &bytes.Buffer{}
+	writer1 := parquet.NewGenericWriter[SpanRecord1](buffer1)
+	_, err := writer1.Write(records1)
+	if err != nil {
+		t.Fatalf("Failed to write records1: %v", err)
+	}
+	writer1.Close()
+
+	// Create second row group
+	buffer2 := &bytes.Buffer{}
+	writer2 := parquet.NewGenericWriter[SpanRecord2](buffer2)
+	_, err = writer2.Write(records2)
+	if err != nil {
+		t.Fatalf("Failed to write records2: %v", err)
+	}
+	writer2.Close()
+
+	// Read back the row groups
+	reader1 := parquet.NewReader(bytes.NewReader(buffer1.Bytes()))
+	reader2 := parquet.NewReader(bytes.NewReader(buffer2.Bytes()))
+
+	file1 := reader1.File()
+	file2 := reader2.File()
+
+	schema1 := file1.Schema()
+	schema2 := file2.Schema()
+
+	fmt.Printf("\nNull values test:\n")
+	fmt.Printf("Schema 1 columns: %d\n", len(schema1.Columns()))
+	fmt.Printf("Schema 2 columns: %d\n", len(schema2.Columns()))
+
+	// Print field order for both schemas
+	for i, columnPath := range schema1.Columns() {
+		leaf, found := schema1.Lookup(columnPath...)
+		if found {
+			fmt.Printf("Schema1 col %d: %v, type: %s\n", i, columnPath, leaf.Node.Type())
+		}
+	}
+
+	for i, columnPath := range schema2.Columns() {
+		leaf, found := schema2.Lookup(columnPath...)
+		if found {
+			fmt.Printf("Schema2 col %d: %v, type: %s\n", i, columnPath, leaf.Node.Type())
+		}
+	}
+
+	// Create row groups and merge them - this should trigger the null value issue
+	rowGroup1 := file1.RowGroups()[0]
+	rowGroup2 := file2.RowGroups()[0]
+
+	fmt.Printf("\nAttempting to merge row groups with null fixed-size byte arrays...\n")
+	mergedRowGroup, err := parquet.MergeRowGroups([]parquet.RowGroup{rowGroup1, rowGroup2})
+	if err != nil {
+		t.Fatalf("Failed to merge row groups: %v", err)
+	}
+
+	// Get the merged schema from the merged row group
+	mergedSchema := mergedRowGroup.Schema()
+	fmt.Printf("Merged schema columns: %d\n", len(mergedSchema.Columns()))
+
+	// Print merged field order
+	for i, columnPath := range mergedSchema.Columns() {
+		leaf, found := mergedSchema.Lookup(columnPath...)
+		if found {
+			fmt.Printf("Merged col %d: %v, type: %s\n", i, columnPath, leaf.Node.Type())
+		}
+	}
+
+	// Try to copy rows - this should reproduce the index out of range panic
+	buffer3 := &bytes.Buffer{}
+	writer3 := parquet.NewWriter(buffer3, mergedSchema)
+
+	rows := mergedRowGroup.Rows()
+	defer rows.Close()
+
+	// This is where we expect the panic due to null value handling issues
+	fmt.Printf("\nCopying rows from merged row group to writer...\n")
+	numCopied, err := parquet.CopyRows(writer3, rows)
+	if err != nil {
+		t.Fatalf("Failed to copy rows: %v", err)
+	}
+
+	writer3.Close()
+	fmt.Printf("Successfully merged %d rows\n", numCopied)
 }
 
 func BenchmarkMergeNodes(b *testing.B) {
