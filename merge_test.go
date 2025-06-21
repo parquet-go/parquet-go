@@ -464,7 +464,7 @@ func TestMergeRowGroups(t *testing.T) {
 						"user":     {"id", "name"},
 						"metadata": {"created", "updated"},
 					},
-					map[string]interface{}{
+					map[string]any{
 						"user.id":          int64(1),
 						"user.name":        "Alice",
 						"metadata.created": "2023-01-01",
@@ -477,7 +477,7 @@ func TestMergeRowGroups(t *testing.T) {
 						"user":     {"name", "id"},
 						"metadata": {"updated", "created"},
 					},
-					map[string]interface{}{
+					map[string]any{
 						"user.id":          int64(2),
 						"user.name":        "Bob",
 						"metadata.created": "2023-02-01",
@@ -774,12 +774,9 @@ func determineMergedSortingColumns(input []parquet.RowGroup, options []parquet.R
 
 // commonSortingPrefix returns the common prefix of two sorting column slices
 func commonSortingPrefix(a, b []parquet.SortingColumn) []parquet.SortingColumn {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
+	minLen := min(len(b), len(a))
 
-	for i := 0; i < minLen; i++ {
+	for i := range minLen {
 		if !equalSortingColumn(a[i], b[i]) {
 			return a[:i]
 		}
@@ -1537,7 +1534,7 @@ func TestMergeFixedSizeByteArrayMinimalReproduction(t *testing.T) {
 
 	// Debug: Let's manually read a few rows to see what's wrong
 	rowBuf := make([]parquet.Row, 1)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		n, err := rows.ReadRows(rowBuf)
 		if err != nil && err != io.EOF {
 			t.Fatalf("Failed to read debug row %d: %v", i, err)
@@ -1817,7 +1814,7 @@ func createRowGroupWithFieldOrder(fieldOrder []string, rows ...Person) parquet.R
 }
 
 // createPersonSubsetRowGroup creates a row group with only a subset of Person fields
-func createPersonSubsetRowGroup(fields []string, rows ...interface{}) parquet.RowGroup {
+func createPersonSubsetRowGroup(fields []string, rows ...any) parquet.RowGroup {
 	buf := parquet.NewBuffer()
 	for _, row := range rows {
 		buf.Write(row)
@@ -1857,7 +1854,7 @@ type NestedType2 struct {
 }
 
 // createNestedRowGroupWithFieldOrder creates a nested row group using different struct orders
-func createNestedRowGroupWithFieldOrder(fieldOrders map[string][]string, values map[string]interface{}) parquet.RowGroup {
+func createNestedRowGroupWithFieldOrder(fieldOrders map[string][]string, values map[string]any) parquet.RowGroup {
 	userID := values["user.id"].(int64)
 	userName := utf8string(values["user.name"].(string))
 	created := utf8string(values["metadata.created"].(string))
