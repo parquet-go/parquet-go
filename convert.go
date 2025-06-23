@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"math/big"
-	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -260,32 +259,7 @@ func Convert(to, from Node) (conv Conversion, err error) {
 	}
 
 	if EqualNodes(to, from) {
-		//return identity{schema}, nil
-		// Even when schemas are equal, we need to check if column indices match.
-		// MergeNodes can reorder fields (sortFields), so we need column remapping.
-		_, targetColumns := columnMappingOf(to)
-		_, sourceColumns := columnMappingOf(from)
-
-		// Check if column indices are identical (same order)
-		needsRemapping := false
-		if len(targetColumns) == len(sourceColumns) {
-			for i, targetPath := range targetColumns {
-				if i < len(sourceColumns) {
-					sourcePath := sourceColumns[i]
-					if !slices.Equal(targetPath, sourcePath) {
-						needsRemapping = true
-						break
-					}
-				}
-			}
-		} else {
-			needsRemapping = true
-		}
-
-		if !needsRemapping {
-			return identity{schema}, nil
-		}
-		// Fall through to create a proper conversion with column remapping
+		return identity{schema}, nil
 	}
 
 	targetMapping, targetColumns := columnMappingOf(to)
