@@ -409,6 +409,116 @@ func TestMergeRowGroups(t *testing.T) {
 				LastNameOnly{LastName: "Kenobi"},
 			),
 		},
+
+		// Test cases to exercise non-overlapping optimization (currently disabled due to range detection being disabled)
+		{
+			scenario: "potentially non-overlapping sorted row groups by Age",
+			options: []parquet.RowGroupOption{
+				parquet.SortingRowGroupConfig(
+					parquet.SortingColumns(
+						parquet.Ascending("Age"),
+					),
+				),
+			},
+			input: []parquet.RowGroup{
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("Age"),
+							),
+						),
+					},
+					Person{FirstName: "Alice", LastName: "Brown", Age: 20},
+					Person{FirstName: "Bob", LastName: "Smith", Age: 25},
+				),
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("Age"),
+							),
+						),
+					},
+					Person{FirstName: "Charlie", LastName: "Johnson", Age: 30},
+					Person{FirstName: "David", LastName: "Wilson", Age: 35},
+				),
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("Age"),
+							),
+						),
+					},
+					Person{FirstName: "Eve", LastName: "Davis", Age: 40},
+					Person{FirstName: "Frank", LastName: "Miller", Age: 45},
+				),
+			},
+			output: sortedRowGroup(
+				[]parquet.RowGroupOption{
+					parquet.SortingRowGroupConfig(
+						parquet.SortingColumns(
+							parquet.Ascending("Age"),
+						),
+					),
+				},
+				Person{FirstName: "Alice", LastName: "Brown", Age: 20},
+				Person{FirstName: "Bob", LastName: "Smith", Age: 25},
+				Person{FirstName: "Charlie", LastName: "Johnson", Age: 30},
+				Person{FirstName: "David", LastName: "Wilson", Age: 35},
+				Person{FirstName: "Eve", LastName: "Davis", Age: 40},
+				Person{FirstName: "Frank", LastName: "Miller", Age: 45},
+			),
+		},
+
+		{
+			scenario: "potentially overlapping sorted row groups by Age",
+			options: []parquet.RowGroupOption{
+				parquet.SortingRowGroupConfig(
+					parquet.SortingColumns(
+						parquet.Ascending("Age"),
+					),
+				),
+			},
+			input: []parquet.RowGroup{
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("Age"),
+							),
+						),
+					},
+					Person{FirstName: "Alice", LastName: "Brown", Age: 20},
+					Person{FirstName: "Bob", LastName: "Smith", Age: 30}, // Overlaps with next group
+				),
+				sortedRowGroup(
+					[]parquet.RowGroupOption{
+						parquet.SortingRowGroupConfig(
+							parquet.SortingColumns(
+								parquet.Ascending("Age"),
+							),
+						),
+					},
+					Person{FirstName: "Charlie", LastName: "Johnson", Age: 25}, // Overlaps with previous group
+					Person{FirstName: "David", LastName: "Wilson", Age: 35},
+				),
+			},
+			output: sortedRowGroup(
+				[]parquet.RowGroupOption{
+					parquet.SortingRowGroupConfig(
+						parquet.SortingColumns(
+							parquet.Ascending("Age"),
+						),
+					),
+				},
+				Person{FirstName: "Alice", LastName: "Brown", Age: 20},
+				Person{FirstName: "Charlie", LastName: "Johnson", Age: 25},
+				Person{FirstName: "Bob", LastName: "Smith", Age: 30},
+				Person{FirstName: "David", LastName: "Wilson", Age: 35},
+			),
+		},
 	}
 
 	// Additional tests for different field ordering scenarios
@@ -528,7 +638,7 @@ func TestMergeRowGroups(t *testing.T) {
 						t.Fatal(err)
 					}
 					if merged.NumRows() != test.output.NumRows() {
-						t.Fatalf("the number of rows mismatch: want=%d got=%d", merged.NumRows(), test.output.NumRows())
+						t.Fatalf("the number of rows mismatch: want=%d got=%d", test.output.NumRows(), merged.NumRows())
 					}
 					if !parquet.SameNodes(merged.Schema(), test.output.Schema()) {
 						t.Fatalf("the row group schemas mismatch:\n%v\n%v", test.output.Schema(), merged.Schema())
@@ -591,13 +701,13 @@ func TestMergeRowGroups(t *testing.T) {
 										_, err1 = expectedRows.ReadRows(row1[:0])
 									}
 									if err1 != io.EOF {
-										t.Fatalf("errors mismatched while comparing row %d/%d: want=%v got=%v", numRows, totalRows, err1, err2)
+										t.Fatalf("errors mismatched while comparing row %d/%d: want=%v got=%v", totalRows, numRows, err1, err2)
 									}
 								}
 
 								if n != 0 {
 									if !row1[0].Equal(row2[0]) {
-										t.Errorf("row at index %d/%d mismatch: want=%+v got=%+v", numRows, totalRows, row1[0], row2[0])
+										t.Errorf("row at index %d/%d mismatch: want=%+v got=%+v", totalRows, numRows, row1[0], row2[0])
 									}
 									numRows++
 								}
@@ -2182,3 +2292,8 @@ func equalSortingColumnsTest(a, b parquet.SortingColumn) bool {
 
 	return a.Descending() == b.Descending() && a.NullsFirst() == b.NullsFirst()
 }
+
+// Test cases for non-overlapping row group optimization
+// Note: The current implementation has range detection disabled, so these test cases
+// verify that the merge logic works correctly but don't exercise the optimization path.
+// When range detection is enabled in the future, these tests will exercise the optimization.
