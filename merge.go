@@ -602,7 +602,7 @@ type bufferedRowReader struct {
 	rows RowReader
 	off  int32
 	end  int32
-	buf  [10]Row
+	buf  [24]Row
 }
 
 func (r *bufferedRowReader) empty() bool {
