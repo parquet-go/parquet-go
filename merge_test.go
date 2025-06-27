@@ -2292,8 +2292,3 @@ func equalSortingColumnsTest(a, b parquet.SortingColumn) bool {
 
 	return a.Descending() == b.Descending() && a.NullsFirst() == b.NullsFirst()
 }
-
-// Test cases for non-overlapping row group optimization
-// Note: The current implementation has range detection disabled, so these test cases
-// verify that the merge logic works correctly but don't exercise the optimization path.
-// When range detection is enabled in the future, these tests will exercise the optimization.
