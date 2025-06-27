@@ -547,6 +547,46 @@ func TestDeconstructionReconstruction(t *testing.T) {
 	}
 }
 
+func TestReconstructMapInInterface(t *testing.T) {
+	type S struct {
+		M any
+	}
+	type T struct {
+		M map[string]string
+	}
+	schema := parquet.SchemaOf(T{})
+
+	// Test with non-empty map
+	row := schema.Deconstruct(nil, T{M: map[string]string{"hello": "world"}})
+	var result S
+	err := schema.Reconstruct(&result, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconstructedMap, ok := result.M.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", result.M)
+	}
+	if len(reconstructedMap) != 1 || reconstructedMap["hello"] != "world" {
+		t.Errorf("unexpected map content: %#v", reconstructedMap)
+	}
+
+	// Test with empty map
+	row = schema.Deconstruct(nil, T{M: map[string]string{}})
+	result = S{}
+	err = schema.Reconstruct(&result, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconstructedMap, ok = result.M.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", result.M)
+	}
+	if len(reconstructedMap) != 0 {
+		t.Errorf("expected empty map, got %#v", reconstructedMap)
+	}
+}
+
 func columnsOf(row parquet.Row) [][]parquet.Value {
 	columns := make([][]parquet.Value, 0)
 	row.Range(func(_ int, c []parquet.Value) bool {
