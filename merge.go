@@ -207,7 +207,7 @@ func rowGroupRangeOfSortedColumns(rg RowGroup, schema *Schema, sorting []Sorting
 		// Find first non-null page for min value
 		var globalMin Value
 		var found bool
-		for pageIdx := 0; pageIdx < numPages; pageIdx++ {
+		for pageIdx := range numPages {
 			if !columnIndex.NullPage(pageIdx) {
 				if minValue := columnIndex.MinValue(pageIdx); !minValue.IsNull() {
 					globalMin, found = minValue, true
