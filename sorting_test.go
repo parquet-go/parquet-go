@@ -439,3 +439,220 @@ func TestIssue293(t *testing.T) {
 		}
 	}
 }
+
+func TestEqualSortingColumns(t *testing.T) {
+	tests := []struct {
+		name     string
+		a        []parquet.SortingColumn
+		b        []parquet.SortingColumn
+		expected bool
+	}{
+		{
+			name:     "both empty",
+			a:        []parquet.SortingColumn{},
+			b:        []parquet.SortingColumn{},
+			expected: true,
+		},
+		{
+			name:     "both nil",
+			a:        nil,
+			b:        nil,
+			expected: true,
+		},
+		{
+			name:     "one empty, one nil",
+			a:        []parquet.SortingColumn{},
+			b:        nil,
+			expected: true,
+		},
+		{
+			name:     "different lengths",
+			a:        []parquet.SortingColumn{parquet.Ascending("A")},
+			b:        []parquet.SortingColumn{parquet.Ascending("A"), parquet.Descending("B")},
+			expected: false,
+		},
+		{
+			name:     "one empty, one non-empty",
+			a:        []parquet.SortingColumn{},
+			b:        []parquet.SortingColumn{parquet.Ascending("A")},
+			expected: false,
+		},
+		{
+			name:     "identical single column",
+			a:        []parquet.SortingColumn{parquet.Ascending("A")},
+			b:        []parquet.SortingColumn{parquet.Ascending("A")},
+			expected: true,
+		},
+		{
+			name: "identical multiple columns",
+			a: []parquet.SortingColumn{
+				parquet.Ascending("A"),
+				parquet.Descending("B"),
+				parquet.Ascending("C"),
+			},
+			b: []parquet.SortingColumn{
+				parquet.Ascending("A"),
+				parquet.Descending("B"),
+				parquet.Ascending("C"),
+			},
+			expected: true,
+		},
+		{
+			name:     "different column names",
+			a:        []parquet.SortingColumn{parquet.Ascending("A")},
+			b:        []parquet.SortingColumn{parquet.Ascending("B")},
+			expected: false,
+		},
+		{
+			name:     "different directions",
+			a:        []parquet.SortingColumn{parquet.Ascending("A")},
+			b:        []parquet.SortingColumn{parquet.Descending("A")},
+			expected: false,
+		},
+		{
+			name:     "different nulls first setting",
+			a:        []parquet.SortingColumn{parquet.NullsFirst(parquet.Ascending("A"))},
+			b:        []parquet.SortingColumn{parquet.Ascending("A")}, // defaults to nulls last
+			expected: false,
+		},
+		{
+			name:     "same nulls first setting",
+			a:        []parquet.SortingColumn{parquet.NullsFirst(parquet.Ascending("A"))},
+			b:        []parquet.SortingColumn{parquet.NullsFirst(parquet.Ascending("A"))},
+			expected: true,
+		},
+		{
+			name:     "complex paths identical",
+			a:        []parquet.SortingColumn{parquet.Ascending("nested.field.a")},
+			b:        []parquet.SortingColumn{parquet.Ascending("nested.field.a")},
+			expected: true,
+		},
+		{
+			name:     "complex paths different",
+			a:        []parquet.SortingColumn{parquet.Ascending("nested.field.a")},
+			b:        []parquet.SortingColumn{parquet.Ascending("nested.field.b")},
+			expected: false,
+		},
+		{
+			name: "multiple columns with difference in middle",
+			a: []parquet.SortingColumn{
+				parquet.Ascending("A"),
+				parquet.Ascending("B"), // different from b
+				parquet.Descending("C"),
+			},
+			b: []parquet.SortingColumn{
+				parquet.Ascending("A"),
+				parquet.Descending("B"), // different from a
+				parquet.Descending("C"),
+			},
+			expected: false,
+		},
+		{
+			name: "multiple columns with difference at end",
+			a: []parquet.SortingColumn{
+				parquet.Ascending("A"),
+				parquet.Descending("B"),
+				parquet.Ascending("C"), // different from b
+			},
+			b: []parquet.SortingColumn{
+				parquet.Ascending("A"),
+				parquet.Descending("B"),
+				parquet.Descending("C"), // different from a
+			},
+			expected: false,
+		},
+		{
+			name: "mixed properties - all same",
+			a: []parquet.SortingColumn{
+				parquet.NullsFirst(parquet.Ascending("A")),
+				parquet.Descending("B"),
+				parquet.NullsFirst(parquet.Descending("C")),
+			},
+			b: []parquet.SortingColumn{
+				parquet.NullsFirst(parquet.Ascending("A")),
+				parquet.Descending("B"),
+				parquet.NullsFirst(parquet.Descending("C")),
+			},
+			expected: true,
+		},
+		{
+			name: "mixed properties - different nulls handling",
+			a: []parquet.SortingColumn{
+				parquet.NullsFirst(parquet.Ascending("A")),
+				parquet.Descending("B"),
+			},
+			b: []parquet.SortingColumn{
+				parquet.Ascending("A"), // nulls last by default
+				parquet.Descending("B"),
+			},
+			expected: false,
+		},
+		{
+			name: "same columns in different order",
+			a: []parquet.SortingColumn{
+				parquet.Ascending("A"),
+				parquet.Descending("B"),
+			},
+			b: []parquet.SortingColumn{
+				parquet.Descending("B"),
+				parquet.Ascending("A"),
+			},
+			expected: false, // Order matters
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := parquet.EqualSortingColumns(test.a, test.b)
+			if result != test.expected {
+				t.Errorf("EqualSortingColumns(%v, %v) = %v, expected %v",
+					formatSortingColumns(test.a), formatSortingColumns(test.b), result, test.expected)
+			}
+
+			// Test symmetry - EqualSortingColumns should be commutative
+			resultReverse := parquet.EqualSortingColumns(test.b, test.a)
+			if result != resultReverse {
+				t.Errorf("EqualSortingColumns is not symmetric: EqualSortingColumns(a, b) = %v, but EqualSortingColumns(b, a) = %v",
+					result, resultReverse)
+			}
+		})
+	}
+}
+
+// formatSortingColumns formats a slice of sorting columns for test output
+func formatSortingColumns(cols []parquet.SortingColumn) string {
+	if len(cols) == 0 {
+		return "[]"
+	}
+
+	result := "["
+	for i, col := range cols {
+		if i > 0 {
+			result += ", "
+		}
+
+		// Format each column with its properties
+		path := col.Path()
+		pathStr := ""
+		if len(path) > 0 {
+			pathStr = path[0]
+			for _, p := range path[1:] {
+				pathStr += "." + p
+			}
+		}
+
+		direction := "asc"
+		if col.Descending() {
+			direction = "desc"
+		}
+
+		nulls := ""
+		if col.NullsFirst() {
+			nulls = "+nulls_first"
+		}
+
+		result += direction + "(" + pathStr + ")" + nulls
+	}
+	result += "]"
+	return result
+}

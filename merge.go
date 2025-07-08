@@ -1,11 +1,16 @@
 package parquet
 
 import (
+	"cmp"
 	"container/heap"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
+
+	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 // MergeRowGroups constructs a row group which is a merged view of rowGroups. If
@@ -30,38 +35,54 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 		return newEmptyRowGroup(schema), nil
 	}
 	if schema == nil {
-		schema = rowGroups[0].Schema()
-
-		for _, rowGroup := range rowGroups[1:] {
-			if !EqualNodes(schema, rowGroup.Schema()) {
-				return nil, ErrRowGroupSchemaMismatch
-			}
+		schemas := make([]Node, len(rowGroups))
+		for i, rowGroup := range rowGroups {
+			schemas[i] = rowGroup.Schema()
 		}
+		schema = NewSchema(rowGroups[0].Schema().Name(), MergeNodes(schemas...))
 	}
 
-	mergedRowGroups := make([]RowGroup, len(rowGroups))
-	copy(mergedRowGroups, rowGroups)
-
+	mergedRowGroups := slices.Clone(rowGroups)
 	for i, rowGroup := range mergedRowGroups {
-		if rowGroupSchema := rowGroup.Schema(); !EqualNodes(schema, rowGroupSchema) {
-			conv, err := Convert(schema, rowGroupSchema)
-			if err != nil {
-				return nil, fmt.Errorf("cannot merge row groups: %w", err)
-			}
-			mergedRowGroups[i] = ConvertRowGroup(rowGroup, conv)
+		rowGroupSchema := rowGroup.Schema()
+		// Always apply conversion when merging multiple row groups to ensure
+		// column indices match the merged schema layout. The merge process can
+		// reorder fields even when schemas are otherwise identical.
+		conv, err := Convert(schema, rowGroupSchema)
+		if err != nil {
+			return nil, fmt.Errorf("cannot merge row groups: %w", err)
 		}
+		mergedRowGroups[i] = ConvertRowGroup(rowGroup, conv)
 	}
 
-	m := &mergedRowGroup{sorting: config.Sorting.SortingColumns}
-	m.init(schema, mergedRowGroups)
+	// Determine the effective sorting columns for the merge
+	mergedSortingColumns := slices.Clone(config.Sorting.SortingColumns)
+	if len(mergedSortingColumns) == 0 {
+		// Auto-detect common sorting columns from input row groups
+		sortingColumns := make([][]SortingColumn, len(mergedRowGroups))
+		for i, rowGroup := range mergedRowGroups {
+			sortingColumns[i] = rowGroup.SortingColumns()
+		}
+		mergedSortingColumns = MergeSortingColumns(sortingColumns...)
+	}
 
-	if len(m.sorting) == 0 {
-		// When the row group has no ordering, use a simpler version of the
+	if len(mergedSortingColumns) == 0 {
+		// When there are no effective sorting columns, use a simpler version of the
 		// merger which simply concatenates rows from each of the row groups.
 		// This is preferable because it makes the output deterministic, the
 		// heap merge may otherwise reorder rows across groups.
-		return &m.multiRowGroup, nil
+		//
+		// IMPORTANT: We need to ensure conversions are applied even in the simple
+		// concatenation path. Instead of returning the multiRowGroup directly
+		// (which bypasses row-level conversion), we create a simple concatenating
+		// row reader that preserves the conversion logic.
+		c := new(concatRowGroup)
+		c.init(schema, mergedRowGroups)
+		return c, nil
 	}
+
+	m := &mergedRowGroup{sorting: mergedSortingColumns}
+	m.init(schema, mergedRowGroups)
 
 	for _, rowGroup := range m.rowGroups {
 		if !sortingColumnsHavePrefix(rowGroup.SortingColumns(), m.sorting) {
@@ -71,6 +92,74 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 
 	m.compare = compareRowsFuncOf(schema, m.sorting)
 	return m, nil
+}
+
+// concatRowGroup is used when there's no sorting requirement.
+// It provides the same interface as multiRowGroup but ensures that row-level
+// conversions are applied by reading through the converted row groups instead
+// of directly from column chunks.
+type concatRowGroup struct {
+	multiRowGroup
+	sorting []SortingColumn
+}
+
+func (s *concatRowGroup) SortingColumns() []SortingColumn {
+	return s.sorting
+}
+
+func (s *concatRowGroup) Rows() Rows {
+	rowReaders := make([]Rows, len(s.rowGroups))
+	for i, rowGroup := range s.rowGroups {
+		rowReaders[i] = rowGroup.Rows()
+	}
+	return &concatRows{readers: rowReaders}
+}
+
+// concatRows reads rows sequentially from multiple converted row groups
+type concatRows struct {
+	readers []Rows
+	current int
+}
+
+func (s *concatRows) ReadRows(rows []Row) (int, error) {
+	for s.current < len(s.readers) {
+		n, err := s.readers[s.current].ReadRows(rows)
+		if n > 0 {
+			return n, nil
+		}
+		if err != io.EOF {
+			return 0, err
+		}
+		s.current++
+	}
+	return 0, io.EOF
+}
+
+func (s *concatRows) Close() error {
+	var lastErr error
+	for _, reader := range s.readers {
+		if err := reader.Close(); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+func (s *concatRows) Schema() *Schema {
+	if len(s.readers) > 0 {
+		return s.readers[0].Schema()
+	}
+	return nil
+}
+
+func (s *concatRows) SeekToRow(rowIndex int64) error {
+	// Simple implementation: just reset current reader
+	// More sophisticated seeking would require tracking row counts
+	s.current = 0
+	if len(s.readers) > 0 {
+		return s.readers[0].SeekToRow(rowIndex)
+	}
+	return io.EOF
 }
 
 type mergedRowGroup struct {
@@ -499,3 +588,166 @@ var (
 	_ heap.Interface      = (*mergeBuffer)(nil)
 	_ RowWriterTo         = (*mergeBuffer)(nil)
 )
+
+// MergeNodes takes a list of nodes and greedily retains properties of the schemas:
+// - keeps last compression that is not nil
+// - keeps last non-plain encoding that is not nil
+// - keeps last non-zero field id
+// - union of all columns for group nodes
+// - retains the most permissive repetition (required < optional < repeated)
+func MergeNodes(nodes ...Node) Node {
+	switch len(nodes) {
+	case 0:
+		return nil
+	case 1:
+		return nodes[0]
+	default:
+		merged := nodes[0]
+		for _, node := range nodes[1:] {
+			merged = mergeTwoNodes(merged, node)
+		}
+		return merged
+	}
+}
+
+// mergeTwoNodes merges two nodes using greedy property retention
+func mergeTwoNodes(a, b Node) Node {
+	leaf1 := a.Leaf()
+	leaf2 := b.Leaf()
+	// Both must be either leaf or group nodes
+	if leaf1 != leaf2 {
+		// Cannot merge leaf with group - return the last one
+		return b
+	}
+
+	var merged Node
+	if leaf1 {
+		merged = Leaf(b.Type())
+
+		// Apply compression (keep last non-nil)
+		compression1 := a.Compression()
+		compression2 := b.Compression()
+		compression := cmp.Or(compression2, compression1)
+		if compression != nil {
+			merged = Compressed(merged, compression)
+		}
+
+		// Apply encoding (keep last non-plain, non-nil)
+		encoding := encoding.Encoding(&Plain)
+		encoding1 := a.Encoding()
+		encoding2 := b.Encoding()
+		if !isPlainEncoding(encoding1) {
+			encoding = encoding1
+		}
+		if !isPlainEncoding(encoding2) {
+			encoding = encoding2
+		}
+		if encoding != nil {
+			merged = Encoded(merged, encoding)
+		}
+	} else {
+		fields1 := slices.Clone(a.Fields())
+		fields2 := slices.Clone(b.Fields())
+		sortFields(fields1)
+		sortFields(fields2)
+
+		group := make(Group, len(fields1))
+		i1 := 0
+		i2 := 0
+		for i1 < len(fields1) && i2 < len(fields2) {
+			name1 := fields1[i1].Name()
+			name2 := fields2[i2].Name()
+			switch {
+			case name1 < name2:
+				group[name1] = nullable(fields1[i1])
+				i1++
+			case name1 > name2:
+				group[name2] = nullable(fields2[i2])
+				i2++
+			default:
+				group[name1] = mergeTwoNodes(fields1[i1], fields2[i2])
+				i1++
+				i2++
+			}
+		}
+
+		for _, field := range fields1[i1:] {
+			group[field.Name()] = nullable(field)
+		}
+
+		for _, field := range fields2[i2:] {
+			group[field.Name()] = nullable(field)
+		}
+
+		merged = group
+
+		if logicalType := b.Type().LogicalType(); logicalType != nil {
+			switch {
+			case logicalType.List != nil:
+				merged = &listNode{group}
+			case logicalType.Map != nil:
+				merged = &mapNode{group}
+			}
+		}
+	}
+
+	// Apply repetition (most permissive: required < optional < repeated)
+	if a.Repeated() || b.Repeated() {
+		merged = Repeated(merged)
+	} else if a.Optional() || b.Optional() {
+		merged = Optional(merged)
+	} else {
+		merged = Required(merged)
+	}
+
+	// Apply field ID (keep last non-zero)
+	return FieldID(merged, cmp.Or(b.ID(), a.ID()))
+}
+
+// isPlainEncoding checks if the encoding is plain encoding
+func isPlainEncoding(enc encoding.Encoding) bool {
+	return enc == nil || enc.Encoding() == format.Plain
+}
+
+func nullable(n Node) Node {
+	if !n.Repeated() {
+		return Optional(n)
+	}
+	return n
+}
+
+// MergeSortingColumns returns the common prefix of all sorting columns passed as arguments.
+// This function is used to determine the resulting sorting columns when merging multiple
+// row groups that each have their own sorting columns.
+//
+// The function returns the longest common prefix where all sorting columns match exactly
+// (same path, same descending flag, same nulls first flag). If any row group has no
+// sorting columns, or if there's no common prefix, an empty slice is returned.
+//
+// Example:
+//
+//	columns1 := []SortingColumn{Ascending("A"), Ascending("B"), Descending("C")}
+//	columns2 := []SortingColumn{Ascending("A"), Ascending("B"), Ascending("D")}
+//	result := MergeSortingColumns(columns1, columns2)
+//	// result will be []SortingColumn{Ascending("A"), Ascending("B")}
+func MergeSortingColumns(sortingColumns ...[]SortingColumn) []SortingColumn {
+	if len(sortingColumns) == 0 {
+		return nil
+	}
+	merged := slices.Clone(sortingColumns[0])
+	for _, columns := range sortingColumns[1:] {
+		merged = commonSortingPrefix(merged, columns)
+	}
+	return merged
+}
+
+// commonSortingPrefix returns the common prefix of two sorting column slices
+func commonSortingPrefix(a, b []SortingColumn) []SortingColumn {
+	minLen := min(len(a), len(b))
+	for i := range minLen {
+		if !equalSortingColumn(a[i], b[i]) {
+			return a[:i]
+		}
+	}
+	return a[:minLen]
+}
