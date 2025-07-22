@@ -1333,3 +1333,24 @@ func TestReadMapAsAny(t *testing.T) {
 		t.Errorf("value mismatch: want=%+v got=%+v", anyd, anys)
 	}
 }
+
+// TestReadFileWithNullColumns tests reading a Parquet file that contains
+// columns where all values are NULL (logical_type=Null).
+// Reproduces https://github.com/parquet-go/parquet-go/issues/151
+func TestReadFileWithNullColumns(t *testing.T) {
+	rows, err := parquet.ReadFile[any]("testdata/null_columns.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []any{
+		map[string]any{"name": "test1", "value": nil},
+		map[string]any{"name": "test2", "value": nil},
+		map[string]any{"name": "test3", "value": nil},
+		map[string]any{"name": "test4", "value": nil},
+	}
+
+	if !reflect.DeepEqual(rows, expected) {
+		t.Errorf("rows mismatch:\nwant: %+v\ngot:  %+v", expected, rows)
+	}
+}

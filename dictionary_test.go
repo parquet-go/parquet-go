@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"os"
 	"testing"
 	"time"
 
@@ -268,6 +269,77 @@ func TestIssueSegmentio312(t *testing.T) {
 			// https://github.com/segmentio/parquet-go/issues/312
 			_ = columnType.NewDictionary(0, 1, values)
 		})
+	}
+}
+
+func TestNullDictionary(t *testing.T) {
+	// Since we cannot create a NULL type directly through the public API,
+	// we obtain one from a test file containing a NULL type column
+	const numValues = 4
+
+	f, err := os.Open("testdata/null_columns.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	stat, _ := f.Stat()
+	file, err := parquet.OpenFile(f, stat.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get the NULL type from the second column
+	nullType := file.RowGroups()[0].ColumnChunks()[1].Type()
+	if nullType.Kind() != -1 { // NULL type has Kind() == -1
+		t.Fatalf("expected NULL type, got %v", nullType)
+	}
+
+	// Test dictionary creation and methods
+	const columnIndex = 1
+	dict := nullType.NewDictionary(columnIndex, numValues, encoding.Values{})
+
+	// Test Len
+	if got := dict.Len(); got != numValues {
+		t.Errorf("Len() = %d, want %d", got, numValues)
+	}
+
+	// Test Index - all values should be null
+	for i := int32(0); i < int32(numValues); i++ {
+		if val := dict.Index(i); !val.IsNull() {
+			t.Errorf("Index(%d) = %v, want null", i, val)
+		}
+	}
+
+	// Test Insert (should be no-op for null dictionary)
+	indexes := []int32{0, 1}
+	values := []parquet.Value{parquet.NullValue(), parquet.NullValue()}
+	dict.Insert(indexes, values)
+
+	// Test Lookup
+	lookups := make([]parquet.Value, len(indexes))
+	dict.Lookup(indexes, lookups)
+	for i, val := range lookups {
+		if !val.IsNull() {
+			t.Errorf("Lookup[%d] = %v, want null", i, val)
+		}
+	}
+
+	// Test Bounds - should return null values
+	lower, upper := dict.Bounds(indexes)
+	if !lower.IsNull() || !upper.IsNull() {
+		t.Errorf("Bounds() = (%v, %v), want (null, null)", lower, upper)
+	}
+
+	// Test Reset and Page
+	dict.Reset()
+	if got := dict.Len(); got != 0 {
+		t.Errorf("Len() after Reset = %d, want 0", got)
+	}
+
+	page := dict.Page()
+	if got := page.NumValues(); got != 0 {
+		t.Errorf("Page().NumValues() after Reset = %d, want 0", got)
 	}
 }
 
