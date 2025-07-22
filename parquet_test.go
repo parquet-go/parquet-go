@@ -1343,16 +1343,14 @@ func TestReadFileWithNullColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// File should have rows that can be read without panicking
-	if len(rows) == 0 {
-		t.Fatal("expected non-empty file")
+	expected := []any{
+		map[string]any{"name": "test1", "value": nil},
+		map[string]any{"name": "test2", "value": nil},
+		map[string]any{"name": "test3", "value": nil},
+		map[string]any{"name": "test4", "value": nil},
 	}
 
-	// Verify rows are returned as map[string]interface{}
-	for i, row := range rows {
-		if _, ok := row.(map[string]any); !ok {
-			t.Errorf("row %d: expected map[string]interface{}, got %T", i, row)
-		}
+	if !reflect.DeepEqual(rows, expected) {
+		t.Errorf("rows mismatch:\nwant: %+v\ngot:  %+v", expected, rows)
 	}
 }
-
