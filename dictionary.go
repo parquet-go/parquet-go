@@ -1495,7 +1495,7 @@ func newNullDictionary(typ Type, columnIndex int16, numValues int32, _ encoding.
 
 func (d *nullDictionary) Type() Type { return d.nullPage.Type() }
 
-func (d *nullDictionary) Len() int { return 0 }
+func (d *nullDictionary) Len() int { return int(d.nullPage.count) }
 
 func (d *nullDictionary) Index(i int32) Value { return NullValue() }
 
@@ -1512,7 +1512,9 @@ func (d *nullDictionary) Bounds(indexes []int32) (min, max Value) {
 	return NullValue(), NullValue()
 }
 
-func (d *nullDictionary) Reset() {}
+func (d *nullDictionary) Reset() {
+	d.nullPage.count = 0
+}
 
 func (d *nullDictionary) Page() Page { return &d.nullPage }
 

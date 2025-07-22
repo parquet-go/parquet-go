@@ -2272,8 +2272,8 @@ func (t *nullType) NewColumnIndexer(int) ColumnIndexer {
 	panic("create create column indexer from parquet NULL type")
 }
 
-func (t *nullType) NewDictionary(int, int, encoding.Values) Dictionary {
-	panic("cannot create dictionary from parquet NULL type")
+func (t *nullType) NewDictionary(columnIndex, numValues int, data encoding.Values) Dictionary {
+	return newNullDictionary(t, makeColumnIndex(columnIndex), makeNumValues(numValues), data)
 }
 
 func (t *nullType) NewColumnBuffer(int, int) ColumnBuffer {

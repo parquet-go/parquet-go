@@ -797,10 +797,6 @@ func (c *Column) decodeDictionary(header DictionaryPageHeader, page *buffer, siz
 	}
 
 	pageType := c.Type()
-	// NULL type columns cannot have dictionaries, return a null dictionary
-	if pageType.Kind() == -1 {
-		return newNullDictionary(pageType, int16(c.index), 0, encoding.Values{}), nil
-	}
 	pageEncoding := header.Encoding()
 	if pageEncoding == format.PlainDictionary {
 		pageEncoding = format.Plain

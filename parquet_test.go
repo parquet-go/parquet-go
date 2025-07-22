@@ -1355,3 +1355,36 @@ func TestReadFileWithNullColumns(t *testing.T) {
 		}
 	}
 }
+
+// TestNullDictionary verifies that NULL type columns create dictionaries without panicking
+func TestNullDictionary(t *testing.T) {
+	file, err := os.Open("testdata/null_columns.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := parquet.OpenFile(file, info.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test that we can create a dictionary for NULL type columns
+	for _, col := range pf.Root().Columns() {
+		if col.Type().Kind() == -1 { // NULL type
+			dict := col.Type().NewDictionary(0, 10, col.Type().NewValues(nil, nil))
+			if dict.Len() != 10 {
+				t.Errorf("NULL dictionary Len() = %d, want 10", dict.Len())
+			}
+			if value := dict.Index(0); !value.IsNull() {
+				t.Errorf("NULL dictionary Index(0) = %v, want null", value)
+			}
+			break
+		}
+	}
+}
