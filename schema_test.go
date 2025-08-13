@@ -260,6 +260,34 @@ func TestSchemaOf(t *testing.T) {
 	required binary sb;
 }`,
 		},
+		{
+			value: new(struct {
+				A struct {
+					B []string `parquet:"b,id(2),list" parquet-element:",id(3)"`
+				} `parquet:"a,id(1)"`
+				D []string `parquet:"d,id(4),list"`
+				E []int    `parquet:"e,id(5),list" parquet-element:",id(6)"`
+			}),
+			print: `message {
+	required group a = 1 {
+		required group b (LIST) = 2 {
+			repeated group list {
+				required binary element (STRING) = 3;
+			}
+		}
+	}
+	required group d (LIST) = 4 {
+		repeated group list {
+			required binary element (STRING);
+		}
+	}
+	required group e (LIST) = 5 {
+		repeated group list {
+			required int64 element (INT(64,true)) = 6;
+		}
+	}
+}`,
+		},
 	}
 
 	for _, test := range tests {
