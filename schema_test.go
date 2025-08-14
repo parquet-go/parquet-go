@@ -267,6 +267,11 @@ func TestSchemaOf(t *testing.T) {
 				} `parquet:"a,id(1)"`
 				D []string `parquet:"d,id(4),list"`
 				E []int    `parquet:"e,id(5),list" parquet-element:",id(6)"`
+				F []string `parquet:"f,id(7),list" parquet-element:",id(8),json"`
+				G []struct {
+					H string `parquet:"h,id(12)"`
+					I int    `parquet:"i,id(13)"`
+				} `parquet:"g,id(9),list" parquet-element:",id(11)"`
 			}),
 			print: `message {
 	required group a = 1 {
@@ -284,6 +289,19 @@ func TestSchemaOf(t *testing.T) {
 	required group e (LIST) = 5 {
 		repeated group list {
 			required int64 element (INT(64,true)) = 6;
+		}
+	}
+	required group f (LIST) = 7 {
+		repeated group list {
+			required binary element (JSON) = 8;
+		}
+	}
+	required group g (LIST) = 9 {
+		repeated group list {
+			required group element = 11 {
+				required binary h (STRING) = 12;
+				required int64 i (INT(64,true)) = 13;
+			}
 		}
 	}
 }`,

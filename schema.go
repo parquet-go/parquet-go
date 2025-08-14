@@ -130,7 +130,7 @@ func (v *onceValue[T]) load(f func() *T) *T {
 //
 // The configuration of Parquet maps are done via two tags:
 //   - The `parquet-key` tag allows to configure the key of a map.
-//   - The parquet-value tag allows users to configure a map's values, for example to declare their native Parquet types.
+//   - The `parquet-value` tag allows users to configure a map's values, for example to declare their native Parquet types.
 //
 // When configuring a Parquet map, the `parquet` tag will configure the map itself.
 //
@@ -140,13 +140,14 @@ func (v *onceValue[T]) load(f func() *T) *T {
 //	  Action map[int64]string `parquet:"," parquet-key:",timestamp"`
 //	}
 //
-// To configure the element of a list, use the `parquet-element` tag. For now the parquet-element tag can only
-// be used to configure the field id of the element. For example, the following will set the id of the element field
-// to 2:
+// To configure the element of a list, use the `parquet-element` tag. For example, the following will
+// set the id of the element field to 2:
 //
 //	type Item struct {
 //	  Attributes []string `parquet:",id(1),list" parquet-element:",id(2)"`
 //	}
+//
+// Note that the name of the element cannot be changed.
 //
 // The schema name is the Go type name of the value.
 func SchemaOf(model any) *Schema {
@@ -569,14 +570,13 @@ func throwUnknownTag(t reflect.Type, name string, tag string) {
 	panic(tag + " is an unrecognized parquet tag: " + nodeString(t, name, tag))
 }
 
-// func throwInvalidNode(t reflect.Type, msg, name string, tag ...string) {
-// 	panic(msg + ": " + nodeString(t, name, tag...))
-// }
-
 func throwInvalidNode(t reflect.Type, msg, name string, tagKeyToVals map[string]string) {
 	tags := make([]string, 0, len(tagKeyToVals))
-	for _, val := range tagKeyToVals {
-		tags = append(tags, val)
+	// Iterate using knownTagKeys to make sure that ordering is deterministic.
+	for _, tagKey := range knownTagKeys {
+		if val, ok := tagKeyToVals[tagKey]; ok {
+			tags = append(tags, val)
+		}
 	}
 	panic(msg + ": " + nodeString(t, name, tags...))
 }
@@ -666,12 +666,12 @@ func nodeOf(t reflect.Type, tagKeyToVals map[string]string) Node {
 			n = JSON()
 		} else {
 			n = Map(
-				makeNodeOf(t.Key(), t.Name(), map[string]string{"parquet-key": keyTag}),
-				makeNodeOf(t.Elem(), t.Name(), map[string]string{"parquet-value": valueTag}),
+				makeNodeOf(t.Key(), t.Name(), map[string]string{"parquet": keyTag}),
+				makeNodeOf(t.Elem(), t.Name(), map[string]string{"parquet": valueTag}),
 			)
 		}
 
-		forEachTagOption(map[string]string{"parquet": mapTag}, func(key, option, args string) {
+		forEachTagOption([]string{mapTag}, func(option, args string) {
 			switch option {
 			case "", "json":
 				return
@@ -865,202 +865,200 @@ func makeNodeOf(t reflect.Type, name string, tagKeyToVals map[string]string) Nod
 		compressed = c
 	}
 
-	forEachTagOption(tagKeyToVals, func(key, option, args string) {
-		if t.Kind() == reflect.Map {
-			node = nodeOf(t, tagKeyToVals)
-			return
-		}
-		switch option {
-		case "":
-			return
-		case "optional":
-			setOptional()
+	if t.Kind() == reflect.Map {
+		node = nodeOf(t, tagKeyToVals)
+	} else {
+		forEachTagOption([]string{tagKeyToVals["parquet"]}, func(option, args string) {
+			switch option {
+			case "":
+				return
+			case "optional":
+				setOptional()
 
-		case "snappy":
-			setCompression(&Snappy)
+			case "snappy":
+				setCompression(&Snappy)
 
-		case "gzip":
-			setCompression(&Gzip)
+			case "gzip":
+				setCompression(&Gzip)
 
-		case "brotli":
-			setCompression(&Brotli)
+			case "brotli":
+				setCompression(&Brotli)
 
-		case "lz4":
-			setCompression(&Lz4Raw)
+			case "lz4":
+				setCompression(&Lz4Raw)
 
-		case "zstd":
-			setCompression(&Zstd)
+			case "zstd":
+				setCompression(&Zstd)
 
-		case "uncompressed":
-			setCompression(&Uncompressed)
+			case "uncompressed":
+				setCompression(&Uncompressed)
 
-		case "plain":
-			setEncoding(&Plain)
+			case "plain":
+				setEncoding(&Plain)
 
-		case "dict":
-			setEncoding(&RLEDictionary)
+			case "dict":
+				setEncoding(&RLEDictionary)
 
-		case "json":
-			setNode(JSON())
+			case "json":
+				setNode(JSON())
 
-		case "delta":
-			switch t.Kind() {
-			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint32, reflect.Uint64:
-				setEncoding(&DeltaBinaryPacked)
-			case reflect.String:
-				setEncoding(&DeltaByteArray)
-			case reflect.Slice:
-				if t.Elem().Kind() == reflect.Uint8 { // []byte?
-					setEncoding(&DeltaByteArray)
-				} else {
-					throwInvalidTag(t, name, option)
-				}
-			case reflect.Array:
-				if t.Elem().Kind() == reflect.Uint8 { // [N]byte?
-					setEncoding(&DeltaByteArray)
-				} else {
-					throwInvalidTag(t, name, option)
-				}
-			default:
-				switch t {
-				case reflect.TypeOf(time.Time{}):
+			case "delta":
+				switch t.Kind() {
+				case reflect.Int, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint32, reflect.Uint64:
 					setEncoding(&DeltaBinaryPacked)
+				case reflect.String:
+					setEncoding(&DeltaByteArray)
+				case reflect.Slice:
+					if t.Elem().Kind() == reflect.Uint8 { // []byte?
+						setEncoding(&DeltaByteArray)
+					} else {
+						throwInvalidTag(t, name, option)
+					}
+				case reflect.Array:
+					if t.Elem().Kind() == reflect.Uint8 { // [N]byte?
+						setEncoding(&DeltaByteArray)
+					} else {
+						throwInvalidTag(t, name, option)
+					}
+				default:
+					switch t {
+					case reflect.TypeOf(time.Time{}):
+						setEncoding(&DeltaBinaryPacked)
+					default:
+						throwInvalidTag(t, name, option)
+					}
+				}
+
+			case "split":
+				switch t.Kind() {
+				case reflect.Float32, reflect.Float64:
+					setEncoding(&ByteStreamSplit)
 				default:
 					throwInvalidTag(t, name, option)
 				}
-			}
 
-		case "split":
-			switch t.Kind() {
-			case reflect.Float32, reflect.Float64:
-				setEncoding(&ByteStreamSplit)
-			default:
-				throwInvalidTag(t, name, option)
-			}
-
-		case "list":
-			switch t.Kind() {
-			case reflect.Slice:
-				element := makeNodeOf(t.Elem(), t.Name(), map[string]string{"parquet": tagKeyToVals["parquet-element"]})
-				setNode(element)
-				setList()
-			default:
-				throwInvalidTag(t, name, option)
-			}
-
-		case "enum":
-			switch t.Kind() {
-			case reflect.String:
-				setNode(Enum())
-			default:
-				throwInvalidTag(t, name, option)
-			}
-
-		case "uuid":
-			switch t.Kind() {
-			case reflect.Array:
-				if t.Elem().Kind() != reflect.Uint8 || t.Len() != 16 {
+			case "list":
+				switch t.Kind() {
+				case reflect.Slice:
+					element := makeNodeOf(t.Elem(), t.Name(), map[string]string{"parquet": tagKeyToVals["parquet-element"]})
+					setNode(element)
+					setList()
+				default:
 					throwInvalidTag(t, name, option)
 				}
-			default:
-				throwInvalidTag(t, name, option)
-			}
 
-		case "decimal":
-			scale, precision, err := parseDecimalArgs(args)
-			if err != nil {
-				throwInvalidTag(t, name, option+args)
-			}
-			var baseType Type
-			switch t.Kind() {
-			case reflect.Int32:
-				baseType = Int32Type
-			case reflect.Int64:
-				baseType = Int64Type
-			case reflect.Array, reflect.Slice:
-				baseType = FixedLenByteArrayType(decimalFixedLenByteArraySize(precision))
-			default:
-				throwInvalidTag(t, name, option)
-			}
-
-			setNode(Decimal(scale, precision, baseType))
-		case "string":
-			switch {
-			case t.Kind() == reflect.String:
-			case t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8:
-			default:
-				throwInvalidTag(t, name, option)
-			}
-			setNode(String())
-		case "bytes":
-			switch {
-			case t.Kind() == reflect.String:
-			case t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8:
-			default:
-				throwInvalidTag(t, name, option)
-			}
-			setNode(Leaf(ByteArrayType))
-		case "date":
-			switch t.Kind() {
-			case reflect.Int32:
-				setNode(Date())
-			default:
-				throwInvalidTag(t, name, option)
-			}
-		case "time":
-			switch t.Kind() {
-			case reflect.Int32:
-				timeUnit, adjusted, err := parseTimestampArgs(args)
-				if err != nil || timeUnit.Duration() < time.Millisecond {
-					throwInvalidTag(t, name, option+args)
+			case "enum":
+				switch t.Kind() {
+				case reflect.String:
+					setNode(Enum())
+				default:
+					throwInvalidTag(t, name, option)
 				}
-				setNode(TimeAdjusted(timeUnit, adjusted))
-			case reflect.Int64:
-				timeUnit, adjusted, err := parseTimestampArgs(args)
-				if t == reflect.TypeOf(time.Duration(0)) {
-					if args == "()" {
-						timeUnit = Nanosecond
-					} else if timeUnit != Nanosecond {
-						throwInvalidTag(t, name, option+args)
+
+			case "uuid":
+				switch t.Kind() {
+				case reflect.Array:
+					if t.Elem().Kind() != reflect.Uint8 || t.Len() != 16 {
+						throwInvalidTag(t, name, option)
 					}
+				default:
+					throwInvalidTag(t, name, option)
 				}
-				if err != nil || timeUnit.Duration() == time.Millisecond {
-					throwInvalidTag(t, name, option+args)
-				}
-				setNode(TimeAdjusted(timeUnit, adjusted))
-			default:
-				throwInvalidTag(t, name, option)
-			}
-		case "timestamp":
-			switch t.Kind() {
-			case reflect.Int64:
-				timeUnit, adjusted, err := parseTimestampArgs(args)
+
+			case "decimal":
+				scale, precision, err := parseDecimalArgs(args)
 				if err != nil {
 					throwInvalidTag(t, name, option+args)
 				}
-				setNode(TimestampAdjusted(timeUnit, adjusted))
-			default:
-				switch t {
-				case reflect.TypeOf(time.Time{}):
+				var baseType Type
+				switch t.Kind() {
+				case reflect.Int32:
+					baseType = Int32Type
+				case reflect.Int64:
+					baseType = Int64Type
+				case reflect.Array, reflect.Slice:
+					baseType = FixedLenByteArrayType(decimalFixedLenByteArraySize(precision))
+				default:
+					throwInvalidTag(t, name, option)
+				}
+
+				setNode(Decimal(scale, precision, baseType))
+			case "string":
+				switch {
+				case t.Kind() == reflect.String:
+				case t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8:
+				default:
+					throwInvalidTag(t, name, option)
+				}
+				setNode(String())
+			case "bytes":
+				switch {
+				case t.Kind() == reflect.String:
+				case t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8:
+				default:
+					throwInvalidTag(t, name, option)
+				}
+				setNode(Leaf(ByteArrayType))
+			case "date":
+				switch t.Kind() {
+				case reflect.Int32:
+					setNode(Date())
+				default:
+					throwInvalidTag(t, name, option)
+				}
+			case "time":
+				switch t.Kind() {
+				case reflect.Int32:
+					timeUnit, adjusted, err := parseTimestampArgs(args)
+					if err != nil || timeUnit.Duration() < time.Millisecond {
+						throwInvalidTag(t, name, option+args)
+					}
+					setNode(TimeAdjusted(timeUnit, adjusted))
+				case reflect.Int64:
+					timeUnit, adjusted, err := parseTimestampArgs(args)
+					if t == reflect.TypeOf(time.Duration(0)) {
+						if args == "()" {
+							timeUnit = Nanosecond
+						} else if timeUnit != Nanosecond {
+							throwInvalidTag(t, name, option+args)
+						}
+					}
+					if err != nil || timeUnit.Duration() == time.Millisecond {
+						throwInvalidTag(t, name, option+args)
+					}
+					setNode(TimeAdjusted(timeUnit, adjusted))
+				default:
+					throwInvalidTag(t, name, option)
+				}
+			case "timestamp":
+				switch t.Kind() {
+				case reflect.Int64:
 					timeUnit, adjusted, err := parseTimestampArgs(args)
 					if err != nil {
 						throwInvalidTag(t, name, option+args)
 					}
 					setNode(TimestampAdjusted(timeUnit, adjusted))
 				default:
-					throwInvalidTag(t, name, option)
+					switch t {
+					case reflect.TypeOf(time.Time{}):
+						timeUnit, adjusted, err := parseTimestampArgs(args)
+						if err != nil {
+							throwInvalidTag(t, name, option+args)
+						}
+						setNode(TimestampAdjusted(timeUnit, adjusted))
+					default:
+						throwInvalidTag(t, name, option)
+					}
 				}
-			}
-		case "id":
-			if key == "parquet" {
+			case "id":
 				id, err := parseIDArgs(args)
 				if err != nil {
 					throwInvalidNode(t, "struct field has field id that is not a valid int", name, tagKeyToVals)
 				}
 				fieldID = id
 			}
-		}
-	})
+		})
+	}
 
 	// Special case: an "optional" struct tag on a slice applies to the
 	// individual items, not the overall list. The least messy way to
@@ -1113,15 +1111,15 @@ func makeNodeOf(t reflect.Type, name string, tagKeyToVals map[string]string) Nod
 	return node
 }
 
-func forEachTagOption(tagKeyToVals map[string]string, do func(key, option, args string)) {
-	for key, val := range tagKeyToVals {
-		_, tag := split(val) // skip the field name
+func forEachTagOption(tags []string, do func(option, args string)) {
+	for _, tag := range tags {
+		_, tag = split(tag) // skip the field name
 		for tag != "" {
 			option := ""
 			option, tag = split(tag)
 			var args string
 			option, args = splitOptionArgs(option)
-			do(key, option, args)
+			do(option, args)
 		}
 	}
 }
