@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -552,4 +554,224 @@ type nopPageWriter struct{}
 
 func (n nopPageWriter) WritePage(page parquet.Page) (int64, error) {
 	return page.NumValues(), nil
+}
+
+type countingReaderAt struct {
+	ra    io.ReaderAt
+	reads int64
+}
+
+func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	atomic.AddInt64(&c.reads, 1)
+	return c.ra.ReadAt(p, off)
+}
+
+type benchRow struct {
+	K string   `parquet:",snappy,dict"`
+	V []string `parquet:",snappy,list"`
+}
+
+// BenchmarkSeekThroughFile reads / seeks through the whole file while tracking the number of reads.
+// Hypothesis: seeking through the whole file should always require equal or fewer reads than reading
+// the whole file.
+func BenchmarkSeekThroughFile(b *testing.B) {
+	rnd := rand.New(rand.NewSource(1234))
+
+	var numRows int64 = 10_000
+	data, _ := makeSeekBenchFile(b, numRows, false)
+
+	steps := [8]int64{0, 7, 13, 29, 61, 127, 251, 563}
+	var positions [8][]int64
+
+	// precompute all seek positions for all steps
+	for i, stepSize := range steps {
+		positions[i] = make([]int64, 0, numRows/10)
+		if stepSize > 0 {
+			var pos int64
+			for range numRows {
+				jitter := rnd.Int63n(stepSize)
+				pos += stepSize/2 + jitter
+				positions[i] = append(positions[i], pos)
+				if pos >= int64(numRows) {
+					break
+				}
+			}
+		}
+	}
+
+	// wrap bytes.Reader with counting ReaderAt and open file
+	br := bytes.NewReader(data)
+	ctr := &countingReaderAt{ra: br}
+
+	opts := []parquet.FileOption{
+		parquet.SkipBloomFilters(true),
+		parquet.FileReadMode(parquet.ReadModeSync), // sync helps with tracking the reads/op
+		parquet.ReadBufferSize(60 * 1024),          // roughly the page size in the 'V' column
+	}
+
+	f, err := parquet.OpenFile(ctr, int64(len(data)), opts...)
+	if err != nil {
+		b.Fatalf("open file: %v", err)
+	}
+
+	// seek / read through the whole file using Reader
+	b.Run("reader", func(b *testing.B) {
+		for i, stepSize := range steps {
+			name := fmt.Sprintf("step size=%d", stepSize)
+			if stepSize == 0 {
+				name = "no-seek"
+			}
+			b.Run(name, func(b *testing.B) {
+				// benchmark loop: read / seek through the whole file
+				ctr.reads = 0
+				for b.Loop() {
+					r := parquet.NewReader(f)
+
+					for j := range numRows {
+						if stepSize > 0 { // if seek is zero, we don't seek at all (baseline)
+							err = r.SeekToRow(positions[i][j])
+							if err != nil {
+								if errors.Is(err, io.EOF) {
+									break
+								}
+								b.Fatalf("read row %d: %v", j, err)
+							}
+						}
+
+						var row benchRow
+						err = r.Read(&row)
+						if err != nil {
+							if errors.Is(err, io.EOF) {
+								break
+							}
+							b.Fatalf("read row %d: %v", j, err)
+						}
+					}
+					_ = r.Close()
+				}
+				b.ReportMetric(float64(ctr.reads)/float64(b.N), "reads/op")
+			})
+		}
+	})
+
+	// seek / read through the whole column 1 using Pages
+	b.Run("pages", func(b *testing.B) {
+		for i, stepSize := range steps {
+			name := fmt.Sprintf("step size=%d", stepSize)
+			if stepSize == 0 {
+				name = "no-seek"
+			}
+			b.Run(name, func(b *testing.B) {
+				ctr.reads = 0
+				for b.Loop() {
+					// sequentially read all pages of column 1 (baseline)
+					if stepSize == 0 {
+						for _, rg := range f.RowGroups() {
+							pages := rg.ColumnChunks()[1].Pages()
+							for {
+								p, err := pages.ReadPage()
+								if err != nil {
+									if errors.Is(err, io.EOF) {
+										break
+									}
+									b.Fatalf("read page: %v", err)
+								}
+								parquet.Release(p)
+							}
+							_ = pages.Close()
+						}
+						continue
+					}
+
+					// read column 1 seeking through rg pages
+					var j int
+					var rgOffset int64
+					for _, rg := range f.RowGroups() {
+						pages := rg.ColumnChunks()[1].Pages()
+
+						for {
+							pos := positions[i][j] - rgOffset
+							if pos >= rg.NumRows() {
+								_ = pages.Close()
+								rgOffset += rg.NumRows()
+								break
+							}
+
+							err = pages.SeekToRow(pos)
+							if err != nil {
+								b.Fatalf("seek page: %v", err)
+							}
+
+							p, err := pages.ReadPage()
+							if err != nil {
+								b.Fatalf("read page: %v", err)
+							}
+
+							j++
+							parquet.Release(p)
+						}
+					}
+				}
+				b.ReportMetric(float64(ctr.reads)/float64(b.N), "reads/op")
+			})
+		}
+	})
+}
+
+func makeSeekBenchFile(t testing.TB, numRows int64, writeTemp bool) ([]byte, string) {
+	rnd := rand.New(rand.NewSource(1234))
+	var buf bytes.Buffer
+
+	w := parquet.NewGenericWriter[benchRow](&buf,
+		parquet.MaxRowsPerRowGroup(numRows/3),
+	)
+
+	strs := make([]string, 500) // max cardinality
+	for i := range strs {
+		b := make([]byte, 50+rnd.Intn(50))
+		for k := range b {
+			b[k] = byte('a' + rnd.Intn(26))
+		}
+		strs[i] = string(b)
+	}
+
+	baseLen := 10
+	for i := range numRows {
+		if i != 0 && i%50 == 0 { // make pages with varying sizes
+			baseLen = 1 + rnd.Intn(75)
+		}
+		vals := make([]string, baseLen+rnd.Intn(10))
+		for j := range vals {
+			vals[j] = strs[rnd.Intn(len(strs))]
+		}
+
+		_, err := w.Write([]benchRow{{K: fmt.Sprintf("key-%s", strs[rnd.Intn(len(strs))]), V: vals}})
+		if err != nil {
+			t.Fatalf("write row %d: %v", i, err)
+		}
+	}
+
+	err := w.Close()
+	if err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	var fpath string
+	if writeTemp { // just for inspecting the generated file for debugging purposes
+		f, err := os.CreateTemp(t.TempDir(), "seek-bench-*.parquet")
+		if err != nil {
+			t.Fatalf("create temp file: %v", err)
+		}
+		defer f.Close()
+		fpath = f.Name()
+
+		_, err = f.Write(buf.Bytes())
+		if err != nil {
+			t.Fatalf("write temp parquet file %s: %v", fpath, err)
+		}
+
+		t.Logf("seek bench parquet written to: %s", fpath)
+	}
+
+	return buf.Bytes(), fpath
 }
