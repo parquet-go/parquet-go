@@ -1000,6 +1000,12 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 		if index < 0 {
 			return ErrSeekOutOfRange
 		}
+
+		if f.index == index {
+			f.skip = rowIndex - pages[index].FirstRowIndex
+			return nil
+		}
+
 		_, err = f.section.Seek(pages[index].Offset-f.baseOffset, io.SeekStart)
 		f.skip = rowIndex - pages[index].FirstRowIndex
 		f.index = index
