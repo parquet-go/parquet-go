@@ -606,7 +606,7 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 	opts := []parquet.FileOption{
 		parquet.SkipBloomFilters(true),
 		parquet.FileReadMode(parquet.ReadModeSync), // sync helps with tracking the reads/op
-		parquet.ReadBufferSize(60 * 1024),          // roughly the page size in the 'V' column
+		parquet.ReadBufferSize(90 * 1024),          // roughly 1.5x the page size in the 'V' column
 	}
 
 	f, err := parquet.OpenFile(ctr, int64(len(data)), opts...)
