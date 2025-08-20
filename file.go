@@ -741,6 +741,12 @@ type FilePages struct {
 	skip       int64
 	dictionary Dictionary
 
+	// track the last page to prevent re-reading the same page
+	lastPageIndex int
+	lastPage      Page
+	lastPageValid bool
+	serveLastPage bool
+
 	bufferSize int
 }
 
@@ -758,6 +764,11 @@ func (f *FilePages) init(c *FileColumnChunk, reader io.ReaderAt) {
 	f.section = *io.NewSectionReader(reader, f.baseOffset, c.chunk.MetaData.TotalCompressedSize)
 	f.rbuf, f.rbufpool = getBufioReader(&f.section, f.bufferSize)
 	f.decoder.Reset(f.protocol.NewReader(f.rbuf))
+	f.index = 0
+	f.lastPage = nil
+	f.lastPageIndex = -1
+	f.lastPageValid = false
+	f.serveLastPage = false
 }
 
 // ReadDictionary returns the dictionary of the column chunk, or nil if the
@@ -784,6 +795,26 @@ func (f *FilePages) ReadPage() (Page, error) {
 	// seekToRowStart indicates whether we are in the process of seeking to the start
 	// of requested row to read, as opposed to reading sequentially values and moving through pages
 	seekToRowStart := f.skip > 0
+
+	// Serve last page if SeekToRow targeted the same page as last returned
+	if f.serveLastPage && f.lastPageValid {
+		f.serveLastPage = false
+		f.index = f.lastPageIndex + 1
+
+		if f.skip == 0 {
+			return f.lastPage, nil
+		}
+
+		numRows := f.lastPage.NumRows()
+		if f.skip < numRows {
+			tail := f.lastPage.Slice(f.skip, numRows)
+			f.skip = 0
+			return tail, nil
+		}
+
+		f.skip -= numRows // fall through to reading the next page
+	}
+
 	for {
 		// Instantiate a new format.PageHeader for each page.
 		//
@@ -838,6 +869,16 @@ func (f *FilePages) ReadPage() (Page, error) {
 		if page == nil {
 			continue
 		}
+
+		if f.lastPageValid {
+			Release(f.lastPage) // in case we cached a valid last page, release it now
+		}
+
+		// track last page
+		f.lastPage = page
+		Retain(page)
+		f.lastPageIndex = f.index
+		f.lastPageValid = true
 
 		f.index++
 		if f.skip == 0 {
@@ -985,6 +1026,7 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 	if f.chunk == nil {
 		return io.ErrClosedPipe
 	}
+
 	if index := f.chunk.offsetIndex.Load(); index == nil {
 		_, err = f.section.Seek(f.dataOffset-f.baseOffset, io.SeekStart)
 		f.skip = rowIndex
@@ -992,26 +1034,36 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 		if f.dictOffset > 0 {
 			f.index = 1
 		}
+		f.rbuf.Reset(&f.section)
+		return err
 	} else {
 		pages := index.index.PageLocations
-		index := sort.Search(len(pages), func(i int) bool {
+		target := sort.Search(len(pages), func(i int) bool {
 			return pages[i].FirstRowIndex > rowIndex
 		}) - 1
-		if index < 0 {
+		if target < 0 {
 			return ErrSeekOutOfRange
 		}
 
-		if f.index == index {
-			f.skip = rowIndex - pages[index].FirstRowIndex
+		// positioned at the last returned page: serve it
+		if f.lastPageValid && target == f.lastPageIndex {
+			f.skip = rowIndex - pages[f.lastPageIndex].FirstRowIndex
+			f.serveLastPage = true
 			return nil
 		}
 
-		_, err = f.section.Seek(pages[index].Offset-f.baseOffset, io.SeekStart)
-		f.skip = rowIndex - pages[index].FirstRowIndex
-		f.index = index
+		// already positioned at the target page
+		if f.index == target {
+			f.skip = rowIndex - pages[target].FirstRowIndex
+			return nil
+		}
+
+		_, err = f.section.Seek(pages[target].Offset-f.baseOffset, io.SeekStart)
+		f.skip = rowIndex - pages[target].FirstRowIndex
+		f.index = target
+		f.rbuf.Reset(&f.section)
+		return err
 	}
-	f.rbuf.Reset(&f.section)
-	return err
 }
 
 // Close closes the page reader.
@@ -1025,6 +1077,14 @@ func (f *FilePages) Close() error {
 	f.dataOffset = 0
 	f.dictOffset = 0
 	f.index = 0
+	// release cached page if any
+	if f.lastPageValid {
+		Release(f.lastPage)
+	}
+	f.lastPage = nil
+	f.lastPageIndex = -1
+	f.lastPageValid = false
+	f.serveLastPage = false
 	f.skip = 0
 	f.dictionary = nil
 	return nil
