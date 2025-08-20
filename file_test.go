@@ -623,6 +623,8 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 
 			// seek / read through the whole file using Reader
 			b.Run("reader", func(b *testing.B) {
+				row := make([]benchRow, 1)
+
 				for i, stepSize := range steps {
 					name := fmt.Sprintf("step size=%d", stepSize)
 					if stepSize == 0 {
@@ -633,7 +635,7 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 
 						// benchmark loop: read / seek through the whole file
 						for b.Loop() {
-							r := parquet.NewReader(f)
+							r := parquet.NewGenericReader[benchRow](f)
 
 							for j := range numRows {
 								if stepSize > 0 { // if seek is zero, we don't seek at all (baseline)
@@ -646,8 +648,7 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 									}
 								}
 
-								var row benchRow
-								err = r.Read(&row)
+								_, err = r.Read(row)
 								if err != nil {
 									if errors.Is(err, io.EOF) {
 										break
