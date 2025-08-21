@@ -1052,15 +1052,29 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 			return nil
 		}
 
+		f.skip = rowIndex - pages[target].FirstRowIndex
+
 		// already positioned at the target page
 		if f.index == target {
-			f.skip = rowIndex - pages[target].FirstRowIndex
 			return nil
 		}
 
-		_, err = f.section.Seek(pages[target].Offset-f.baseOffset, io.SeekStart)
-		f.skip = rowIndex - pages[target].FirstRowIndex
 		f.index = target
+
+		// if the target page is within the unread portion of the current buffer, just skip/discard some bytes
+		pos, _ := f.section.Seek(0, io.SeekCurrent)
+		unread := int64(f.rbuf.Buffered())
+		currOffset := pos - unread                          // section relative offset
+		targetOffset := pages[target].Offset - f.baseOffset // section relative target offset
+		skipBytes := targetOffset - currOffset
+		if skipBytes >= 0 && skipBytes <= unread {
+			if skipBytes > 0 {
+				_, err = f.rbuf.Discard(int(skipBytes))
+			}
+			return err
+		}
+
+		_, err = f.section.Seek(pages[target].Offset-f.baseOffset, io.SeekStart)
 		f.rbuf.Reset(&f.section)
 		return err
 	}
