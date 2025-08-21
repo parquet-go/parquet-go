@@ -1034,8 +1034,6 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 		if f.dictOffset > 0 {
 			f.index = 1
 		}
-		f.rbuf.Reset(&f.section)
-		return err
 	} else {
 		pages := index.index.PageLocations
 		target := sort.Search(len(pages), func(i int) bool {
@@ -1075,9 +1073,10 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 		}
 
 		_, err = f.section.Seek(pages[target].Offset-f.baseOffset, io.SeekStart)
-		f.rbuf.Reset(&f.section)
-		return err
 	}
+
+	f.rbuf.Reset(&f.section)
+	return err
 }
 
 // Close closes the page reader.
