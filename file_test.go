@@ -634,7 +634,8 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 						atomic.StoreInt64(&ctr.reads, 0)
 
 						// benchmark loop: read / seek through the whole file
-						for b.Loop() {
+						b.ResetTimer()
+						for range b.N {
 							r := parquet.NewGenericReader[benchRow](f)
 
 							for j := range numRows {
@@ -674,7 +675,8 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 					b.Run(name, func(b *testing.B) {
 						atomic.StoreInt64(&ctr.reads, 0)
 
-						for b.Loop() {
+						b.ResetTimer()
+						for range b.N {
 							// sequentially read all pages of column 1 (baseline)
 							if stepSize == 0 {
 								for _, rg := range f.RowGroups() {
