@@ -796,7 +796,7 @@ func (f *FilePages) ReadPage() (Page, error) {
 	// of requested row to read, as opposed to reading sequentially values and moving through pages
 	seekToRowStart := f.skip > 0
 
-	// Serve last page if SeekToRow targeted the same page as last returned
+	// serve the last page if SeekToRow targeted the same page as last returned
 	if f.serveLastPage && f.lastPageValid {
 		f.serveLastPage = false
 		f.index = f.lastPageIndex + 1
