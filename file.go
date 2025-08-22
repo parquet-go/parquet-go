@@ -744,7 +744,6 @@ type FilePages struct {
 	// track the last page to prevent re-reading the same page
 	lastPageIndex int
 	lastPage      Page
-	lastPageValid bool
 	serveLastPage bool
 
 	bufferSize int
@@ -767,7 +766,6 @@ func (f *FilePages) init(c *FileColumnChunk, reader io.ReaderAt) {
 	f.index = 0
 	f.lastPage = nil
 	f.lastPageIndex = -1
-	f.lastPageValid = false
 	f.serveLastPage = false
 }
 
@@ -797,7 +795,7 @@ func (f *FilePages) ReadPage() (Page, error) {
 	seekToRowStart := f.skip > 0
 
 	// serve the last page if SeekToRow targeted the same page as last returned
-	if f.serveLastPage && f.lastPageValid {
+	if f.serveLastPage && f.lastPage != nil {
 		f.serveLastPage = false
 		f.index = f.lastPageIndex + 1
 
@@ -870,7 +868,7 @@ func (f *FilePages) ReadPage() (Page, error) {
 			continue
 		}
 
-		if f.lastPageValid {
+		if f.lastPage != nil {
 			Release(f.lastPage) // in case we cached a valid last page, release it now
 		}
 
@@ -878,7 +876,6 @@ func (f *FilePages) ReadPage() (Page, error) {
 		f.lastPage = page
 		Retain(page)
 		f.lastPageIndex = f.index
-		f.lastPageValid = true
 
 		f.index++
 		if f.skip == 0 {
@@ -1044,7 +1041,7 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 		}
 
 		// positioned at the last returned page: serve it
-		if f.lastPageValid && target == f.lastPageIndex {
+		if f.lastPage != nil && target == f.lastPageIndex {
 			f.skip = rowIndex - pages[f.lastPageIndex].FirstRowIndex
 			f.serveLastPage = true
 			return nil
@@ -1091,12 +1088,11 @@ func (f *FilePages) Close() error {
 	f.dictOffset = 0
 	f.index = 0
 	// release cached page if any
-	if f.lastPageValid {
+	if f.lastPage != nil {
 		Release(f.lastPage)
 	}
 	f.lastPage = nil
 	f.lastPageIndex = -1
-	f.lastPageValid = false
 	f.serveLastPage = false
 	f.skip = 0
 	f.dictionary = nil
