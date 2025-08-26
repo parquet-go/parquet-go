@@ -563,7 +563,7 @@ func TestSeekToRowGeneral(t *testing.T) {
 	w := parquet.NewGenericWriter[Row](buf, parquet.PageBufferSize(128))
 
 	// Write rows individually with frequent flushes to create multiple row groups
-	for i := 0; i < numRows; i++ {
+	for i := range numRows {
 		if _, err := w.Write([]Row{{A: i}}); err != nil {
 			t.Fatal(err)
 		}
@@ -597,7 +597,7 @@ func TestSeekToRowGeneral(t *testing.T) {
 
 			// Test 1: SeekToRow forward through every row
 			t.Run("forward", func(t *testing.T) {
-				for i := 0; i < numRows; i++ {
+				for i := range numRows {
 					if err := pages.SeekToRow(int64(i)); err != nil {
 						t.Fatalf("SeekToRow(%d) failed: %v", i, err)
 					}
