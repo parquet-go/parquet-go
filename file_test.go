@@ -580,12 +580,7 @@ func TestSeekToRowGeneral(t *testing.T) {
 	}
 	t.Logf("Testing random rows: %v", randomRows)
 
-	modes := []parquet.ReadMode{
-		parquet.ReadModeSync,
-		// parquet.ReadModeAsync, // temporarily disabled due to flakiness
-	}
-
-	for _, mode := range modes {
+	for _, mode := range []parquet.ReadMode{parquet.ReadModeSync, parquet.ReadModeAsync} {
 		t.Run(readModeToString(mode), func(t *testing.T) {
 			// Open parquet file for reading
 			pf, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()), parquet.FileReadMode(mode))
@@ -670,6 +665,10 @@ func TestSeekToRowGeneral(t *testing.T) {
 
 			// Test 3: SeekToRow to random rows
 			t.Run("random", func(t *testing.T) {
+				if mode == parquet.ReadModeAsync {
+					t.Skip("test is flaky in async mode")
+				}
+
 				for _, rowNum := range randomRows {
 					if err := pages.SeekToRow(int64(rowNum)); err != nil {
 						t.Fatalf("SeekToRow(%d) failed: %v", rowNum, err)
