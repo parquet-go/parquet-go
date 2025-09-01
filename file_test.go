@@ -598,7 +598,8 @@ func TestSeekToRowGeneral(t *testing.T) {
 			// Test 1: SeekToRow forward through every row
 			t.Run("forward", func(t *testing.T) {
 				for i := range numRows {
-					if err := pages.SeekToRow(int64(i)); err != nil {
+					err = pages.SeekToRow(int64(i))
+					if err != nil {
 						t.Fatalf("SeekToRow(%d) failed: %v", i, err)
 					}
 
@@ -613,7 +614,10 @@ func TestSeekToRowGeneral(t *testing.T) {
 						t.Fatalf("ReadValues failed at row %d: %v", i, err)
 					}
 
-					_, _ = pages.ReadPage()
+					_, err = pages.ReadPage()
+					if err != nil && !errors.Is(err, io.EOF) {
+						t.Fatalf("ReadPage failed at row %d: %v", i, err)
+					}
 
 					if n != 1 {
 						t.Fatalf("expected 1 value, got %d at position %d", n, i)
