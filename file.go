@@ -1019,13 +1019,17 @@ func (f *FilePages) readPage(header *format.PageHeader, reader *bufio.Reader) (*
 }
 
 // SeekToRow seeks to the given row index in the column chunk.
-func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
+func (f *FilePages) SeekToRow(rowIndex int64) error {
 	if f.chunk == nil {
 		return io.ErrClosedPipe
 	}
 
 	if index := f.chunk.offsetIndex.Load(); index == nil {
-		_, err = f.section.Seek(f.dataOffset-f.baseOffset, io.SeekStart)
+		_, err := f.section.Seek(f.dataOffset-f.baseOffset, io.SeekStart)
+		if err != nil {
+			return err
+		}
+
 		f.skip = rowIndex
 		f.index = 0
 		if f.dictOffset > 0 {
@@ -1057,7 +1061,12 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 		f.index = target
 
 		// if the target page is within the unread portion of the current buffer, just skip/discard some bytes
-		pos, _ := f.section.Seek(0, io.SeekCurrent)
+		var pos int64
+		pos, err := f.section.Seek(0, io.SeekCurrent) // no-op seek to retrieve position
+		if err != nil {
+			return err
+		}
+
 		unread := int64(f.rbuf.Buffered())
 		currOffset := pos - unread                          // section relative offset
 		targetOffset := pages[target].Offset - f.baseOffset // section relative target offset
@@ -1070,10 +1079,13 @@ func (f *FilePages) SeekToRow(rowIndex int64) (err error) {
 		}
 
 		_, err = f.section.Seek(pages[target].Offset-f.baseOffset, io.SeekStart)
+		if err != nil {
+			return err
+		}
 	}
 
 	f.rbuf.Reset(&f.section)
-	return err
+	return nil
 }
 
 // Close closes the page reader.
