@@ -553,6 +553,7 @@ func TestCopyFilePages(t *testing.T) {
 func TestSeekToRowGeneral(t *testing.T) {
 	type Row struct {
 		A int `parquet:","`
+		B int `parquet:",dict"`
 	}
 
 	// Create test data with 100 rows
@@ -564,11 +565,10 @@ func TestSeekToRowGeneral(t *testing.T) {
 
 	// Write rows individually with frequent flushes to create multiple row groups
 	for i := range numRows {
-		if _, err := w.Write([]Row{{A: i}}); err != nil {
+		if _, err := w.Write([]Row{{A: i, B: i}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -583,124 +583,126 @@ func TestSeekToRowGeneral(t *testing.T) {
 	// values to read
 	vals := make([]parquet.Value, 1)
 
-	for _, mode := range []parquet.ReadMode{parquet.ReadModeSync, parquet.ReadModeAsync} {
-		t.Run(readModeToString(mode), func(t *testing.T) {
-			// Open parquet file for reading
-			pf, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()), parquet.FileReadMode(mode))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			rgs := pf.RowGroups()
-			if len(rgs) != 1 {
-				t.Fatalf("expected exactly 1 row group, got %d", len(rgs))
-			}
-
-			pages := rgs[0].ColumnChunks()[0].Pages()
-
-			// Test 1: SeekToRow forward through every row
-			t.Run("forward", func(t *testing.T) {
-				for i := range numRows {
-					err = pages.SeekToRow(int64(i))
-					if err != nil {
-						t.Fatalf("SeekToRow(%d) failed: %v", i, err)
-					}
-
-					pg, err := pages.ReadPage()
-					if err != nil {
-						t.Fatalf("ReadPage failed at row %d: %v", i, err)
-					}
-
-					_, err = pages.ReadPage()
-					if err != nil && !errors.Is(err, io.EOF) {
-						t.Fatalf("ReadPage failed at row %d: %v", i, err)
-					}
-
-					n, err := pg.Values().ReadValues(vals)
-					if err != nil && !errors.Is(err, io.EOF) {
-						t.Fatalf("ReadValues failed at row %d: %v", i, err)
-					}
-
-					if n != 1 {
-						t.Fatalf("expected 1 value, got %d at position %d", n, i)
-					}
-
-					if vals[0].Int64() != int64(i) {
-						t.Errorf("row %d: expected value %d, got %d", i, i, vals[0].Int64())
-					}
+	for _, col := range []int{0, 1} {
+		for _, mode := range []parquet.ReadMode{parquet.ReadModeSync, parquet.ReadModeAsync} {
+			t.Run(fmt.Sprintf("%s/col%d", readModeToString(mode), col), func(t *testing.T) {
+				// Open parquet file for reading
+				pf, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()), parquet.FileReadMode(mode))
+				if err != nil {
+					t.Fatal(err)
 				}
-			})
 
-			pages = rgs[0].ColumnChunks()[0].Pages()
-
-			// Test 2: SeekToRow backward through every row
-			t.Run("backward", func(t *testing.T) {
-				for i := numRows - 1; i >= 0; i-- {
-					err = pages.SeekToRow(int64(i))
-					if err != nil {
-						t.Fatalf("SeekToRow(%d) failed: %v", i, err)
-					}
-
-					pg, err := pages.ReadPage()
-					if err != nil {
-						t.Fatalf("ReadPage failed at row %d: %v", i, err)
-					}
-
-					_, err = pages.ReadPage()
-					if err != nil && !errors.Is(err, io.EOF) {
-						t.Fatalf("ReadPage failed at row %d: %v", i, err)
-					}
-
-					n, err := pg.Values().ReadValues(vals)
-					if err != nil && !errors.Is(err, io.EOF) {
-						t.Fatalf("ReadValues failed at row %d: %v", i, err)
-					}
-
-					if n != 1 {
-						t.Fatalf("expected 1 value, got %d at position %d", n, i)
-					}
-
-					if vals[0].Int64() != int64(i) {
-						t.Errorf("row %d: expected value %d, got %d", i, i, vals[0].Int64())
-					}
+				rgs := pf.RowGroups()
+				if len(rgs) != 1 {
+					t.Fatalf("expected exactly 1 row group, got %d", len(rgs))
 				}
+
+				pages := rgs[0].ColumnChunks()[col].Pages()
+
+				// Test 1: SeekToRow forward through every row
+				t.Run("forward", func(t *testing.T) {
+					for i := range numRows {
+						err = pages.SeekToRow(int64(i))
+						if err != nil {
+							t.Fatalf("SeekToRow(%d) failed: %v", i, err)
+						}
+
+						pg, err := pages.ReadPage()
+						if err != nil {
+							t.Fatalf("ReadPage failed at row %d: %v", i, err)
+						}
+
+						_, err = pages.ReadPage()
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadPage failed at row %d: %v", i, err)
+						}
+
+						n, err := pg.Values().ReadValues(vals)
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadValues failed at row %d: %v", i, err)
+						}
+
+						if n != 1 {
+							t.Fatalf("expected 1 value, got %d at position %d", n, i)
+						}
+
+						if vals[0].Int64() != int64(i) {
+							t.Errorf("row %d: expected value %d, got %d", i, i, vals[0].Int64())
+						}
+					}
+				})
+
+				pages = rgs[0].ColumnChunks()[col].Pages()
+
+				// Test 2: SeekToRow backward through every row
+				t.Run("backward", func(t *testing.T) {
+					for i := numRows - 1; i >= 0; i-- {
+						err = pages.SeekToRow(int64(i))
+						if err != nil {
+							t.Fatalf("SeekToRow(%d) failed: %v", i, err)
+						}
+
+						pg, err := pages.ReadPage()
+						if err != nil {
+							t.Fatalf("ReadPage failed at row %d: %v", i, err)
+						}
+
+						_, err = pages.ReadPage()
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadPage failed at row %d: %v", i, err)
+						}
+
+						n, err := pg.Values().ReadValues(vals)
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadValues failed at row %d: %v", i, err)
+						}
+
+						if n != 1 {
+							t.Fatalf("expected 1 value, got %d at position %d", n, i)
+						}
+
+						if vals[0].Int64() != int64(i) {
+							t.Errorf("row %d: expected value %d, got %d", i, i, vals[0].Int64())
+						}
+					}
+				})
+
+				pages = rgs[0].ColumnChunks()[col].Pages()
+
+				// Test 3: SeekToRow to random rows
+				t.Run("random", func(t *testing.T) {
+					for _, rowNum := range randomRows {
+						err = pages.SeekToRow(int64(rowNum))
+						if err != nil {
+							t.Fatalf("SeekToRow(%d) failed: %v", rowNum, err)
+						}
+
+						pg, err := pages.ReadPage()
+						if err != nil {
+							t.Fatalf("ReadPage failed at row %d: %v", rowNum, err)
+						}
+
+						_, err = pages.ReadPage()
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadPage failed at row %d: %v", rowNum, err)
+						}
+
+						n, err := pg.Values().ReadValues(vals)
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadValues failed at row %d: %v", rowNum, err)
+						}
+
+						if n != 1 {
+							t.Fatalf("expected 1 value, got %d at position %d", n, rowNum)
+						}
+
+						if vals[0].Int64() != int64(rowNum) {
+							t.Errorf("row %d: expected value %d, got %d", rowNum, rowNum, vals[0].Int64())
+						}
+					}
+				})
 			})
-
-			pages = rgs[0].ColumnChunks()[0].Pages()
-
-			// Test 3: SeekToRow to random rows
-			t.Run("random", func(t *testing.T) {
-				for _, rowNum := range randomRows {
-					err = pages.SeekToRow(int64(rowNum))
-					if err != nil {
-						t.Fatalf("SeekToRow(%d) failed: %v", rowNum, err)
-					}
-
-					pg, err := pages.ReadPage()
-					if err != nil {
-						t.Fatalf("ReadPage failed at row %d: %v", rowNum, err)
-					}
-
-					_, err = pages.ReadPage()
-					if err != nil && !errors.Is(err, io.EOF) {
-						t.Fatalf("ReadPage failed at row %d: %v", rowNum, err)
-					}
-
-					n, err := pg.Values().ReadValues(vals)
-					if err != nil && !errors.Is(err, io.EOF) {
-						t.Fatalf("ReadValues failed at row %d: %v", rowNum, err)
-					}
-
-					if n != 1 {
-						t.Fatalf("expected 1 value, got %d at position %d", n, rowNum)
-					}
-
-					if vals[0].Int64() != int64(rowNum) {
-						t.Errorf("row %d: expected value %d, got %d", rowNum, rowNum, vals[0].Int64())
-					}
-				}
-			})
-		})
+		}
 	}
 }
 
