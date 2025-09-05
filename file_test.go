@@ -580,6 +580,9 @@ func TestSeekToRowGeneral(t *testing.T) {
 	}
 	t.Logf("Testing random rows: %v", randomRows)
 
+	// values to read
+	vals := make([]parquet.Value, 1)
+
 	for _, mode := range []parquet.ReadMode{parquet.ReadModeSync, parquet.ReadModeAsync} {
 		t.Run(readModeToString(mode), func(t *testing.T) {
 			// Open parquet file for reading
@@ -608,15 +611,14 @@ func TestSeekToRowGeneral(t *testing.T) {
 						t.Fatalf("ReadPage failed at row %d: %v", i, err)
 					}
 
-					vals := make([]parquet.Value, 1)
-					n, err := pg.Values().ReadValues(vals)
-					if err != nil && err != io.EOF {
-						t.Fatalf("ReadValues failed at row %d: %v", i, err)
-					}
-
 					_, err = pages.ReadPage()
 					if err != nil && !errors.Is(err, io.EOF) {
 						t.Fatalf("ReadPage failed at row %d: %v", i, err)
+					}
+
+					n, err := pg.Values().ReadValues(vals)
+					if err != nil && !errors.Is(err, io.EOF) {
+						t.Fatalf("ReadValues failed at row %d: %v", i, err)
 					}
 
 					if n != 1 {
@@ -634,7 +636,8 @@ func TestSeekToRowGeneral(t *testing.T) {
 			// Test 2: SeekToRow backward through every row
 			t.Run("backward", func(t *testing.T) {
 				for i := numRows - 1; i >= 0; i-- {
-					if err := pages.SeekToRow(int64(i)); err != nil {
+					err = pages.SeekToRow(int64(i))
+					if err != nil {
 						t.Fatalf("SeekToRow(%d) failed: %v", i, err)
 					}
 
@@ -643,11 +646,13 @@ func TestSeekToRowGeneral(t *testing.T) {
 						t.Fatalf("ReadPage failed at row %d: %v", i, err)
 					}
 
-					_, _ = pages.ReadPage()
+					_, err = pages.ReadPage()
+					if err != nil && !errors.Is(err, io.EOF) {
+						t.Fatalf("ReadPage failed at row %d: %v", i, err)
+					}
 
-					vals := make([]parquet.Value, 1)
 					n, err := pg.Values().ReadValues(vals)
-					if err != nil && err != io.EOF {
+					if err != nil && !errors.Is(err, io.EOF) {
 						t.Fatalf("ReadValues failed at row %d: %v", i, err)
 					}
 
@@ -665,12 +670,9 @@ func TestSeekToRowGeneral(t *testing.T) {
 
 			// Test 3: SeekToRow to random rows
 			t.Run("random", func(t *testing.T) {
-				if mode == parquet.ReadModeAsync {
-					t.Skip("test is flaky in async mode")
-				}
-
 				for _, rowNum := range randomRows {
-					if err := pages.SeekToRow(int64(rowNum)); err != nil {
+					err = pages.SeekToRow(int64(rowNum))
+					if err != nil {
 						t.Fatalf("SeekToRow(%d) failed: %v", rowNum, err)
 					}
 
@@ -679,11 +681,13 @@ func TestSeekToRowGeneral(t *testing.T) {
 						t.Fatalf("ReadPage failed at row %d: %v", rowNum, err)
 					}
 
-					_, _ = pages.ReadPage()
+					_, err = pages.ReadPage()
+					if err != nil && !errors.Is(err, io.EOF) {
+						t.Fatalf("ReadPage failed at row %d: %v", rowNum, err)
+					}
 
-					vals := make([]parquet.Value, 1)
 					n, err := pg.Values().ReadValues(vals)
-					if err != nil && err != io.EOF {
+					if err != nil && !errors.Is(err, io.EOF) {
 						t.Fatalf("ReadValues failed at row %d: %v", rowNum, err)
 					}
 
