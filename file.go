@@ -1040,14 +1040,13 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 			return ErrSeekOutOfRange
 		}
 
+		f.skip = rowIndex - pages[target].FirstRowIndex
+
 		// positioned at the last returned page: serve it
 		if f.lastPage != nil && target == f.lastPageIndex {
-			f.skip = rowIndex - pages[f.lastPageIndex].FirstRowIndex
 			f.serveLastPage = true
 			return nil
 		}
-
-		f.skip = rowIndex - pages[target].FirstRowIndex
 
 		// already positioned at the target page
 		if f.index == target {
