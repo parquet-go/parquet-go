@@ -799,10 +799,6 @@ func (f *FilePages) ReadPage() (Page, error) {
 		f.serveLastPage = false
 		f.index = f.lastPageIndex + 1
 
-		if f.skip == 0 {
-			return f.lastPage, nil
-		}
-
 		numRows := f.lastPage.NumRows()
 		if f.skip < numRows {
 			tail := f.lastPage.Slice(f.skip, numRows)
