@@ -764,7 +764,10 @@ func (f *FilePages) init(c *FileColumnChunk, reader io.ReaderAt) {
 	f.rbuf, f.rbufpool = getBufioReader(&f.section, f.bufferSize)
 	f.decoder.Reset(f.protocol.NewReader(f.rbuf))
 	f.index = 0
-	f.lastPage = nil
+	if f.lastPage != nil {
+		Release(f.lastPage)
+		f.lastPage = nil
+	}
 	f.lastPageIndex = -1
 	f.serveLastPage = false
 }
@@ -1066,10 +1069,11 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 		currOffset := pos - unread                          // section relative offset
 		targetOffset := pages[target].Offset - f.baseOffset // section relative target offset
 		skipBytes := targetOffset - currOffset
-		if skipBytes >= 0 && skipBytes <= unread {
-			if skipBytes > 0 {
-				_, err = f.rbuf.Discard(int(skipBytes))
-			}
+		if skipBytes == 0 {
+			return nil
+		}
+		if skipBytes > 0 && skipBytes <= unread {
+			_, err = f.rbuf.Discard(int(skipBytes))
 			return err
 		}
 
@@ -1094,11 +1098,10 @@ func (f *FilePages) Close() error {
 	f.dataOffset = 0
 	f.dictOffset = 0
 	f.index = 0
-	// release cached page if any
 	if f.lastPage != nil {
 		Release(f.lastPage)
+		f.lastPage = nil
 	}
-	f.lastPage = nil
 	f.lastPageIndex = -1
 	f.serveLastPage = false
 	f.skip = 0
