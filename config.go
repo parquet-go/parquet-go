@@ -2,16 +2,15 @@ package parquet
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 
-	"slices"
-
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/encoding"
-	"maps"
 )
 
 // ReadMode is an enum that is used to configure the way that a File reads pages.
