@@ -762,3 +762,55 @@ func TestSchemaRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestSchemaOfOptions(t *testing.T) {
+	type testChild struct {
+		Value  string
+		Value2 string
+	}
+	type testParent struct {
+		Name   string
+		Values []testChild
+	}
+
+	tests := []struct {
+		value    any
+		expected any
+		options  []parquet.SchemaOption
+	}{
+		{
+			// No change
+			value:    new(testParent),
+			expected: new(testParent),
+		},
+		{
+			// Change nested field name, encoding, and compression.
+			value: new(testParent),
+			options: []parquet.SchemaOption{parquet.FieldTagsCallback(func(parentStruct reflect.Type, f *reflect.StructField, tags *parquet.ParquetTags) {
+				if parentStruct == reflect.TypeOf(testChild{}) {
+					if f.Name == "Value2" {
+						tags.Parquet = "Value3,snappy,dict"
+					}
+				}
+			})},
+			expected: new(struct {
+				Name   string
+				Values []struct {
+					Value  string
+					Value3 string `parquet:",snappy,dict"`
+				}
+			}),
+		},
+	}
+	for _, test := range tests {
+		t.Run("", func(t *testing.T) {
+			got := parquet.SchemaOf(test.value, test.options...)
+
+			expected := parquet.SchemaOf(test.expected)
+
+			if !parquet.IdenticalNodes(got, expected) {
+				t.Errorf("expected %v to be equal to %v", got, expected)
+			}
+		})
+	}
+}

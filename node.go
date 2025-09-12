@@ -491,6 +491,22 @@ func fieldByName(node Node, name string) Field {
 	return nil
 }
 
+// IdenticalNodes returns true if node1 and node2 contain identical schemas including field order, encoding, and compression.
+func IdenticalNodes(node1, node2 Node) bool {
+	if node1.Leaf() {
+		return node2.Leaf() && leafNodesAreIdentical(node1, node2)
+	} else {
+		return !node2.Leaf() && groupNodesAreEqual(node1, node2)
+	}
+}
+
+func leafNodesAreIdentical(node1, node2 Node) bool {
+	return EqualTypes(node1.Type(), node2.Type()) &&
+		repetitionsAreEqual(node1, node2) &&
+		node1.Encoding().String() == node2.Encoding().String() &&
+		node1.Compression().String() == node2.Compression().String()
+}
+
 // EqualNodes returns true if node1 and node2 are equal.
 //
 // Nodes that are not of the same repetition type (optional, required, repeated)

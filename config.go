@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"reflect"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -422,6 +423,12 @@ func (c *SortingConfig) ConfigureSorting(config *SortingConfig) {
 	*config = coalesceSortingConfig(*c, *config)
 }
 
+// SchemaOption is an interface implemented by types that carry configuration
+// options for parquet schemas.
+type SchemaOption interface {
+	ConfigureSchema(*SchemaConfig)
+}
+
 // FileOption is an interface implemented by types that carry configuration
 // options for parquet files.
 type FileOption interface {
@@ -754,6 +761,20 @@ func DropDuplicatedRows(drop bool) SortingOption {
 	return sortingOption(func(config *SortingConfig) { config.DropDuplicatedRows = drop })
 }
 
+type FieldTagsCallbackFunc func(parentStruct reflect.Type, f *reflect.StructField, tags *ParquetTags)
+
+type SchemaConfig struct {
+	fieldTagsCallback FieldTagsCallbackFunc
+}
+
+// FieldTagsCallback allows for customiziation of parquet tags when deriving a schema
+// from a Go struct.
+func FieldTagsCallback(cb FieldTagsCallbackFunc) SchemaOption {
+	return schemaOption(func(cfg *SchemaConfig) {
+		cfg.fieldTagsCallback = cb
+	})
+}
+
 type fileOption func(*FileConfig)
 
 func (opt fileOption) ConfigureFile(config *FileConfig) { opt(config) }
@@ -773,6 +794,10 @@ func (opt rowGroupOption) ConfigureRowGroup(config *RowGroupConfig) { opt(config
 type sortingOption func(*SortingConfig)
 
 func (opt sortingOption) ConfigureSorting(config *SortingConfig) { opt(config) }
+
+type schemaOption func(*SchemaConfig)
+
+func (opt schemaOption) ConfigureSchema(config *SchemaConfig) { opt(config) }
 
 func coalesceBool(i1, i2 bool) bool {
 	return i1 || i2
