@@ -761,18 +761,24 @@ func DropDuplicatedRows(drop bool) SortingOption {
 	return sortingOption(func(config *SortingConfig) { config.DropDuplicatedRows = drop })
 }
 
-type FieldTagsCallbackFunc func(parentStruct reflect.Type, f *reflect.StructField, tags *ParquetTags)
-
 type SchemaConfig struct {
-	fieldTagsCallback FieldTagsCallbackFunc
+	tagOverrides []struct {
+		typ  reflect.Type
+		name string
+		tags ParquetTags
+	}
 }
 
-// FieldTagsCallback allows for customiziation of parquet tags when deriving a schema
+// FieldTags allows for customiziation of parquet tags when deriving a schema
 // from a Go struct.
-func FieldTagsCallback(cb FieldTagsCallbackFunc) SchemaOption {
-	return schemaOption(func(cfg *SchemaConfig) {
-		cfg.fieldTagsCallback = cb
-	})
+func FieldTags(typ reflect.Type, name string, tags ParquetTags) schemaOption {
+	return func(cfg *SchemaConfig) {
+		cfg.tagOverrides = append(cfg.tagOverrides, struct {
+			typ  reflect.Type
+			name string
+			tags ParquetTags
+		}{typ, name, tags})
+	}
 }
 
 type fileOption func(*FileConfig)

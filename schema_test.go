@@ -785,14 +785,8 @@ func TestSchemaOfOptions(t *testing.T) {
 		},
 		{
 			// Change nested field name, encoding, and compression.
-			value: new(testParent),
-			options: []parquet.SchemaOption{parquet.FieldTagsCallback(func(parentStruct reflect.Type, f *reflect.StructField, tags *parquet.ParquetTags) {
-				if parentStruct == reflect.TypeOf(testChild{}) {
-					if f.Name == "Value2" {
-						tags.Parquet = "Value3,snappy,dict"
-					}
-				}
-			})},
+			value:   new(testParent),
+			options: []parquet.SchemaOption{parquet.FieldTags(reflect.TypeOf(testChild{}), "Value2", parquet.ParquetTags{Parquet: "Value3,snappy,dict"})},
 			expected: new(struct {
 				Name   string
 				Values []struct {

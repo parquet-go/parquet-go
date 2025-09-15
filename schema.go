@@ -157,7 +157,7 @@ func schemaOf(model reflect.Type) *Schema {
 }
 
 func schemaOfWithConfig(model reflect.Type, cfg SchemaConfig) *Schema {
-	cacheable := cfg.fieldTagsCallback == nil
+	cacheable := len(cfg.tagOverrides) == 0
 	if cacheable {
 		cached, _ := cachedSchemas.Load(model)
 		schema, _ := cached.(*Schema)
@@ -438,8 +438,11 @@ func structNodeOf(t reflect.Type, cfg SchemaConfig) *structNode {
 		field := structField{name: fields[i].Name, index: fields[i].Index}
 
 		tags := fromStructTag(fields[i].Tag)
-		if cfg.fieldTagsCallback != nil {
-			cfg.fieldTagsCallback(t, &fields[i], &tags)
+		for _, override := range cfg.tagOverrides {
+			if override.typ == t && override.name == fields[i].Name {
+				tags = override.tags
+				break
+			}
 		}
 
 		field.Node = makeNodeOf(fields[i].Type, fields[i].Name, tags, cfg)
@@ -457,8 +460,11 @@ func structFieldsOf(t reflect.Type, cfg SchemaConfig) []reflect.StructField {
 		f := &fields[i]
 
 		tags := fromStructTag(f.Tag)
-		if cfg.fieldTagsCallback != nil {
-			cfg.fieldTagsCallback(t, f, &tags)
+		for _, override := range cfg.tagOverrides {
+			if override.typ == t && override.name == f.Name {
+				tags = override.tags
+				break
+			}
 		}
 
 		if tag := tags.Parquet; tag != "" {
@@ -477,8 +483,11 @@ func appendStructFields(t reflect.Type, fields []reflect.StructField, index []in
 		f := t.Field(i)
 
 		tags := fromStructTag(f.Tag)
-		if cfg.fieldTagsCallback != nil {
-			cfg.fieldTagsCallback(t, &f, &tags)
+		for _, override := range cfg.tagOverrides {
+			if override.typ == t && override.name == f.Name {
+				tags = override.tags
+				break
+			}
 		}
 
 		if tag := tags.Parquet; tag != "" {
