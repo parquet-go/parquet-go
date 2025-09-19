@@ -38,14 +38,11 @@ func TestSliceBoundsOutOfRange(t *testing.T) {
 	defer os.Remove(file.Name())
 	defer file.Close()
 
-	// Print the file path
-	t.Logf("创建的文件路径: %s", file.Name())
-
 	// Create schema
 	schema := parquet.SchemaOf(TestRecord{})
 
 	// Create writer with small MaxRowsPerRowGroup - this triggers the bug
-	writer := parquet.NewGenericWriter[map[string]interface{}](
+	writer := parquet.NewGenericWriter[map[string]any](
 		file,
 		schema,
 		parquet.MaxRowsPerRowGroup(120), // Small value is key to reproducing the bug
@@ -54,16 +51,16 @@ func TestSliceBoundsOutOfRange(t *testing.T) {
 
 	// Test parameters that reproduce the bug
 	batchSize := 100  // Must be > 64 (maxRowsPerWrite) to trigger the bug
-	totalBatches := 1 // Multiple batches to cross row group boundaries
+	totalBatches := 3 // Multiple batches to cross row group boundaries
 
 	t.Logf("Test configuration: MaxRowsPerRowGroup=120, BatchSize=%d", batchSize)
 
-	for batch := 0; batch < totalBatches; batch++ {
+	for batch := range totalBatches {
 		// Generate test data
-		records := make([]map[string]interface{}, batchSize)
-		for i := 0; i < batchSize; i++ {
+		records := make([]map[string]any, batchSize)
+		for i := range batchSize {
 			recordID := int64(batch*batchSize + i)
-			records[i] = map[string]interface{}{
+			records[i] = map[string]any{
 				"id":     recordID,
 				"name":   fmt.Sprintf("user_%d", recordID),
 				"age":    int32(20 + (recordID % 50)),
@@ -99,13 +96,10 @@ func TestWorkaroundWithLargeMaxRows(t *testing.T) {
 	defer os.Remove(file.Name())
 	defer file.Close()
 
-	// Print the file path
-	t.Logf("创建的文件路径: %s", file.Name())
-
 	schema := parquet.SchemaOf(TestRecord{})
 
 	// Use large MaxRowsPerRowGroup - this avoids the bug
-	writer := parquet.NewGenericWriter[map[string]interface{}](
+	writer := parquet.NewGenericWriter[map[string]any](
 		file,
 		schema,
 		parquet.MaxRowsPerRowGroup(10000), // Large value avoids the bug
@@ -117,11 +111,11 @@ func TestWorkaroundWithLargeMaxRows(t *testing.T) {
 
 	t.Logf("Workaround test: MaxRowsPerRowGroup=10000, BatchSize=%d", batchSize)
 
-	for batch := 0; batch < totalBatches; batch++ {
-		records := make([]map[string]interface{}, batchSize)
-		for i := 0; i < batchSize; i++ {
+	for batch := range totalBatches {
+		records := make([]map[string]any, batchSize)
+		for i := range batchSize {
 			recordID := int64(batch*batchSize + i)
-			records[i] = map[string]interface{}{
+			records[i] = map[string]any{
 				"id":     recordID,
 				"name":   fmt.Sprintf("user_%d", recordID),
 				"age":    int32(20 + (recordID % 50)),
