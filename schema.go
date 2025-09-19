@@ -946,6 +946,9 @@ func makeNodeOf(t reflect.Type, name string, tags parquetTags) Node {
 					if t.Elem().Kind() != reflect.Uint8 || t.Len() != 16 {
 						throwInvalidTag(t, name, option)
 					}
+					setNode(UUID())
+				case reflect.String:
+					setNode(UUID())
 				default:
 					throwInvalidTag(t, name, option)
 				}
