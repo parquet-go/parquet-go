@@ -1918,3 +1918,41 @@ func TestIssue275(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestColumnValidation(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatal("require no panic")
+		}
+	}()
+
+	type DuplicateColumnsDiffTypes struct {
+		Foo string `parquet:"foo"`
+		Bar int    `parquet:"foo"`
+	}
+
+	b := bytes.NewBuffer(nil)
+
+	failedWriter := parquet.NewGenericWriter[*DuplicateColumnsDiffTypes](b)
+	data := []*DuplicateColumnsDiffTypes{
+		{Foo: "1", Bar: 1},
+	}
+	if _, err := failedWriter.Write(data); err == nil {
+		t.Fatal(err)
+	}
+
+	type DuplicateColumnsEqualTypes struct {
+		Foo string `parquet:"foo"`
+		Bar string    `parquet:"foo"`
+	}
+
+	b = bytes.NewBuffer(nil)
+
+	normalWriter := parquet.NewGenericWriter[*DuplicateColumnsEqualTypes](b)
+	data2 := []*DuplicateColumnsEqualTypes{
+		{Foo: "1", Bar: "1"},
+	}
+	if _, err := normalWriter.Write(data2); err != nil {
+		t.Fatal(err)
+	}
+}
