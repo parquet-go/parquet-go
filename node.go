@@ -602,3 +602,159 @@ func sortFields(fields []Field) {
 func compareFields(a, b Field) int {
 	return strings.Compare(a.Name(), b.Name())
 }
+
+func RewriteSchema(schema *Schema, replace func(path []string, node Node) Node) *Schema {
+	return NewSchema(schema.name, rewriteSchema(nil, schema.root, replace))
+}
+
+func rewriteSchema(path []string, node Node, replace func(path []string, node Node) Node) Node {
+	if node.Leaf() {
+		return replace(path, node)
+	}
+
+	// Types requiring special handling.
+	switch n := node.(type) {
+	case *structNode:
+		// Maintain struct information including field order and index.
+		fields := make([]structField, 0, len(n.fields))
+		for _, field := range n.fields {
+			node := rewriteSchema(append(path, field.name), field.Node, replace)
+			if node == nil {
+				continue
+			}
+			fields = append(fields, structField{
+				Node:  node,
+				name:  field.name,
+				index: field.index,
+			})
+		}
+		return &structNode{
+			gotype: n.gotype,
+			fields: fields,
+		}
+	case *groupField:
+		// Rewrite and return inner node only, groupField accounted for in parent Group below.
+		return rewriteSchema(path, n.Node, replace)
+	}
+
+	g := Group{}
+	for _, field := range node.Fields() {
+		n := field.Name()
+		node := rewriteSchema(append(path, n), field, replace)
+		if node == nil {
+			continue
+		}
+		g[n] = &groupField{
+			Node: node,
+			name: n,
+		}
+	}
+
+	out := (Node)(&g)
+
+	if logicalType := node.Type().LogicalType(); logicalType != nil {
+		switch {
+		case logicalType.List != nil:
+			out = &listNode{Group: g}
+		case logicalType.Map != nil:
+			out = &mapNode{Group: g}
+		}
+	}
+
+	// Reapply options as needed.
+
+	if node.Optional() && !out.Optional() {
+		out = Optional(out)
+	}
+
+	if node.Repeated() && !out.Repeated() {
+		out = Repeated(out)
+	}
+
+	if node.Required() && !out.Required() {
+		out = Required(out)
+	}
+
+	// This must be last.
+	if node.GoType() != out.GoType() {
+		out = &goNode{
+			Node:   out,
+			gotype: node.GoType(),
+		}
+	}
+
+	return out
+}
+
+// BinaryEqualNodes returns true if node1 and node2 are binary-identical in parquet input/output.
+// This is like EqualNodes, but considers encoding, compression, ordering,and go type.
+func BinaryEqualNodes(node1, node2 Node) bool {
+	if node1.Leaf() {
+		return node2.Leaf() && leafNodesAreBinaryIdentical(node1, node2)
+	} else {
+		return !node2.Leaf() && groupNodesAreBinaryIdentical(node1, node2)
+	}
+}
+
+func leafNodesAreBinaryIdentical(node1, node2 Node) bool {
+	if node1.ID() != node2.ID() {
+		return false
+	}
+
+	if !EqualTypes(node1.Type(), node2.Type()) {
+		return false
+	}
+
+	// Leaf nodes must have the same final type.
+	if node1.GoType() != node2.GoType() {
+		return false
+	}
+	if !repetitionsAreEqual(node1, node2) {
+		return false
+	}
+
+	enc1 := node1.Encoding()
+	enc2 := node2.Encoding()
+	if (enc1 != nil) != (enc2 != nil) {
+		return false
+	}
+	if enc1 != nil && enc2 != nil && enc1.String() != enc2.String() {
+		return false
+	}
+
+	comp1 := node1.Compression()
+	comp2 := node2.Compression()
+	if (comp1 != nil) != (comp2 != nil) {
+		return false
+	}
+	if comp1 != nil && comp2 != nil && comp1.String() != comp2.String() {
+		return false
+	}
+
+	return true
+}
+
+func groupNodesAreBinaryIdentical(node1, node2 Node) bool {
+	if node1.ID() != node2.ID() {
+		return false
+	}
+	fields1 := node1.Fields()
+	fields2 := node2.Fields()
+	if len(fields1) != len(fields2) {
+		return false
+	}
+	if !repetitionsAreEqual(node1, node2) {
+		return false
+	}
+	if !fieldsAreEqual(fields1, fields2, BinaryEqualNodes) {
+		return false
+	}
+
+	// TODO - Check for equivalent but not exact go type?
+	// For testing, a different go type might be present for structs.
+	/*if node1.GoType() != node2.GoType() {
+		return false
+	}*/
+
+	return equalLogicalTypes(node1.Type(), node2.Type())
+}

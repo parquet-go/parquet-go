@@ -3,6 +3,7 @@ package parquet_test
 import (
 	"bytes"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -768,6 +769,89 @@ func TestSchemaRoundTrip(t *testing.T) {
 			}
 			if s := file.Schema().String(); s != test.roundTripped {
 				t.Errorf("\nexpected:\n\n%s\n\nfound:\n\n%s\n", test.roundTripped, s)
+			}
+		})
+	}
+}
+
+func TestSchemaRewrite(t *testing.T) {
+	tests := []struct {
+		value    any
+		expected any
+		replace  func(path []string, node parquet.Node) parquet.Node
+	}{
+		{
+			// No change
+			value: new(struct {
+				Name   string
+				Values []struct {
+					Value string
+				}
+			}),
+			replace: func(path []string, node parquet.Node) parquet.Node { return node },
+			expected: new(struct {
+				Name   string
+				Values []struct {
+					Value string
+				}
+			}),
+		},
+		{
+			// Change nested field encoding, and compression.
+			value: new(struct {
+				Name   string
+				Values []struct {
+					Value  string
+					Value2 string
+				}
+			}),
+			replace: func(path []string, node parquet.Node) parquet.Node {
+				if slices.Equal(path, []string{"Values", "Value2"}) {
+					node = parquet.Encoded(node, &parquet.RLEDictionary)
+					node = parquet.Compressed(node, &parquet.Snappy)
+					return node
+				}
+				return node
+			},
+			expected: new(struct {
+				Name   string
+				Values []struct {
+					Value  string
+					Value2 string `parquet:",snappy,dict"`
+				}
+			}),
+		},
+		{
+			// Drop field
+			value: new(struct {
+				Name   string
+				Values []struct {
+					Value  string
+					Value2 string
+				}
+			}),
+			replace: func(path []string, node parquet.Node) parquet.Node {
+				if slices.Equal(path, []string{"Values", "Value2"}) {
+					return nil
+				}
+				return node
+			},
+			expected: new(struct {
+				Name   string
+				Values []struct {
+					Value string
+				}
+			}),
+		},
+	}
+	for _, test := range tests {
+		t.Run("", func(t *testing.T) {
+			got := parquet.RewriteSchema(parquet.SchemaOf(test.value), test.replace)
+
+			expected := parquet.SchemaOf(test.expected)
+
+			if !parquet.BinaryEqualNodes(got, expected) {
+				t.Errorf("expected %v to be equal to %v", got, expected)
 			}
 		})
 	}
