@@ -496,15 +496,71 @@ func IdenticalNodes(node1, node2 Node) bool {
 	if node1.Leaf() {
 		return node2.Leaf() && leafNodesAreIdentical(node1, node2)
 	} else {
-		return !node2.Leaf() && groupNodesAreEqual(node1, node2)
+		return !node2.Leaf() && groupNodesAreIdentical(node1, node2)
 	}
 }
 
 func leafNodesAreIdentical(node1, node2 Node) bool {
-	return EqualTypes(node1.Type(), node2.Type()) &&
-		repetitionsAreEqual(node1, node2) &&
-		node1.Encoding().String() == node2.Encoding().String() &&
-		node1.Compression().String() == node2.Compression().String()
+	if node1.ID() != node2.ID() {
+		return false
+	}
+
+	if !EqualTypes(node1.Type(), node2.Type()) {
+		return false
+	}
+
+	// Leaf nodes must have the same final type.
+	if node1.GoType() != node2.GoType() {
+		return false
+	}
+	if !repetitionsAreEqual(node1, node2) {
+		return false
+	}
+
+	enc1 := node1.Encoding()
+	enc2 := node2.Encoding()
+	if (enc1 != nil) != (enc2 != nil) {
+		return false
+	}
+	if enc1 != nil && enc2 != nil && enc1.String() != enc2.String() {
+		return false
+	}
+
+	comp1 := node1.Compression()
+	comp2 := node2.Compression()
+	if (comp1 != nil) != (comp2 != nil) {
+		return false
+	}
+	if comp1 != nil && comp2 != nil && comp1.String() != comp2.String() {
+		return false
+	}
+
+	return true
+}
+
+func groupNodesAreIdentical(node1, node2 Node) bool {
+	if node1.ID() != node2.ID() {
+		return false
+	}
+	fields1 := node1.Fields()
+	fields2 := node2.Fields()
+	if len(fields1) != len(fields2) {
+		return false
+	}
+	if !repetitionsAreEqual(node1, node2) {
+		return false
+	}
+	if !fieldsAreEqual(fields1, fields2, IdenticalNodes) {
+		return false
+	}
+
+	// TODO - Check for equivalent but not exact go type?
+	// For testing, a different go type might be present for structs.
+	/*if node1.GoType() != node2.GoType() {
+		return false
+	}*/
+
+	return equalLogicalTypes(node1.Type(), node2.Type())
 }
 
 // EqualNodes returns true if node1 and node2 are equal.

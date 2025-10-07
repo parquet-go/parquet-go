@@ -764,46 +764,75 @@ func TestSchemaRoundTrip(t *testing.T) {
 }
 
 func TestSchemaOfOptions(t *testing.T) {
-	type testChild struct {
-		Value  string
-		Value2 string
-	}
-	type testParent struct {
-		Name   string
-		Values []testChild
-	}
-
 	tests := []struct {
+		name     string
 		value    any
 		expected any
 		options  []parquet.SchemaOption
 	}{
 		{
-			// No change
-			value:    new(testParent),
-			expected: new(testParent),
-		},
-		{
-			// Change nested field name, encoding, and compression.
-			value:   new(testParent),
-			options: []parquet.SchemaOption{parquet.FieldTags(reflect.TypeOf(testChild{}), "Value2", parquet.ParquetTags{Parquet: "Value3,snappy,dict"})},
+			name: "noop",
+			value: new(struct {
+				A string
+				B struct {
+					C string
+				}
+			}),
 			expected: new(struct {
-				Name   string
-				Values []struct {
-					Value  string
-					Value3 string `parquet:",snappy,dict"`
+				A string
+				B struct {
+					C string
 				}
 			}),
 		},
+		{
+			name: "nested", // Change name, encoding, compression, and drop
+			value: new(struct {
+				A string
+				B struct {
+					C string `parquet:",snappy,dict"`
+					D string
+				}
+			}),
+			options: []parquet.SchemaOption{
+				parquet.FieldTags([]string{"B", "C"}, parquet.ParquetTags{Parquet: "C2,zstd,dict"}),
+				parquet.FieldTags([]string{"B", "D"}, parquet.ParquetTags{Parquet: "-"}),
+			},
+			expected: new(struct {
+				A string
+				B struct {
+					C2 string `parquet:",zstd,dict"`
+				}
+			}),
+		},
+		{
+			name: "embedded",
+			value: func() any {
+				type Embedded struct {
+					A string
+				}
+				return new(struct {
+					Embedded
+				})
+			}(),
+			options: []parquet.SchemaOption{parquet.FieldTags([]string{"A"}, parquet.ParquetTags{Parquet: "B,snappy,dict"})},
+			expected: func() any {
+				type Embedded struct {
+					B string `parquet:",snappy,dict"`
+				}
+				return new(struct {
+					Embedded
+				})
+			}(),
+		},
 	}
 	for _, test := range tests {
-		t.Run("", func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
+			want := parquet.SchemaOf(test.expected)
 			got := parquet.SchemaOf(test.value, test.options...)
 
-			expected := parquet.SchemaOf(test.expected)
-
-			if !parquet.IdenticalNodes(got, expected) {
-				t.Errorf("expected %v to be equal to %v", got, expected)
+			if !parquet.IdenticalNodes(want, got) {
+				t.Errorf("schema not identical want: %v got: %v", want, got)
 			}
 		})
 	}

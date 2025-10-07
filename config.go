@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"math"
-	"reflect"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -763,21 +762,19 @@ func DropDuplicatedRows(drop bool) SortingOption {
 
 type SchemaConfig struct {
 	tagOverrides []struct {
-		typ  reflect.Type
-		name string
+		path []string
 		tags ParquetTags
 	}
 }
 
-// FieldTags allows for customiziation of parquet tags when deriving a schema
+// FieldTags provide runtime customization of parquet field tags when deriving a schema
 // from a Go struct.
-func FieldTags(typ reflect.Type, name string, tags ParquetTags) schemaOption {
+func FieldTags(path []string, tags ParquetTags) schemaOption {
 	return func(cfg *SchemaConfig) {
 		cfg.tagOverrides = append(cfg.tagOverrides, struct {
-			typ  reflect.Type
-			name string
+			path []string
 			tags ParquetTags
-		}{typ, name, tags})
+		}{path, tags})
 	}
 }
 

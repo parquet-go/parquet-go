@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -168,7 +169,7 @@ func schemaOfWithConfig(model reflect.Type, cfg SchemaConfig) *Schema {
 	if model.Kind() != reflect.Struct {
 		panic("cannot construct parquet schema from value of type " + model.String())
 	}
-	schema := NewSchema(model.Name(), nodeOf(model, noTags, cfg))
+	schema := NewSchema(model.Name(), nodeOf(nil, model, noTags, cfg))
 	schema.cfg = cfg
 
 	if cacheable {
@@ -424,10 +425,10 @@ type structNode struct {
 	fields []structField
 }
 
-func structNodeOf(t reflect.Type, cfg SchemaConfig) *structNode {
+func structNodeOf(path []string, t reflect.Type, cfg SchemaConfig) *structNode {
 	// Collect struct fields first so we can order them before generating the
 	// column indexes.
-	fields := structFieldsOf(t, cfg)
+	fields, tags := structFieldsOf(path, t, cfg)
 
 	s := &structNode{
 		gotype: t,
@@ -437,15 +438,7 @@ func structNodeOf(t reflect.Type, cfg SchemaConfig) *structNode {
 	for i := range fields {
 		field := structField{name: fields[i].Name, index: fields[i].Index}
 
-		tags := fromStructTag(fields[i].Tag)
-		for _, override := range cfg.tagOverrides {
-			if override.typ == t && override.name == fields[i].Name {
-				tags = override.tags
-				break
-			}
-		}
-
-		field.Node = makeNodeOf(fields[i].Type, fields[i].Name, tags, cfg)
+		field.Node = makeNodeOf(path, fields[i].Type, fields[i].Name, tags[i], cfg)
 
 		s.fields[i] = field
 	}
@@ -453,47 +446,35 @@ func structNodeOf(t reflect.Type, cfg SchemaConfig) *structNode {
 	return s
 }
 
-func structFieldsOf(t reflect.Type, cfg SchemaConfig) []reflect.StructField {
-	fields := appendStructFields(t, nil, nil, 0, cfg)
-
-	for i := range fields {
-		f := &fields[i]
-
-		tags := fromStructTag(f.Tag)
-		for _, override := range cfg.tagOverrides {
-			if override.typ == t && override.name == f.Name {
-				tags = override.tags
-				break
-			}
-		}
-
-		if tag := tags.Parquet; tag != "" {
-			name, _ := split(tag)
-			if name != "" {
-				f.Name = name
-			}
-		}
-	}
-
-	return fields
+func structFieldsOf(path []string, t reflect.Type, cfg SchemaConfig) ([]reflect.StructField, []ParquetTags) {
+	return appendStructFields(path, t, nil, nil, nil, 0, cfg)
 }
 
-func appendStructFields(t reflect.Type, fields []reflect.StructField, index []int, offset uintptr, cfg SchemaConfig) []reflect.StructField {
+func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, tags []ParquetTags, index []int, offset uintptr, cfg SchemaConfig) ([]reflect.StructField, []ParquetTags) {
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
+		ftags := fromStructTag(f.Tag)
 
-		tags := fromStructTag(f.Tag)
-		for _, override := range cfg.tagOverrides {
-			if override.typ == t && override.name == f.Name {
-				tags = override.tags
-				break
+		// Tag overrides if present.
+		// Embedded anonymous fields do not extend the
+		// column path and are not directly addressable.
+		if !f.Anonymous {
+			fpath := append(path, f.Name)
+			for _, override := range cfg.tagOverrides {
+				if slices.Equal(fpath, override.path) {
+					ftags = override.tags
+					break
+				}
 			}
 		}
 
-		if tag := tags.Parquet; tag != "" {
+		if tag := ftags.Parquet; tag != "" {
 			name, _ := split(tag)
 			if tag != "-," && name == "-" {
 				continue
+			}
+			if name != "" {
+				f.Name = name
 			}
 		}
 
@@ -503,13 +484,14 @@ func appendStructFields(t reflect.Type, fields []reflect.StructField, index []in
 		f.Offset += offset
 
 		if f.Anonymous {
-			fields = appendStructFields(f.Type, fields, fieldIndex, f.Offset, cfg)
+			fields, tags = appendStructFields(path, f.Type, fields, tags, fieldIndex, f.Offset, cfg)
 		} else if f.IsExported() {
 			f.Index = fieldIndex
 			fields = append(fields, f)
+			tags = append(tags, ftags)
 		}
 	}
-	return fields
+	return fields, tags
 }
 
 func (s *structNode) Optional() bool { return false }
@@ -618,8 +600,8 @@ func decimalFixedLenByteArraySize(precision int) int {
 	return int(math.Ceil((math.Log10(2) + float64(precision)) / math.Log10(256)))
 }
 
-func forEachStructTagOption(sf reflect.StructField, do func(t reflect.Type, option, args string)) {
-	if tag := sf.Tag.Get("parquet"); tag != "" {
+func forEachStructTagOption(sf reflect.StructField, tags ParquetTags, do func(t reflect.Type, option, args string)) {
+	if tag := tags.Parquet; tag != "" {
 		_, tag = split(tag) // skip the field name
 		for tag != "" {
 			option := ""
@@ -635,7 +617,7 @@ func forEachStructTagOption(sf reflect.StructField, do func(t reflect.Type, opti
 	}
 }
 
-func nodeOf(t reflect.Type, tags ParquetTags, cfg SchemaConfig) Node {
+func nodeOf(path []string, t reflect.Type, tags ParquetTags, cfg SchemaConfig) Node {
 	switch t {
 	case reflect.TypeOf(deprecated.Int96{}):
 		return Leaf(Int96Type)
@@ -672,13 +654,13 @@ func nodeOf(t reflect.Type, tags ParquetTags, cfg SchemaConfig) Node {
 		n = String()
 
 	case reflect.Ptr:
-		n = Optional(nodeOf(t.Elem(), noTags, cfg))
+		n = Optional(nodeOf(path, t.Elem(), noTags, cfg))
 
 	case reflect.Slice:
 		if elem := t.Elem(); elem.Kind() == reflect.Uint8 { // []byte?
 			n = Leaf(ByteArrayType)
 		} else {
-			n = Repeated(nodeOf(elem, noTags, cfg))
+			n = Repeated(nodeOf(path, elem, noTags, cfg))
 		}
 
 	case reflect.Array:
@@ -692,8 +674,8 @@ func nodeOf(t reflect.Type, tags ParquetTags, cfg SchemaConfig) Node {
 			n = JSON()
 		} else {
 			n = Map(
-				makeNodeOf(t.Key(), t.Name(), tags.getMapKeyNodeTags(), cfg),
-				makeNodeOf(t.Elem(), t.Name(), tags.getMapValueNodeTags(), cfg),
+				makeNodeOf(path, t.Key(), t.Name(), tags.getMapKeyNodeTags(), cfg),
+				makeNodeOf(path, t.Elem(), t.Name(), tags.getMapValueNodeTags(), cfg),
 			)
 		}
 
@@ -715,7 +697,7 @@ func nodeOf(t reflect.Type, tags ParquetTags, cfg SchemaConfig) Node {
 		})
 
 	case reflect.Struct:
-		return structNodeOf(t, cfg)
+		return structNodeOf(path, t, cfg)
 	}
 
 	if n == nil {
@@ -846,7 +828,9 @@ var (
 	_ WriterOption   = (*Schema)(nil)
 )
 
-func makeNodeOf(t reflect.Type, name string, tags ParquetTags, cfg SchemaConfig) Node {
+func makeNodeOf(path []string, t reflect.Type, name string, tags ParquetTags, cfg SchemaConfig) Node {
+	path = append(path, name)
+
 	var (
 		node       Node
 		optional   bool
@@ -892,7 +876,7 @@ func makeNodeOf(t reflect.Type, name string, tags ParquetTags, cfg SchemaConfig)
 	}
 
 	if t.Kind() == reflect.Map {
-		node = nodeOf(t, tags, cfg)
+		node = nodeOf(path, t, tags, cfg)
 	} else {
 		forEachTagOption([]string{tags.Parquet}, func(option, args string) {
 			switch option {
@@ -966,7 +950,7 @@ func makeNodeOf(t reflect.Type, name string, tags ParquetTags, cfg SchemaConfig)
 			case "list":
 				switch t.Kind() {
 				case reflect.Slice:
-					element := makeNodeOf(t.Elem(), t.Name(), tags.getListElementNodeTags(), cfg)
+					element := makeNodeOf(path, t.Elem(), t.Name(), tags.getListElementNodeTags(), cfg)
 					setNode(element)
 					setList()
 				default:
@@ -1096,14 +1080,14 @@ func makeNodeOf(t reflect.Type, name string, tags ParquetTags, cfg SchemaConfig)
 		// Note for strings "optional" applies only to the entire BYTE_ARRAY and
 		// not each individual byte.
 		if optional && !isUint8 {
-			node = Repeated(Optional(nodeOf(t.Elem(), tags, cfg)))
+			node = Repeated(Optional(nodeOf(path, t.Elem(), tags, cfg)))
 			// Don't also apply "optional" to the whole list.
 			optional = false
 		}
 	}
 
 	if node == nil {
-		node = nodeOf(t, tags, cfg)
+		node = nodeOf(path, t, tags, cfg)
 	}
 
 	if compressed != nil {
