@@ -852,7 +852,29 @@ func TestSchemaOfOptions(t *testing.T) {
 			}(),
 		},
 		{
-			name: "nested list", // Change name, encoding, compression, and drop of nested map
+			name: "nested slice", // Change name, encoding, compression, and drop within nested slice (non-LIST)
+			value: func() any {
+				return new(struct {
+					A []struct {
+						B string `parquet:",snappy"`
+						C string
+					}
+				})
+			}(),
+			options: []parquet.SchemaOption{
+				parquet.FieldTags([]string{"A", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
+				parquet.FieldTags([]string{"A", "C"}, parquet.ParquetTags{Parquet: "-"}),
+			},
+			expected: func() any {
+				return new(struct {
+					A []struct {
+						B2 string `parquet:",zstd,dict"`
+					}
+				})
+			}(),
+		},
+		{
+			name: "nested list", // Change name, encoding, compression, and drop within nested LIST
 			value: func() any {
 				return new(struct {
 					A []struct {
