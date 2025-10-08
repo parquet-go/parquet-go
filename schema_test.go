@@ -786,7 +786,7 @@ func TestSchemaOfOptions(t *testing.T) {
 			}),
 		},
 		{
-			name: "nested", // Change name, encoding, compression, and drop
+			name: "nested", // Change name, encoding, compression, and drop columns of nested struct
 			value: new(struct {
 				A string
 				B struct {
@@ -806,22 +806,70 @@ func TestSchemaOfOptions(t *testing.T) {
 			}),
 		},
 		{
-			name: "embedded",
+			name: "embedded", // Change name, encoding, compression, and drop of embedded field
 			value: func() any {
 				type Embedded struct {
 					A string
+					B string
 				}
 				return new(struct {
 					Embedded
 				})
 			}(),
-			options: []parquet.SchemaOption{parquet.FieldTags([]string{"A"}, parquet.ParquetTags{Parquet: "B,snappy,dict"})},
+			options: []parquet.SchemaOption{
+				parquet.FieldTags([]string{"A"}, parquet.ParquetTags{Parquet: "A2,snappy,dict"}),
+				parquet.FieldTags([]string{"B"}, parquet.ParquetTags{Parquet: "-"}),
+			},
 			expected: func() any {
 				type Embedded struct {
-					B string `parquet:",snappy,dict"`
+					A2 string `parquet:",snappy,dict"`
 				}
 				return new(struct {
 					Embedded
+				})
+			}(),
+		},
+		{
+			name: "nested map", // Change name, encoding, compression, and drop of nested map
+			value: func() any {
+				return new(struct {
+					A map[string]struct {
+						B string `parquet:",snappy"`
+						C string
+					}
+				})
+			}(),
+			options: []parquet.SchemaOption{
+				parquet.FieldTags([]string{"A", "key_value", "value", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
+				parquet.FieldTags([]string{"A", "key_value", "value", "C"}, parquet.ParquetTags{Parquet: "-"}),
+			},
+			expected: func() any {
+				return new(struct {
+					A map[string]struct {
+						B2 string `parquet:",zstd,dict"`
+					}
+				})
+			}(),
+		},
+		{
+			name: "nested list", // Change name, encoding, compression, and drop of nested map
+			value: func() any {
+				return new(struct {
+					A []struct {
+						B string `parquet:",snappy"`
+						C string
+					} `parquet:",list"`
+				})
+			}(),
+			options: []parquet.SchemaOption{
+				parquet.FieldTags([]string{"A", "list", "element", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
+				parquet.FieldTags([]string{"A", "list", "element", "C"}, parquet.ParquetTags{Parquet: "-"}),
+			},
+			expected: func() any {
+				return new(struct {
+					A []struct {
+						B2 string `parquet:",zstd,dict"`
+					} `parquet:",list"`
 				})
 			}(),
 		},

@@ -438,7 +438,7 @@ func structNodeOf(path []string, t reflect.Type, cfg SchemaConfig) *structNode {
 	for i := range fields {
 		field := structField{name: fields[i].Name, index: fields[i].Index}
 
-		field.Node = makeNodeOf(path, fields[i].Type, fields[i].Name, tags[i], cfg)
+		field.Node = makeNodeOf(append(path, fields[i].Name), fields[i].Type, fields[i].Name, tags[i], cfg)
 
 		s.fields[i] = field
 	}
@@ -674,8 +674,8 @@ func nodeOf(path []string, t reflect.Type, tags ParquetTags, cfg SchemaConfig) N
 			n = JSON()
 		} else {
 			n = Map(
-				makeNodeOf(path, t.Key(), t.Name(), tags.getMapKeyNodeTags(), cfg),
-				makeNodeOf(path, t.Elem(), t.Name(), tags.getMapValueNodeTags(), cfg),
+				makeNodeOf(append(path, "key_value", "key"), t.Key(), t.Name(), tags.getMapKeyNodeTags(), cfg),
+				makeNodeOf(append(path, "key_value", "value"), t.Elem(), t.Name(), tags.getMapValueNodeTags(), cfg),
 			)
 		}
 
@@ -829,7 +829,7 @@ var (
 )
 
 func makeNodeOf(path []string, t reflect.Type, name string, tags ParquetTags, cfg SchemaConfig) Node {
-	path = append(path, name)
+	// path = append(path, name)
 
 	var (
 		node       Node
@@ -950,7 +950,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags ParquetTags, cf
 			case "list":
 				switch t.Kind() {
 				case reflect.Slice:
-					element := makeNodeOf(path, t.Elem(), t.Name(), tags.getListElementNodeTags(), cfg)
+					element := makeNodeOf(append(path, "list", "element"), t.Elem(), t.Name(), tags.getListElementNodeTags(), cfg)
 					setNode(element)
 					setList()
 				default:
