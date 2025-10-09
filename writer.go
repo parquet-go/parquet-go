@@ -115,6 +115,10 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 		panic("generic writer must be instantiated with schema or concrete type.")
 	}
 
+	if t != nil && config.Schema.GoType() != dereference(t) {
+		panic("generic writer type does not match schema gotype")
+	}
+
 	var writeFn writeFunc[T]
 	if genWriteErr != nil {
 		writeFn = func(*GenericWriter[T], []T) (int, error) { return 0, genWriteErr }

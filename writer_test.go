@@ -475,7 +475,6 @@ func TestIssueSegmentio302(t *testing.T) {
 
 				b := new(bytes.Buffer)
 				_ = parquet.NewGenericWriter[T](b)
-
 			},
 		},
 
@@ -490,7 +489,6 @@ func TestIssueSegmentio302(t *testing.T) {
 
 				b := new(bytes.Buffer)
 				_ = parquet.NewGenericWriter[T](b)
-
 			},
 		},
 
@@ -1917,4 +1915,27 @@ func TestIssue275(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestWriterSchemaMismatch(t *testing.T) {
+	type A struct {
+		X string
+	}
+	type B struct {
+		X string
+	}
+
+	const expectedPanic = "generic writer type does not match schema gotype"
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("using different schema than generic type parameter should panic")
+		}
+		if r.(string) != expectedPanic {
+			t.Fatalf(`panic should return "%s", but returned "%s"`, expectedPanic, r.(string))
+		}
+	}()
+
+	_ = parquet.NewGenericWriter[A](io.Discard, parquet.SchemaOf(B{}))
 }
