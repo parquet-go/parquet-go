@@ -148,5 +148,5 @@ func TestWriteRowsFuncOfRequiredColumnNotFound(t *testing.T) {
 		}
 	}()
 
-	writeRowsFuncOfRequired(reflect.TypeOf(""), schema, columnPath{"nonexistent"})
+	writeRowsFuncOfRequired(reflect.TypeOf(""), schema, columnPath{"nonexistent"}, nil)
 }

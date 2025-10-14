@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -795,8 +796,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				}
 			}),
 			options: []parquet.SchemaOption{
-				parquet.FieldTags([]string{"B", "C"}, parquet.ParquetTags{Parquet: "C2,zstd,dict"}),
-				parquet.FieldTags([]string{"B", "D"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.TagReplacement([]string{"B", "C"}, parquet.ParquetTags{Parquet: "C2,zstd,dict"}),
+				parquet.TagReplacement([]string{"B", "D"}, parquet.ParquetTags{Parquet: "-"}),
 			},
 			expected: new(struct {
 				A string
@@ -817,8 +818,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.FieldTags([]string{"A"}, parquet.ParquetTags{Parquet: "A2,snappy,dict"}),
-				parquet.FieldTags([]string{"B"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.TagReplacement([]string{"A"}, parquet.ParquetTags{Parquet: "A2,snappy,dict"}),
+				parquet.TagReplacement([]string{"B"}, parquet.ParquetTags{Parquet: "-"}),
 			},
 			expected: func() any {
 				type Embedded struct {
@@ -840,8 +841,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.FieldTags([]string{"A", "key_value", "value", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
-				parquet.FieldTags([]string{"A", "key_value", "value", "C"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.TagReplacement([]string{"A", "key_value", "value", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
+				parquet.TagReplacement([]string{"A", "key_value", "value", "C"}, parquet.ParquetTags{Parquet: "-"}),
 			},
 			expected: func() any {
 				return new(struct {
@@ -862,8 +863,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.FieldTags([]string{"A", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
-				parquet.FieldTags([]string{"A", "C"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.TagReplacement([]string{"A", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
+				parquet.TagReplacement([]string{"A", "C"}, parquet.ParquetTags{Parquet: "-"}),
 			},
 			expected: func() any {
 				return new(struct {
@@ -884,8 +885,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.FieldTags([]string{"A", "list", "element", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
-				parquet.FieldTags([]string{"A", "list", "element", "C"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.TagReplacement([]string{"A", "list", "element", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
+				parquet.TagReplacement([]string{"A", "list", "element", "C"}, parquet.ParquetTags{Parquet: "-"}),
 			},
 			expected: func() any {
 				return new(struct {
@@ -905,5 +906,99 @@ func TestSchemaOfOptions(t *testing.T) {
 				t.Errorf("schema not identical want: %v got: %v", want, got)
 			}
 		})
+	}
+}
+
+func TestScheamInteroperability(t *testing.T) {
+	type One struct {
+		A int `parquet:",snappy"`
+	}
+	type Two struct {
+		A int `parquet:",gzip"`
+		B int `parquet:"-"`
+	}
+	type Three struct {
+		B int `parquet:"A"`
+	}
+	type Four struct {
+		C int
+		D int
+	}
+
+	tag1 := parquet.TagReplacement([]string{"C"}, parquet.ParquetTags{Parquet: "A"})
+	tag2 := parquet.TagReplacement([]string{"D"}, parquet.ParquetTags{Parquet: "-"})
+
+	s1 := parquet.SchemaOf(&One{})
+	s2 := parquet.SchemaOf(&Two{})
+	s3 := parquet.SchemaOf(&Three{})
+	s4 := parquet.SchemaOf(&Four{}, tag1, tag2)
+	schemas := []*parquet.Schema{s1, s2, s3, s4}
+
+	t.Run("T=One", func(t *testing.T) {
+		for _, schema := range schemas {
+			t.Run("Schema="+schema.Name(), func(t *testing.T) {
+				tt := tester[One]{}
+				tt.test(t, One{A: 1}, schema, nil, nil)
+			})
+		}
+	})
+
+	t.Run("T=Two", func(t *testing.T) {
+		for _, schema := range schemas {
+			t.Run("Schema="+schema.Name(), func(t *testing.T) {
+				tt := tester[Two]{}
+				tt.test(t, Two{A: 1}, schema, nil, nil)
+			})
+		}
+	})
+	t.Run("T=Three", func(t *testing.T) {
+		for _, schema := range schemas {
+			t.Run("Schema="+schema.Name(), func(t *testing.T) {
+				tt := tester[Three]{}
+				tt.test(t, Three{B: 1}, schema, nil, nil)
+			})
+		}
+	})
+	t.Run("T=Four", func(t *testing.T) {
+		for _, schema := range schemas {
+			t.Run("Schema="+schema.Name(), func(t *testing.T) {
+				writerOptions := []parquet.WriterOption{tag1, tag2}
+				readerOptions := []parquet.ReaderOption{tag1, tag2}
+				tt := tester[Four]{}
+				tt.test(t, Four{C: 1}, schema, writerOptions, readerOptions)
+			})
+		}
+	})
+}
+
+type tester[T any] struct{}
+
+func (tt *tester[T]) test(t *testing.T, val T, schema *parquet.Schema, writerOptions []parquet.WriterOption, readerOptions []parquet.ReaderOption) {
+	buf := bytes.NewBuffer(nil)
+	w := parquet.NewGenericWriter[T](buf, append(writerOptions, schema)...)
+	if _, err := w.Write([]T{val}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rbuf := make([]T, 1)
+	r := parquet.NewGenericReader[T](bytes.NewReader(buf.Bytes()), append(readerOptions, schema)...)
+	n, err := r.Read(rbuf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatal("expected 1 row, got ", n)
+	}
+	if len(rbuf) != 1 {
+		t.Fatal("expected 1 row, got ", len(rbuf))
+	}
+	if !reflect.DeepEqual(rbuf[0], val) {
+		t.Fatal("expected ", val, " got ", rbuf[0])
 	}
 }
