@@ -102,7 +102,7 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 
 	var genWriteErr error
 	if schema == nil && t != nil {
-		schema = schemaOf(dereference(t))
+		schema = schemaOf(dereference(t), config.TagReplacements...)
 		if len(schema.Columns()) == 0 {
 			genWriteErr = fmt.Errorf("cannot write %v: it has no columns (maybe it has no exported fields)", t)
 		}

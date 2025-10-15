@@ -909,7 +909,11 @@ func TestSchemaOfOptions(t *testing.T) {
 	}
 }
 
-func TestScheamInteroperability(t *testing.T) {
+func TestSchemaInteroperability(t *testing.T) {
+	// All of these types generate the same parquet/leaf structure
+	// with one column named A. This test verifies that the schemas
+	// and structs can be used interchangeably when reading and writing
+	// using the generic reader and writer.
 	type One struct {
 		A int `parquet:",snappy"`
 	}
@@ -925,20 +929,20 @@ func TestScheamInteroperability(t *testing.T) {
 		D int
 	}
 
-	tag1 := parquet.TagReplacement([]string{"C"}, parquet.ParquetTags{Parquet: "A"})
-	tag2 := parquet.TagReplacement([]string{"D"}, parquet.ParquetTags{Parquet: "-"})
-
-	s1 := parquet.SchemaOf(&One{})
-	s2 := parquet.SchemaOf(&Two{})
-	s3 := parquet.SchemaOf(&Three{})
-	s4 := parquet.SchemaOf(&Four{}, tag1, tag2)
-	schemas := []*parquet.Schema{s1, s2, s3, s4}
+	var (
+		s1      = parquet.SchemaOf(&One{})
+		s2      = parquet.SchemaOf(&Two{})
+		s3      = parquet.SchemaOf(&Three{})
+		tag1    = parquet.TagReplacement([]string{"C"}, parquet.ParquetTags{Parquet: "A"})
+		tag2    = parquet.TagReplacement([]string{"D"}, parquet.ParquetTags{Parquet: "-"})
+		s4      = parquet.SchemaOf(&Four{}, tag1, tag2)
+		schemas = []*parquet.Schema{s1, s2, s3, s4}
+	)
 
 	t.Run("T=One", func(t *testing.T) {
 		for _, schema := range schemas {
 			t.Run("Schema="+schema.Name(), func(t *testing.T) {
-				tt := tester[One]{}
-				tt.test(t, One{A: 1}, schema, nil, nil)
+				roundtripTester[One]{}.test(t, One{A: 1}, schema, nil, nil)
 			})
 		}
 	})
@@ -946,59 +950,51 @@ func TestScheamInteroperability(t *testing.T) {
 	t.Run("T=Two", func(t *testing.T) {
 		for _, schema := range schemas {
 			t.Run("Schema="+schema.Name(), func(t *testing.T) {
-				tt := tester[Two]{}
-				tt.test(t, Two{A: 1}, schema, nil, nil)
+				roundtripTester[Two]{}.test(t, Two{A: 1}, schema, nil, nil)
 			})
 		}
 	})
 	t.Run("T=Three", func(t *testing.T) {
 		for _, schema := range schemas {
 			t.Run("Schema="+schema.Name(), func(t *testing.T) {
-				tt := tester[Three]{}
-				tt.test(t, Three{B: 1}, schema, nil, nil)
+				roundtripTester[Three]{}.test(t, Three{B: 1}, schema, nil, nil)
 			})
 		}
 	})
 	t.Run("T=Four", func(t *testing.T) {
+		writerOptions := []parquet.WriterOption{tag1, tag2}
+		readerOptions := []parquet.ReaderOption{tag1, tag2}
+
 		for _, schema := range schemas {
 			t.Run("Schema="+schema.Name(), func(t *testing.T) {
-				writerOptions := []parquet.WriterOption{tag1, tag2}
-				readerOptions := []parquet.ReaderOption{tag1, tag2}
-				tt := tester[Four]{}
-				tt.test(t, Four{C: 1}, schema, writerOptions, readerOptions)
+				roundtripTester[Four]{}.test(t, Four{C: 1}, schema, writerOptions, readerOptions)
 			})
 		}
 	})
 }
 
-type tester[T any] struct{}
+type roundtripTester[T any] struct{}
 
-func (tt *tester[T]) test(t *testing.T, val T, schema *parquet.Schema, writerOptions []parquet.WriterOption, readerOptions []parquet.ReaderOption) {
+func (_ roundtripTester[T]) test(t *testing.T, val T, schema *parquet.Schema, writerOptions []parquet.WriterOption, readerOptions []parquet.ReaderOption) {
 	buf := bytes.NewBuffer(nil)
 	w := parquet.NewGenericWriter[T](buf, append(writerOptions, schema)...)
 	if _, err := w.Write([]T{val}); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	rbuf := make([]T, 1)
+	rows := make([]T, 1)
 	r := parquet.NewGenericReader[T](bytes.NewReader(buf.Bytes()), append(readerOptions, schema)...)
-	n, err := r.Read(rbuf)
+	n, err := r.Read(rows)
 	if err != nil && err != io.EOF {
 		t.Fatal(err)
 	}
-	if n != 1 {
+	if n != 1 || len(rows) != 1 {
 		t.Fatal("expected 1 row, got ", n)
 	}
-	if len(rbuf) != 1 {
-		t.Fatal("expected 1 row, got ", len(rbuf))
-	}
-	if !reflect.DeepEqual(rbuf[0], val) {
-		t.Fatal("expected ", val, " got ", rbuf[0])
+	if !reflect.DeepEqual(rows[0], val) {
+		t.Fatal("expected ", val, " got ", rows[0])
 	}
 }

@@ -154,6 +154,7 @@ var cachedSchemas sync.Map // map[reflect.Type]*Schema
 
 func schemaOf(model reflect.Type, tagReplacements ...TagReplacementOption) *Schema {
 	cacheable := len(tagReplacements) == 0
+
 	if cacheable {
 		cached, _ := cachedSchemas.Load(model)
 		schema, _ := cached.(*Schema)
@@ -161,9 +162,11 @@ func schemaOf(model reflect.Type, tagReplacements ...TagReplacementOption) *Sche
 			return schema
 		}
 	}
+
 	if model.Kind() != reflect.Struct {
 		panic("cannot construct parquet schema from value of type " + model.String())
 	}
+
 	schema := NewSchema(model.Name(), nodeOf(nil, model, noTags, tagReplacements))
 
 	if cacheable {
@@ -823,8 +826,6 @@ var (
 )
 
 func makeNodeOf(path []string, t reflect.Type, name string, tags ParquetTags, tagReplacements []TagReplacementOption) Node {
-	// path = append(path, name)
-
 	var (
 		node       Node
 		optional   bool

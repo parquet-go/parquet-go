@@ -769,17 +769,20 @@ type TagReplacementOption struct {
 }
 
 var (
-	_ WriterOption = (*TagReplacementOption)(nil)
 	_ SchemaOption = (*TagReplacementOption)(nil)
 	_ ReaderOption = (*TagReplacementOption)(nil)
+	_ WriterOption = (*TagReplacementOption)(nil)
 )
 
 type SchemaConfig struct {
 	TagReplacements []TagReplacementOption
 }
 
-// TagReplacement provide runtime customization of parquet field tags when deriving a schema
-// from a Go struct.
+// TagReplacement performs runtime replacement of "parquet..." field tags when deriving a schema
+// from a Go struct.  This option can be used anywhere a schema is inferred from a Go struct
+// including SchemaOf, NewGenericReader, and NewGenericWriter.
+//
+// This option is additive, it may be used multiple times to affect multiple columns.
 func TagReplacement(path []string, tags ParquetTags) *TagReplacementOption {
 	return &TagReplacementOption{Path: path, Tags: tags}
 }
