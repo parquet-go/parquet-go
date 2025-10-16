@@ -902,11 +902,104 @@ func TestSchemaOfOptions(t *testing.T) {
 			want := parquet.SchemaOf(test.expected)
 			got := parquet.SchemaOf(test.value, test.options...)
 
-			if !parquet.IdenticalNodes(want, got) {
+			if !identicalNodes(want, got) {
 				t.Errorf("schema not identical want: %v got: %v", want, got)
 			}
 		})
 	}
+}
+
+// identicalNodes is like EqualNodes but also checks field order, encoding, and compression.
+func identicalNodes(node1, node2 parquet.Node) bool {
+	if node1.Leaf() {
+		return node2.Leaf() && leafNodesAreIdentical(node1, node2)
+	} else {
+		return !node2.Leaf() && groupNodesAreIdentical(node1, node2)
+	}
+}
+
+func leafNodesAreIdentical(node1, node2 parquet.Node) bool {
+	if node1.ID() != node2.ID() {
+		return false
+	}
+
+	if !parquet.EqualTypes(node1.Type(), node2.Type()) {
+		return false
+	}
+
+	// Leaf nodes must have the same final type.
+	if node1.GoType() != node2.GoType() {
+		return false
+	}
+
+	repetitionsAreEqual := node1.Optional() == node2.Optional() && node1.Repeated() == node2.Repeated()
+	if !repetitionsAreEqual {
+		return false
+	}
+
+	enc1 := node1.Encoding()
+	enc2 := node2.Encoding()
+	if (enc1 != nil) != (enc2 != nil) {
+		return false
+	}
+	if enc1 != nil && enc2 != nil && enc1.String() != enc2.String() {
+		return false
+	}
+
+	comp1 := node1.Compression()
+	comp2 := node2.Compression()
+	if (comp1 != nil) != (comp2 != nil) {
+		return false
+	}
+	if comp1 != nil && comp2 != nil && comp1.String() != comp2.String() {
+		return false
+	}
+
+	return true
+}
+
+func groupNodesAreIdentical(node1, node2 parquet.Node) bool {
+	if node1.ID() != node2.ID() {
+		return false
+	}
+	fields1 := node1.Fields()
+	fields2 := node2.Fields()
+	if len(fields1) != len(fields2) {
+		return false
+	}
+	repetitionsAreEqual := node1.Optional() == node2.Optional() && node1.Repeated() == node2.Repeated()
+	if !repetitionsAreEqual {
+		return false
+	}
+	if !fieldsAreEqual(fields1, fields2, identicalNodes) {
+		return false
+	}
+
+	// TODO - Check for equivalent but not exact go type?
+	// For testing, a different go type might be present for structs.
+	/*if node1.GoType() != node2.GoType() {
+		return false
+	}*/
+
+	equalLogicalTypes := reflect.DeepEqual(node1.Type().LogicalType(), node2.Type().LogicalType())
+	return equalLogicalTypes
+}
+
+func fieldsAreEqual(fields1, fields2 []parquet.Field, equal func(parquet.Node, parquet.Node) bool) bool {
+	if len(fields1) != len(fields2) {
+		return false
+	}
+	for i := range fields1 {
+		if fields1[i].Name() != fields2[i].Name() {
+			return false
+		}
+	}
+	for i := range fields1 {
+		if !equal(fields1[i], fields2[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestSchemaInteroperability(t *testing.T) {
