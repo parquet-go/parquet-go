@@ -147,12 +147,12 @@ func SchemaOf(model any, opts ...SchemaOption) *Schema {
 	for _, opt := range opts {
 		opt.ConfigureSchema(&cfg)
 	}
-	return schemaOf(dereference(reflect.TypeOf(model)), cfg.TagReplacements...)
+	return schemaOf(dereference(reflect.TypeOf(model)), cfg.StructTags...)
 }
 
 var cachedSchemas sync.Map // map[reflect.Type]*Schema
 
-func schemaOf(model reflect.Type, tagReplacements ...TagReplacementOption) *Schema {
+func schemaOf(model reflect.Type, tagReplacements ...StructTagOption) *Schema {
 	cacheable := len(tagReplacements) == 0
 
 	if cacheable {
@@ -422,7 +422,7 @@ type structNode struct {
 	fields []structField
 }
 
-func structNodeOf(path []string, t reflect.Type, tagReplacements []TagReplacementOption) *structNode {
+func structNodeOf(path []string, t reflect.Type, tagReplacements []StructTagOption) *structNode {
 	// Collect struct fields first so we can order them before generating the
 	// column indexes.
 	fields, tags := structFieldsOf(path, t, tagReplacements)
@@ -443,23 +443,23 @@ func structNodeOf(path []string, t reflect.Type, tagReplacements []TagReplacemen
 	return s
 }
 
-func structFieldsOf(path []string, t reflect.Type, tagReplacements []TagReplacementOption) ([]reflect.StructField, []ParquetTags) {
+func structFieldsOf(path []string, t reflect.Type, tagReplacements []StructTagOption) ([]reflect.StructField, []ParquetTags) {
 	return appendStructFields(path, t, nil, nil, nil, 0, tagReplacements)
 }
 
-func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, tags []ParquetTags, index []int, offset uintptr, tagReplacements []TagReplacementOption) ([]reflect.StructField, []ParquetTags) {
+func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, tags []ParquetTags, index []int, offset uintptr, tagReplacements []StructTagOption) ([]reflect.StructField, []ParquetTags) {
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
 		ftags := fromStructTag(f.Tag)
 
-		// Tag overrides if present.
+		// Tag replacements if present.
 		// Embedded anonymous fields do not extend the
-		// column path and are not directly addressable.
+		// column path and tags are not used.
 		if !f.Anonymous {
 			fpath := append(path, f.Name)
-			for _, override := range tagReplacements {
-				if slices.Equal(fpath, override.Path) {
-					ftags = override.Tags
+			for _, opt := range tagReplacements {
+				if slices.Equal(fpath, opt.Path) {
+					ftags = opt.Tags
 					break
 				}
 			}
@@ -614,7 +614,7 @@ func forEachStructTagOption(sf reflect.StructField, tags ParquetTags, do func(t 
 	}
 }
 
-func nodeOf(path []string, t reflect.Type, tags ParquetTags, tagReplacements []TagReplacementOption) Node {
+func nodeOf(path []string, t reflect.Type, tags ParquetTags, tagReplacements []StructTagOption) Node {
 	switch t {
 	case reflect.TypeOf(deprecated.Int96{}):
 		return Leaf(Int96Type)
@@ -825,7 +825,7 @@ var (
 	_ WriterOption   = (*Schema)(nil)
 )
 
-func makeNodeOf(path []string, t reflect.Type, name string, tags ParquetTags, tagReplacements []TagReplacementOption) Node {
+func makeNodeOf(path []string, t reflect.Type, name string, tags ParquetTags, tagReplacements []StructTagOption) Node {
 	var (
 		node       Node
 		optional   bool

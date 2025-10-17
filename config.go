@@ -160,8 +160,8 @@ func (c *FileConfig) Validate() error {
 //		// ...
 //	})
 type ReaderConfig struct {
-	Schema          *Schema
-	TagReplacements []TagReplacementOption
+	Schema     *Schema
+	StructTags []StructTagOption
 }
 
 // DefaultReaderConfig returns a new ReaderConfig value initialized with the
@@ -224,7 +224,7 @@ type WriterConfig struct {
 	Sorting              SortingConfig
 	SkipPageBounds       [][]string
 	Encodings            map[Kind]encoding.Encoding
-	TagReplacements      []TagReplacementOption
+	StructTags           []StructTagOption
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -297,7 +297,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		Sorting:              coalesceSortingConfig(c.Sorting, config.Sorting),
 		SkipPageBounds:       coalesceSkipPageBounds(c.SkipPageBounds, config.SkipPageBounds),
 		Encodings:            encodings,
-		TagReplacements:      coalesceTagReplacements(c.TagReplacements, config.TagReplacements),
+		StructTags:           coalesceTagReplacements(c.StructTags, config.StructTags),
 	}
 }
 
@@ -763,40 +763,44 @@ func DropDuplicatedRows(drop bool) SortingOption {
 	return sortingOption(func(config *SortingConfig) { config.DropDuplicatedRows = drop })
 }
 
-type TagReplacementOption struct {
+// StructTagOption performs runtime replacement of "parquet..." struct tags when deriving a schema
+// from a Go struct.
+type StructTagOption struct {
 	Path []string
 	Tags ParquetTags
 }
 
 var (
-	_ SchemaOption = (*TagReplacementOption)(nil)
-	_ ReaderOption = (*TagReplacementOption)(nil)
-	_ WriterOption = (*TagReplacementOption)(nil)
+	_ SchemaOption = (*StructTagOption)(nil)
+	_ ReaderOption = (*StructTagOption)(nil)
+	_ WriterOption = (*StructTagOption)(nil)
 )
 
 type SchemaConfig struct {
-	TagReplacements []TagReplacementOption
+	StructTags []StructTagOption
 }
 
-// TagReplacement performs runtime replacement of "parquet..." field tags when deriving a schema
+// StructTag performs runtime replacement of "parquet..." struct tags when deriving a schema
 // from a Go struct.  This option can be used anywhere a schema is inferred from a Go struct
 // including SchemaOf, NewGenericReader, and NewGenericWriter.
 //
 // This option is additive, it may be used multiple times to affect multiple columns.
-func TagReplacement(path []string, tags ParquetTags) *TagReplacementOption {
-	return &TagReplacementOption{Path: path, Tags: tags}
+//
+// When renaming a column, configure the option by its original name.
+func StructTag(path []string, tags ParquetTags) *StructTagOption {
+	return &StructTagOption{Path: path, Tags: tags}
 }
 
-func (f *TagReplacementOption) ConfigureSchema(config *SchemaConfig) {
-	config.TagReplacements = append(config.TagReplacements, *f)
+func (f *StructTagOption) ConfigureSchema(config *SchemaConfig) {
+	config.StructTags = append(config.StructTags, *f)
 }
 
-func (f *TagReplacementOption) ConfigureWriter(config *WriterConfig) {
-	config.TagReplacements = append(config.TagReplacements, *f)
+func (f *StructTagOption) ConfigureWriter(config *WriterConfig) {
+	config.StructTags = append(config.StructTags, *f)
 }
 
-func (f *TagReplacementOption) ConfigureReader(config *ReaderConfig) {
-	config.TagReplacements = append(config.TagReplacements, *f)
+func (f *StructTagOption) ConfigureReader(config *ReaderConfig) {
+	config.StructTags = append(config.StructTags, *f)
 }
 
 type fileOption func(*FileConfig)
@@ -905,7 +909,7 @@ func coalesceCompression(c1, c2 compress.Codec) compress.Codec {
 	return c2
 }
 
-func coalesceTagReplacements(f1, f2 []TagReplacementOption) []TagReplacementOption {
+func coalesceTagReplacements(f1, f2 []StructTagOption) []StructTagOption {
 	if f1 != nil {
 		return f1
 	}

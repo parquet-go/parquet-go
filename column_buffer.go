@@ -1998,7 +1998,7 @@ type writeRowsFunc func(columns []ColumnBuffer, rows sparse.Array, levels column
 // writeRowsFuncOf generates a writeRowsFunc function for the given Go type and
 // parquet schema. The column path indicates the column that the function is
 // being generated for in the parquet schema.
-func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplacements []TagReplacementOption) writeRowsFunc {
+func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	if leaf, exists := schema.Lookup(path...); exists && leaf.Node.Type().LogicalType() != nil && leaf.Node.Type().LogicalType().Json != nil {
 		return writeRowsFuncOfJSON(t, schema, path, tagReplacements)
 	}
@@ -2048,7 +2048,7 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplace
 	panic("cannot convert Go values of type " + typeNameOf(t) + " to parquet value")
 }
 
-func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath, tagReplacements []TagReplacementOption) writeRowsFunc {
+func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := column.columnIndex
 	if columnIndex < 0 {
@@ -2168,7 +2168,7 @@ func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, wr
 	}
 }
 
-func writeRowsFuncOfArray(t reflect.Type, schema *Schema, path columnPath, tagReplacements []TagReplacementOption) writeRowsFunc {
+func writeRowsFuncOfArray(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	arrayLen := t.Len()
 	columnLen := column.node.Type().Length()
@@ -2178,7 +2178,7 @@ func writeRowsFuncOfArray(t reflect.Type, schema *Schema, path columnPath, tagRe
 	return writeRowsFuncOfRequired(t, schema, path, tagReplacements)
 }
 
-func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tagReplacements []TagReplacementOption) writeRowsFunc {
+func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	elemType := t.Elem()
 	elemSize := uintptr(elemType.Size())
 	writeRows := writeRowsFuncOf(elemType, schema, path, tagReplacements)
@@ -2230,7 +2230,7 @@ func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tag
 	}
 }
 
-func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagReplacements []TagReplacementOption) writeRowsFunc {
+func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	elemType := t.Elem()
 	elemSize := uintptr(elemType.Size())
 	writeRows := writeRowsFuncOf(elemType, schema, path, tagReplacements)
@@ -2278,7 +2278,7 @@ func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagRe
 	}
 }
 
-func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagReplacements []TagReplacementOption) writeRowsFunc {
+func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	type column struct {
 		offset    uintptr
 		writeRows writeRowsFunc
@@ -2335,7 +2335,7 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagR
 	}
 }
 
-func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath, tagReplacements []TagReplacementOption) writeRowsFunc {
+func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	keyPath := path.append("key_value", "key")
 	keyType := t.Key()
 	keySize := uintptr(keyType.Size())
@@ -2444,7 +2444,7 @@ func compareFuncOf(t reflect.Type) func(reflect.Value, reflect.Value) int {
 	}
 }
 
-func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath, tagReplacements []TagReplacementOption) writeRowsFunc {
+func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	// If this is a string or a byte array write directly.
 	switch t.Kind() {
 	case reflect.String:
@@ -2482,7 +2482,7 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath, tagRep
 	}
 }
 
-func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagReplacements []TagReplacementOption) writeRowsFunc {
+func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	t := reflect.TypeOf(int64(0))
 	elemSize := uintptr(t.Size())
 	writeRows := writeRowsFuncOf(t, schema, path, tagReplacements)
