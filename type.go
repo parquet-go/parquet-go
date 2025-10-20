@@ -9,6 +9,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
@@ -865,7 +866,10 @@ func (t byteArrayType) ConvertValue(val Value, typ Type) (Value, error) {
 	}
 }
 
-type fixedLenByteArrayType struct{ length int }
+type fixedLenByteArrayType struct {
+	length int
+	isUUID bool
+}
 
 func (t fixedLenByteArrayType) String() string {
 	return fmt.Sprintf("FIXED_LEN_BYTE_ARRAY(%d)", t.length)
@@ -941,6 +945,11 @@ func (t fixedLenByteArrayType) AssignValue(dst reflect.Value, src Value) error {
 	case reflect.Slice:
 		dst.SetBytes(copyBytes(v))
 		return nil
+	case reflect.String:
+		if t.isUUID {
+			dst.SetString(uuid.UUID(v).String())
+			return nil
+		}
 	}
 
 	val := reflect.ValueOf(copyBytes(v))
@@ -1032,7 +1041,9 @@ func (t uint64Type) NewPage(columnIndex, numValues int, data encoding.Values) Pa
 // that the values are 16 bytes long. Stronger type checking can also be applied
 // by the compiler when using [16]byte values rather than []byte, reducing the
 // risk of errors on these common code paths.
-type be128Type struct{}
+type be128Type struct {
+	isUUID bool
+}
 
 func (t be128Type) String() string { return "FIXED_LEN_BYTE_ARRAY(16)" }
 
@@ -1087,11 +1098,11 @@ func (t be128Type) EstimateDecodeSize(numValues int, src []byte, enc encoding.En
 }
 
 func (t be128Type) AssignValue(dst reflect.Value, src Value) error {
-	return fixedLenByteArrayType{length: 16}.AssignValue(dst, src)
+	return fixedLenByteArrayType{length: 16, isUUID: t.isUUID}.AssignValue(dst, src)
 }
 
 func (t be128Type) ConvertValue(val Value, typ Type) (Value, error) {
-	return fixedLenByteArrayType{length: 16}.ConvertValue(val, typ)
+	return fixedLenByteArrayType{length: 16, isUUID: t.isUUID}.ConvertValue(val, typ)
 }
 
 // FixedLenByteArrayType constructs a type for fixed-length values of the given
@@ -1438,43 +1449,43 @@ func (t *uuidType) LogicalType() *format.LogicalType {
 func (t *uuidType) ConvertedType() *deprecated.ConvertedType { return nil }
 
 func (t *uuidType) NewColumnIndexer(sizeLimit int) ColumnIndexer {
-	return be128Type{}.NewColumnIndexer(sizeLimit)
+	return be128Type{isUUID: true}.NewColumnIndexer(sizeLimit)
 }
 
 func (t *uuidType) NewDictionary(columnIndex, numValues int, data encoding.Values) Dictionary {
-	return be128Type{}.NewDictionary(columnIndex, numValues, data)
+	return be128Type{isUUID: true}.NewDictionary(columnIndex, numValues, data)
 }
 
 func (t *uuidType) NewColumnBuffer(columnIndex, numValues int) ColumnBuffer {
-	return be128Type{}.NewColumnBuffer(columnIndex, numValues)
+	return be128Type{isUUID: true}.NewColumnBuffer(columnIndex, numValues)
 }
 
 func (t *uuidType) NewPage(columnIndex, numValues int, data encoding.Values) Page {
-	return be128Type{}.NewPage(columnIndex, numValues, data)
+	return be128Type{isUUID: true}.NewPage(columnIndex, numValues, data)
 }
 
 func (t *uuidType) NewValues(values []byte, offsets []uint32) encoding.Values {
-	return be128Type{}.NewValues(values, offsets)
+	return be128Type{isUUID: true}.NewValues(values, offsets)
 }
 
 func (t *uuidType) Encode(dst []byte, src encoding.Values, enc encoding.Encoding) ([]byte, error) {
-	return be128Type{}.Encode(dst, src, enc)
+	return be128Type{isUUID: true}.Encode(dst, src, enc)
 }
 
 func (t *uuidType) Decode(dst encoding.Values, src []byte, enc encoding.Encoding) (encoding.Values, error) {
-	return be128Type{}.Decode(dst, src, enc)
+	return be128Type{isUUID: true}.Decode(dst, src, enc)
 }
 
 func (t *uuidType) EstimateDecodeSize(numValues int, src []byte, enc encoding.Encoding) int {
-	return be128Type{}.EstimateDecodeSize(numValues, src, enc)
+	return be128Type{isUUID: true}.EstimateDecodeSize(numValues, src, enc)
 }
 
 func (t *uuidType) AssignValue(dst reflect.Value, src Value) error {
-	return be128Type{}.AssignValue(dst, src)
+	return be128Type{isUUID: true}.AssignValue(dst, src)
 }
 
 func (t *uuidType) ConvertValue(val Value, typ Type) (Value, error) {
-	return be128Type{}.ConvertValue(val, typ)
+	return be128Type{isUUID: true}.ConvertValue(val, typ)
 }
 
 // Enum constructs a leaf node with a logical type representing enumerations.

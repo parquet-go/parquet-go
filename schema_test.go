@@ -307,6 +307,16 @@ func TestSchemaOf(t *testing.T) {
 	}
 }`,
 		},
+		{
+			value: new(struct {
+				A [16]byte `parquet:",uuid"`
+				B string   `parquet:",uuid"`
+			}),
+			print: `message {
+	required fixed_len_byte_array(16) A (UUID);
+	required fixed_len_byte_array(16) B (UUID);
+}`,
+		},
 	}
 
 	for _, test := range tests {
