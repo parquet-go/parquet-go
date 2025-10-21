@@ -508,3 +508,59 @@ func TestOptionalTimeWithNanosecond(t *testing.T) {
 		t.Errorf("expected non-zero time, got zero")
 	}
 }
+
+// TestIssue155 verifies the fix for https://github.com/parquet-go/parquet-go/issues/155
+// The issue reported that empty time.Time{} values were being serialized as "1754-08-30"
+// instead of being preserved as zero values (NULL) when using optional timestamp fields.
+func TestIssue155(t *testing.T) {
+	type TestStruct struct {
+		TestDate time.Time `parquet:"test_date,optional,timestamp"`
+		TestInt  int       `parquet:"test_int"`
+	}
+
+	// Create a record with an empty time.Time (zero value)
+	original := TestStruct{
+		TestDate: time.Time{}, // empty/zero time - should be preserved
+		TestInt:  123,
+	}
+
+	// Write to parquet
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[TestStruct](buf)
+	if _, err := writer.Write([]TestStruct{original}); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close: %v", err)
+	}
+
+	// Read back
+	reader := parquet.NewGenericReader[TestStruct](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	result := make([]TestStruct, 1)
+	n, err := reader.Read(result)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 record, got %d", n)
+	}
+
+	// Verify the TestInt field is preserved
+	if result[0].TestInt != 123 {
+		t.Errorf("expected TestInt=123, got %d", result[0].TestInt)
+	}
+
+	// The critical assertion from issue #155:
+	// An empty time.Time should remain zero after round-trip
+	if !result[0].TestDate.IsZero() {
+		t.Errorf("expected TestDate.IsZero()=true, got false with value: %v (was: %s)",
+			result[0].TestDate, result[0].TestDate.Format("2006-01-02"))
+	}
+
+	// Also verify it's not the erroneous "1754-08-30" date that was reported
+	if result[0].TestDate.Year() == 1754 {
+		t.Errorf("got the erroneous 1754-08-30 date that was reported in issue #155")
+	}
+}
