@@ -2064,6 +2064,12 @@ func (t *timestampType) EstimateDecodeSize(numValues int, src []byte, enc encodi
 func (t *timestampType) AssignValue(dst reflect.Value, src Value) error {
 	switch dst.Type() {
 	case reflect.TypeOf(time.Time{}):
+		// Check if the value is NULL - if so, assign zero time.Time
+		if src.IsNull() {
+			dst.Set(reflect.ValueOf(time.Time{}))
+			return nil
+		}
+
 		unit := Nanosecond.TimeUnit()
 		lt := t.LogicalType()
 		if lt != nil && lt.Timestamp != nil {

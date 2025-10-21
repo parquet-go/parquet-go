@@ -2307,6 +2307,9 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 			switch {
 			case kind == reflect.Pointer:
 			case kind == reflect.Slice && !list:
+			case f.Type == reflect.TypeOf(time.Time{}):
+				// time.Time is a struct but has IsZero() method, so it needs special handling
+				// Don't use writeRowsFuncOfOptional which relies on bitmap batching
 			default:
 				writeRows = writeRowsFuncOfOptional(f.Type, schema, columnPath, writeRows)
 			}
@@ -2495,6 +2498,9 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeR
 		unit = lt.Timestamp.Unit
 	}
 
+	// Check if the column is optional
+	isOptional := col.Node.Optional()
+
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		if rows.Len() == 0 {
 			return writeRows(columns, rows, levels)
@@ -2503,6 +2509,23 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeR
 		times := rows.TimeArray()
 		for i := range times.Len() {
 			t := times.Index(i)
+
+			// For optional fields, check if the value is zero
+			elemLevels := levels
+			if isOptional && t.IsZero() {
+				// Write as NULL (don't increment definition level)
+				empty := sparse.Array{}
+				if err := writeRows(columns, empty, elemLevels); err != nil {
+					return err
+				}
+				continue
+			}
+
+			// For optional non-zero values, increment definition level
+			if isOptional {
+				elemLevels.definitionLevel++
+			}
+
 			var val int64
 			switch {
 			case unit.Millis != nil:
@@ -2514,7 +2537,7 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeR
 			}
 
 			a := makeArray(reflectValueData(reflect.ValueOf(val)), 1, elemSize)
-			if err := writeRows(columns, a, levels); err != nil {
+			if err := writeRows(columns, a, elemLevels); err != nil {
 				return err
 			}
 		}
