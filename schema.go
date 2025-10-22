@@ -1026,6 +1026,18 @@ func makeNodeOf(t reflect.Type, name string, tags parquetTags) Node {
 						throwInvalidTag(t, name, option+args)
 					}
 					setNode(TimestampAdjusted(timeUnit, adjusted))
+				case reflect.Ptr:
+					// Support *time.Time with timestamp tags
+					if t.Elem() == reflect.TypeOf(time.Time{}) {
+						timeUnit, adjusted, err := parseTimestampArgs(args)
+						if err != nil {
+							throwInvalidTag(t, name, option+args)
+						}
+						// Wrap in Optional for schema correctness (nil pointers = NULL values)
+						setNode(Optional(TimestampAdjusted(timeUnit, adjusted)))
+					} else {
+						throwInvalidTag(t, name, option)
+					}
 				default:
 					switch t {
 					case reflect.TypeOf(time.Time{}):

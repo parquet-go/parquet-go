@@ -2506,13 +2506,18 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeR
 			return writeRows(columns, rows, levels)
 		}
 
+		// If we're optional and the current definition level is already > 0,
+		// then we're in a pointer/nested context where writeRowsFuncOfPointer already handles optionality.
+		// Don't double-handle it here. For simple optional fields, definitionLevel starts at 0.
+		alreadyHandled := isOptional && levels.definitionLevel > 0
+
 		times := rows.TimeArray()
 		for i := range times.Len() {
 			t := times.Index(i)
 
-			// For optional fields, check if the value is zero
+			// For optional fields, check if the value is zero (unless already handled by pointer wrapper)
 			elemLevels := levels
-			if isOptional && t.IsZero() {
+			if isOptional && !alreadyHandled && t.IsZero() {
 				// Write as NULL (don't increment definition level)
 				empty := sparse.Array{}
 				if err := writeRows(columns, empty, elemLevels); err != nil {
@@ -2521,8 +2526,8 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeR
 				continue
 			}
 
-			// For optional non-zero values, increment definition level
-			if isOptional {
+			// For optional non-zero values, increment definition level (unless already handled)
+			if isOptional && !alreadyHandled {
 				elemLevels.definitionLevel++
 			}
 

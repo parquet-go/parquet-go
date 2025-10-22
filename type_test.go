@@ -564,3 +564,65 @@ func TestIssue155(t *testing.T) {
 		t.Errorf("got the erroneous 1754-08-30 date that was reported in issue #155")
 	}
 }
+
+// TestIssue326 reproduces https://github.com/parquet-go/parquet-go/issues/326
+// Issue #326: using *time.Time (pointer) with timestamp(millisecond) tag causes a panic.
+func TestIssue326(t *testing.T) {
+	type Person struct {
+		ID        int32      `parquet:"id"`
+		Name      string     `parquet:"name"`
+		CreatedAt *time.Time `parquet:"created_at,timestamp(millisecond)"`
+	}
+
+	// This should not panic - pointer types should support timestamp tags
+	schema := parquet.SchemaOf(Person{})
+	if schema == nil {
+		t.Fatal("schema should not be nil")
+	}
+	t.Logf("Schema: %s", schema)
+
+	// Test writing and reading
+	buffer := new(bytes.Buffer)
+	now := time.Now()
+
+	writer := parquet.NewGenericWriter[Person](buffer, schema)
+	_, err := writer.Write([]Person{
+		{ID: 1, Name: "Alice", CreatedAt: &now},
+		{ID: 2, Name: "Bob", CreatedAt: nil}, // NULL value
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Buffer size: %d bytes", buffer.Len())
+
+	// Read back
+	reader := parquet.NewGenericReader[Person](bytes.NewReader(buffer.Bytes()))
+	rows := make([]Person, 2)
+	n, err := reader.Read(rows)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("expected 2 rows, got %d", n)
+	}
+
+	t.Logf("Row 0: ID=%d, Name=%s, CreatedAt=%v", rows[0].ID, rows[0].Name, rows[0].CreatedAt)
+	t.Logf("Row 1: ID=%d, Name=%s, CreatedAt=%v", rows[1].ID, rows[1].Name, rows[1].CreatedAt)
+
+	// Verify first row has timestamp
+	if rows[0].CreatedAt == nil {
+		t.Error("expected first row to have non-nil CreatedAt")
+	} else if !rows[0].CreatedAt.Equal(now.Truncate(time.Millisecond)) {
+		t.Errorf("timestamp mismatch: got %v, want %v", rows[0].CreatedAt, now.Truncate(time.Millisecond))
+	}
+
+	// Verify second row has NULL
+	if rows[1].CreatedAt != nil {
+		t.Errorf("expected second row to have nil CreatedAt, got %v", rows[1].CreatedAt)
+	}
+}
