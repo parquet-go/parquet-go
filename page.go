@@ -8,7 +8,7 @@ import (
 
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
-	"github.com/parquet-go/parquet-go/internal/bitpack"
+	"github.com/parquet-go/bitpack"
 	"github.com/parquet-go/parquet-go/internal/debug"
 )
 
