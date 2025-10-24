@@ -7,9 +7,9 @@ import (
 	"math"
 	"math/bits"
 
+	"github.com/parquet-go/bitpack"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
-	"github.com/parquet-go/bitpack"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
 )
 

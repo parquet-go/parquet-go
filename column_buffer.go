@@ -13,9 +13,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/parquet-go/bitpack"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/plain"
-	"github.com/parquet-go/bitpack"
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
 	"github.com/parquet-go/parquet-go/sparse"
 )
