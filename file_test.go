@@ -951,3 +951,182 @@ func readModeToString(m parquet.ReadMode) string {
 		return "unknown"
 	}
 }
+
+// TestEmptyGroup tests reading and writing a struct with an empty group field
+func TestEmptyGroup(t *testing.T) {
+	type EmptyStruct struct {
+		// This struct has no fields, creating an empty GROUP in parquet
+	}
+
+	type Record struct {
+		ID    int         `parquet:"id"`
+		Empty EmptyStruct `parquet:"empty"`
+		Name  string      `parquet:"name"`
+	}
+
+	// Create some test data
+	records := []Record{
+		{ID: 1, Name: "Alice"},
+		{ID: 2, Name: "Bob"},
+		{ID: 3, Name: "Charlie"},
+	}
+
+	// Write to parquet
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf)
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+	if n != len(records) {
+		t.Fatalf("expected to write %d records, wrote %d", len(records), n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	t.Logf("Successfully wrote %d bytes", buf.Len())
+
+	// Read back
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, len(records))
+	n, err = reader.Read(readRecords)
+	// EOF is expected when all rows have been read
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	if n != len(records) {
+		t.Fatalf("expected to read %d records, read %d", len(records), n)
+	}
+
+	// Verify data
+	for i := range readRecords {
+		if readRecords[i].ID != records[i].ID {
+			t.Errorf("record %d: expected ID=%d, got %d", i, records[i].ID, readRecords[i].ID)
+		}
+		if readRecords[i].Name != records[i].Name {
+			t.Errorf("record %d: expected Name=%s, got %s", i, records[i].Name, readRecords[i].Name)
+		}
+	}
+
+	t.Logf("Successfully read back %d records", n)
+}
+
+// TestOptionalEmptyGroup tests an optional empty group.
+// Note: Optional empty groups cannot preserve nullability information
+// since there are no columns to store definition levels.
+func TestOptionalEmptyGroup(t *testing.T) {
+	type EmptyStruct struct{}
+
+	type Record struct {
+		ID    int          `parquet:"id"`
+		Empty *EmptyStruct `parquet:"empty,optional"`
+		Name  string       `parquet:"name"`
+	}
+
+	records := []Record{
+		{ID: 1, Empty: &EmptyStruct{}, Name: "Alice"},
+		{ID: 2, Empty: nil, Name: "Bob"},
+		{ID: 3, Empty: &EmptyStruct{}, Name: "Charlie"},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf)
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, len(records))
+	n, err = reader.Read(readRecords)
+	// EOF is expected when all rows have been read
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	if n != len(records) {
+		t.Fatalf("expected to read %d records, read %d", len(records), n)
+	}
+
+	// Verify basic data (ID and Name)
+	for i := range readRecords {
+		if readRecords[i].ID != records[i].ID {
+			t.Errorf("record %d: expected ID=%d, got %d", i, records[i].ID, readRecords[i].ID)
+		}
+		if readRecords[i].Name != records[i].Name {
+			t.Errorf("record %d: expected Name=%s, got %s", i, records[i].Name, readRecords[i].Name)
+		}
+		// Note: We cannot verify Empty field nullability because empty groups
+		// have no columns to store definition levels
+	}
+}
+
+// TestRepeatedEmptyGroup tests a repeated empty group.
+// Note: Repeated empty groups cannot preserve array length information
+// since there are no columns to store repetition levels.
+func TestRepeatedEmptyGroup(t *testing.T) {
+	type EmptyStruct struct{}
+
+	type Record struct {
+		ID      int           `parquet:"id"`
+		Empties []EmptyStruct `parquet:"empties"`
+		Name    string        `parquet:"name"`
+	}
+
+	records := []Record{
+		{ID: 1, Empties: []EmptyStruct{{}}, Name: "Alice"},
+		{ID: 2, Empties: []EmptyStruct{{}, {}}, Name: "Bob"},
+		{ID: 3, Empties: nil, Name: "Charlie"},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf)
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, len(records))
+	n, err = reader.Read(readRecords)
+	// EOF is expected when all rows have been read
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	if n != len(records) {
+		t.Fatalf("expected to read %d records, read %d", len(records), n)
+	}
+
+	// Verify basic data (ID and Name)
+	for i := range readRecords {
+		if readRecords[i].ID != records[i].ID {
+			t.Errorf("record %d: expected ID=%d, got %d", i, records[i].ID, readRecords[i].ID)
+		}
+		if readRecords[i].Name != records[i].Name {
+			t.Errorf("record %d: expected Name=%s, got %s", i, records[i].Name, readRecords[i].Name)
+		}
+		// Note: We cannot verify Empties array length because empty groups
+		// have no columns to store repetition levels
+	}
+}
