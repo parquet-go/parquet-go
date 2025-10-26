@@ -193,7 +193,7 @@ func (c *Column) Value(base reflect.Value) reflect.Value {
 func (c *Column) String() string { return c.path.String() + ": " + sprint(c.Name(), c) }
 
 func (c *Column) forEachLeaf(do func(*Column)) {
-	if len(c.columns) == 0 {
+	if isLeafSchemaElement(c.schema) {
 		do(c)
 	} else {
 		for _, child := range c.columns {
@@ -251,11 +251,13 @@ func (c *Column) setLevels(depth, repetition, definition, index int) (int, error
 	c.maxDefinitionLevel = byte(definition)
 	depth++
 
-	if len(c.columns) > 0 {
-		c.index = -1
-	} else {
+	// Only leaf columns get a column index.
+	if isLeafSchemaElement(c.schema) {
 		c.index = int16(index)
 		index++
+	} else {
+		// Groups (including empty groups) don't get a column index
+		c.index = -1
 	}
 
 	var err error
@@ -283,7 +285,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 	cl.schemaIndex++
 	numChildren := int(c.schema.NumChildren)
 
-	if numChildren == 0 {
+	if isLeafSchemaElement(c.schema) {
 		c.typ = schemaElementTypeOf(c.schema)
 
 		if cl.columnOrderIndex < len(metadata.ColumnOrders) {
@@ -379,6 +381,17 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		c.fields[i] = column
 	}
 	return c, nil
+}
+
+// isLeafSchemaElement returns true if the schema element represents a leaf node
+// (a column with actual data). According to the Parquet specification, the Type
+// field is set for leaf nodes and not set (nil) for group nodes.
+//
+// This is the authoritative way to distinguish between:
+//   - Leaf nodes: Type != nil (has column data)
+//   - Group nodes: Type == nil (including empty groups with NumChildren == 0)
+func isLeafSchemaElement(element *format.SchemaElement) bool {
+	return element.Type != nil
 }
 
 func schemaElementTypeOf(s *format.SchemaElement) Type {
