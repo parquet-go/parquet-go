@@ -1943,7 +1943,7 @@ func TestColumnValidation(t *testing.T) {
 
 	type DuplicateColumnsEqualTypes struct {
 		Foo string `parquet:"foo"`
-		Bar string    `parquet:"foo"`
+		Bar string `parquet:"foo"`
 	}
 
 	b = bytes.NewBuffer(nil)
