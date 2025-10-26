@@ -682,7 +682,7 @@ func BenchmarkDeconstruct(b *testing.B) {
 	schema := parquet.SchemaOf(row)
 	buffer := parquet.Row{}
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buffer = schema.Deconstruct(buffer[:0], row)
 	}
 }
@@ -709,7 +709,7 @@ func BenchmarkReconstruct(b *testing.B) {
 	values := schema.Deconstruct(nil, row)
 	buffer := AddressBook{}
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buffer = AddressBook{}
 
 		if err := schema.Reconstruct(&buffer, values); err != nil {

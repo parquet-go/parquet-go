@@ -347,7 +347,7 @@ func TestOrderOfBytes(t *testing.T) {
 func BenchmarkOrderOfBool(b *testing.B) {
 	forEachBenchmarkBufferSize(b, func(b *testing.B, bufferSize int) {
 		values := make([]bool, bufferSize/1)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			orderOfBool(values)
 		}
 	})
@@ -356,7 +356,7 @@ func BenchmarkOrderOfBool(b *testing.B) {
 func BenchmarkOrderOfInt32(b *testing.B) {
 	forEachBenchmarkBufferSize(b, func(b *testing.B, bufferSize int) {
 		values := make([]int32, bufferSize/4)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			orderOfInt32(values)
 		}
 	})
@@ -365,7 +365,7 @@ func BenchmarkOrderOfInt32(b *testing.B) {
 func BenchmarkOrderOfInt64(b *testing.B) {
 	forEachBenchmarkBufferSize(b, func(b *testing.B, bufferSize int) {
 		values := make([]int64, bufferSize/8)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			orderOfInt64(values)
 		}
 	})
@@ -374,7 +374,7 @@ func BenchmarkOrderOfInt64(b *testing.B) {
 func BenchmarkOrderOfUint32(b *testing.B) {
 	forEachBenchmarkBufferSize(b, func(b *testing.B, bufferSize int) {
 		values := make([]uint32, bufferSize/4)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			orderOfUint32(values)
 		}
 	})
@@ -383,7 +383,7 @@ func BenchmarkOrderOfUint32(b *testing.B) {
 func BenchmarkOrderOfUint64(b *testing.B) {
 	forEachBenchmarkBufferSize(b, func(b *testing.B, bufferSize int) {
 		values := make([]uint64, bufferSize/8)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			orderOfUint64(values)
 		}
 	})
@@ -392,7 +392,7 @@ func BenchmarkOrderOfUint64(b *testing.B) {
 func BenchmarkOrderOfFloat32(b *testing.B) {
 	forEachBenchmarkBufferSize(b, func(b *testing.B, bufferSize int) {
 		values := make([]float32, bufferSize/4)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			orderOfFloat32(values)
 		}
 	})
@@ -401,7 +401,7 @@ func BenchmarkOrderOfFloat32(b *testing.B) {
 func BenchmarkOrderOfFloat64(b *testing.B) {
 	forEachBenchmarkBufferSize(b, func(b *testing.B, bufferSize int) {
 		values := make([]float64, bufferSize/8)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			orderOfFloat64(values)
 		}
 	})
@@ -414,7 +414,7 @@ func BenchmarkOrderOfBytes(b *testing.B) {
 		for i := range values {
 			values[i] = data[i*16 : (i+1)*16]
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			orderOfBytes(values)
 		}
 	})

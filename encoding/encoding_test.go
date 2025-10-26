@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/bitpacked"
@@ -16,7 +17,6 @@ import (
 	"github.com/parquet-go/parquet-go/encoding/delta"
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/encoding/rle"
-	"github.com/parquet-go/bitpack/unsafecast"
 	"golang.org/x/sys/cpu"
 )
 

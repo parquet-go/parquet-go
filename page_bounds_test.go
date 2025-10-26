@@ -275,7 +275,7 @@ func BenchmarkBoundsInt32(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Int31()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			boundsInt32(values)
 		}
 	})
@@ -288,7 +288,7 @@ func BenchmarkBoundsInt64(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Int63()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			boundsInt64(values)
 		}
 	})
@@ -301,7 +301,7 @@ func BenchmarkBoundsUint32(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Uint32()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			boundsUint32(values)
 		}
 	})
@@ -314,7 +314,7 @@ func BenchmarkBoundsUint64(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Uint64()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			boundsUint64(values)
 		}
 	})
@@ -327,7 +327,7 @@ func BenchmarkBoundsFloat32(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Float32()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			boundsFloat32(values)
 		}
 	})
@@ -340,7 +340,7 @@ func BenchmarkBoundsFloat64(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Float64()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			boundsFloat64(values)
 		}
 	})
@@ -353,7 +353,7 @@ func BenchmarkBoundsBE128(b *testing.B) {
 		for i := range values {
 			prng.Read(values[i][:])
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			boundsBE128(values)
 		}
 	})
@@ -364,7 +364,7 @@ func BenchmarkBoundsFixedLenByteArray(b *testing.B) {
 		values := make([]byte, bufferSize)
 		prng := rand.New(rand.NewSource(1))
 		prng.Read(values)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			boundsFixedLenByteArray(values, 32)
 		}
 	})

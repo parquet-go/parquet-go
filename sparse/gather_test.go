@@ -257,7 +257,7 @@ func benchmarkThroughput(b *testing.B, m string, f func() int) {
 	start := time.Now()
 	count := 0
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		count += f()
 	}
 

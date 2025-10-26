@@ -20,7 +20,7 @@ func BenchmarkValueAppend(b *testing.B) {
 	row := make(parquet.Row, 0, N)
 	val := parquet.ValueOf(42)
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		row = row[:0]
 		for range N {
 			row = append(row, val)

@@ -4,10 +4,10 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/bloom"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/internal/quick"
-	"github.com/parquet-go/bitpack/unsafecast"
 )
 
 func TestSplitBlockFilter(t *testing.T) {
@@ -165,7 +165,7 @@ func BenchmarkSplitBlockFilter(b *testing.B) {
 		v[i] = r.Int63()
 	}
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		e.EncodeInt64(f, v)
 	}
 
