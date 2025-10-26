@@ -68,8 +68,9 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: "go.mod"
-
+           # TODO: update to using the version in go.mod when that version supports the go tool directive (1.25.x)
+           # go-version-file: "go.mod"
+          go-version: 1.25.x
       - name: Validate formatting
         run: |
           make format
