@@ -1085,7 +1085,7 @@ func (w *writer) writeRows(numRows int, write func(i, j int) (int, error)) (int,
 		remain := w.maxRows - w.numRows
 		length := numRows - written
 
-		if remain == 0 {
+		if remain <= 0 {
 			remain = w.maxRows
 
 			if err := w.flush(); err != nil {
