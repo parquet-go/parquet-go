@@ -9,7 +9,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/plain"
-	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"github.com/parquet-go/bitpack/unsafecast"
 )
 
 func TestPage(t *testing.T) {

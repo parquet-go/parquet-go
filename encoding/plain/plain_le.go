@@ -4,7 +4,7 @@ package plain
 
 import (
 	"github.com/parquet-go/parquet-go/encoding"
-	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"github.com/parquet-go/bitpack/unsafecast"
 )
 
 func (e *Encoding) EncodeInt32(dst []byte, src []int32) ([]byte, error) {

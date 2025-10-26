@@ -16,7 +16,7 @@ import (
 	"github.com/parquet-go/parquet-go/encoding/delta"
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/encoding/rle"
-	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"github.com/parquet-go/bitpack/unsafecast"
 	"golang.org/x/sys/cpu"
 )
 

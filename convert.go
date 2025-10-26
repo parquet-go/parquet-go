@@ -16,7 +16,7 @@ import (
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
-	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"github.com/parquet-go/bitpack/unsafecast"
 )
 
 // ConvertError is an error type returned by calls to Convert when the conversion

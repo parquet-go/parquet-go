@@ -4,7 +4,7 @@ package parquet
 
 import (
 	"github.com/parquet-go/parquet-go/deprecated"
-	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"github.com/parquet-go/bitpack/unsafecast"
 )
 
 func unsafecastInt96ToBytes(src []deprecated.Int96) []byte {

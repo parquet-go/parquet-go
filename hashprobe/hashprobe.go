@@ -35,7 +35,7 @@ import (
 
 	"github.com/parquet-go/parquet-go/hashprobe/aeshash"
 	"github.com/parquet-go/parquet-go/hashprobe/wyhash"
-	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
