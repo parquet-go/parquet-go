@@ -101,6 +101,11 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 	t := typeOf[T]()
 
 	var genWriteErr error
+
+	if columnName, ok := validateColumns(dereference(t)); !ok {
+		genWriteErr = fmt.Errorf("caonnot write %v: it has columns with the same paqruet column name %q", t, columnName)
+	}
+
 	if schema == nil && t != nil {
 		schema = schemaOf(dereference(t))
 		if len(schema.Columns()) == 0 {

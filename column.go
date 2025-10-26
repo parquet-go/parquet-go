@@ -829,3 +829,30 @@ func (c *Column) decodeDictionary(header DictionaryPageHeader, page *buffer, siz
 var (
 	_ Node = (*Column)(nil)
 )
+
+func validateColumns(t reflect.Type) (string, bool) {
+	var (
+		field     reflect.StructField
+		fieldType reflect.Type
+		fieldTag  string
+	)
+
+	columns := make(map[string]reflect.Type, t.NumField())
+
+	for i := range t.NumField() {
+		field = t.Field(i)
+		fieldType = field.Type
+		fieldTag = field.Tag.Get("parquet")
+
+		if val, ok := columns[fieldTag]; ok {
+			if val == fieldType {
+				continue
+			}
+			return fieldTag, false
+		} else {
+			columns[fieldTag] = fieldType
+		}
+	}
+
+	return "", true
+}
