@@ -8,8 +8,6 @@ github.com/hexops/gotextdiff v1.0.3 h1:gitA9+qJrrTCsiCl7+kh75nPqQt1cx4ZkudSTLoUq
 github.com/hexops/gotextdiff v1.0.3/go.mod h1:pSWU5MAI3yDq+fZBTazCSJysOMbxWL1BSow5/V2vxeg=
 github.com/klauspost/compress v1.17.9 h1:6KIumPrER1LHsvBVuDa0r5xaG0Es51mhhB9BQB2qeMA=
 github.com/klauspost/compress v1.17.9/go.mod h1:Di0epgTjJY877eYKx5yC51cX2A2Vl2ibi7bDH9ttBbw=
-github.com/parquet-go/bitpack v0.0.0-20251026144303-27c130d7716c h1:XeVsi68zBBiUcvsfumGiNiDdRyEKUeYGh/rqDGFio84=
-github.com/parquet-go/bitpack v0.0.0-20251026144303-27c130d7716c/go.mod h1:Ef5FEKAqlyHECov7Z3RKOq8Ud9Vr8cbGNoCF56KEKaE=
 github.com/parquet-go/bitpack v0.0.0-20251026160814-ee8dffbb040e h1:oqjnZFoPJhsUduHKyahRNQxYq1Wn7vdqbs176n6j5kU=
 github.com/parquet-go/bitpack v0.0.0-20251026160814-ee8dffbb040e/go.mod h1:XnVk9TH+O40eOOmvpAVZ7K2ocQFrQwysLMnc6M/8lgs=
 github.com/pierrec/lz4/v4 v4.1.21 h1:yOVMLb6qSIDP67pl/5F7RepeKYu/VmTyEXvuMI5d9mQ=
