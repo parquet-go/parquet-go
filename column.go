@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -831,6 +832,11 @@ var (
 )
 
 func validateColumns(t reflect.Type) (string, bool) {
+	// Only validate struct types
+	if t.Kind() != reflect.Struct {
+		return "", true
+	}
+
 	var (
 		field     reflect.StructField
 		fieldType reflect.Type
@@ -841,16 +847,39 @@ func validateColumns(t reflect.Type) (string, bool) {
 
 	for i := range t.NumField() {
 		field = t.Field(i)
+
+		// Skip unexported fields
+		if !field.IsExported() {
+			continue
+		}
+
 		fieldType = field.Type
 		fieldTag = field.Tag.Get("parquet")
 
-		if val, ok := columns[fieldTag]; ok {
+		// Determine the actual column name using the same logic as schema generation
+		columnName := field.Name
+		if fieldTag != "" {
+			// Split tag by comma to get the name part
+			if commaIdx := strings.IndexByte(fieldTag, ','); commaIdx >= 0 {
+				fieldTag = fieldTag[:commaIdx]
+			}
+			// Check if field is skipped
+			if fieldTag == "-" {
+				continue
+			}
+			// Use tag name if non-empty
+			if fieldTag != "" {
+				columnName = fieldTag
+			}
+		}
+
+		if val, ok := columns[columnName]; ok {
 			if val == fieldType {
 				continue
 			}
-			return fieldTag, false
+			return columnName, false
 		} else {
-			columns[fieldTag] = fieldType
+			columns[columnName] = fieldType
 		}
 	}
 
