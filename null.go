@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"reflect"
+	"time"
 	"unsafe"
 
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -35,10 +36,23 @@ func nullIndexStruct(bits []uint64, rows sparse.Array) {
 	bytealg.Broadcast(unsafecast.Slice[byte](bits), 0xFF)
 }
 
+func nullIndexTime(bits []uint64, rows sparse.Array) {
+	for i := range rows.Len() {
+		t := (*time.Time)(rows.Index(i))
+		if !t.IsZero() {
+			x := uint(i) / 64
+			y := uint(i) % 64
+			bits[x] |= 1 << y
+		}
+	}
+}
+
 func nullIndexFuncOf(t reflect.Type) nullIndexFunc {
 	switch t {
 	case reflect.TypeOf(deprecated.Int96{}):
 		return nullIndex[deprecated.Int96]
+	case reflect.TypeOf(time.Time{}):
+		return nullIndexTime
 	}
 
 	switch t.Kind() {
