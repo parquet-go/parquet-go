@@ -2339,7 +2339,91 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 	}
 }
 
+// writeRowsFuncOfMapToGroup handles writing a Go map to a Parquet GROUP schema
+// (as opposed to a MAP logical type). This allows map[string]T to be written
+// to schemas with named optional fields.
+func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, groupNode Node) writeRowsFunc {
+	if t.Key().Kind() != reflect.String {
+		panic("map keys must be strings when writing to GROUP schema")
+	}
+
+	type fieldWriter struct {
+		fieldName string
+		writeRows writeRowsFunc
+	}
+
+	// Get all fields from the GROUP and create write functions for each
+	fields := groupNode.Fields()
+	writers := make([]fieldWriter, len(fields))
+	valueType := t.Elem()
+	valueSize := uintptr(valueType.Size())
+
+	for i, field := range fields {
+		fieldPath := path.append(field.Name())
+		writeRows := writeRowsFuncOf(valueType, schema, fieldPath)
+
+		// Check if the field is optional
+		if field.Optional() {
+			writeRows = writeRowsFuncOfOptional(valueType, schema, fieldPath, writeRows)
+		}
+
+		writers[i] = fieldWriter{
+			fieldName: field.Name(),
+			writeRows: writeRows,
+		}
+	}
+
+	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+		if rows.Len() == 0 {
+			// Write empty values for all fields
+			empty := sparse.Array{}
+			for _, w := range writers {
+				if err := w.writeRows(columns, empty, levels); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		for i := range rows.Len() {
+			m := reflect.NewAt(t, rows.Index(i)).Elem()
+
+			// For each field in the GROUP schema, look up the corresponding map key
+			for _, w := range writers {
+				keyValue := reflect.ValueOf(w.fieldName)
+				mapValue := m.MapIndex(keyValue)
+
+				if !mapValue.IsValid() {
+					// Key doesn't exist in map - write a null/zero value
+					empty := sparse.Array{}
+					if err := w.writeRows(columns, empty, levels); err != nil {
+						return err
+					}
+				} else {
+					// Key exists - write the value
+					valueArray := makeArray(reflectValueData(mapValue), 1, valueSize)
+					if err := w.writeRows(columns, valueArray, levels); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		return nil
+	}
+}
+
 func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+	// Check if the schema at this path is a MAP or a GROUP.
+	node := findByPath(schema, path)
+	if node != nil && !isMap(node) {
+		// The schema is a GROUP (not a MAP), so we need to handle it differently.
+		// Instead of using key_value structure, we iterate through the GROUP's fields
+		// and look up corresponding map keys.
+		return writeRowsFuncOfMapToGroup(t, schema, path, node)
+	}
+
+	// Standard MAP logical type handling
 	keyPath := path.append("key_value", "key")
 	keyType := t.Key()
 	keySize := uintptr(keyType.Size())
