@@ -553,7 +553,7 @@ func TestGenericWriterMapAnyToDeeplyNestedGroups(t *testing.T) {
 				Level2 struct {
 					Value string `parquet:",optional"`
 				} `parquet:",optional"`
-				Name string `parquet:",optional"`
+				Name *string `parquet:",optional"`
 			} `parquet:",optional"`
 		}
 	}
@@ -564,6 +564,7 @@ func TestGenericWriterMapAnyToDeeplyNestedGroups(t *testing.T) {
 	// Try to write using NewGenericWriter with the map type
 	buf := new(bytes.Buffer)
 	writer := NewGenericWriter[RecordWithMap](buf, desiredSchema)
+	strPtr := func(s string) *string { return &s }
 
 	// Attempt to write values with deeply nested maps
 	records := []RecordWithMap{
@@ -571,7 +572,7 @@ func TestGenericWriterMapAnyToDeeplyNestedGroups(t *testing.T) {
 			Root: map[string]any{
 				"Level1": map[string]any{
 					"Level2": map[string]any{
-						"Value": "deep_value",
+						"Value": strPtr("deep_value"),
 					},
 					"Name": "level1_name",
 				},
@@ -611,8 +612,8 @@ func TestGenericWriterMapAnyToDeeplyNestedGroups(t *testing.T) {
 	if result1.Root.Level1.Level2.Value != "deep_value" {
 		t.Errorf("row 1 deep value incorrect: %s", result1.Root.Level1.Level2.Value)
 	}
-	if result1.Root.Level1.Name != "level1_name" {
-		t.Errorf("row 1 level1 name incorrect: %s", result1.Root.Level1.Name)
+	if *result1.Root.Level1.Name != "level1_name" {
+		t.Errorf("row 1 level1 name incorrect: %s", *result1.Root.Level1.Name)
 	}
 
 	var result2 RecordWithStruct
@@ -623,7 +624,7 @@ func TestGenericWriterMapAnyToDeeplyNestedGroups(t *testing.T) {
 	if result2.Root.Level1.Level2.Value != "" {
 		t.Errorf("row 2 deep value should be empty: %s", result2.Root.Level1.Level2.Value)
 	}
-	if result2.Root.Level1.Name != "another_name" {
-		t.Errorf("row 2 level1 name incorrect: %s", result2.Root.Level1.Name)
+	if *result2.Root.Level1.Name != "another_name" {
+		t.Errorf("row 2 level1 name incorrect: %s", *result2.Root.Level1.Name)
 	}
 }

@@ -2377,17 +2377,19 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 			fieldPathCopy := fieldPath
 			writeValue := func(columns []ColumnBuffer, mapValue reflect.Value, levels columnLevels) error {
 				actualValue := mapValue
-				if actualValue.Kind() == reflect.Interface && !actualValue.IsNil() {
+				actualValueKind := actualValue.Kind()
+				if actualValueKind == reflect.Interface && !actualValue.IsNil() {
 					actualValue = actualValue.Elem()
+					actualValueKind = actualValue.Kind()
 				}
-
-				if !actualValue.IsValid() || (actualValue.Kind() == reflect.Pointer && actualValue.IsNil()) {
+				if !actualValue.IsValid() || (actualValueKind == reflect.Pointer && actualValue.IsNil()) {
 					// Nil interface or nil pointer - write null
 					empty := sparse.Array{}
 					return writeNull(columns, empty, levels)
 				}
-
-				// Write the actual value based on its runtime type
+				if actualValueKind == reflect.Pointer {
+					actualValue = actualValue.Elem()
+				}
 				return writeInterfaceValue(columns, actualValue, fieldCopy, schema, fieldPathCopy, levels)
 			}
 
