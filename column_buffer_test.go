@@ -2,7 +2,6 @@ package parquet
 
 import (
 	"bytes"
-	"fmt"
 	"reflect"
 	"testing"
 )
@@ -173,8 +172,6 @@ func TestMapFieldToGroupSchema(t *testing.T) {
 	// Create schema from the struct (this gives us the desired GROUP schema)
 	desiredSchema := SchemaOf(RecordWithStruct{})
 
-	t.Logf("Desired schema:\n%s", desiredSchema)
-
 	// Try to write using the map type
 	buf := new(bytes.Buffer)
 	writer := NewWriter(buf, desiredSchema)
@@ -197,8 +194,6 @@ func TestMapFieldToGroupSchema(t *testing.T) {
 		t.Fatalf("failed to close writer: %v", err)
 	}
 
-	t.Logf("Successfully wrote %d bytes", buf.Len())
-
 	// Try to read it back
 	reader := NewReader(bytes.NewReader(buf.Bytes()))
 	defer reader.Close()
@@ -207,8 +202,6 @@ func TestMapFieldToGroupSchema(t *testing.T) {
 	if err := reader.Read(&result); err != nil {
 		t.Fatalf("failed to read row: %v", err)
 	}
-
-	t.Logf("Read back: %+v", result)
 }
 
 // TestWhatActuallyHappensWithMapField tests what schema is generated when
@@ -221,7 +214,11 @@ func TestWhatActuallyHappensWithMapField(t *testing.T) {
 	// Get the schema that's naturally generated from the map type
 	naturalSchema := SchemaOf(RecordWithMap{})
 
-	fmt.Printf("Natural schema from map[string]string:\n%s\n", naturalSchema)
+	// Verify that the natural schema is a MAP type, not a GROUP
+	nestedField := naturalSchema.Fields()[0]
+	if nestedField.Type().LogicalType() == nil || nestedField.Type().LogicalType().Map == nil {
+		t.Fatalf("expected Nested field to have MAP logical type, got: %v", nestedField.Type().LogicalType())
+	}
 
 	// Write some data
 	buf := new(bytes.Buffer)
@@ -239,11 +236,13 @@ func TestWhatActuallyHappensWithMapField(t *testing.T) {
 	}
 	writer.Close()
 
-	// Read it back and check the schema
+	// Read it back and check the schema matches
 	reader := NewReader(bytes.NewReader(buf.Bytes()))
 	defer reader.Close()
 
-	fmt.Printf("\nActual file schema:\n%s\n", reader.Schema())
+	if !EqualNodes(naturalSchema, reader.Schema()) {
+		t.Errorf("reader schema doesn't match natural schema:\nexpected: %s\ngot: %s", naturalSchema, reader.Schema())
+	}
 }
 
 // TestGenericWriterMapToGroupSchema tests that NewGenericWriter supports
@@ -265,8 +264,6 @@ func TestGenericWriterMapToGroupSchema(t *testing.T) {
 
 	// Create schema from the struct (this gives us the desired GROUP schema)
 	desiredSchema := SchemaOf(RecordWithStruct{})
-
-	t.Logf("Desired schema:\n%s", desiredSchema)
 
 	// Try to write using NewGenericWriter with the map type
 	buf := new(bytes.Buffer)
@@ -302,8 +299,6 @@ func TestGenericWriterMapToGroupSchema(t *testing.T) {
 		t.Fatalf("failed to close writer: %v", err)
 	}
 
-	t.Logf("Successfully wrote %d bytes", buf.Len())
-
 	// Try to read it back
 	reader := NewReader(bytes.NewReader(buf.Bytes()))
 	defer reader.Close()
@@ -312,7 +307,6 @@ func TestGenericWriterMapToGroupSchema(t *testing.T) {
 	if err := reader.Read(&result1); err != nil {
 		t.Fatalf("failed to read row 1: %v", err)
 	}
-	t.Logf("Row 1: %+v", result1)
 
 	if result1.Nested.A != "value_a1" || result1.Nested.B != "value_b1" || result1.Nested.C != "value_c1" {
 		t.Errorf("row 1 values incorrect: %+v", result1.Nested)
@@ -322,9 +316,315 @@ func TestGenericWriterMapToGroupSchema(t *testing.T) {
 	if err := reader.Read(&result2); err != nil {
 		t.Fatalf("failed to read row 2: %v", err)
 	}
-	t.Logf("Row 2: %+v", result2)
 
 	if result2.Nested.A != "value_a2" || result2.Nested.B != "value_b2" || result2.Nested.C != "" {
 		t.Errorf("row 2 values incorrect: %+v", result2.Nested)
+	}
+}
+
+// TestGenericWriterMapAnyToNestedGroupSchema tests that NewGenericWriter supports
+// writing map[string]any fields to a nested GROUP schema with multiple levels.
+// This corresponds to the example:
+//
+//	message record {
+//	  group nested {
+//	    group coordinates {
+//	      double x;
+//	      double y;
+//	    }
+//	    string id;
+//	  }
+//	}
+func TestGenericWriterMapAnyToNestedGroupSchema(t *testing.T) {
+	// The user's Go type with map[string]any
+	type RecordWithMap struct {
+		Nested map[string]any
+	}
+
+	// The desired schema structure (nested GROUPs)
+	type RecordWithStruct struct {
+		Nested struct {
+			Coordinates struct {
+				X float64 `parquet:",optional"`
+				Y float64 `parquet:",optional"`
+			} `parquet:",optional"`
+			ID string `parquet:",optional"`
+		}
+	}
+
+	// Create schema from the struct (this gives us the desired nested GROUP schema)
+	desiredSchema := SchemaOf(RecordWithStruct{})
+
+	// Try to write using NewGenericWriter with the map type
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithMap](buf, desiredSchema)
+
+	// Attempt to write values with map[string]any
+	records := []RecordWithMap{
+		{
+			Nested: map[string]any{
+				"Coordinates": map[string]float64{
+					"X": 0.1,
+					"Y": 0.2,
+				},
+				"ID": "1234567890",
+			},
+		},
+		{
+			Nested: map[string]any{
+				"Coordinates": map[string]any{
+					"X": 1.5,
+					"Y": 2.5,
+				},
+				"ID": "abc",
+			},
+		},
+		{
+			Nested: map[string]any{
+				// Coordinates omitted - should be null
+				"ID": "xyz",
+			},
+		},
+	}
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write rows: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("expected to write 3 rows, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Try to read it back
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var result1 RecordWithStruct
+	if err := reader.Read(&result1); err != nil {
+		t.Fatalf("failed to read row 1: %v", err)
+	}
+
+	if result1.Nested.Coordinates.X != 0.1 || result1.Nested.Coordinates.Y != 0.2 {
+		t.Errorf("row 1 coordinates incorrect: %+v", result1.Nested.Coordinates)
+	}
+	if result1.Nested.ID != "1234567890" {
+		t.Errorf("row 1 ID incorrect: %s", result1.Nested.ID)
+	}
+
+	var result2 RecordWithStruct
+	if err := reader.Read(&result2); err != nil {
+		t.Fatalf("failed to read row 2: %v", err)
+	}
+
+	if result2.Nested.Coordinates.X != 1.5 || result2.Nested.Coordinates.Y != 2.5 {
+		t.Errorf("row 2 coordinates incorrect: %+v", result2.Nested.Coordinates)
+	}
+	if result2.Nested.ID != "abc" {
+		t.Errorf("row 2 ID incorrect: %s", result2.Nested.ID)
+	}
+
+	var result3 RecordWithStruct
+	if err := reader.Read(&result3); err != nil {
+		t.Fatalf("failed to read row 3: %v", err)
+	}
+
+	if result3.Nested.Coordinates.X != 0 || result3.Nested.Coordinates.Y != 0 {
+		t.Errorf("row 3 coordinates should be zero: %+v", result3.Nested.Coordinates)
+	}
+	if result3.Nested.ID != "xyz" {
+		t.Errorf("row 3 ID incorrect: %s", result3.Nested.ID)
+	}
+}
+
+// TestGenericWriterMapAnyToGroupWithMixedTypes tests map[string]any mapping
+// to a GROUP schema with various primitive types.
+func TestGenericWriterMapAnyToGroupWithMixedTypes(t *testing.T) {
+	// The user's Go type with map[string]any
+	type RecordWithMap struct {
+		Data map[string]any
+	}
+
+	// The desired schema structure with various types
+	type RecordWithStruct struct {
+		Data struct {
+			Name   string  `parquet:",optional"`
+			Age    int32   `parquet:",optional"`
+			Score  float64 `parquet:",optional"`
+			Active bool    `parquet:",optional"`
+		}
+	}
+
+	// Create schema from the struct
+	desiredSchema := SchemaOf(RecordWithStruct{})
+
+	// Try to write using NewGenericWriter with the map type
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithMap](buf, desiredSchema)
+
+	// Attempt to write values with map[string]any containing different types
+	records := []RecordWithMap{
+		{
+			Data: map[string]any{
+				"Name":   "Alice",
+				"Age":    int32(30),
+				"Score":  95.5,
+				"Active": true,
+			},
+		},
+		{
+			Data: map[string]any{
+				"Name":  "Bob",
+				"Age":   int32(25),
+				"Score": 87.3,
+				// Active omitted
+			},
+		},
+	}
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write rows: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected to write 2 rows, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Try to read it back
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var result1 RecordWithStruct
+	if err := reader.Read(&result1); err != nil {
+		t.Fatalf("failed to read row 1: %v", err)
+	}
+
+	if result1.Data.Name != "Alice" {
+		t.Errorf("row 1 Name incorrect: %s", result1.Data.Name)
+	}
+	if result1.Data.Age != 30 {
+		t.Errorf("row 1 Age incorrect: %d", result1.Data.Age)
+	}
+	if result1.Data.Score != 95.5 {
+		t.Errorf("row 1 Score incorrect: %f", result1.Data.Score)
+	}
+	if result1.Data.Active != true {
+		t.Errorf("row 1 Active incorrect: %v", result1.Data.Active)
+	}
+
+	var result2 RecordWithStruct
+	if err := reader.Read(&result2); err != nil {
+		t.Fatalf("failed to read row 2: %v", err)
+	}
+
+	if result2.Data.Name != "Bob" {
+		t.Errorf("row 2 Name incorrect: %s", result2.Data.Name)
+	}
+	if result2.Data.Age != 25 {
+		t.Errorf("row 2 Age incorrect: %d", result2.Data.Age)
+	}
+	if result2.Data.Score != 87.3 {
+		t.Errorf("row 2 Score incorrect: %f", result2.Data.Score)
+	}
+	if result2.Data.Active != false {
+		t.Errorf("row 2 Active should be false: %v", result2.Data.Active)
+	}
+}
+
+// TestGenericWriterMapAnyToDeeplyNestedGroups tests map[string]any mapping
+// to a deeply nested GROUP schema (3+ levels).
+func TestGenericWriterMapAnyToDeeplyNestedGroups(t *testing.T) {
+	// The user's Go type with map[string]any
+	type RecordWithMap struct {
+		Root map[string]any
+	}
+
+	// The desired schema structure with deep nesting
+	type RecordWithStruct struct {
+		Root struct {
+			Level1 struct {
+				Level2 struct {
+					Value string `parquet:",optional"`
+				} `parquet:",optional"`
+				Name *string `parquet:",optional"`
+			} `parquet:",optional"`
+		}
+	}
+
+	// Create schema from the struct
+	desiredSchema := SchemaOf(RecordWithStruct{})
+
+	// Try to write using NewGenericWriter with the map type
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithMap](buf, desiredSchema)
+	strPtr := func(s string) *string { return &s }
+
+	// Attempt to write values with deeply nested maps
+	records := []RecordWithMap{
+		{
+			Root: map[string]any{
+				"Level1": map[string]any{
+					"Level2": map[string]any{
+						"Value": strPtr("deep_value"),
+					},
+					"Name": "level1_name",
+				},
+			},
+		},
+		{
+			Root: map[string]any{
+				"Level1": map[string]any{
+					// Level2 omitted
+					"Name": "another_name",
+				},
+			},
+		},
+	}
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write rows: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected to write 2 rows, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Try to read it back
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var result1 RecordWithStruct
+	if err := reader.Read(&result1); err != nil {
+		t.Fatalf("failed to read row 1: %v", err)
+	}
+
+	if result1.Root.Level1.Level2.Value != "deep_value" {
+		t.Errorf("row 1 deep value incorrect: %s", result1.Root.Level1.Level2.Value)
+	}
+	if *result1.Root.Level1.Name != "level1_name" {
+		t.Errorf("row 1 level1 name incorrect: %s", *result1.Root.Level1.Name)
+	}
+
+	var result2 RecordWithStruct
+	if err := reader.Read(&result2); err != nil {
+		t.Fatalf("failed to read row 2: %v", err)
+	}
+
+	if result2.Root.Level1.Level2.Value != "" {
+		t.Errorf("row 2 deep value should be empty: %s", result2.Root.Level1.Level2.Value)
+	}
+	if *result2.Root.Level1.Name != "another_name" {
+		t.Errorf("row 2 level1 name incorrect: %s", *result2.Root.Level1.Name)
 	}
 }
