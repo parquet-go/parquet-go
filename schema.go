@@ -637,7 +637,8 @@ func nodeOf(t reflect.Type, tags parquetTags) Node {
 		if elem := t.Elem(); elem.Kind() == reflect.Uint8 { // []byte?
 			n = Leaf(ByteArrayType)
 		} else {
-			n = Repeated(nodeOf(elem, noTags))
+			// Use List by default for proper Parquet compatibility (issue #332)
+			n = List(nodeOf(elem, noTags))
 		}
 
 	case reflect.Array:
@@ -1070,7 +1071,8 @@ func makeNodeOf(t reflect.Type, name string, tags parquetTags) Node {
 		// Note for strings "optional" applies only to the entire BYTE_ARRAY and
 		// not each individual byte.
 		if optional && !isUint8 {
-			node = Repeated(Optional(nodeOf(t.Elem(), tags)))
+			// Use List instead of Repeated for proper Parquet compatibility (issue #332)
+			node = List(Optional(nodeOf(t.Elem(), tags)))
 			// Don't also apply "optional" to the whole list.
 			optional = false
 		}
