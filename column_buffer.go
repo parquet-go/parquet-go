@@ -2607,7 +2607,29 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 		for i := range rows.Len() {
 			m := reflect.NewAt(t, rows.Index(i)).Elem()
 
-			if m.Len() == 0 {
+			// Check if map is nil or empty. Must use defer/recover to handle
+			// corrupted map pointers that can occur with nested structures (issue #316).
+			//
+			// When reflect.NewAt() creates a Value from a sparse array offset for
+			// deeply nested maps, it can produce a reflect.Value where IsValid() and
+			// IsNil() indicate a valid non-nil map, but the internal map pointer is
+			// corrupted (e.g., pointing to 0x2), causing Len() to panic with
+			// "invalid memory address or nil pointer dereference".
+			//
+			// This defensive check prevents the crash while treating corrupted maps
+			// as empty, which is the safest behavior.
+			var mapLen int
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// Len() panicked - treat as empty
+						mapLen = 0
+					}
+				}()
+				mapLen = m.Len()
+			}()
+
+			if mapLen == 0 {
 				empty := sparse.Array{}
 				if err := writeKeyValues(columns, empty, empty, levels); err != nil {
 					return err

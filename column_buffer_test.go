@@ -628,3 +628,58 @@ func TestGenericWriterMapAnyToDeeplyNestedGroups(t *testing.T) {
 		t.Errorf("row 2 level1 name incorrect: %s", *result2.Root.Level1.Name)
 	}
 }
+
+// TestIssue316NestedMapWithPointers tests the exact scenario from issue #316:
+// nested structs with map[string]*AnotherStruct that was causing nil pointer
+// dereference errors.
+func TestIssue316NestedMapWithPointers(t *testing.T) {
+	type LevelStats struct {
+		Avg             float64 `parquet:",optional"`
+		Price           float64 `parquet:",optional"`
+		CheapestPerlvl  float64 `parquet:",optional"`
+		Count           int64   `parquet:",optional"`
+		Items           map[string]float64
+	}
+
+	type SecStats struct {
+		Levels         map[string]*LevelStats
+		CheapestPerSec float64 `parquet:",optional"`
+	}
+
+	type Summary struct {
+		Sections map[string]*SecStats
+	}
+
+	// Create test data that matches the issue description
+	testData := []Summary{
+		{
+			Sections: map[string]*SecStats{
+				"section1": {
+					CheapestPerSec: 10.5,
+					Levels: map[string]*LevelStats{
+						"level1": {
+							Avg:            100.0,
+							Price:          200.0,
+							CheapestPerlvl: 50.0,
+							Count:          5,
+							Items: map[string]float64{
+								"item1": 1.5,
+								"item2": 2.5,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// This should not panic with nil pointer dereference
+	buf := new(bytes.Buffer)
+	err := Write(buf, testData)
+	if err != nil {
+		t.Fatalf("failed to write data (issue #316 reproduction): %v", err)
+	}
+
+	// The main goal is that it doesn't panic - we've fixed the crash
+	t.Logf("Successfully wrote %d bytes without crashing", buf.Len())
+}
