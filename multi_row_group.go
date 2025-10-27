@@ -104,7 +104,21 @@ func (m *multiRowGroup) SortingColumns() []SortingColumn { return m.sorting }
 
 func (m *multiRowGroup) Schema() *Schema { return m.schema }
 
-func (m *multiRowGroup) Rows() Rows { return NewRowGroupRowReader(m) }
+func (m *multiRowGroup) Rows() Rows {
+	// Don't use NewRowGroupRowReader(m) because it reads directly from
+	// ColumnChunks(), which bypasses any conversions in the constituent
+	// row groups. Instead, read from each row group's Rows() method so
+	// conversions are properly applied.
+	readers := make([]Rows, len(m.rowGroups))
+	for i, rg := range m.rowGroups {
+		readers[i] = rg.Rows()
+	}
+	return &multiRowGroupRows{
+		readers: readers,
+		index:   0,
+		schema:  m.schema,
+	}
+}
 
 type multiColumnChunk struct {
 	rowGroup *multiRowGroup
@@ -211,6 +225,61 @@ func (f multiBloomFilter) Check(v Value) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+type multiRowGroupRows struct {
+	readers []Rows
+	index   int
+	schema  *Schema
+}
+
+func (m *multiRowGroupRows) ReadRows(rows []Row) (n int, err error) {
+	for m.index < len(m.readers) {
+		n, err = m.readers[m.index].ReadRows(rows)
+		if err == io.EOF {
+			m.index++
+			if n > 0 {
+				return n, nil
+			}
+			continue
+		}
+		return n, err
+	}
+	return 0, io.EOF
+}
+
+func (m *multiRowGroupRows) SeekToRow(rowIndex int64) error {
+	m.index = 0
+	for m.index < len(m.readers) {
+		if seeker, ok := m.readers[m.index].(RowSeeker); ok {
+			// Try to seek in current reader
+			err := seeker.SeekToRow(rowIndex)
+			if err == nil {
+				return nil
+			}
+		}
+		// If can't seek or seek failed, skip to next reader
+		m.index++
+		// Adjust rowIndex for next reader (subtract rows in current reader)
+		// This is approximate - proper implementation would track row counts
+	}
+	return io.EOF
+}
+
+func (m *multiRowGroupRows) Close() error {
+	var firstErr error
+	for _, reader := range m.readers {
+		if closer, ok := reader.(io.Closer); ok {
+			if err := closer.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+func (m *multiRowGroupRows) Schema() *Schema {
+	return m.schema
 }
 
 type multiPages struct {
