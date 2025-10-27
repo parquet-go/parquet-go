@@ -1956,3 +1956,250 @@ func TestColumnValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestConcurrentRowGroupWriter(t *testing.T) {
+	type Row struct {
+		ID   int
+		Name string
+	}
+
+	t.Run("single row group", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf, parquet.MaxRowsPerRowGroup(100))
+
+		rg, err := writer.BeginRowGroup()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rows := []parquet.Row{
+			{parquet.ValueOf(1).Level(0, 0, 0), parquet.ValueOf("test").Level(0, 0, 1)},
+		}
+		n, err := rg.WriteRows(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("expected 1 row written, got %d", n)
+		}
+
+		if _, err := writer.CommitRowGroup(rg); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(f.RowGroups()) != 1 {
+			t.Fatalf("expected 1 row group, got %d", len(f.RowGroups()))
+		}
+
+		if f.NumRows() != 1 {
+			t.Fatalf("expected 1 row, got %d", f.NumRows())
+		}
+	})
+
+	t.Run("multiple row groups in order", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf, parquet.MaxRowsPerRowGroup(10))
+
+		const numGroups = 5
+		rgs := make([]*parquet.ConcurrentRowGroupWriter, numGroups)
+
+		// Create row groups sequentially
+		for i := range rgs {
+			rg, err := writer.BeginRowGroup()
+			if err != nil {
+				t.Fatal(err)
+			}
+			rgs[i] = rg
+
+			// Write data to this row group
+			for j := range 10 {
+				rows := []parquet.Row{
+					{parquet.ValueOf(i*10+j).Level(0, 0, 0), parquet.ValueOf(fmt.Sprintf("row_%d_%d", i, j)).Level(0, 0, 1)},
+				}
+				if _, err := rg.WriteRows(rows); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+
+		// Commit in order
+		for _, rg := range rgs {
+			if _, err := writer.CommitRowGroup(rg); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(f.RowGroups()) != numGroups {
+			t.Fatalf("expected %d row groups, got %d", numGroups, len(f.RowGroups()))
+		}
+
+		if f.NumRows() != 50 {
+			t.Fatalf("expected 50 rows, got %d", f.NumRows())
+		}
+
+		// Verify data
+		reader := parquet.NewGenericReader[Row](f)
+		for i := range 50 {
+			rows := []Row{{}}
+			n, err := reader.Read(rows)
+			if err != nil && err != io.EOF {
+				t.Fatal(err)
+			}
+			if n > 0 && rows[0].ID != i {
+				t.Errorf("row %d: expected ID %d, got %d", i, i, rows[0].ID)
+			}
+		}
+	})
+
+	t.Run("parallel row group writing", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf, parquet.MaxRowsPerRowGroup(10))
+
+		const numGroups = 5
+		rgs := make([]*parquet.ConcurrentRowGroupWriter, numGroups)
+
+		// Create all row groups
+		for i := range rgs {
+			rg, err := writer.BeginRowGroup()
+			if err != nil {
+				t.Fatal(err)
+			}
+			rgs[i] = rg
+		}
+
+		// Write to them in parallel
+		var wg sync.WaitGroup
+		errs := make([]error, numGroups)
+		for i := range rgs {
+			wg.Add(1)
+			go func(index int, rg *parquet.ConcurrentRowGroupWriter) {
+				defer wg.Done()
+				for j := range 10 {
+					rows := []parquet.Row{
+						{parquet.ValueOf(index*10+j).Level(0, 0, 0), parquet.ValueOf(fmt.Sprintf("row_%d_%d", index, j)).Level(0, 0, 1)},
+					}
+					if _, err := rg.WriteRows(rows); err != nil {
+						errs[index] = err
+						return
+					}
+				}
+			}(i, rgs[i])
+		}
+		wg.Wait()
+
+		// Check for errors
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("row group %d failed: %v", i, err)
+			}
+		}
+
+		// Commit in order
+		for _, rg := range rgs {
+			if _, err := writer.CommitRowGroup(rg); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(f.RowGroups()) != numGroups {
+			t.Fatalf("expected %d row groups, got %d", numGroups, len(f.RowGroups()))
+		}
+
+		if f.NumRows() != 50 {
+			t.Fatalf("expected 50 rows, got %d", f.NumRows())
+		}
+
+		// Verify all data is present (order within row groups should be maintained)
+		reader := parquet.NewGenericReader[Row](f)
+		rowsSeen := make(map[int]bool)
+		for range 50 {
+			rows := []Row{{}}
+			n, err := reader.Read(rows)
+			if err != nil && err != io.EOF {
+				t.Fatal(err)
+			}
+			if n > 0 {
+				if rows[0].ID < 0 || rows[0].ID >= 50 {
+					t.Errorf("unexpected ID: %d", rows[0].ID)
+				}
+				rowsSeen[rows[0].ID] = true
+			}
+		}
+		if len(rowsSeen) != 50 {
+			t.Errorf("expected 50 unique rows, got %d", len(rowsSeen))
+		}
+	})
+
+	t.Run("commit with pending rows", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf, parquet.MaxRowsPerRowGroup(10))
+
+		// Write some rows to the main writer
+		if _, err := writer.Write([]Row{{ID: 1, Name: "main1"}}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create and write to a row group
+		rg, err := writer.BeginRowGroup()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rows := []parquet.Row{
+			{parquet.ValueOf(2).Level(0, 0, 0), parquet.ValueOf("rg1").Level(0, 0, 1)},
+		}
+		if _, err := rg.WriteRows(rows); err != nil {
+			t.Fatal(err)
+		}
+
+		// Commit should flush pending rows first
+		if _, err := writer.CommitRowGroup(rg); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Should have 2 row groups (one from Flush, one from CommitRowGroup)
+		if len(f.RowGroups()) != 2 {
+			t.Fatalf("expected 2 row groups, got %d", len(f.RowGroups()))
+		}
+
+		if f.NumRows() != 2 {
+			t.Fatalf("expected 2 rows, got %d", f.NumRows())
+		}
+	})
+}
