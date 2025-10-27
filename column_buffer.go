@@ -2062,7 +2062,7 @@ func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) wr
 }
 
 func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
-	if t.Kind() == reflect.Slice { // assume nested list
+	if t.Kind() == reflect.Slice && t.Elem().Kind() != reflect.Uint8 { // assume nested list; []byte is scalar
 		return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 			if rows.Len() == 0 {
 				return writeRows(columns, rows, levels)
@@ -2306,7 +2306,8 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 			kind := f.Type.Kind()
 			switch {
 			case kind == reflect.Pointer:
-			case kind == reflect.Slice && !list:
+			case kind == reflect.Slice && !list && f.Type.Elem().Kind() != reflect.Uint8:
+				// For slices other than []byte, optional applies to the element, not the list
 			case f.Type == reflect.TypeOf(time.Time{}):
 				// time.Time is a struct but has IsZero() method, so it needs special handling
 				// Don't use writeRowsFuncOfOptional which relies on bitmap batching
