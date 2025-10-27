@@ -53,10 +53,10 @@ func TestWriteReadNullOnlyColumn(t *testing.T) {
 // TestWriteReadMultipleNullOnlyColumns tests multiple optional columns that are all null
 func TestWriteReadMultipleNullOnlyColumns(t *testing.T) {
 	type Record struct {
-		ID      int64   `parquet:"id"`
-		Field1  *string `parquet:"field1,optional"`
-		Field2  *string `parquet:"field2,optional"`
-		Field3  *string `parquet:"field3,optional"`
+		ID     int64   `parquet:"id"`
+		Field1 *string `parquet:"field1,optional"`
+		Field2 *string `parquet:"field2,optional"`
+		Field3 *string `parquet:"field3,optional"`
 	}
 
 	var buf bytes.Buffer

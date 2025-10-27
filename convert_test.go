@@ -1234,3 +1234,200 @@ type convertMissingColumn struct {
 func (m convertMissingColumn) Column(_ int) int                        { return -1 }
 func (m convertMissingColumn) Schema() *parquet.Schema                 { return m.schema }
 func (m convertMissingColumn) Convert(rows []parquet.Row) (int, error) { return len(rows), nil }
+
+func TestConvertRowGroupColumnIndexes(t *testing.T) {
+	type OriginalSchema struct {
+		A int64  `parquet:"a"`
+		B string `parquet:"b"`
+		C bool   `parquet:"c"`
+	}
+
+	type TargetSchema struct {
+		A int64  `parquet:"a"`
+		C bool   `parquet:"c"`
+		B string `parquet:"b"`
+	}
+
+	originalSchema := parquet.SchemaOf(&OriginalSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	buffer := parquet.NewGenericBuffer[OriginalSchema](originalSchema)
+	if _, err := buffer.Write([]OriginalSchema{
+		{A: 1, B: "hello", C: true},
+		{A: 2, B: "world", C: false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, originalSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	chunks := convertedRowGroup.ColumnChunks()
+
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 column chunks, got %d", len(chunks))
+	}
+
+	expectedColumns := []struct {
+		name          string
+		columnIndex   int
+		originalIndex int
+	}{
+		{"a", 0, 0},
+		{"b", 1, 1},
+		{"c", 2, 2},
+	}
+
+	for _, expected := range expectedColumns {
+		chunk := chunks[expected.columnIndex]
+		gotColumnIndex := chunk.Column()
+
+		if gotColumnIndex != expected.columnIndex {
+			t.Errorf("column %q at position %d: Column() returned %d, want %d",
+				expected.name, expected.columnIndex, gotColumnIndex, expected.columnIndex)
+		}
+	}
+}
+
+func TestConvertRowGroupValueColumnIndexes(t *testing.T) {
+	type OriginalSchema struct {
+		ID       int64   `parquet:"id"`
+		Required string  `parquet:"required"`
+		Optional *string `parquet:"optional,optional"`
+	}
+
+	type TargetSchema struct {
+		ID       int64   `parquet:"id"`
+		Optional *string `parquet:"optional,optional"`
+		Required string  `parquet:"required"`
+	}
+
+	originalSchema := parquet.SchemaOf(&OriginalSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	optionalValue := "test"
+	buffer := parquet.NewGenericBuffer[OriginalSchema](originalSchema)
+	if _, err := buffer.Write([]OriginalSchema{
+		{ID: 1, Required: "value1", Optional: &optionalValue},
+		{ID: 2, Required: "value2", Optional: nil},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, originalSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	chunks := convertedRowGroup.ColumnChunks()
+
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 column chunks, got %d", len(chunks))
+	}
+
+	for chunkIndex, chunk := range chunks {
+		pages := chunk.Pages()
+		defer pages.Close()
+
+		for {
+			page, err := pages.ReadPage()
+			if err != nil {
+				break
+			}
+
+			reader := page.Values()
+			values := make([]parquet.Value, 1024)
+
+			for {
+				n, err := reader.ReadValues(values)
+				for i := 0; i < n; i++ {
+					gotColumnIndex := values[i].Column()
+					if gotColumnIndex != chunkIndex {
+						t.Errorf("chunk %d: value has columnIndex %d, want %d",
+							chunkIndex, gotColumnIndex, chunkIndex)
+					}
+				}
+
+				if err != nil {
+					break
+				}
+			}
+		}
+	}
+}
+
+func TestConvertRowGroupWithMissingColumns(t *testing.T) {
+	type OriginalSchema struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"`
+	}
+
+	type TargetSchema struct {
+		ID    int64   `parquet:"id"`
+		Extra *string `parquet:"extra,optional"`
+		Name  string  `parquet:"name"`
+	}
+
+	originalSchema := parquet.SchemaOf(&OriginalSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	buffer := parquet.NewGenericBuffer[OriginalSchema](originalSchema)
+	if _, err := buffer.Write([]OriginalSchema{
+		{ID: 1, Name: "first"},
+		{ID: 2, Name: "second"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, originalSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	chunks := convertedRowGroup.ColumnChunks()
+
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 column chunks, got %d", len(chunks))
+	}
+
+	for chunkIndex, chunk := range chunks {
+		gotColumnIndex := chunk.Column()
+		if gotColumnIndex != chunkIndex {
+			t.Errorf("chunk %d: Column() returned %d, want %d",
+				chunkIndex, gotColumnIndex, chunkIndex)
+		}
+
+		pages := chunk.Pages()
+		defer pages.Close()
+
+		for {
+			page, err := pages.ReadPage()
+			if err != nil {
+				break
+			}
+
+			reader := page.Values()
+			values := make([]parquet.Value, 1024)
+
+			for {
+				n, err := reader.ReadValues(values)
+				for i := 0; i < n; i++ {
+					gotValueColumnIndex := values[i].Column()
+					if gotValueColumnIndex != chunkIndex {
+						t.Errorf("chunk %d: value has columnIndex %d, want %d",
+							chunkIndex, gotValueColumnIndex, chunkIndex)
+					}
+				}
+
+				if err != nil {
+					break
+				}
+			}
+		}
+	}
+}
