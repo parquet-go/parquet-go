@@ -1344,7 +1344,7 @@ func TestConvertRowGroupValueColumnIndexes(t *testing.T) {
 
 			for {
 				n, err := reader.ReadValues(values)
-				for i := 0; i < n; i++ {
+				for i := range n {
 					gotColumnIndex := values[i].Column()
 					if gotColumnIndex != chunkIndex {
 						t.Errorf("chunk %d: value has columnIndex %d, want %d",
@@ -1416,7 +1416,7 @@ func TestConvertRowGroupWithMissingColumns(t *testing.T) {
 
 			for {
 				n, err := reader.ReadValues(values)
-				for i := 0; i < n; i++ {
+				for i := range n {
 					gotValueColumnIndex := values[i].Column()
 					if gotValueColumnIndex != chunkIndex {
 						t.Errorf("chunk %d: value has columnIndex %d, want %d",

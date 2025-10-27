@@ -84,7 +84,7 @@ func TestWriteReadMultipleNullOnlyColumns(t *testing.T) {
 	reader := parquet.NewReader(file)
 	defer reader.Close()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		var readRecord Record
 		if err := reader.Read(&readRecord); err != nil {
 			t.Fatalf("Read record %d failed: %v", i, err)
