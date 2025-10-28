@@ -771,8 +771,28 @@ func DropDuplicatedRows(drop bool) SortingOption {
 	return sortingOption(func(config *SortingConfig) { config.DropDuplicatedRows = drop })
 }
 
+// The SchemaConfig type carries configuration options for parquet schemas.
+//
+// SchemaConfig implements the SchemaOption interface so it can be used directly
+// as argument to the SchemaOf function when needed, for example:
+//
+//	schema := parquet.SchemaOf(obj, &parquet.SchemaConfig{
+//		...
+//	})
 type SchemaConfig struct {
 	StructTags []StructTagOption
+}
+
+func (c *SchemaConfig) ConfigureSchema(config *SchemaConfig) {
+	config.StructTags = coalesceStructTags(c.StructTags, config.StructTags)
+}
+
+func (c *SchemaConfig) ConfigureReader(config *ReaderConfig) {
+	c.ConfigureSchema(config.SchemaConfig)
+}
+
+func (c *SchemaConfig) ConfigureWriter(config *WriterConfig) {
+	c.ConfigureSchema(config.SchemaConfig)
 }
 
 func DefaultSchemaConfig() *SchemaConfig {
@@ -780,7 +800,8 @@ func DefaultSchemaConfig() *SchemaConfig {
 }
 
 // StructTagOption performs runtime replacement of "parquet..." struct tags when deriving a schema
-// from a Go struct.
+// from a Go struct.  This option can be used anywhere a schema is inferred from a Go struct
+// including SchemaOf, NewGenericReader, and NewGenericWriter.
 type StructTagOption struct {
 	Path           []string
 	Parquet        *string
@@ -810,7 +831,7 @@ var (
 	_ WriterOption = (*StructTagOption)(nil)
 )
 
-// ParquetTag performs runtime replacement of "parquet..." struct tags when deriving a schema
+// ParquetTag performs runtime replacement of the "parquet" struct tag when deriving a schema
 // from a Go struct.  This option can be used anywhere a schema is inferred from a Go struct
 // including SchemaOf, NewGenericReader, and NewGenericWriter.
 //
@@ -821,14 +842,29 @@ func ParquetTag(path []string, tag string) SchemaOption {
 	return &StructTagOption{Path: path, Parquet: &tag}
 }
 
+// ParquetKey performs runtime replacement of the "parquet-key" struct tag when deriving a schema
+// from a Go struct.  This option can be used anywhere a schema is inferred from a Go struct
+// including SchemaOf, NewGenericReader, and NewGenericWriter.
+//
+// This option is additive, it may be used multiple times to affect multiple columns.
 func ParquetKey(path []string, tag string) SchemaOption {
 	return &StructTagOption{Path: path, ParquetKey: &tag}
 }
 
+// ParquetValue performs runtime replacement of the "parquet-value" struct tag when deriving a schema
+// from a Go struct.  This option can be used anywhere a schema is inferred from a Go struct
+// including SchemaOf, NewGenericReader, and NewGenericWriter.
+//
+// This option is additive, it may be used multiple times to affect multiple columns.
 func ParquetValue(path []string, tag string) SchemaOption {
 	return &StructTagOption{Path: path, ParquetValue: &tag}
 }
 
+// ParquetElement performs runtime replacement of the "parquet-element" struct tag when deriving a schema
+// from a Go struct.  This option can be used anywhere a schema is inferred from a Go struct
+// including SchemaOf, NewGenericReader, and NewGenericWriter.
+//
+// This option is additive, it may be used multiple times to affect multiple columns.
 func ParquetElement(path []string, tag string) SchemaOption {
 	return &StructTagOption{Path: path, ParquetElement: &tag}
 }
@@ -954,6 +990,13 @@ func coalesceSchemaConfig(f1, f2 *SchemaConfig) *SchemaConfig {
 	return f2
 }
 
+func coalesceStructTags(s1, s2 []StructTagOption) []StructTagOption {
+	if len(s1) > 0 {
+		return s1
+	}
+	return s2
+}
+
 func validatePositiveInt(optionName string, optionValue int) error {
 	if optionValue > 0 {
 		return nil
@@ -1028,4 +1071,5 @@ var (
 	_ WriterOption   = (*WriterConfig)(nil)
 	_ RowGroupOption = (*RowGroupConfig)(nil)
 	_ SortingOption  = (*SortingConfig)(nil)
+	_ SchemaOption   = (*SchemaConfig)(nil)
 )
