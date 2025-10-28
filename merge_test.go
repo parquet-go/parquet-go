@@ -45,7 +45,7 @@ func TestMergeRowGroups(t *testing.T) {
 		output   parquet.RowGroup
 	}{
 		{
-			scenario: "no row groups",
+			scenario: "no row groups with schema",
 			options: []parquet.RowGroupOption{
 				parquet.SchemaOf(Person{}),
 			},
@@ -915,6 +915,19 @@ func equalSortingColumns(a, b []parquet.SortingColumn) bool {
 	}
 
 	return true
+}
+
+// TestMergeRowGroupsEmptyWithoutSchema tests that MergeRowGroups returns an error
+// when called with an empty slice and no schema option (issue #322)
+func TestMergeRowGroupsEmptyWithoutSchema(t *testing.T) {
+	_, err := parquet.MergeRowGroups([]parquet.RowGroup{})
+	if err == nil {
+		t.Fatal("expected error when merging empty row groups without schema, got nil")
+	}
+	expectedErrMsg := "cannot merge empty row groups without a schema"
+	if err.Error() != expectedErrMsg {
+		t.Errorf("expected error message %q, got %q", expectedErrMsg, err.Error())
+	}
 }
 
 func TestMergeRowGroupsCursorsAreClosed(t *testing.T) {
