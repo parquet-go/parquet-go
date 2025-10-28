@@ -135,7 +135,7 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 
 type writeFunc[T any] func(*GenericWriter[T], []T) (int, error)
 
-func writeFuncOf[T any](t reflect.Type, schema *Schema, tagReplacements []structTagOption) writeFunc[T] {
+func writeFuncOf[T any](t reflect.Type, schema *Schema, tagReplacements []StructTagOption) writeFunc[T] {
 	if t == nil {
 		return (*GenericWriter[T]).writeAny
 	}
@@ -154,7 +154,7 @@ func writeFuncOf[T any](t reflect.Type, schema *Schema, tagReplacements []struct
 	panic("cannot create writer for values of type " + t.String())
 }
 
-func makeWriteFunc[T any](t reflect.Type, schema *Schema, tagReplacements []structTagOption) writeFunc[T] {
+func makeWriteFunc[T any](t reflect.Type, schema *Schema, tagReplacements []StructTagOption) writeFunc[T] {
 	writeRows := writeRowsFuncOf(t, schema, nil, tagReplacements)
 	return func(w *GenericWriter[T], rows []T) (n int, err error) {
 		if w.columns == nil {

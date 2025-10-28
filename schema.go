@@ -152,7 +152,7 @@ func SchemaOf(model any, opts ...SchemaOption) *Schema {
 
 var cachedSchemas sync.Map // map[reflect.Type]*Schema
 
-func schemaOf(model reflect.Type, tagReplacements ...structTagOption) *Schema {
+func schemaOf(model reflect.Type, tagReplacements ...StructTagOption) *Schema {
 	cacheable := len(tagReplacements) == 0
 
 	if cacheable {
@@ -422,7 +422,7 @@ type structNode struct {
 	fields []structField
 }
 
-func structNodeOf(path []string, t reflect.Type, tagReplacements []structTagOption) *structNode {
+func structNodeOf(path []string, t reflect.Type, tagReplacements []StructTagOption) *structNode {
 	// Collect struct fields first so we can order them before generating the
 	// column indexes.
 	fields, tags := structFieldsOf(path, t, tagReplacements)
@@ -443,11 +443,11 @@ func structNodeOf(path []string, t reflect.Type, tagReplacements []structTagOpti
 	return s
 }
 
-func structFieldsOf(path []string, t reflect.Type, tagReplacements []structTagOption) ([]reflect.StructField, []parquetTags) {
+func structFieldsOf(path []string, t reflect.Type, tagReplacements []StructTagOption) ([]reflect.StructField, []parquetTags) {
 	return appendStructFields(path, t, nil, nil, nil, 0, tagReplacements)
 }
 
-func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, tags []parquetTags, index []int, offset uintptr, tagReplacements []structTagOption) ([]reflect.StructField, []parquetTags) {
+func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, tags []parquetTags, index []int, offset uintptr, tagReplacements []StructTagOption) ([]reflect.StructField, []parquetTags) {
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
 		ftags := fromStructTag(f.Tag)
@@ -613,7 +613,7 @@ func forEachStructTagOption(sf reflect.StructField, tags parquetTags, do func(t 
 	}
 }
 
-func nodeOf(path []string, t reflect.Type, tags parquetTags, tagReplacements []structTagOption) Node {
+func nodeOf(path []string, t reflect.Type, tags parquetTags, tagReplacements []StructTagOption) Node {
 	switch t {
 	case reflect.TypeOf(deprecated.Int96{}):
 		return Leaf(Int96Type)
@@ -824,7 +824,7 @@ var (
 	_ WriterOption   = (*Schema)(nil)
 )
 
-func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, tagReplacements []structTagOption) Node {
+func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, tagReplacements []StructTagOption) Node {
 	var (
 		node       Node
 		optional   bool

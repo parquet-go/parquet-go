@@ -772,16 +772,16 @@ func DropDuplicatedRows(drop bool) SortingOption {
 }
 
 type SchemaConfig struct {
-	StructTags []structTagOption
+	StructTags []StructTagOption
 }
 
 func DefaultSchemaConfig() *SchemaConfig {
 	return &SchemaConfig{}
 }
 
-// structTagOption performs runtime replacement of "parquet..." struct tags when deriving a schema
+// StructTagOption performs runtime replacement of "parquet..." struct tags when deriving a schema
 // from a Go struct.
-type structTagOption struct {
+type StructTagOption struct {
 	Path           []string
 	Parquet        *string
 	ParquetKey     *string
@@ -789,7 +789,7 @@ type structTagOption struct {
 	ParquetElement *string
 }
 
-func (s structTagOption) apply(tags *parquetTags) {
+func (s StructTagOption) apply(tags *parquetTags) {
 	if s.Parquet != nil {
 		tags.parquet = *s.Parquet
 	}
@@ -805,9 +805,9 @@ func (s structTagOption) apply(tags *parquetTags) {
 }
 
 var (
-	_ SchemaOption = (*structTagOption)(nil)
-	_ ReaderOption = (*structTagOption)(nil)
-	_ WriterOption = (*structTagOption)(nil)
+	_ SchemaOption = (*StructTagOption)(nil)
+	_ ReaderOption = (*StructTagOption)(nil)
+	_ WriterOption = (*StructTagOption)(nil)
 )
 
 // ParquetTag performs runtime replacement of "parquet..." struct tags when deriving a schema
@@ -818,30 +818,30 @@ var (
 //
 // When renaming a column, configure the option by its original name.
 func ParquetTag(path []string, tag string) SchemaOption {
-	return &structTagOption{Path: path, Parquet: &tag}
+	return &StructTagOption{Path: path, Parquet: &tag}
 }
 
 func ParquetKey(path []string, tag string) SchemaOption {
-	return &structTagOption{Path: path, ParquetKey: &tag}
+	return &StructTagOption{Path: path, ParquetKey: &tag}
 }
 
 func ParquetValue(path []string, tag string) SchemaOption {
-	return &structTagOption{Path: path, ParquetValue: &tag}
+	return &StructTagOption{Path: path, ParquetValue: &tag}
 }
 
 func ParquetElement(path []string, tag string) SchemaOption {
-	return &structTagOption{Path: path, ParquetElement: &tag}
+	return &StructTagOption{Path: path, ParquetElement: &tag}
 }
 
-func (f *structTagOption) ConfigureSchema(config *SchemaConfig) {
+func (f *StructTagOption) ConfigureSchema(config *SchemaConfig) {
 	config.StructTags = append(config.StructTags, *f)
 }
 
-func (f *structTagOption) ConfigureWriter(config *WriterConfig) {
+func (f *StructTagOption) ConfigureWriter(config *WriterConfig) {
 	f.ConfigureSchema(config.SchemaConfig)
 }
 
-func (f *structTagOption) ConfigureReader(config *ReaderConfig) {
+func (f *StructTagOption) ConfigureReader(config *ReaderConfig) {
 	f.ConfigureSchema(config.SchemaConfig)
 }
 
