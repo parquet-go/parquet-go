@@ -3,6 +3,7 @@ package parquet
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/internal/quick"
@@ -23,6 +24,7 @@ func TestNullIndex(t *testing.T) {
 	testNullIndex[deprecated.Int96](t)
 	testNullIndex[string](t)
 	testNullIndex[*struct{}](t)
+	testNullIndexTime(t)
 }
 
 func testNullIndex[T comparable](t *testing.T) {
@@ -91,5 +93,29 @@ func benchmarkNullIndex[T any](b *testing.B) {
 			null(bits, data)
 		}
 		b.SetBytes(int64(typ.Size() * N))
+	})
+}
+
+// testNullIndexTime is a special test for time.Time because it's not comparable with ==
+// but has an IsZero() method to detect zero values
+func testNullIndexTime(t *testing.T) {
+	t.Helper()
+	t.Run("time.Time", func(t *testing.T) {
+		data := []time.Time{
+			time.Time{}, // zero
+			time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC), // non-zero
+			time.Time{}, // zero
+			time.Date(2024, 12, 25, 12, 30, 0, 0, time.UTC), // non-zero
+		}
+
+		array := makeArrayOf(data)
+		bits := make([]uint64, 1)
+		nullIndexFuncOf(reflect.TypeOf(time.Time{}))(bits, array)
+
+		// bits should be 0b1010 = 10 (bit 1 and 3 are set for non-zero values)
+		expected := uint64(0b1010)
+		if bits[0] != expected {
+			t.Errorf("unexpected null index\nwant = %064b\ngot  = %064b", expected, bits[0])
+		}
 	})
 }

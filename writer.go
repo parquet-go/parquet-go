@@ -101,6 +101,12 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 	t := typeOf[T]()
 
 	var genWriteErr error
+	if t != nil {
+		if columnName, ok := validateColumns(dereference(t)); !ok {
+			genWriteErr = fmt.Errorf("caonnot write %v: it has columns with the same paqruet column name %q", t, columnName)
+		}
+	}
+
 	if schema == nil && t != nil {
 		schema = schemaOf(dereference(t), config.SchemaConfig.StructTags...)
 		if len(schema.Columns()) == 0 {
@@ -961,6 +967,11 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 			}
 		}
 
+		// Skip columns with nil pageBuffer (e.g., empty struct groups with no leaf columns)
+		if c.pageBuffer == nil {
+			continue
+		}
+
 		dataPageOffset := w.writer.offset
 		c.columnChunk.MetaData.DataPageOffset = dataPageOffset
 		for j := range c.offsetIndex.PageLocations {
@@ -1085,7 +1096,7 @@ func (w *writer) writeRows(numRows int, write func(i, j int) (int, error)) (int,
 		remain := w.maxRows - w.numRows
 		length := numRows - written
 
-		if remain == 0 {
+		if remain <= 0 {
 			remain = w.maxRows
 
 			if err := w.flush(); err != nil {
@@ -1331,6 +1342,11 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 	// When the filter was already allocated, pages have been written to it as
 	// they were seen by the column writer.
 	if len(c.filter) > 0 {
+		return nil
+	}
+
+	// Skip columns with nil pageBuffer (e.g., empty struct groups with no leaf columns)
+	if c.pageBuffer == nil {
 		return nil
 	}
 

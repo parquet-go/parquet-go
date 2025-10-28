@@ -2064,6 +2064,12 @@ func (t *timestampType) EstimateDecodeSize(numValues int, src []byte, enc encodi
 func (t *timestampType) AssignValue(dst reflect.Value, src Value) error {
 	switch dst.Type() {
 	case reflect.TypeOf(time.Time{}):
+		// Check if the value is NULL - if so, assign zero time.Time
+		if src.IsNull() {
+			dst.Set(reflect.ValueOf(time.Time{}))
+			return nil
+		}
+
 		unit := Nanosecond.TimeUnit()
 		lt := t.LogicalType()
 		if lt != nil && lt.Timestamp != nil {
@@ -2080,6 +2086,32 @@ func (t *timestampType) AssignValue(dst reflect.Value, src Value) error {
 
 		val := time.Unix(0, nanos).UTC()
 		dst.Set(reflect.ValueOf(val))
+		return nil
+	case reflect.TypeOf((*time.Time)(nil)):
+		// Handle *time.Time (pointer to time.Time)
+		if src.IsNull() {
+			// For NULL values, set the pointer to nil
+			dst.Set(reflect.Zero(dst.Type()))
+			return nil
+		}
+
+		unit := Nanosecond.TimeUnit()
+		lt := t.LogicalType()
+		if lt != nil && lt.Timestamp != nil {
+			unit = lt.Timestamp.Unit
+		}
+
+		nanos := src.int64()
+		switch {
+		case unit.Millis != nil:
+			nanos = nanos * 1e6
+		case unit.Micros != nil:
+			nanos = nanos * 1e3
+		}
+
+		val := time.Unix(0, nanos).UTC()
+		ptr := &val
+		dst.Set(reflect.ValueOf(ptr))
 		return nil
 	default:
 		return int64Type{}.AssignValue(dst, src)

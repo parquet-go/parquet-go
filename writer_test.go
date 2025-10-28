@@ -603,6 +603,37 @@ func TestIssueSegmentio375(t *testing.T) {
 	}
 }
 
+func TestIssue303_OptionalByteSlice(t *testing.T) {
+	type Row struct {
+		Buf []byte `parquet:"buf,optional"`
+	}
+
+	// Write a non-nil, non-empty []byte into an optional BYTE_ARRAY field
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[Row](&buf)
+	in := []Row{{Buf: []byte("test")}}
+	if _, err := w.Write(in); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back and verify it is not NULL and equals the original bytes
+	r := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+	out := make([]Row, 1)
+	if n, err := r.Read(out); n != len(out) {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := string(out[0].Buf), "test"; got != want {
+		t.Fatalf("optional []byte round-trip mismatch: got=%q want=%q", got, want)
+	}
+}
+
 func TestGenericSetKeyValueMetadata(t *testing.T) {
 	testKey := "test-key"
 	testValue := "test-value"
@@ -1913,6 +1944,44 @@ func TestIssue275(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestColumnValidation(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatal("require no panic")
+		}
+	}()
+
+	type DuplicateColumnsDiffTypes struct {
+		Foo string `parquet:"foo"`
+		Bar int    `parquet:"foo"`
+	}
+
+	b := bytes.NewBuffer(nil)
+
+	failedWriter := parquet.NewGenericWriter[*DuplicateColumnsDiffTypes](b)
+	data := []*DuplicateColumnsDiffTypes{
+		{Foo: "1", Bar: 1},
+	}
+	if _, err := failedWriter.Write(data); err == nil {
+		t.Fatal(err)
+	}
+
+	type DuplicateColumnsEqualTypes struct {
+		Foo string `parquet:"foo"`
+		Bar string `parquet:"foo"`
+	}
+
+	b = bytes.NewBuffer(nil)
+
+	normalWriter := parquet.NewGenericWriter[*DuplicateColumnsEqualTypes](b)
+	data2 := []*DuplicateColumnsEqualTypes{
+		{Foo: "1", Bar: "1"},
+	}
+	if _, err := normalWriter.Write(data2); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -149,4 +150,181 @@ func TestWriteRowsFuncOfRequiredColumnNotFound(t *testing.T) {
 	}()
 
 	writeRowsFuncOfRequired(reflect.TypeOf(""), schema, columnPath{"nonexistent"}, nil)
+}
+
+// TestMapFieldToGroupSchema tests writing a Go struct with a map[string]string
+// field to a schema where that field is defined as a GROUP with named optional fields.
+// This verifies that NewWriter supports this functionality.
+func TestMapFieldToGroupSchema(t *testing.T) {
+	// The user's Go type
+	type RecordWithMap struct {
+		Nested map[string]string
+	}
+
+	// The desired schema structure (GROUP with named fields)
+	type RecordWithStruct struct {
+		Nested struct {
+			A string `parquet:",optional"`
+			B string `parquet:",optional"`
+			C string `parquet:",optional"`
+		}
+	}
+
+	// Create schema from the struct (this gives us the desired GROUP schema)
+	desiredSchema := SchemaOf(RecordWithStruct{})
+
+	t.Logf("Desired schema:\n%s", desiredSchema)
+
+	// Try to write using the map type
+	buf := new(bytes.Buffer)
+	writer := NewWriter(buf, desiredSchema)
+
+	// Attempt to write a value with map[string]string
+	record := RecordWithMap{
+		Nested: map[string]string{
+			"A": "value_a",
+			"B": "value_b",
+			"C": "value_c",
+		},
+	}
+
+	err := writer.Write(record)
+	if err != nil {
+		t.Fatalf("failed to write row: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	t.Logf("Successfully wrote %d bytes", buf.Len())
+
+	// Try to read it back
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var result RecordWithStruct
+	if err := reader.Read(&result); err != nil {
+		t.Fatalf("failed to read row: %v", err)
+	}
+
+	t.Logf("Read back: %+v", result)
+}
+
+// TestWhatActuallyHappensWithMapField tests what schema is generated when
+// you use a map[string]string field - it creates a MAP logical type, not a GROUP.
+func TestWhatActuallyHappensWithMapField(t *testing.T) {
+	type RecordWithMap struct {
+		Nested map[string]string
+	}
+
+	// Get the schema that's naturally generated from the map type
+	naturalSchema := SchemaOf(RecordWithMap{})
+
+	fmt.Printf("Natural schema from map[string]string:\n%s\n", naturalSchema)
+
+	// Write some data
+	buf := new(bytes.Buffer)
+	writer := NewWriter(buf, naturalSchema)
+
+	record := RecordWithMap{
+		Nested: map[string]string{
+			"A": "value_a",
+			"B": "value_b",
+		},
+	}
+
+	if err := writer.Write(record); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	writer.Close()
+
+	// Read it back and check the schema
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	fmt.Printf("\nActual file schema:\n%s\n", reader.Schema())
+}
+
+// TestGenericWriterMapToGroupSchema tests that NewGenericWriter supports
+// writing map[string]string fields to a GROUP schema with named optional fields.
+func TestGenericWriterMapToGroupSchema(t *testing.T) {
+	// The user's Go type
+	type RecordWithMap struct {
+		Nested map[string]string
+	}
+
+	// The desired schema structure (GROUP with named fields)
+	type RecordWithStruct struct {
+		Nested struct {
+			A string `parquet:",optional"`
+			B string `parquet:",optional"`
+			C string `parquet:",optional"`
+		}
+	}
+
+	// Create schema from the struct (this gives us the desired GROUP schema)
+	desiredSchema := SchemaOf(RecordWithStruct{})
+
+	t.Logf("Desired schema:\n%s", desiredSchema)
+
+	// Try to write using NewGenericWriter with the map type
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithMap](buf, desiredSchema)
+
+	// Attempt to write values with map[string]string
+	records := []RecordWithMap{
+		{
+			Nested: map[string]string{
+				"A": "value_a1",
+				"B": "value_b1",
+				"C": "value_c1",
+			},
+		},
+		{
+			Nested: map[string]string{
+				"A": "value_a2",
+				"B": "value_b2",
+				// C is omitted - should be null
+			},
+		},
+	}
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write rows: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected to write 2 rows, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	t.Logf("Successfully wrote %d bytes", buf.Len())
+
+	// Try to read it back
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var result1 RecordWithStruct
+	if err := reader.Read(&result1); err != nil {
+		t.Fatalf("failed to read row 1: %v", err)
+	}
+	t.Logf("Row 1: %+v", result1)
+
+	if result1.Nested.A != "value_a1" || result1.Nested.B != "value_b1" || result1.Nested.C != "value_c1" {
+		t.Errorf("row 1 values incorrect: %+v", result1.Nested)
+	}
+
+	var result2 RecordWithStruct
+	if err := reader.Read(&result2); err != nil {
+		t.Fatalf("failed to read row 2: %v", err)
+	}
+	t.Logf("Row 2: %+v", result2)
+
+	if result2.Nested.A != "value_a2" || result2.Nested.B != "value_b2" || result2.Nested.C != "" {
+		t.Errorf("row 2 values incorrect: %+v", result2.Nested)
+	}
 }
