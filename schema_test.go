@@ -806,8 +806,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				}
 			}),
 			options: []parquet.SchemaOption{
-				parquet.StructTag([]string{"B", "C"}, parquet.ParquetTags{Parquet: "C2,zstd,dict"}),
-				parquet.StructTag([]string{"B", "D"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.ParquetTag([]string{"B", "C"}, "C2,zstd,dict"),
+				parquet.ParquetTag([]string{"B", "D"}, "-"),
 			},
 			expected: new(struct {
 				A string
@@ -828,8 +828,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.StructTag([]string{"A"}, parquet.ParquetTags{Parquet: "A2,snappy,dict"}),
-				parquet.StructTag([]string{"B"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.ParquetTag([]string{"A"}, "A2,snappy,dict"),
+				parquet.ParquetTag([]string{"B"}, "-"),
 			},
 			expected: func() any {
 				type Embedded struct {
@@ -851,8 +851,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.StructTag([]string{"A", "key_value", "value", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
-				parquet.StructTag([]string{"A", "key_value", "value", "C"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.ParquetTag([]string{"A", "key_value", "value", "B"}, "B2,zstd,dict"),
+				parquet.ParquetTag([]string{"A", "key_value", "value", "C"}, "-"),
 			},
 			expected: func() any {
 				return new(struct {
@@ -873,8 +873,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.StructTag([]string{"A", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
-				parquet.StructTag([]string{"A", "C"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.ParquetTag([]string{"A", "B"}, "B2,zstd,dict"),
+				parquet.ParquetTag([]string{"A", "C"}, "-"),
 			},
 			expected: func() any {
 				return new(struct {
@@ -895,8 +895,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.StructTag([]string{"A", "list", "element", "B"}, parquet.ParquetTags{Parquet: "B2,zstd,dict"}),
-				parquet.StructTag([]string{"A", "list", "element", "C"}, parquet.ParquetTags{Parquet: "-"}),
+				parquet.ParquetTag([]string{"A", "list", "element", "B"}, "B2,zstd,dict"),
+				parquet.ParquetTag([]string{"A", "list", "element", "C"}, "-"),
 			},
 			expected: func() any {
 				return new(struct {
@@ -1036,8 +1036,8 @@ func TestSchemaInteroperability(t *testing.T) {
 		s1      = parquet.SchemaOf(&One{})
 		s2      = parquet.SchemaOf(&Two{})
 		s3      = parquet.SchemaOf(&Three{})
-		tag1    = parquet.StructTag([]string{"C"}, parquet.ParquetTags{Parquet: "A"})
-		tag2    = parquet.StructTag([]string{"D"}, parquet.ParquetTags{Parquet: "-"})
+		tag1    = parquet.ParquetTag([]string{"C"}, "A")
+		tag2    = parquet.ParquetTag([]string{"D"}, "-")
 		s4      = parquet.SchemaOf(&Four{}, tag1, tag2)
 		schemas = []*parquet.Schema{s1, s2, s3, s4}
 	)

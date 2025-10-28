@@ -152,7 +152,7 @@ func SchemaOf(model any, opts ...SchemaOption) *Schema {
 
 var cachedSchemas sync.Map // map[reflect.Type]*Schema
 
-func schemaOf(model reflect.Type, tagReplacements ...StructTagOption) *Schema {
+func schemaOf(model reflect.Type, tagReplacements ...structTagOption) *Schema {
 	cacheable := len(tagReplacements) == 0
 
 	if cacheable {
@@ -422,7 +422,7 @@ type structNode struct {
 	fields []structField
 }
 
-func structNodeOf(path []string, t reflect.Type, tagReplacements []StructTagOption) *structNode {
+func structNodeOf(path []string, t reflect.Type, tagReplacements []structTagOption) *structNode {
 	// Collect struct fields first so we can order them before generating the
 	// column indexes.
 	fields, tags := structFieldsOf(path, t, tagReplacements)
@@ -443,11 +443,11 @@ func structNodeOf(path []string, t reflect.Type, tagReplacements []StructTagOpti
 	return s
 }
 
-func structFieldsOf(path []string, t reflect.Type, tagReplacements []StructTagOption) ([]reflect.StructField, []ParquetTags) {
+func structFieldsOf(path []string, t reflect.Type, tagReplacements []structTagOption) ([]reflect.StructField, []parquetTags) {
 	return appendStructFields(path, t, nil, nil, nil, 0, tagReplacements)
 }
 
-func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, tags []ParquetTags, index []int, offset uintptr, tagReplacements []StructTagOption) ([]reflect.StructField, []ParquetTags) {
+func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, tags []parquetTags, index []int, offset uintptr, tagReplacements []structTagOption) ([]reflect.StructField, []parquetTags) {
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
 		ftags := fromStructTag(f.Tag)
@@ -459,13 +459,12 @@ func appendStructFields(path []string, t reflect.Type, fields []reflect.StructFi
 			fpath := append(path, f.Name)
 			for _, opt := range tagReplacements {
 				if slices.Equal(fpath, opt.Path) {
-					ftags = opt.Tags
-					break
+					opt.apply(&ftags)
 				}
 			}
 		}
 
-		if tag := ftags.Parquet; tag != "" {
+		if tag := ftags.parquet; tag != "" {
 			name, _ := split(tag)
 			if tag != "-," && name == "-" {
 				continue
@@ -574,19 +573,19 @@ func throwUnknownTag(t reflect.Type, name string, tag string) {
 	panic(tag + " is an unrecognized parquet tag: " + nodeString(t, name, tag))
 }
 
-func throwInvalidNode(t reflect.Type, msg, name string, parquetTags ParquetTags) {
+func throwInvalidNode(t reflect.Type, msg, name string, parquetTags parquetTags) {
 	tags := make([]string, 0, 3) // A node can have at most 3 tags.
-	if parquetTags.Parquet != "" {
-		tags = append(tags, parquetTags.Parquet)
+	if parquetTags.parquet != "" {
+		tags = append(tags, parquetTags.parquet)
 	}
-	if parquetTags.ParquetKey != "" {
-		tags = append(tags, parquetTags.ParquetKey)
+	if parquetTags.parquetKey != "" {
+		tags = append(tags, parquetTags.parquetKey)
 	}
-	if parquetTags.ParquetValue != "" {
-		tags = append(tags, parquetTags.ParquetValue)
+	if parquetTags.parquetValue != "" {
+		tags = append(tags, parquetTags.parquetValue)
 	}
-	if parquetTags.ParquetElement != "" {
-		tags = append(tags, parquetTags.ParquetElement)
+	if parquetTags.parquetElement != "" {
+		tags = append(tags, parquetTags.parquetElement)
 	}
 	panic(msg + ": " + nodeString(t, name, tags...))
 }
@@ -597,8 +596,8 @@ func decimalFixedLenByteArraySize(precision int) int {
 	return int(math.Ceil((math.Log10(2) + float64(precision)) / math.Log10(256)))
 }
 
-func forEachStructTagOption(sf reflect.StructField, tags ParquetTags, do func(t reflect.Type, option, args string)) {
-	if tag := tags.Parquet; tag != "" {
+func forEachStructTagOption(sf reflect.StructField, tags parquetTags, do func(t reflect.Type, option, args string)) {
+	if tag := tags.parquet; tag != "" {
 		_, tag = split(tag) // skip the field name
 		for tag != "" {
 			option := ""
@@ -614,7 +613,7 @@ func forEachStructTagOption(sf reflect.StructField, tags ParquetTags, do func(t 
 	}
 }
 
-func nodeOf(path []string, t reflect.Type, tags ParquetTags, tagReplacements []StructTagOption) Node {
+func nodeOf(path []string, t reflect.Type, tags parquetTags, tagReplacements []structTagOption) Node {
 	switch t {
 	case reflect.TypeOf(deprecated.Int96{}):
 		return Leaf(Int96Type)
@@ -666,7 +665,7 @@ func nodeOf(path []string, t reflect.Type, tags ParquetTags, tagReplacements []S
 		}
 
 	case reflect.Map:
-		mapTag := tags.Parquet
+		mapTag := tags.parquet
 		if strings.Contains(mapTag, "json") {
 			n = JSON()
 		} else {
@@ -825,7 +824,7 @@ var (
 	_ WriterOption   = (*Schema)(nil)
 )
 
-func makeNodeOf(path []string, t reflect.Type, name string, tags ParquetTags, tagReplacements []StructTagOption) Node {
+func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, tagReplacements []structTagOption) Node {
 	var (
 		node       Node
 		optional   bool
@@ -873,7 +872,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags ParquetTags, ta
 	if t.Kind() == reflect.Map {
 		node = nodeOf(path, t, tags, tagReplacements)
 	} else {
-		forEachTagOption([]string{tags.Parquet}, func(option, args string) {
+		forEachTagOption([]string{tags.parquet}, func(option, args string) {
 			switch option {
 			case "":
 				return

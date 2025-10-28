@@ -8,40 +8,40 @@ import (
 func TestFromStructTag(t *testing.T) {
 	tests := []struct {
 		structTag reflect.StructTag
-		expected  ParquetTags
+		expected  parquetTags
 	}{
 		{
 			structTag: reflect.StructTag("parquet:\"-,\""),
-			expected: ParquetTags{
-				Parquet: "-,",
+			expected: parquetTags{
+				parquet: "-,",
 			},
 		},
 		{
 			structTag: reflect.StructTag("parquet:\"name,optional\""),
-			expected: ParquetTags{
-				Parquet: "name,optional",
+			expected: parquetTags{
+				parquet: "name,optional",
 			},
 		},
 		{
 			structTag: reflect.StructTag("parquet:\",\" parquet-key:\",timestamp\""),
-			expected: ParquetTags{
-				Parquet:    ",",
-				ParquetKey: ",timestamp",
+			expected: parquetTags{
+				parquet:    ",",
+				parquetKey: ",timestamp",
 			},
 		},
 		{
 			structTag: reflect.StructTag("parquet:\",optional\" parquet-value:\",json\" parquet-key:\",timestamp(microsecond)\""),
-			expected: ParquetTags{
-				Parquet:      ",optional",
-				ParquetValue: ",json",
-				ParquetKey:   ",timestamp(microsecond)",
+			expected: parquetTags{
+				parquet:      ",optional",
+				parquetValue: ",json",
+				parquetKey:   ",timestamp(microsecond)",
 			},
 		},
 		{
 			structTag: reflect.StructTag("parquet:\"outer,id(1),list\" parquet-element:\",id(2)\""),
-			expected: ParquetTags{
-				Parquet:        "outer,id(1),list",
-				ParquetElement: ",id(2)",
+			expected: parquetTags{
+				parquet:        "outer,id(1),list",
+				parquetElement: ",id(2)",
 			},
 		},
 	}
@@ -58,55 +58,55 @@ func TestFromStructTag(t *testing.T) {
 
 func TestGetNodeTags(t *testing.T) {
 	tests := []struct {
-		input       ParquetTags
-		getNodeTags func(ParquetTags) ParquetTags
-		expected    ParquetTags
+		input       parquetTags
+		getNodeTags func(parquetTags) parquetTags
+		expected    parquetTags
 	}{
 		{
-			input: ParquetTags{
-				Parquet: ",optional",
+			input: parquetTags{
+				parquet: ",optional",
 			},
-			getNodeTags: func(p ParquetTags) ParquetTags {
+			getNodeTags: func(p parquetTags) parquetTags {
 				return p.getMapKeyNodeTags()
 			},
-			expected: ParquetTags{
-				Parquet: "",
+			expected: parquetTags{
+				parquet: "",
 			},
 		},
 		{
-			input: ParquetTags{
-				Parquet:    ",optional",
-				ParquetKey: ",timestamp",
+			input: parquetTags{
+				parquet:    ",optional",
+				parquetKey: ",timestamp",
 			},
-			getNodeTags: func(p ParquetTags) ParquetTags {
+			getNodeTags: func(p parquetTags) parquetTags {
 				return p.getMapKeyNodeTags()
 			},
-			expected: ParquetTags{
-				Parquet: ",timestamp",
+			expected: parquetTags{
+				parquet: ",timestamp",
 			},
 		},
 		{
-			input: ParquetTags{
-				Parquet:      ",optional",
-				ParquetValue: ",json",
+			input: parquetTags{
+				parquet:      ",optional",
+				parquetValue: ",json",
 			},
-			getNodeTags: func(p ParquetTags) ParquetTags {
+			getNodeTags: func(p parquetTags) parquetTags {
 				return p.getMapValueNodeTags()
 			},
-			expected: ParquetTags{
-				Parquet: ",json",
+			expected: parquetTags{
+				parquet: ",json",
 			},
 		},
 		{
-			input: ParquetTags{
-				Parquet:        ",id(1),list",
-				ParquetElement: ",id(2)",
+			input: parquetTags{
+				parquet:        ",id(1),list",
+				parquetElement: ",id(2)",
 			},
-			getNodeTags: func(p ParquetTags) ParquetTags {
+			getNodeTags: func(p parquetTags) parquetTags {
 				return p.getListElementNodeTags()
 			},
-			expected: ParquetTags{
-				Parquet: ",id(2)",
+			expected: parquetTags{
+				parquet: ",id(2)",
 			},
 		},
 	}

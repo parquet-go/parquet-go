@@ -160,14 +160,16 @@ func (c *FileConfig) Validate() error {
 //		// ...
 //	})
 type ReaderConfig struct {
-	Schema     *Schema
-	StructTags []StructTagOption
+	Schema       *Schema
+	SchemaConfig *SchemaConfig
 }
 
 // DefaultReaderConfig returns a new ReaderConfig value initialized with the
 // default reader configuration.
 func DefaultReaderConfig() *ReaderConfig {
-	return &ReaderConfig{}
+	return &ReaderConfig{
+		SchemaConfig: DefaultSchemaConfig(),
+	}
 }
 
 // NewReaderConfig constructs a new reader configuration applying the options
@@ -191,7 +193,8 @@ func (c *ReaderConfig) Apply(options ...ReaderOption) {
 // ConfigureReader applies configuration options from c to config.
 func (c *ReaderConfig) ConfigureReader(config *ReaderConfig) {
 	*config = ReaderConfig{
-		Schema: coalesceSchema(c.Schema, config.Schema),
+		Schema:       coalesceSchema(c.Schema, config.Schema),
+		SchemaConfig: coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
 	}
 }
 
@@ -224,7 +227,7 @@ type WriterConfig struct {
 	Sorting              SortingConfig
 	SkipPageBounds       [][]string
 	Encodings            map[Kind]encoding.Encoding
-	StructTags           []StructTagOption
+	SchemaConfig         *SchemaConfig
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -239,6 +242,7 @@ func DefaultWriterConfig() *WriterConfig {
 		DataPageVersion:      DefaultDataPageVersion,
 		DataPageStatistics:   DefaultDataPageStatistics,
 		MaxRowsPerRowGroup:   DefaultMaxRowsPerRowGroup,
+		SchemaConfig:         DefaultSchemaConfig(),
 		Sorting: SortingConfig{
 			SortingBuffers: &defaultSortingBufferPool,
 		},
@@ -297,7 +301,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		Sorting:              coalesceSortingConfig(c.Sorting, config.Sorting),
 		SkipPageBounds:       coalesceSkipPageBounds(c.SkipPageBounds, config.SkipPageBounds),
 		Encodings:            encodings,
-		StructTags:           coalesceTagReplacements(c.StructTags, config.StructTags),
+		SchemaConfig:         coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
 	}
 }
 
@@ -426,8 +430,12 @@ func (c *SortingConfig) ConfigureSorting(config *SortingConfig) {
 }
 
 // SchemaOption is an interface implemented by types that carry configuration
-// options for parquet schemas.
+// options for parquet schemas.  SchemaOption also implements ReaderOption and WriterOption
+// and may be used to configure the way NewGenericReader and NewGenericWriter derive schemas from the arguments.
 type SchemaOption interface {
+	ReaderOption
+	WriterOption
+
 	ConfigureSchema(*SchemaConfig)
 }
 
@@ -763,44 +771,78 @@ func DropDuplicatedRows(drop bool) SortingOption {
 	return sortingOption(func(config *SortingConfig) { config.DropDuplicatedRows = drop })
 }
 
-// StructTagOption performs runtime replacement of "parquet..." struct tags when deriving a schema
+type SchemaConfig struct {
+	StructTags []structTagOption
+}
+
+func DefaultSchemaConfig() *SchemaConfig {
+	return &SchemaConfig{}
+}
+
+// structTagOption performs runtime replacement of "parquet..." struct tags when deriving a schema
 // from a Go struct.
-type StructTagOption struct {
-	Path []string
-	Tags ParquetTags
+type structTagOption struct {
+	Path           []string
+	Parquet        *string
+	ParquetKey     *string
+	ParquetValue   *string
+	ParquetElement *string
+}
+
+func (s structTagOption) apply(tags *parquetTags) {
+	if s.Parquet != nil {
+		tags.parquet = *s.Parquet
+	}
+	if s.ParquetKey != nil {
+		tags.parquetKey = *s.ParquetKey
+	}
+	if s.ParquetValue != nil {
+		tags.parquetValue = *s.ParquetValue
+	}
+	if s.ParquetElement != nil {
+		tags.parquetElement = *s.ParquetElement
+	}
 }
 
 var (
-	_ SchemaOption = (*StructTagOption)(nil)
-	_ ReaderOption = (*StructTagOption)(nil)
-	_ WriterOption = (*StructTagOption)(nil)
+	_ SchemaOption = (*structTagOption)(nil)
+	_ ReaderOption = (*structTagOption)(nil)
+	_ WriterOption = (*structTagOption)(nil)
 )
 
-type SchemaConfig struct {
-	StructTags []StructTagOption
-}
-
-// StructTag performs runtime replacement of "parquet..." struct tags when deriving a schema
+// ParquetTag performs runtime replacement of "parquet..." struct tags when deriving a schema
 // from a Go struct.  This option can be used anywhere a schema is inferred from a Go struct
 // including SchemaOf, NewGenericReader, and NewGenericWriter.
 //
 // This option is additive, it may be used multiple times to affect multiple columns.
 //
 // When renaming a column, configure the option by its original name.
-func StructTag(path []string, tags ParquetTags) *StructTagOption {
-	return &StructTagOption{Path: path, Tags: tags}
+func ParquetTag(path []string, tag string) SchemaOption {
+	return &structTagOption{Path: path, Parquet: &tag}
 }
 
-func (f *StructTagOption) ConfigureSchema(config *SchemaConfig) {
+func ParquetKey(path []string, tag string) SchemaOption {
+	return &structTagOption{Path: path, ParquetKey: &tag}
+}
+
+func ParquetValue(path []string, tag string) SchemaOption {
+	return &structTagOption{Path: path, ParquetValue: &tag}
+}
+
+func ParquetElement(path []string, tag string) SchemaOption {
+	return &structTagOption{Path: path, ParquetElement: &tag}
+}
+
+func (f *structTagOption) ConfigureSchema(config *SchemaConfig) {
 	config.StructTags = append(config.StructTags, *f)
 }
 
-func (f *StructTagOption) ConfigureWriter(config *WriterConfig) {
-	config.StructTags = append(config.StructTags, *f)
+func (f *structTagOption) ConfigureWriter(config *WriterConfig) {
+	f.ConfigureSchema(config.SchemaConfig)
 }
 
-func (f *StructTagOption) ConfigureReader(config *ReaderConfig) {
-	config.StructTags = append(config.StructTags, *f)
+func (f *structTagOption) ConfigureReader(config *ReaderConfig) {
+	f.ConfigureSchema(config.SchemaConfig)
 }
 
 type fileOption func(*FileConfig)
@@ -822,10 +864,6 @@ func (opt rowGroupOption) ConfigureRowGroup(config *RowGroupConfig) { opt(config
 type sortingOption func(*SortingConfig)
 
 func (opt sortingOption) ConfigureSorting(config *SortingConfig) { opt(config) }
-
-type schemaOption func(*SchemaConfig)
-
-func (opt schemaOption) ConfigureSchema(config *SchemaConfig) { opt(config) }
 
 func coalesceBool(i1, i2 bool) bool {
 	return i1 || i2
@@ -909,7 +947,7 @@ func coalesceCompression(c1, c2 compress.Codec) compress.Codec {
 	return c2
 }
 
-func coalesceTagReplacements(f1, f2 []StructTagOption) []StructTagOption {
+func coalesceSchemaConfig(f1, f2 *SchemaConfig) *SchemaConfig {
 	if f1 != nil {
 		return f1
 	}
