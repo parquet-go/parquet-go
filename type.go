@@ -961,6 +961,21 @@ func reflectValueData(v reflect.Value) unsafe.Pointer {
 	return (*[2]unsafe.Pointer)(unsafe.Pointer(&v))[1]
 }
 
+func reflectValuePointer(v reflect.Value) unsafe.Pointer {
+	if v.Kind() == reflect.Map {
+		// Map values are inlined in the reflect.Value data area,
+		// because they are a reference type and their paointer is
+		// packed in the interface. However, we need to get an
+		// address to the pointer itself, so we extract it and
+		// return the address of this pointer. It causes a heap
+		// allocation, which is unfortunate, an we would probably
+		// want to optimize away eventually.
+		p := v.UnsafePointer()
+		return unsafe.Pointer(&p)
+	}
+	return reflectValueData(v)
+}
+
 func (t fixedLenByteArrayType) ConvertValue(val Value, typ Type) (Value, error) {
 	switch typ.(type) {
 	case *stringType:

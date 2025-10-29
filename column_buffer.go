@@ -2420,15 +2420,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 
 			// Both null and value use the same function for concrete types
 			writeValue := func(columns []ColumnBuffer, mapValue reflect.Value, levels columnLevels) error {
-				// For map values, need proper storage allocation like in writeInterfaceValue
-				var valueArray sparse.Array
-				if valueType.Kind() == reflect.Map {
-					mapPtr := reflect.New(valueType)
-					mapPtr.Elem().Set(mapValue)
-					valueArray = makeArray(mapPtr.UnsafePointer(), 1, valueSize)
-				} else {
-					valueArray = makeArray(reflectValueData(mapValue), 1, valueSize)
-				}
+				valueArray := makeArray(reflectValuePointer(mapValue), 1, valueSize)
 				return writeRows(columns, valueArray, levels)
 			}
 
@@ -2641,7 +2633,7 @@ func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node
 
 	writeRowsKey := writeRowsCacheKey{
 		gotype: actualType,
-		column: path.hash(schemaCache.hashSeed),
+		column: hash.Sum64(),
 	}
 
 	writeRows := schemaCache.writeRows.load(writeRowsKey, func() writeRowsFunc {
@@ -2655,16 +2647,7 @@ func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node
 		defer func() { levels.definitionLevel-- }()
 	}
 
-	// For maps, allocate storage for the map value
-	var valueArray sparse.Array
-	if actualType.Kind() == reflect.Map {
-		// Maps need proper storage allocation - create a pointer to hold the map
-		mapPtr := reflect.New(actualType)
-		mapPtr.Elem().Set(value)
-		valueArray = makeArray(mapPtr.UnsafePointer(), 1, actualType.Size())
-	} else {
-		valueArray = makeArray(reflectValueData(value), 1, actualType.Size())
-	}
+	valueArray := makeArray(reflectValuePointer(value), 1, actualType.Size())
 	return writeRows(columns, valueArray, levels)
 }
 
