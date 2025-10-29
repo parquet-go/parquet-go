@@ -32,7 +32,7 @@ func BenchmarkCount(b *testing.B) {
 		for i := range data {
 			data[i] = byte(i)
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			bytealg.Count(data, 0)
 		}
 	})

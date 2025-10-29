@@ -147,7 +147,7 @@ func benchmarkSearchPrefixLength(b *testing.B, prefixLength func(base, data []by
 			base := buffer[:size]
 			data := buffer[:size/2]
 
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_ = prefixLength(base, data)
 			}
 		})

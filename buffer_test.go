@@ -257,9 +257,8 @@ func BenchmarkSortGenericBuffer(b *testing.B) {
 	}
 
 	buffer.Write(rows)
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for range 10 {
 			buffer.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
 		}
