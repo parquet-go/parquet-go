@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math/bits"
 	"reflect"
 	"slices"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -2340,6 +2343,11 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 	}
 }
 
+var (
+	mapStringStringType = reflect.TypeOf((map[string]string)(nil))
+	mapStringAnyType    = reflect.TypeOf((map[string]any)(nil))
+)
+
 // writeRowsFuncOfMapToGroup handles writing a Go map to a Parquet GROUP schema
 // (as opposed to a MAP logical type). This allows map[string]T to be written
 // to schemas with named optional fields.
@@ -2351,7 +2359,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 	type fieldWriter struct {
 		fieldName  string
 		fieldPath  columnPath
-		writeNull  writeRowsFunc // Writes null/empty value
+		writeRows  writeRowsFunc // Writes null/empty value
 		writeValue func([]ColumnBuffer, reflect.Value, columnLevels) error
 	}
 
@@ -2385,8 +2393,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 				}
 				if !actualValue.IsValid() || (actualValueKind == reflect.Pointer && actualValue.IsNil()) {
 					// Nil interface or nil pointer - write null
-					empty := sparse.Array{}
-					return writeNull(columns, empty, levels)
+					return writeNull(columns, sparse.Array{}, levels)
 				}
 				if actualValueKind == reflect.Pointer {
 					actualValue = actualValue.Elem()
@@ -2397,7 +2404,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 			writers[i] = fieldWriter{
 				fieldName:  field.Name(),
 				fieldPath:  fieldPath,
-				writeNull:  writeNull,
+				writeRows:  writeNull,
 				writeValue: writeValue,
 			}
 		}
@@ -2423,50 +2430,133 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 			writers[i] = fieldWriter{
 				fieldName:  field.Name(),
 				fieldPath:  fieldPath,
-				writeNull:  writeRows,
+				writeRows:  writeRows,
 				writeValue: writeValue,
 			}
+		}
+	}
+
+	// We make sepcial cases for the common types to avoid paying the cost of
+	// reflection in calls like MapIndex which force the returned value to be
+	// allocated on the heap.
+	var writeMaps writeRowsFunc
+	switch {
+	case t.ConvertibleTo(mapStringStringType):
+		var convert func(reflect.Value) map[string]string
+		if t == mapStringStringType {
+			convert = func(v reflect.Value) map[string]string {
+				return *v.Interface().(*map[string]string)
+			}
+		} else {
+			convert = func(v reflect.Value) map[string]string {
+				return *v.Convert(mapStringStringType).Interface().(*map[string]string)
+			}
+		}
+
+		writeMaps = func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+			buffer, _ := stringArrayPool.Get().(*stringArray)
+			if buffer == nil {
+				buffer = new(stringArray)
+			}
+			numRows := rows.Len()
+			numValues := len(writers) * numRows
+			buffer.values = slices.Grow(buffer.values, numValues)[:numValues]
+			defer stringArrayPool.Put(buffer)
+
+			for i := range numRows {
+				m := convert(reflect.NewAt(t, rows.Index(i)))
+
+				for j := range writers {
+					buffer.values[j*numRows+i] = m[writers[j].fieldName]
+				}
+			}
+
+			for j := range writers {
+				a := sparse.MakeStringArray(buffer.values[j*numRows : (j+1)*numRows])
+				if err := writers[j].writeRows(columns, a.UnsafeArray(), levels); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		}
+
+	case t.ConvertibleTo(mapStringAnyType):
+		var convert func(reflect.Value) map[string]any
+		if t == mapStringAnyType {
+			convert = func(v reflect.Value) map[string]any {
+				return *v.Interface().(*map[string]any)
+			}
+		} else {
+			convert = func(v reflect.Value) map[string]any {
+				return *v.Convert(mapStringAnyType).Interface().(*map[string]any)
+			}
+		}
+
+		writeMaps = func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+			for i := range rows.Len() {
+				m := convert(reflect.NewAt(t, rows.Index(i)))
+
+				for j := range writers {
+					w := &writers[j]
+					v, ok := m[w.fieldName]
+
+					var err error
+					if !ok {
+						err = w.writeRows(columns, sparse.Array{}, levels)
+					} else {
+						err = w.writeValue(columns, reflect.ValueOf(v), levels)
+					}
+					if err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
+
+	default:
+		writeMaps = func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+			for i := range rows.Len() {
+				m := reflect.NewAt(t, rows.Index(i)).Elem()
+
+				for j := range writers {
+					w := &writers[j]
+					keyValue := reflect.ValueOf(&w.fieldName).Elem()
+					mapValue := m.MapIndex(keyValue)
+
+					var err error
+					if !mapValue.IsValid() {
+						err = w.writeRows(columns, sparse.Array{}, levels)
+					} else {
+						err = w.writeValue(columns, mapValue, levels)
+					}
+					if err != nil {
+						return err
+					}
+				}
+			}
+			return nil
 		}
 	}
 
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		if rows.Len() == 0 {
 			// Write empty values for all fields
-			empty := sparse.Array{}
 			for _, w := range writers {
-				if err := w.writeNull(columns, empty, levels); err != nil {
+				if err := w.writeRows(columns, sparse.Array{}, levels); err != nil {
 					return err
 				}
 			}
 			return nil
 		}
-
-		for i := range rows.Len() {
-			m := reflect.NewAt(t, rows.Index(i)).Elem()
-
-			// For each field in the GROUP schema, look up the corresponding map key
-			for _, w := range writers {
-				keyValue := reflect.ValueOf(w.fieldName)
-				mapValue := m.MapIndex(keyValue)
-
-				if !mapValue.IsValid() {
-					// Key doesn't exist in map - write a null/zero value
-					empty := sparse.Array{}
-					if err := w.writeNull(columns, empty, levels); err != nil {
-						return err
-					}
-				} else {
-					// Key exists - write the value
-					if err := w.writeValue(columns, mapValue, levels); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-		return nil
+		return writeMaps(columns, rows, levels)
 	}
 }
+
+type stringArray struct{ values []string }
+
+var stringArrayPool sync.Pool // *stringArray
 
 // writeRowsFuncOfSchemaNode creates a write function based on the schema node type
 // rather than a Go type. This is used for interface{} values where we need to write
@@ -2530,12 +2620,23 @@ func writeRowsFuncOfSchemaNode(node Node, schema *Schema, path columnPath, field
 	}
 }
 
+var writeInterfaceFuncCache atomic.Value // map[reflect.Type]writeRowsFunc
+
 // writeInterfaceValue writes an interface{} value at runtime, determining the appropriate
 // write function based on the actual type.
 func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node, schema *Schema, path columnPath, levels columnLevels) error {
+	cache, _ := writeInterfaceFuncCache.Load().(map[reflect.Type]writeRowsFunc)
 	// Get the write function for the actual type at runtime
 	actualType := value.Type()
-	writeRows := writeRowsFuncOf(actualType, schema, path)
+	writeRows := cache[actualType]
+
+	if writeRows == nil {
+		writeRows = writeRowsFuncOf(actualType, schema, path)
+		newCache := make(map[reflect.Type]writeRowsFunc, len(cache)+1)
+		maps.Copy(newCache, cache)
+		newCache[actualType] = writeRows
+		writeInterfaceFuncCache.Store(newCache)
+	}
 
 	// Handle optional fields
 	if field.Optional() {
@@ -2544,19 +2645,7 @@ func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node
 		defer func() { levels.definitionLevel-- }()
 	}
 
-	// Create a sparse array with the single value
-	// We need to get the pointer to the value's data
-	var data unsafe.Pointer
-	if value.CanAddr() {
-		data = unsafe.Pointer(value.UnsafeAddr())
-	} else {
-		// If the value can't be addressed, we need to copy it
-		temp := reflect.New(actualType)
-		temp.Elem().Set(value)
-		data = unsafe.Pointer(temp.Pointer())
-	}
-
-	valueArray := makeArray(data, 1, actualType.Size())
+	valueArray := makeArray(reflectValueData(value), 1, actualType.Size())
 	return writeRows(columns, valueArray, levels)
 }
 

@@ -628,3 +628,288 @@ func TestGenericWriterMapAnyToDeeplyNestedGroups(t *testing.T) {
 		t.Errorf("row 2 level1 name incorrect: %s", *result2.Root.Level1.Name)
 	}
 }
+
+// BenchmarkMapToGroup benchmarks writing maps to GROUP schemas
+func BenchmarkMapToGroup(b *testing.B) {
+	b.Run("map[string]string", func(b *testing.B) {
+		benchmarkMapToGroupStringString(b)
+	})
+	b.Run("map[string]any", func(b *testing.B) {
+		benchmarkMapToGroupStringAny(b)
+	})
+	b.Run("map[string]map[string]string", func(b *testing.B) {
+		benchmarkMapToGroupNested(b)
+	})
+}
+
+func benchmarkMapToGroupStringString(b *testing.B) {
+	// Go type with map
+	type RecordWithMap struct {
+		ID   int64
+		Data map[string]string
+	}
+
+	// Schema type with GROUP
+	type RecordWithStruct struct {
+		ID   int64
+		Data struct {
+			Field1 string `parquet:",optional"`
+			Field2 string `parquet:",optional"`
+			Field3 string `parquet:",optional"`
+			Field4 string `parquet:",optional"`
+			Field5 string `parquet:",optional"`
+		}
+	}
+
+	schema := SchemaOf(RecordWithStruct{})
+
+	// Create test data
+	records := make([]RecordWithMap, 1000)
+	for i := range records {
+		records[i] = RecordWithMap{
+			ID: int64(i),
+			Data: map[string]string{
+				"Field1": "value1_" + string(rune('a'+i%26)),
+				"Field2": "value2_" + string(rune('a'+i%26)),
+				"Field3": "value3_" + string(rune('a'+i%26)),
+				"Field4": "value4_" + string(rune('a'+i%26)),
+				"Field5": "value5_" + string(rune('a'+i%26)),
+			},
+		}
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithMap](buf, schema)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for b.Loop() {
+		buf.Reset()
+		writer.Reset(buf)
+		_, err := writer.Write(records)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkMapToGroupStringAny(b *testing.B) {
+	// Go type with map[string]any
+	type RecordWithMap struct {
+		ID   int64
+		Data map[string]any
+	}
+
+	// Schema type with GROUP containing various types
+	type RecordWithStruct struct {
+		ID   int64
+		Data struct {
+			Name   string  `parquet:",optional"`
+			Age    int32   `parquet:",optional"`
+			Score  float64 `parquet:",optional"`
+			Active bool    `parquet:",optional"`
+			Count  int64   `parquet:",optional"`
+		}
+	}
+
+	schema := SchemaOf(RecordWithStruct{})
+
+	// Create test data
+	records := make([]RecordWithMap, 1000)
+	for i := range records {
+		records[i] = RecordWithMap{
+			ID: int64(i),
+			Data: map[string]any{
+				"Name":   "name_" + string(rune('a'+i%26)),
+				"Age":    int32(20 + i%50),
+				"Score":  float64(i%100) + 0.5,
+				"Active": i%2 == 0,
+				"Count":  int64(i * 10),
+			},
+		}
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithMap](buf, schema)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for b.Loop() {
+		buf.Reset()
+		writer.Reset(buf)
+		_, err := writer.Write(records)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkMapToGroupNested(b *testing.B) {
+	// Go type with nested maps - using map[string]any for outer map
+	// Note: map[string]map[string]string would be more natural but currently has a bug
+	// that causes a nil pointer panic (see TestGenericWriterMapMapToNestedGroupSchema)
+	type RecordWithMap struct {
+		ID     int64
+		Nested map[string]any
+	}
+
+	// Schema type with nested GROUPs
+	type RecordWithStruct struct {
+		ID     int64
+		Nested struct {
+			Group1 struct {
+				A string `parquet:",optional"`
+				B string `parquet:",optional"`
+				C string `parquet:",optional"`
+			} `parquet:",optional"`
+			Group2 struct {
+				X string `parquet:",optional"`
+				Y string `parquet:",optional"`
+				Z string `parquet:",optional"`
+			} `parquet:",optional"`
+		}
+	}
+
+	schema := SchemaOf(RecordWithStruct{})
+
+	// Create test data
+	records := make([]RecordWithMap, 1000)
+	for i := range records {
+		records[i] = RecordWithMap{
+			ID: int64(i),
+			Nested: map[string]any{
+				"Group1": map[string]string{
+					"A": "value_a_" + string(rune('a'+i%26)),
+					"B": "value_b_" + string(rune('a'+i%26)),
+					"C": "value_c_" + string(rune('a'+i%26)),
+				},
+				"Group2": map[string]string{
+					"X": "value_x_" + string(rune('a'+i%26)),
+					"Y": "value_y_" + string(rune('a'+i%26)),
+					"Z": "value_z_" + string(rune('a'+i%26)),
+				},
+			},
+		}
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithMap](buf, schema)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for b.Loop() {
+		buf.Reset()
+		writer.Reset(buf)
+		_, err := writer.Write(records)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// TestGenericWriterMapMapToNestedGroupSchema tests that map[string]map[string]string
+// can be written to a nested GROUP schema.
+func TestGenericWriterMapMapToNestedGroupSchema(t *testing.T) {
+	// Go type with map[string]map[string]string
+	type RecordWithMap struct {
+		Nested map[string]map[string]string
+	}
+
+	// Schema type with nested GROUPs
+	type RecordWithStruct struct {
+		Nested struct {
+			Group1 struct {
+				A string `parquet:",optional"`
+				B string `parquet:",optional"`
+			} `parquet:",optional"`
+			Group2 struct {
+				X string `parquet:",optional"`
+				Y string `parquet:",optional"`
+			} `parquet:",optional"`
+		}
+	}
+
+	// Create schema from the struct
+	desiredSchema := SchemaOf(RecordWithStruct{})
+
+	// Try to write using NewGenericWriter with map[string]map[string]string
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithMap](buf, desiredSchema)
+
+	// Attempt to write values
+	records := []RecordWithMap{
+		{
+			Nested: map[string]map[string]string{
+				"Group1": {
+					"A": "value_a1",
+					"B": "value_b1",
+				},
+				"Group2": {
+					"X": "value_x1",
+					"Y": "value_y1",
+				},
+			},
+		},
+		{
+			Nested: map[string]map[string]string{
+				"Group1": {
+					"A": "value_a2",
+					// B omitted
+				},
+				// Group2 omitted
+			},
+		},
+	}
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write rows: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected to write 2 rows, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Try to read it back
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var result1 RecordWithStruct
+	if err := reader.Read(&result1); err != nil {
+		t.Fatalf("failed to read row 1: %v", err)
+	}
+
+	if result1.Nested.Group1.A != "value_a1" || result1.Nested.Group1.B != "value_b1" {
+		t.Errorf("row 1 Group1 incorrect: %+v", result1.Nested.Group1)
+	}
+	if result1.Nested.Group2.X != "value_x1" || result1.Nested.Group2.Y != "value_y1" {
+		t.Errorf("row 1 Group2 incorrect: %+v", result1.Nested.Group2)
+	}
+
+	var result2 RecordWithStruct
+	if err := reader.Read(&result2); err != nil {
+		t.Fatalf("failed to read row 2: %v", err)
+	}
+
+	if result2.Nested.Group1.A != "value_a2" || result2.Nested.Group1.B != "" {
+		t.Errorf("row 2 Group1 incorrect: %+v", result2.Nested.Group1)
+	}
+	if result2.Nested.Group2.X != "" || result2.Nested.Group2.Y != "" {
+		t.Errorf("row 2 Group2 should be empty: %+v", result2.Nested.Group2)
+	}
+}
