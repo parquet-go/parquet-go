@@ -458,7 +458,7 @@ func appendStructFields(path []string, t reflect.Type, fields []reflect.StructFi
 		if !f.Anonymous {
 			fpath := append(path, f.Name)
 			for _, opt := range tagReplacements {
-				if slices.Equal(fpath, opt.Path) {
+				if slices.Equal(fpath, opt.ColumnPath) {
 					opt.apply(&ftags)
 				}
 			}
