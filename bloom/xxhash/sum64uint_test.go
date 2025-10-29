@@ -191,7 +191,7 @@ func BenchmarkMultiSum64Uint8(b *testing.B) {
 	b.Run(fmt.Sprintf("%dKB", benchmarkBufferSize/1024), func(b *testing.B) {
 		out := make([]uint64, len(in))
 		start := time.Now()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = xxhash.MultiSum64Uint8(out, in)
 		}
 		reportThroughput(b, b.N, len(out), start)
@@ -206,7 +206,7 @@ func BenchmarkMultiSum64Uint16(b *testing.B) {
 	b.Run(fmt.Sprintf("%dKB", benchmarkBufferSize/1024), func(b *testing.B) {
 		out := make([]uint64, len(in))
 		start := time.Now()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = xxhash.MultiSum64Uint16(out, in)
 		}
 		reportThroughput(b, b.N, len(out), start)
@@ -221,7 +221,7 @@ func BenchmarkMultiSum64Uint32(b *testing.B) {
 	b.Run(fmt.Sprintf("%dKB", benchmarkBufferSize/1024), func(b *testing.B) {
 		out := make([]uint64, len(in))
 		start := time.Now()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = xxhash.MultiSum64Uint32(out, in)
 		}
 		reportThroughput(b, b.N, len(out), start)
@@ -236,7 +236,7 @@ func BenchmarkMultiSum64Uint64(b *testing.B) {
 	b.Run(fmt.Sprintf("%dKB", benchmarkBufferSize/1024), func(b *testing.B) {
 		out := make([]uint64, len(in))
 		start := time.Now()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = xxhash.MultiSum64Uint64(out, in)
 		}
 		reportThroughput(b, b.N, len(out), start)
@@ -252,7 +252,7 @@ func BenchmarkMultiSum64Uint128(b *testing.B) {
 	b.Run(fmt.Sprintf("%dKB", benchmarkBufferSize/1024), func(b *testing.B) {
 		out := make([]uint64, len(in))
 		start := time.Now()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = xxhash.MultiSum64Uint128(out, in)
 		}
 		reportThroughput(b, b.N, len(out), start)

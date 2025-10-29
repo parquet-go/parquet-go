@@ -238,7 +238,7 @@ func benchmarkUint32Loop(b *testing.B, f func([]uint32, []int32) int, keys []uin
 	_ = values[:len(keys)]
 	start := time.Now()
 
-	for k := 0; k < b.N; k++ {
+	for b.Loop() {
 		if j > len(keys) {
 			j = len(keys)
 		}
@@ -328,7 +328,7 @@ func benchmarkUint64Loop(b *testing.B, f func([]uint64, []int32) int, keys []uin
 	_ = values[:len(keys)]
 	start := time.Now()
 
-	for k := 0; k < b.N; k++ {
+	for b.Loop() {
 		if j > len(keys) {
 			j = len(keys)
 		}
@@ -418,7 +418,7 @@ func benchmarkUint128Loop(b *testing.B, f func([][16]byte, []int32) int, keys []
 	_ = values[:len(keys)]
 	start := time.Now()
 
-	for k := 0; k < b.N; k++ {
+	for b.Loop() {
 		if j > len(keys) {
 			j = len(keys)
 		}

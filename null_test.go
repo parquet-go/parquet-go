@@ -89,7 +89,7 @@ func benchmarkNullIndex[T any](b *testing.B) {
 	bits := make([]uint64, (N+63)/64)
 
 	b.Run(typ.String(), func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			null(bits, data)
 		}
 		b.SetBytes(int64(typ.Size() * N))

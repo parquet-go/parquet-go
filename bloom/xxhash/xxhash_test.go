@@ -51,7 +51,7 @@ func BenchmarkSum64(b *testing.B) {
 		}
 		b.Run(bb.name, func(b *testing.B) {
 			b.SetBytes(bb.n)
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_ = xxhash.Sum64(in)
 			}
 		})

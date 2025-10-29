@@ -63,7 +63,7 @@ func benchmarkEncodeInt32IndexEqual8Contiguous(b *testing.B, f func([][8]int32) 
 	for i := range words {
 		words[i][0] = 1
 	}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = f(words)
 	}
 	b.SetBytes(32 * int64(len(words)))

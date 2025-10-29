@@ -28,7 +28,7 @@ func BenchmarkFasthash(b *testing.B) {
 	dst := [4]uint64{}
 	mod := int32(1024)
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		fasthash4x64(&dst, &src, mod)
 	}
 

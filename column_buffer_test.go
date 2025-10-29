@@ -30,7 +30,7 @@ func TestBroadcastRangeInt32(t *testing.T) {
 
 func BenchmarkBroadcastValueInt32(b *testing.B) {
 	buf := make([]int32, 1000)
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		broadcastValueInt32(buf, -1)
 	}
 	b.SetBytes(4 * int64(len(buf)))
@@ -38,7 +38,7 @@ func BenchmarkBroadcastValueInt32(b *testing.B) {
 
 func BenchmarkBroadcastRangeInt32(b *testing.B) {
 	buf := make([]int32, 1000)
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		broadcastRangeInt32(buf, 0)
 	}
 	b.SetBytes(4 * int64(len(buf)))

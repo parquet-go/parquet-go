@@ -161,7 +161,7 @@ func BenchmarkMinInt32(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Int31()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			minInt32(values)
 		}
 	})
@@ -174,7 +174,7 @@ func BenchmarkMinInt64(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Int63()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			minInt64(values)
 		}
 	})
@@ -187,7 +187,7 @@ func BenchmarkMinUint32(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Uint32()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			minUint32(values)
 		}
 	})
@@ -200,7 +200,7 @@ func BenchmarkMinUint64(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Uint64()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			minUint64(values)
 		}
 	})
@@ -213,7 +213,7 @@ func BenchmarkMinFloat32(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Float32()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			minFloat32(values)
 		}
 	})
@@ -226,7 +226,7 @@ func BenchmarkMinFloat64(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Float64()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			minFloat64(values)
 		}
 	})
@@ -239,7 +239,7 @@ func BenchmarkMinBE128(b *testing.B) {
 		for i := range values {
 			prng.Read(values[i][:])
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			minBE128(values)
 		}
 	})
@@ -250,7 +250,7 @@ func BenchmarkMinFixedLenByteArray(b *testing.B) {
 		values := make([]byte, bufferSize)
 		prng := rand.New(rand.NewSource(1))
 		prng.Read(values)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			minFixedLenByteArray(values, 32)
 		}
 	})

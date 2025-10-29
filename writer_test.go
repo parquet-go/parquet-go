@@ -19,10 +19,10 @@ import (
 	"github.com/hexops/gotextdiff"
 	"github.com/hexops/gotextdiff/myers"
 	"github.com/hexops/gotextdiff/span"
+	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/encoding"
-	"github.com/parquet-go/parquet-go/internal/unsafecast"
 )
 
 const (

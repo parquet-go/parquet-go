@@ -142,7 +142,7 @@ func benchmarkHashThroughput(b *testing.B, f func(seed uintptr) int) {
 	hashes := int64(0)
 	start := time.Now()
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		hashes += int64(f(uintptr(i)))
 	}
 
