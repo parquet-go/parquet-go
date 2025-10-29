@@ -758,7 +758,7 @@ func benchmarkMapToGroupNested(b *testing.B) {
 	// that causes a nil pointer panic (see TestGenericWriterMapMapToNestedGroupSchema)
 	type RecordWithMap struct {
 		ID     int64
-		Nested map[string]any
+		Nested map[string]map[string]string
 	}
 
 	// Schema type with nested GROUPs
@@ -785,7 +785,7 @@ func benchmarkMapToGroupNested(b *testing.B) {
 	for i := range records {
 		records[i] = RecordWithMap{
 			ID: int64(i),
-			Nested: map[string]any{
+			Nested: map[string]map[string]string{
 				"Group1": map[string]string{
 					"A": "value_a_" + string(rune('a'+i%26)),
 					"B": "value_b_" + string(rune('a'+i%26)),

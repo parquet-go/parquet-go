@@ -5,14 +5,13 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"hash/maphash"
 	"io"
-	"maps"
 	"math/bits"
 	"reflect"
 	"slices"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -2382,8 +2381,6 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 			writeNull := writeRowsFuncOfSchemaNode(fieldNode, schema, fieldPath, field)
 
 			// Capture variables for the closure
-			fieldCopy := field
-			fieldPathCopy := fieldPath
 			writeValue := func(columns []ColumnBuffer, mapValue reflect.Value, levels columnLevels) error {
 				actualValue := mapValue
 				actualValueKind := actualValue.Kind()
@@ -2398,7 +2395,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 				if actualValueKind == reflect.Pointer {
 					actualValue = actualValue.Elem()
 				}
-				return writeInterfaceValue(columns, actualValue, fieldCopy, schema, fieldPathCopy, levels)
+				return writeInterfaceValue(columns, actualValue, field, schema, fieldPath, levels)
 			}
 
 			writers[i] = fieldWriter{
@@ -2423,7 +2420,15 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 
 			// Both null and value use the same function for concrete types
 			writeValue := func(columns []ColumnBuffer, mapValue reflect.Value, levels columnLevels) error {
-				valueArray := makeArray(reflectValueData(mapValue), 1, valueSize)
+				// For map values, need proper storage allocation like in writeInterfaceValue
+				var valueArray sparse.Array
+				if valueType.Kind() == reflect.Map {
+					mapPtr := reflect.New(valueType)
+					mapPtr.Elem().Set(mapValue)
+					valueArray = makeArray(mapPtr.UnsafePointer(), 1, valueSize)
+				} else {
+					valueArray = makeArray(reflectValueData(mapValue), 1, valueSize)
+				}
 				return writeRows(columns, valueArray, levels)
 			}
 
@@ -2620,23 +2625,28 @@ func writeRowsFuncOfSchemaNode(node Node, schema *Schema, path columnPath, field
 	}
 }
 
-var writeInterfaceFuncCache atomic.Value // map[reflect.Type]writeRowsFunc
-
 // writeInterfaceValue writes an interface{} value at runtime, determining the appropriate
 // write function based on the actual type.
 func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node, schema *Schema, path columnPath, levels columnLevels) error {
-	cache, _ := writeInterfaceFuncCache.Load().(map[reflect.Type]writeRowsFunc)
-	// Get the write function for the actual type at runtime
 	actualType := value.Type()
-	writeRows := cache[actualType]
+	schemaCache := schema.lazyLoadCache()
 
-	if writeRows == nil {
-		writeRows = writeRowsFuncOf(actualType, schema, path)
-		newCache := make(map[reflect.Type]writeRowsFunc, len(cache)+1)
-		maps.Copy(newCache, cache)
-		newCache[actualType] = writeRows
-		writeInterfaceFuncCache.Store(newCache)
+	hash := maphash.Hash{}
+	hash.SetSeed(schemaCache.hashSeed)
+
+	for _, name := range path {
+		hash.WriteString(name)
+		hash.WriteByte(0)
 	}
+
+	writeRowsKey := writeRowsCacheKey{
+		gotype: actualType,
+		column: path.hash(schemaCache.hashSeed),
+	}
+
+	writeRows := schemaCache.writeRows.load(writeRowsKey, func() writeRowsFunc {
+		return writeRowsFuncOf(actualType, schema, path)
+	})
 
 	// Handle optional fields
 	if field.Optional() {
@@ -2645,7 +2655,16 @@ func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node
 		defer func() { levels.definitionLevel-- }()
 	}
 
-	valueArray := makeArray(reflectValueData(value), 1, actualType.Size())
+	// For maps, allocate storage for the map value
+	var valueArray sparse.Array
+	if actualType.Kind() == reflect.Map {
+		// Maps need proper storage allocation - create a pointer to hold the map
+		mapPtr := reflect.New(actualType)
+		mapPtr.Elem().Set(value)
+		valueArray = makeArray(mapPtr.UnsafePointer(), 1, actualType.Size())
+	} else {
+		valueArray = makeArray(reflectValueData(value), 1, actualType.Size())
+	}
 	return writeRows(columns, valueArray, levels)
 }
 
