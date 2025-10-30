@@ -2439,17 +2439,6 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 	var writeMaps writeRowsFunc
 	switch {
 	case t.ConvertibleTo(mapStringStringType):
-		var convert func(reflect.Value) map[string]string
-		if t == mapStringStringType {
-			convert = func(v reflect.Value) map[string]string {
-				return *v.Interface().(*map[string]string)
-			}
-		} else {
-			convert = func(v reflect.Value) map[string]string {
-				return *v.Convert(mapStringStringType).Interface().(*map[string]string)
-			}
-		}
-
 		writeMaps = func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 			buffer, _ := stringArrayPool.Get().(*stringArray)
 			if buffer == nil {
@@ -2461,7 +2450,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 			defer stringArrayPool.Put(buffer)
 
 			for i := range numRows {
-				m := convert(reflect.NewAt(t, rows.Index(i)))
+				m := *(*map[string]string)(reflect.NewAt(t, rows.Index(i)).UnsafePointer())
 
 				for j := range writers {
 					buffer.values[j*numRows+i] = m[writers[j].fieldName]
@@ -2479,20 +2468,9 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 		}
 
 	case t.ConvertibleTo(mapStringAnyType):
-		var convert func(reflect.Value) map[string]any
-		if t == mapStringAnyType {
-			convert = func(v reflect.Value) map[string]any {
-				return *v.Interface().(*map[string]any)
-			}
-		} else {
-			convert = func(v reflect.Value) map[string]any {
-				return *v.Convert(mapStringAnyType).Interface().(*map[string]any)
-			}
-		}
-
 		writeMaps = func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 			for i := range rows.Len() {
-				m := convert(reflect.NewAt(t, rows.Index(i)))
+				m := *(*map[string]any)(reflect.NewAt(t, rows.Index(i)).UnsafePointer())
 
 				for j := range writers {
 					w := &writers[j]
@@ -2664,12 +2642,10 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 	// Standard MAP logical type handling
 	keyPath := path.append("key_value", "key")
 	keyType := t.Key()
-	keySize := uintptr(keyType.Size())
 	writeKeys := writeRowsFuncOf(keyType, schema, keyPath)
 
 	valuePath := path.append("key_value", "value")
 	valueType := t.Elem()
-	valueSize := uintptr(valueType.Size())
 	writeValues := writeRowsFuncOf(valueType, schema, valuePath)
 
 	writeKeyValues := func(columns []ColumnBuffer, keys, values sparse.Array, levels columnLevels) error {
@@ -2688,13 +2664,7 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 		}
 
 		levels.repetitionDepth++
-		mapKey := reflect.Value{}
-		mapValue := reflect.Value{}
-		compareKeys := compareFuncOf(keyType)
-		if compareKeys == nil {
-			mapKey = reflect.New(keyType).Elem()
-			mapValue = reflect.New(valueType).Elem()
-		}
+		makeMap := makeMapFuncOf(t)
 
 		for i := range rows.Len() {
 			m := reflect.NewAt(t, rows.Index(i)).Elem()
@@ -2710,36 +2680,14 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 			elemLevels := levels
 			elemLevels.definitionLevel++
 
-			if compareKeys != nil {
-				keys := m.MapKeys()
-				slices.SortFunc(keys, compareKeys)
-
-				for _, key := range keys {
-					value := m.MapIndex(key)
-
-					k := makeArray(reflectValueData(key), 1, keySize)
-					v := makeArray(reflectValueData(value), 1, valueSize)
-
-					if err := writeKeyValues(columns, k, v, elemLevels); err != nil {
-						return err
-					}
-
-					elemLevels.repetitionLevel = elemLevels.repetitionDepth
+			keys, values := makeMap(m).entries()
+			for i := range keys.Len() {
+				k := keys.Slice(i, i+1)
+				v := values.Slice(i, i+1)
+				if err := writeKeyValues(columns, k, v, elemLevels); err != nil {
+					return err
 				}
-			} else {
-				for it := m.MapRange(); it.Next(); {
-					mapKey.SetIterKey(it)
-					mapValue.SetIterValue(it)
-
-					k := makeArray(reflectValueData(mapKey), 1, keySize)
-					v := makeArray(reflectValueData(mapValue), 1, valueSize)
-
-					if err := writeKeyValues(columns, k, v, elemLevels); err != nil {
-						return err
-					}
-
-					elemLevels.repetitionLevel = elemLevels.repetitionDepth
-				}
+				elemLevels.repetitionLevel = elemLevels.repetitionDepth
 			}
 		}
 
