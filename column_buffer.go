@@ -2,7 +2,6 @@ package parquet
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"hash/maphash"
@@ -2648,19 +2647,15 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 	valueType := t.Elem()
 	writeValues := writeRowsFuncOf(valueType, schema, valuePath)
 
-	writeKeyValues := func(columns []ColumnBuffer, keys, values sparse.Array, levels columnLevels) error {
-		if err := writeKeys(columns, keys, levels); err != nil {
-			return err
-		}
-		if err := writeValues(columns, values, levels); err != nil {
-			return err
-		}
-		return nil
-	}
-
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		if rows.Len() == 0 {
-			return writeKeyValues(columns, rows, rows, levels)
+			if err := writeKeys(columns, rows, levels); err != nil {
+				return err
+			}
+			if err := writeValues(columns, rows, levels); err != nil {
+				return err
+			}
+			return nil
 		}
 
 		levels.repetitionDepth++
@@ -2668,10 +2663,14 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 
 		for i := range rows.Len() {
 			m := reflect.NewAt(t, rows.Index(i)).Elem()
+			n := m.Len()
 
-			if m.Len() == 0 {
+			if n == 0 {
 				empty := sparse.Array{}
-				if err := writeKeyValues(columns, empty, empty, levels); err != nil {
+				if err := writeKeys(columns, empty, levels); err != nil {
+					return err
+				}
+				if err := writeValues(columns, empty, levels); err != nil {
 					return err
 				}
 				continue
@@ -2681,39 +2680,23 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 			elemLevels.definitionLevel++
 
 			keys, values := makeMap(m).entries()
-			for i := range keys.Len() {
-				k := keys.Slice(i, i+1)
-				v := values.Slice(i, i+1)
-				if err := writeKeyValues(columns, k, v, elemLevels); err != nil {
+			if err := writeKeys(columns, keys.Slice(0, 1), elemLevels); err != nil {
+				return err
+			}
+			if err := writeValues(columns, values.Slice(0, 1), elemLevels); err != nil {
+				return err
+			}
+			if n > 1 {
+				elemLevels.repetitionLevel = elemLevels.repetitionDepth
+				if err := writeKeys(columns, keys.Slice(1, n), elemLevels); err != nil {
 					return err
 				}
-				elemLevels.repetitionLevel = elemLevels.repetitionDepth
+				if err := writeValues(columns, values.Slice(1, n), elemLevels); err != nil {
+					return err
+				}
 			}
 		}
 
-		return nil
-	}
-}
-
-func compareFuncOf(t reflect.Type) func(reflect.Value, reflect.Value) int {
-	switch t.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return func(a, b reflect.Value) int {
-			return cmp.Compare(a.Int(), b.Int())
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return func(a, b reflect.Value) int {
-			return cmp.Compare(a.Uint(), b.Uint())
-		}
-	case reflect.Float32, reflect.Float64:
-		return func(a, b reflect.Value) int {
-			return cmp.Compare(a.Float(), b.Float())
-		}
-	case reflect.String:
-		return func(a, b reflect.Value) int {
-			return cmp.Compare(a.String(), b.String())
-		}
-	default:
 		return nil
 	}
 }
