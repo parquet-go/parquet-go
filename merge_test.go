@@ -2089,23 +2089,21 @@ func TestMergeRowGroupsRetainsDictionaryEncoding(t *testing.T) {
 	cityNode = parquet.Encoded(cityNode, &parquet.RLEDictionary)
 
 	schema := parquet.NewSchema("test", parquet.Group{
-		"ID":   parquet.Int64(),
+		"ID":   parquet.Leaf(parquet.Int64Type),
 		"Name": nameNode,
 		"City": cityNode,
 	})
 
 	// Create first row group with dictionary encoding
 	buffer1 := &bytes.Buffer{}
-	writer1 := parquet.NewWriter(buffer1, schema)
+	writer1 := parquet.NewGenericWriter[Record](buffer1, schema)
 	records1 := []Record{
 		{ID: 1, Name: "Alice", City: "NYC"},
 		{ID: 2, Name: "Bob", City: "LA"},
 		{ID: 3, Name: "Alice", City: "NYC"}, // Repeated values for dictionary
 	}
-	for _, rec := range records1 {
-		if err := writer1.Write(rec); err != nil {
-			t.Fatalf("Failed to write record to first file: %v", err)
-		}
+	if _, err := writer1.Write(records1); err != nil {
+		t.Fatalf("Failed to write records to first file: %v", err)
 	}
 	if err := writer1.Close(); err != nil {
 		t.Fatalf("Failed to close first writer: %v", err)
@@ -2113,16 +2111,14 @@ func TestMergeRowGroupsRetainsDictionaryEncoding(t *testing.T) {
 
 	// Create second row group with dictionary encoding
 	buffer2 := &bytes.Buffer{}
-	writer2 := parquet.NewWriter(buffer2, schema)
+	writer2 := parquet.NewGenericWriter[Record](buffer2, schema)
 	records2 := []Record{
 		{ID: 4, Name: "Charlie", City: "SF"},
 		{ID: 5, Name: "Diana", City: "NYC"},
 		{ID: 6, Name: "Charlie", City: "SF"}, // Repeated values for dictionary
 	}
-	for _, rec := range records2 {
-		if err := writer2.Write(rec); err != nil {
-			t.Fatalf("Failed to write record to second file: %v", err)
-		}
+	if _, err := writer2.Write(records2); err != nil {
+		t.Fatalf("Failed to write records to second file: %v", err)
 	}
 	if err := writer2.Close(); err != nil {
 		t.Fatalf("Failed to close second writer: %v", err)
@@ -2214,11 +2210,11 @@ func TestMergeRowGroupsRetainsDictionaryEncoding(t *testing.T) {
 		colName := col[len(col)-1]
 		if colName == "Name" || colName == "City" {
 			chunk := columnChunks[i]
-			// Check if the column chunk has dictionary page
+			// Check if the column chunk has dictionary
 			pages := chunk.Pages()
 			defer pages.Close()
 
-			hasDictPage := false
+			hasDictionary := false
 			for {
 				page, err := pages.ReadPage()
 				if err == io.EOF {
@@ -2227,18 +2223,17 @@ func TestMergeRowGroupsRetainsDictionaryEncoding(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Error reading page: %v", err)
 				}
-				if page.Type() == parquet.DataPageType {
-					// Check encoding of data page
-					encoding := page.Dictionary()
-					if encoding != nil {
-						hasDictPage = true
-						t.Logf("Column %s has dictionary page", colName)
-					}
+				// Check if page has a dictionary
+				dict := page.Dictionary()
+				if dict != nil {
+					hasDictionary = true
+					t.Logf("Column %s has dictionary with %d entries", colName, dict.Len())
+					break
 				}
 			}
 
-			if !hasDictPage {
-				t.Logf("Warning: Column %s does not appear to use dictionary encoding in actual pages", colName)
+			if !hasDictionary {
+				t.Errorf("Column %s does not use dictionary encoding in actual pages", colName)
 			}
 		}
 	}
