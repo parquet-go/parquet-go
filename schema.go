@@ -2,12 +2,15 @@ package parquet
 
 import (
 	"fmt"
+	"hash/maphash"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +32,7 @@ type Schema struct {
 	root  Node
 	funcs onceValue[schemaFuncs]
 	state onceValue[schemaState]
+	cache onceValue[schemaCache]
 }
 
 type schemaFuncs struct {
@@ -39,6 +43,34 @@ type schemaFuncs struct {
 type schemaState struct {
 	mapping columnMapping
 	columns [][]string
+}
+
+type schemaCache struct {
+	hashSeed  maphash.Seed
+	writeRows cacheMap[writeRowsCacheKey, writeRowsFunc]
+}
+
+type writeRowsCacheKey struct {
+	gotype reflect.Type
+	column uint64
+}
+
+type cacheMap[K comparable, V any] struct {
+	value atomic.Value // map[K]V
+}
+
+func (c *cacheMap[K, V]) load(k K, f func() V) V {
+	oldMap, _ := c.value.Load().(map[K]V)
+	value, ok := oldMap[k]
+	if ok {
+		return value
+	}
+	value = f()
+	newMap := make(map[K]V, len(oldMap)+1)
+	maps.Copy(newMap, oldMap)
+	newMap[k] = value
+	c.value.Store(newMap)
+	return value
 }
 
 type onceValue[T any] struct {
@@ -227,6 +259,14 @@ func (s *Schema) lazyLoadState() *schemaState {
 		return &schemaState{
 			mapping: mapping,
 			columns: columns,
+		}
+	})
+}
+
+func (s *Schema) lazyLoadCache() *schemaCache {
+	return s.cache.load(func() *schemaCache {
+		return &schemaCache{
+			hashSeed: maphash.MakeSeed(),
 		}
 	})
 }

@@ -961,6 +961,21 @@ func reflectValueData(v reflect.Value) unsafe.Pointer {
 	return (*[2]unsafe.Pointer)(unsafe.Pointer(&v))[1]
 }
 
+func reflectValuePointer(v reflect.Value) unsafe.Pointer {
+	if v.Kind() == reflect.Map {
+		// Map values are inlined in the reflect.Value data area,
+		// because they are a reference type and their paointer is
+		// packed in the interface. However, we need to get an
+		// address to the pointer itself, so we extract it and
+		// return the address of this pointer. It causes a heap
+		// allocation, which is unfortunate, an we would probably
+		// want to optimize away eventually.
+		p := v.UnsafePointer()
+		return unsafe.Pointer(&p)
+	}
+	return reflectValueData(v)
+}
+
 func (t fixedLenByteArrayType) ConvertValue(val Value, typ Type) (Value, error) {
 	switch typ.(type) {
 	case *stringType:
@@ -1161,6 +1176,20 @@ var unsignedIntTypes = [...]intType{
 	{BitWidth: 64, IsSigned: false},
 }
 
+var signedLogicalIntTypes = [...]format.LogicalType{
+	{Integer: (*format.IntType)(&signedIntTypes[0])},
+	{Integer: (*format.IntType)(&signedIntTypes[1])},
+	{Integer: (*format.IntType)(&signedIntTypes[2])},
+	{Integer: (*format.IntType)(&signedIntTypes[3])},
+}
+
+var unsignedLogicalIntTypes = [...]format.LogicalType{
+	{Integer: (*format.IntType)(&unsignedIntTypes[0])},
+	{Integer: (*format.IntType)(&unsignedIntTypes[1])},
+	{Integer: (*format.IntType)(&unsignedIntTypes[2])},
+	{Integer: (*format.IntType)(&unsignedIntTypes[3])},
+}
+
 type intType format.IntType
 
 func (t *intType) baseType() Type {
@@ -1217,7 +1246,26 @@ func (t *intType) ColumnOrder() *format.ColumnOrder { return t.baseType().Column
 func (t *intType) PhysicalType() *format.Type { return t.baseType().PhysicalType() }
 
 func (t *intType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{Integer: (*format.IntType)(t)}
+	switch t {
+	case &signedIntTypes[0]:
+		return &signedLogicalIntTypes[0]
+	case &signedIntTypes[1]:
+		return &signedLogicalIntTypes[1]
+	case &signedIntTypes[2]:
+		return &signedLogicalIntTypes[2]
+	case &signedIntTypes[3]:
+		return &signedLogicalIntTypes[3]
+	case &unsignedIntTypes[0]:
+		return &unsignedLogicalIntTypes[0]
+	case &unsignedIntTypes[1]:
+		return &unsignedLogicalIntTypes[1]
+	case &unsignedIntTypes[2]:
+		return &unsignedLogicalIntTypes[2]
+	case &unsignedIntTypes[3]:
+		return &unsignedLogicalIntTypes[3]
+	default:
+		return &format.LogicalType{Integer: (*format.IntType)(t)}
+	}
 }
 
 func (t *intType) ConvertedType() *deprecated.ConvertedType {
@@ -1317,6 +1365,10 @@ func (t *decimalType) ConvertedType() *deprecated.ConvertedType {
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#string
 func String() Node { return Leaf(&stringType{}) }
 
+var stringLogicalType = format.LogicalType{
+	UTF8: new(format.StringType),
+}
+
 type stringType format.StringType
 
 func (t *stringType) String() string { return (*format.StringType)(t).String() }
@@ -1342,7 +1394,7 @@ func (t *stringType) PhysicalType() *format.Type {
 }
 
 func (t *stringType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{UTF8: (*format.StringType)(t)}
+	return &stringLogicalType
 }
 
 func (t *stringType) ConvertedType() *deprecated.ConvertedType {
@@ -1424,6 +1476,10 @@ func (t *stringType) ConvertValue(val Value, typ Type) (Value, error) {
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#uuid
 func UUID() Node { return Leaf(&uuidType{}) }
 
+var uuidLogicaType = format.LogicalType{
+	UUID: new(format.UUIDType),
+}
+
 type uuidType format.UUIDType
 
 func (t *uuidType) String() string { return (*format.UUIDType)(t).String() }
@@ -1442,9 +1498,7 @@ func (t *uuidType) ColumnOrder() *format.ColumnOrder { return &typeDefinedColumn
 
 func (t *uuidType) PhysicalType() *format.Type { return &physicalTypes[FixedLenByteArray] }
 
-func (t *uuidType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{UUID: (*format.UUIDType)(t)}
-}
+func (t *uuidType) LogicalType() *format.LogicalType { return &uuidLogicaType }
 
 func (t *uuidType) ConvertedType() *deprecated.ConvertedType { return nil }
 
@@ -1493,6 +1547,10 @@ func (t *uuidType) ConvertValue(val Value, typ Type) (Value, error) {
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#enum
 func Enum() Node { return Leaf(&enumType{}) }
 
+var enumLogicalType = format.LogicalType{
+	Enum: new(format.EnumType),
+}
+
 type enumType format.EnumType
 
 func (t *enumType) String() string { return (*format.EnumType)(t).String() }
@@ -1511,9 +1569,7 @@ func (t *enumType) ColumnOrder() *format.ColumnOrder { return new(stringType).Co
 
 func (t *enumType) PhysicalType() *format.Type { return new(stringType).PhysicalType() }
 
-func (t *enumType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{Enum: (*format.EnumType)(t)}
-}
+func (t *enumType) LogicalType() *format.LogicalType { return &enumLogicalType }
 
 func (t *enumType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Enum]
@@ -1569,6 +1625,10 @@ func (t *enumType) ConvertValue(val Value, typ Type) (Value, error) {
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#json
 func JSON() Node { return Leaf(&jsonType{}) }
 
+var jsonLogicalType = format.LogicalType{
+	Json: new(format.JsonType),
+}
+
 type jsonType format.JsonType
 
 func (t *jsonType) String() string { return (*format.JsonType)(t).String() }
@@ -1587,9 +1647,7 @@ func (t *jsonType) ColumnOrder() *format.ColumnOrder { return byteArrayType{}.Co
 
 func (t *jsonType) PhysicalType() *format.Type { return byteArrayType{}.PhysicalType() }
 
-func (t *jsonType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{Json: (*format.JsonType)(t)}
-}
+func (t *jsonType) LogicalType() *format.LogicalType { return &jsonLogicalType }
 
 func (t *jsonType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Json]
@@ -1663,6 +1721,10 @@ func (t *jsonType) ConvertValue(val Value, typ Type) (Value, error) {
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#bson
 func BSON() Node { return Leaf(&bsonType{}) }
 
+var bsonLogicalType = format.LogicalType{
+	Bson: new(format.BsonType),
+}
+
 type bsonType format.BsonType
 
 func (t *bsonType) String() string { return (*format.BsonType)(t).String() }
@@ -1681,9 +1743,7 @@ func (t *bsonType) ColumnOrder() *format.ColumnOrder { return byteArrayType{}.Co
 
 func (t *bsonType) PhysicalType() *format.Type { return byteArrayType{}.PhysicalType() }
 
-func (t *bsonType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{Bson: (*format.BsonType)(t)}
-}
+func (t *bsonType) LogicalType() *format.LogicalType { return &bsonLogicalType }
 
 func (t *bsonType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Bson]
@@ -1739,6 +1799,10 @@ func (t *bsonType) ConvertValue(val Value, typ Type) (Value, error) {
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#date
 func Date() Node { return Leaf(&dateType{}) }
 
+var dateLogicalType = format.LogicalType{
+	Date: new(format.DateType),
+}
+
 type dateType format.DateType
 
 func (t *dateType) String() string { return (*format.DateType)(t).String() }
@@ -1757,9 +1821,7 @@ func (t *dateType) ColumnOrder() *format.ColumnOrder { return int32Type{}.Column
 
 func (t *dateType) PhysicalType() *format.Type { return int32Type{}.PhysicalType() }
 
-func (t *dateType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{Date: (*format.DateType)(t)}
-}
+func (t *dateType) LogicalType() *format.LogicalType { return &dateLogicalType }
 
 func (t *dateType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Date]
@@ -1860,7 +1922,83 @@ func Time(unit TimeUnit) Node {
 //
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
 func TimeAdjusted(unit TimeUnit, isAdjustedToUTC bool) Node {
-	return Leaf(&timeType{IsAdjustedToUTC: isAdjustedToUTC, Unit: unit.TimeUnit()})
+	// Use pre-allocated instances for common cases
+	timeUnit := unit.TimeUnit()
+	if isAdjustedToUTC {
+		switch {
+		case timeUnit.Millis != nil:
+			return Leaf(&timeMilliAdjustedToUTC)
+		case timeUnit.Micros != nil:
+			return Leaf(&timeMicroAdjustedToUTC)
+		case timeUnit.Nanos != nil:
+			return Leaf(&timeNanoAdjustedToUTC)
+		}
+	} else {
+		switch {
+		case timeUnit.Millis != nil:
+			return Leaf(&timeMilliNotAdjustedToUTC)
+		case timeUnit.Micros != nil:
+			return Leaf(&timeMicroNotAdjustedToUTC)
+		case timeUnit.Nanos != nil:
+			return Leaf(&timeNanoNotAdjustedToUTC)
+		}
+	}
+	// Fallback for unknown unit types
+	return Leaf(&timeType{IsAdjustedToUTC: isAdjustedToUTC, Unit: timeUnit})
+}
+
+var timeMilliAdjustedToUTC = timeType{
+	IsAdjustedToUTC: true,
+	Unit:            format.TimeUnit{Millis: new(format.MilliSeconds)},
+}
+
+var timeMicroAdjustedToUTC = timeType{
+	IsAdjustedToUTC: true,
+	Unit:            format.TimeUnit{Micros: new(format.MicroSeconds)},
+}
+
+var timeNanoAdjustedToUTC = timeType{
+	IsAdjustedToUTC: true,
+	Unit:            format.TimeUnit{Nanos: new(format.NanoSeconds)},
+}
+
+var timeMilliNotAdjustedToUTC = timeType{
+	IsAdjustedToUTC: false,
+	Unit:            format.TimeUnit{Millis: new(format.MilliSeconds)},
+}
+
+var timeMicroNotAdjustedToUTC = timeType{
+	IsAdjustedToUTC: false,
+	Unit:            format.TimeUnit{Micros: new(format.MicroSeconds)},
+}
+
+var timeNanoNotAdjustedToUTC = timeType{
+	IsAdjustedToUTC: false,
+	Unit:            format.TimeUnit{Nanos: new(format.NanoSeconds)},
+}
+
+var timeMilliAdjustedToUTCLogicalType = format.LogicalType{
+	Time: (*format.TimeType)(&timeMilliAdjustedToUTC),
+}
+
+var timeMicroAdjustedToUTCLogicalType = format.LogicalType{
+	Time: (*format.TimeType)(&timeMicroAdjustedToUTC),
+}
+
+var timeNanoAdjustedToUTCLogicalType = format.LogicalType{
+	Time: (*format.TimeType)(&timeNanoAdjustedToUTC),
+}
+
+var timeMilliNotAdjustedToUTCLogicalType = format.LogicalType{
+	Time: (*format.TimeType)(&timeMilliNotAdjustedToUTC),
+}
+
+var timeMicroNotAdjustedToUTCLogicalType = format.LogicalType{
+	Time: (*format.TimeType)(&timeMicroNotAdjustedToUTC),
+}
+
+var timeNanoNotAdjustedToUTCLogicalType = format.LogicalType{
+	Time: (*format.TimeType)(&timeNanoNotAdjustedToUTC),
 }
 
 type timeType format.TimeType
@@ -1902,7 +2040,22 @@ func (t *timeType) ColumnOrder() *format.ColumnOrder { return t.baseType().Colum
 func (t *timeType) PhysicalType() *format.Type { return t.baseType().PhysicalType() }
 
 func (t *timeType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{Time: (*format.TimeType)(t)}
+	switch t {
+	case &timeMilliAdjustedToUTC:
+		return &timeMilliAdjustedToUTCLogicalType
+	case &timeMicroAdjustedToUTC:
+		return &timeMicroAdjustedToUTCLogicalType
+	case &timeNanoAdjustedToUTC:
+		return &timeNanoAdjustedToUTCLogicalType
+	case &timeMilliNotAdjustedToUTC:
+		return &timeMilliNotAdjustedToUTCLogicalType
+	case &timeMicroNotAdjustedToUTC:
+		return &timeMicroNotAdjustedToUTCLogicalType
+	case &timeNanoNotAdjustedToUTC:
+		return &timeNanoNotAdjustedToUTCLogicalType
+	default:
+		return &format.LogicalType{Time: (*format.TimeType)(t)}
+	}
 }
 
 func (t *timeType) ConvertedType() *deprecated.ConvertedType {
@@ -1985,7 +2138,83 @@ func Timestamp(unit TimeUnit) Node {
 //
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
 func TimestampAdjusted(unit TimeUnit, isAdjustedToUTC bool) Node {
-	return Leaf(&timestampType{IsAdjustedToUTC: isAdjustedToUTC, Unit: unit.TimeUnit()})
+	// Use pre-allocated instances for common cases
+	timeUnit := unit.TimeUnit()
+	if isAdjustedToUTC {
+		switch {
+		case timeUnit.Millis != nil:
+			return Leaf(&timestampMilliAdjustedToUTC)
+		case timeUnit.Micros != nil:
+			return Leaf(&timestampMicroAdjustedToUTC)
+		case timeUnit.Nanos != nil:
+			return Leaf(&timestampNanoAdjustedToUTC)
+		}
+	} else {
+		switch {
+		case timeUnit.Millis != nil:
+			return Leaf(&timestampMilliNotAdjustedToUTC)
+		case timeUnit.Micros != nil:
+			return Leaf(&timestampMicroNotAdjustedToUTC)
+		case timeUnit.Nanos != nil:
+			return Leaf(&timestampNanoNotAdjustedToUTC)
+		}
+	}
+	// Fallback for unknown unit types
+	return Leaf(&timestampType{IsAdjustedToUTC: isAdjustedToUTC, Unit: timeUnit})
+}
+
+var timestampMilliAdjustedToUTC = timestampType{
+	IsAdjustedToUTC: true,
+	Unit:            format.TimeUnit{Millis: new(format.MilliSeconds)},
+}
+
+var timestampMicroAdjustedToUTC = timestampType{
+	IsAdjustedToUTC: true,
+	Unit:            format.TimeUnit{Micros: new(format.MicroSeconds)},
+}
+
+var timestampNanoAdjustedToUTC = timestampType{
+	IsAdjustedToUTC: true,
+	Unit:            format.TimeUnit{Nanos: new(format.NanoSeconds)},
+}
+
+var timestampMilliNotAdjustedToUTC = timestampType{
+	IsAdjustedToUTC: false,
+	Unit:            format.TimeUnit{Millis: new(format.MilliSeconds)},
+}
+
+var timestampMicroNotAdjustedToUTC = timestampType{
+	IsAdjustedToUTC: false,
+	Unit:            format.TimeUnit{Micros: new(format.MicroSeconds)},
+}
+
+var timestampNanoNotAdjustedToUTC = timestampType{
+	IsAdjustedToUTC: false,
+	Unit:            format.TimeUnit{Nanos: new(format.NanoSeconds)},
+}
+
+var timestampMilliAdjustedToUTCLogicalType = format.LogicalType{
+	Timestamp: (*format.TimestampType)(&timestampMilliAdjustedToUTC),
+}
+
+var timestampMicroAdjustedToUTCLogicalType = format.LogicalType{
+	Timestamp: (*format.TimestampType)(&timestampMicroAdjustedToUTC),
+}
+
+var timestampNanoAdjustedToUTCLogicalType = format.LogicalType{
+	Timestamp: (*format.TimestampType)(&timestampNanoAdjustedToUTC),
+}
+
+var timestampMilliNotAdjustedToUTCLogicalType = format.LogicalType{
+	Timestamp: (*format.TimestampType)(&timestampMilliNotAdjustedToUTC),
+}
+
+var timestampMicroNotAdjustedToUTCLogicalType = format.LogicalType{
+	Timestamp: (*format.TimestampType)(&timestampMicroNotAdjustedToUTC),
+}
+
+var timestampNanoNotAdjustedToUTCLogicalType = format.LogicalType{
+	Timestamp: (*format.TimestampType)(&timestampNanoNotAdjustedToUTC),
 }
 
 type timestampType format.TimestampType
@@ -2015,7 +2244,22 @@ func (t *timestampType) ColumnOrder() *format.ColumnOrder { return int64Type{}.C
 func (t *timestampType) PhysicalType() *format.Type { return int64Type{}.PhysicalType() }
 
 func (t *timestampType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{Timestamp: (*format.TimestampType)(t)}
+	switch t {
+	case &timestampMilliAdjustedToUTC:
+		return &timestampMilliAdjustedToUTCLogicalType
+	case &timestampMicroAdjustedToUTC:
+		return &timestampMicroAdjustedToUTCLogicalType
+	case &timestampNanoAdjustedToUTC:
+		return &timestampNanoAdjustedToUTCLogicalType
+	case &timestampMilliNotAdjustedToUTC:
+		return &timestampMilliNotAdjustedToUTCLogicalType
+	case &timestampMicroNotAdjustedToUTC:
+		return &timestampMicroNotAdjustedToUTCLogicalType
+	case &timestampNanoNotAdjustedToUTC:
+		return &timestampNanoNotAdjustedToUTCLogicalType
+	default:
+		return &format.LogicalType{Timestamp: (*format.TimestampType)(t)}
+	}
 }
 
 func (t *timestampType) ConvertedType() *deprecated.ConvertedType {
