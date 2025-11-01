@@ -27,12 +27,6 @@ const (
 	maxUncompressedPageSize = math.MaxInt32
 )
 
-type closerFunc func() error
-
-func (c closerFunc) Close() error {
-	return c()
-}
-
 // GenericWriter is similar to a Writer but uses a type parameter to define the
 // Go type representing the schema of rows being written.
 //
@@ -1290,7 +1284,11 @@ type ColumnWriter struct {
 	columnChunk *format.ColumnChunk
 	offsetIndex *format.OffsetIndex
 
-	closer io.Closer
+	// Pooled buffers used by optional and repeated column buffers that need
+	// to be released when the writer is closed.
+	pooledRowsBuffer             *buffer[int32]
+	pooledRepetitionLevelsBuffer *buffer[byte]
+	pooledDefinitionLevelsBuffer *buffer[byte]
 }
 
 func (c *ColumnWriter) reset() {
@@ -1470,31 +1468,17 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 	case c.maxRepetitionLevel > 0:
 		// Since these buffers are pooled, we can afford to allocate a bit more memory in
 		// order to reduce the risk of needing to resize the buffer.
-		var (
-			size             = int(float64(column.Cap()) * 1.5)
-			repetitionLevels = buffers.get(size)
-			definitionLevels = buffers.get(size)
-		)
-		c.closer = closerFunc(func() error {
-			repetitionLevels.unref()
-			definitionLevels.unref()
-			return nil
-		})
-		column = newRepeatedColumnBuffer(column, repetitionLevels.data[:0], definitionLevels.data[:0], c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
+		size := int(float64(column.Cap()) * 1.5)
+		c.pooledRepetitionLevelsBuffer = buffers.get(size)
+		c.pooledDefinitionLevelsBuffer = buffers.get(size)
+		column = newRepeatedColumnBuffer(column, c.pooledRepetitionLevelsBuffer.data[:0], c.pooledDefinitionLevelsBuffer.data[:0], c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
 	case c.maxDefinitionLevel > 0:
 		// Since these buffers are pooled, we can afford to allocate a bit more memory in
 		// order to reduce the risk of needing to resize the buffer.
-		var (
-			size             = int(float64(column.Cap()) * 1.5)
-			rows             = int32Buffers.get(size)
-			definitionLevels = buffers.get(size)
-		)
-		c.closer = closerFunc(func() error {
-			rows.unref()
-			definitionLevels.unref()
-			return nil
-		})
-		column = newOptionalColumnBuffer(column, rows.data[:0], definitionLevels.data[:0], c.maxDefinitionLevel, nullsGoLast)
+		size := int(float64(column.Cap()) * 1.5)
+		c.pooledRowsBuffer = int32Buffers.get(size)
+		c.pooledDefinitionLevelsBuffer = buffers.get(size)
+		column = newOptionalColumnBuffer(column, c.pooledRowsBuffer.data[:0], c.pooledDefinitionLevelsBuffer.data[:0], c.maxDefinitionLevel, nullsGoLast)
 	}
 	return column
 }
@@ -1535,11 +1519,19 @@ func (c *ColumnWriter) Close() (err error) {
 	if err := c.Flush(); err != nil {
 		return err
 	}
-	if c.closer != nil {
-		if err := c.closer.Close(); err != nil {
-			return err
-		}
-		c.closer = nil
+
+	// Release pooled buffers back to their pools.
+	if c.pooledRowsBuffer != nil {
+		c.pooledRowsBuffer.unref()
+		c.pooledRowsBuffer = nil
+	}
+	if c.pooledRepetitionLevelsBuffer != nil {
+		c.pooledRepetitionLevelsBuffer.unref()
+		c.pooledRepetitionLevelsBuffer = nil
+	}
+	if c.pooledDefinitionLevelsBuffer != nil {
+		c.pooledDefinitionLevelsBuffer.unref()
+		c.pooledDefinitionLevelsBuffer = nil
 	}
 
 	c.columnBuffer = nil
