@@ -2221,6 +2221,8 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 			t.Fatalf("expected 2 rows, got %d", f.NumRows())
 		}
 	})
+}
+
 func TestDictionaryMaxBytes(t *testing.T) {
 	// Test that dictionary encoding switches to PLAIN when size limit is exceeded
 	type Record struct {
