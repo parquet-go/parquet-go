@@ -449,15 +449,15 @@ type offsetMapping struct {
 	baseOffset uint32
 }
 
-func newRepeatedColumnBuffer(base ColumnBuffer, maxRepetitionLevel, maxDefinitionLevel byte, nullOrdering nullOrdering) *repeatedColumnBuffer {
+func newRepeatedColumnBuffer(base ColumnBuffer, repetitionLevels, definitionLevels []byte, maxRepetitionLevel, maxDefinitionLevel byte, nullOrdering nullOrdering) *repeatedColumnBuffer {
 	n := base.Cap()
 	return &repeatedColumnBuffer{
 		base:               base,
 		maxRepetitionLevel: maxRepetitionLevel,
 		maxDefinitionLevel: maxDefinitionLevel,
 		rows:               make([]offsetMapping, 0, n/8),
-		repetitionLevels:   make([]byte, 0, n),
-		definitionLevels:   make([]byte, 0, n),
+		repetitionLevels:   repetitionLevels,
+		definitionLevels:   definitionLevels,
 		nullOrdering:       nullOrdering,
 	}
 }

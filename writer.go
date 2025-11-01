@@ -190,6 +190,10 @@ func (w *GenericWriter[T]) Close() error {
 	if err := w.base.Close(); err != nil {
 		return err
 	}
+	// Nil out the columns slice to allow the column buffers to be garbage
+	// collected and to ensure that any subsequent use of this writer after
+	// Close will result in a clear panic rather than operating on closed
+	// resources.
 	w.columns = nil
 	return nil
 }
@@ -1464,7 +1468,19 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 	column := c.columnType.NewColumnBuffer(int(c.bufferIndex), c.columnType.EstimateNumValues(int(c.bufferSize)))
 	switch {
 	case c.maxRepetitionLevel > 0:
-		column = newRepeatedColumnBuffer(column, c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
+		// Since these buffers are pooled, we can afford to allocate a bit more memory in
+		// order to reduce the risk of needing to resize the buffer.
+		var (
+			size             = int(float64(column.Cap()) * 1.5)
+			repetitionLevels = buffers.get(size)
+			definitionLevels = buffers.get(size)
+		)
+		c.closer = closerFunc(func() error {
+			repetitionLevels.unref()
+			definitionLevels.unref()
+			return nil
+		})
+		column = newRepeatedColumnBuffer(column, repetitionLevels.data[:0], definitionLevels.data[:0], c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
 	case c.maxDefinitionLevel > 0:
 		// Since these buffers are pooled, we can afford to allocate a bit more memory in
 		// order to reduce the risk of needing to resize the buffer.
