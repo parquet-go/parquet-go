@@ -2015,9 +2015,12 @@ func TestWriterWithNestedArray(t *testing.T) {
 
 	values := make([]NestedArrayWithTag, 1)
 
-	_, err := r.Read(values)
-	if err != nil {
+	n, err := r.Read(values)
+	if err != nil && err != io.EOF {
 		t.Fatal(err)
+	}
+	if n != len(values) {
+		t.Fatalf("expected to read %d values, got %d", len(values), n)
 	}
 
 	if !reflect.DeepEqual(expect, values) {

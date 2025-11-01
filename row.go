@@ -718,8 +718,87 @@ func reconstructFuncOfRequired(columnIndex int16, node Node) (int16, reconstruct
 
 func reconstructFuncOfList(columnIndex int16, node Node) (int16, reconstructFunc) {
 	element := listElementOf(node)
-	// For nested arrays (e.g., [][]int), the element is already repeated.
-	// Don't wrap it again to avoid double nesting issues.
+
+	// Special case for nested arrays (e.g., [][]int with list tag):
+	// When the element is both repeated and a leaf, we need to handle two
+	// levels of repetition: the LIST level and the element repetition.
+	if element.Repeated() && element.Leaf() {
+		nextColumnIndex, reconstructLeaf := reconstructFuncOf(columnIndex, Required(element))
+		return nextColumnIndex, func(value reflect.Value, levels levels, columns [][]Value) error {
+			// First repetition level: the LIST container
+			levels.repetitionDepth++
+			levels.definitionLevel++
+
+			if len(columns) == 0 || len(columns[0]) == 0 {
+				setMakeSlice(value, 0)
+				return nil
+			}
+
+			if columns[0][0].definitionLevel < levels.definitionLevel {
+				setMakeSlice(value, 0)
+				return nil
+			}
+
+			// Count outer list elements by checking when repetition level
+			// drops back to the current depth
+			column := columns[0]
+			outerCount := 0
+			i := 0
+			for i < len(column) {
+				// Start of a new outer element
+				outerCount++
+				i++
+				// Skip all values that are part of this outer element
+				// (repetition level > current depth means still in same outer element)
+				for i < len(column) && column[i].repetitionLevel > levels.repetitionDepth {
+					i++
+				}
+			}
+
+			// Create the outer slice
+			value = setMakeSlice(value, outerCount)
+
+			// Second repetition level: the repeated elements within each list item
+			levels.repetitionDepth++
+			levels.definitionLevel++
+
+			// Now reconstruct each outer element as an inner slice
+			i = 0
+			for outerIdx := 0; outerIdx < outerCount; outerIdx++ {
+				innerStart := i
+				innerCount := 0
+
+				// Count inner elements for this outer element
+				for i < len(column) && (i == innerStart || column[i].repetitionLevel > levels.repetitionDepth-1) {
+					if i == innerStart || column[i].repetitionLevel == levels.repetitionDepth {
+						innerCount++
+					}
+					i++
+				}
+
+				// Create inner slice
+				innerSlice := value.Index(outerIdx)
+				innerSlice = setMakeSlice(innerSlice, innerCount)
+				value.Index(outerIdx).Set(innerSlice)
+
+				// Reconstruct each inner element
+				innerIdx := 0
+				for j := innerStart; j < i && innerIdx < innerCount; j++ {
+					if j == innerStart || column[j].repetitionLevel == levels.repetitionDepth {
+						innerElemColumns := [][]Value{{column[j]}}
+						if err := reconstructLeaf(innerSlice.Index(innerIdx), levels, innerElemColumns); err != nil {
+							return err
+						}
+						innerIdx++
+					}
+				}
+			}
+
+			return nil
+		}
+	}
+
+	// For other cases, check if element is already repeated (but not a leaf)
 	if element.Repeated() {
 		return reconstructFuncOf(columnIndex, element)
 	}
