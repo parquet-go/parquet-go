@@ -1987,3 +1987,214 @@ func TestColumnValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDictionaryMaxBytes(t *testing.T) {
+	// Test that dictionary encoding switches to PLAIN when size limit is exceeded
+	type Record struct {
+		Value string `parquet:"value,dict"`
+	}
+
+	// Create records with unique strings to grow the dictionary
+	numRecords := 1000
+	records := make([]Record, numRecords)
+	for i := range numRecords {
+		// Each string is ~50 bytes, so 1000 records = ~50KB
+		records[i].Value = fmt.Sprintf("unique_string_value_%04d_with_padding_to_make_it_longer", i)
+	}
+
+	// Test with a very small dictionary limit (1KB) to trigger the fallback
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](
+		buf,
+		parquet.DictionaryMaxBytes(1024), // 1KB limit
+	)
+
+	// Write records - should trigger dictionary to PLAIN conversion
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Verify we can read the data back correctly
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, numRecords)
+	n, err := reader.Read(readRecords)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+	if n != numRecords {
+		t.Fatalf("expected to read %d records, got %d", numRecords, n)
+	}
+
+	// Verify data integrity
+	for i := range numRecords {
+		if readRecords[i].Value != records[i].Value {
+			t.Errorf("record %d: expected %q, got %q", i, records[i].Value, readRecords[i].Value)
+		}
+	}
+}
+
+func TestDictionaryMaxBytesUnlimited(t *testing.T) {
+	// Test that unlimited (default) dictionary size works correctly
+	type Record struct {
+		Value string `parquet:"value,dict"`
+	}
+
+	records := make([]Record, 100)
+	for i := range 100 {
+		records[i].Value = fmt.Sprintf("value_%d", i)
+	}
+
+	buf := new(bytes.Buffer)
+	// No DictionaryMaxBytes option = unlimited
+	writer := parquet.NewGenericWriter[Record](buf)
+
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Verify readability
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, 100)
+	n, err := reader.Read(readRecords)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+	if n != 100 {
+		t.Fatalf("expected to read 100 records, got %d", n)
+	}
+}
+
+func TestDictionaryMaxBytesPerColumn(t *testing.T) {
+	// Test that dictionary limit is per-column, not global
+	type Record struct {
+		SmallColumn string `parquet:"small_column,dict"`
+		LargeColumn string `parquet:"large_column,dict"`
+	}
+
+	numRecords := 500
+	records := make([]Record, numRecords)
+	for i := range numRecords {
+		// Small column has small strings (stays under limit)
+		records[i].SmallColumn = fmt.Sprintf("s%d", i%10) // Only 10 unique values
+		// Large column has large unique strings (exceeds limit)
+		records[i].LargeColumn = fmt.Sprintf("large_unique_string_value_%04d_with_lots_of_padding", i)
+	}
+
+	buf := new(bytes.Buffer)
+	// Set limit to 2KB - small column should stay dict-encoded, large should switch to PLAIN
+	writer := parquet.NewGenericWriter[Record](
+		buf,
+		parquet.DictionaryMaxBytes(2048),
+	)
+
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Verify we can read all data back correctly
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, numRecords)
+	n, err := reader.Read(readRecords)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+	if n != numRecords {
+		t.Fatalf("expected to read %d records, got %d", numRecords, n)
+	}
+
+	// Verify data integrity
+	for i := range numRecords {
+		if readRecords[i].SmallColumn != records[i].SmallColumn {
+			t.Errorf("record %d small_column: expected %q, got %q", i, records[i].SmallColumn, readRecords[i].SmallColumn)
+		}
+		if readRecords[i].LargeColumn != records[i].LargeColumn {
+			t.Errorf("record %d large_column: expected %q, got %q", i, records[i].LargeColumn, readRecords[i].LargeColumn)
+		}
+	}
+}
+
+func TestDictionaryMaxBytesMultipleRowGroups(t *testing.T) {
+	// Test that dictionary encoding works across multiple writes
+	// (simulating multiple row groups being written)
+	type Record struct {
+		Value string `parquet:"value,dict"`
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](
+		buf,
+		parquet.DictionaryMaxBytes(1024), // Small limit to trigger fallback
+	)
+
+	// Write in two batches - this tests that if the first batch triggers
+	// dictionary-to-plain conversion, subsequent writes still work
+	batch1 := make([]Record, 100)
+	for i := range 100 {
+		// Large unique strings that will exceed dictionary limit
+		batch1[i].Value = fmt.Sprintf("batch_1_unique_value_%04d_with_lots_of_padding", i)
+	}
+
+	if _, err := writer.Write(batch1); err != nil {
+		t.Fatalf("failed to write batch 1: %v", err)
+	}
+
+	batch2 := make([]Record, 100)
+	for i := range 100 {
+		// More large unique strings
+		batch2[i].Value = fmt.Sprintf("batch_2_unique_value_%04d_with_lots_of_padding", i)
+	}
+
+	if _, err := writer.Write(batch2); err != nil {
+		t.Fatalf("failed to write batch 2: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Verify all data can be read back correctly
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	totalRecords := 200
+	readRecords := make([]Record, totalRecords)
+	n, err := reader.Read(readRecords)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+	if n != totalRecords {
+		t.Fatalf("expected to read %d records, got %d", totalRecords, n)
+	}
+
+	// Verify data integrity
+	for i := range 100 {
+		expected := fmt.Sprintf("batch_1_unique_value_%04d_with_lots_of_padding", i)
+		if readRecords[i].Value != expected {
+			t.Errorf("record %d: expected %q, got %q", i, expected, readRecords[i].Value)
+		}
+	}
+	for i := range 100 {
+		expected := fmt.Sprintf("batch_2_unique_value_%04d_with_lots_of_padding", i)
+		if readRecords[100+i].Value != expected {
+			t.Errorf("record %d: expected %q, got %q", 100+i, expected, readRecords[100+i].Value)
+		}
+	}
+}
