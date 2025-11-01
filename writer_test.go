@@ -1967,10 +1967,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 		buf := new(bytes.Buffer)
 		writer := parquet.NewGenericWriter[Row](buf, parquet.MaxRowsPerRowGroup(100))
 
-		rg, err := writer.BeginRowGroup()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rg := writer.BeginRowGroup()
 
 		rows := []parquet.Row{
 			{parquet.ValueOf(1).Level(0, 0, 0), parquet.ValueOf("test").Level(0, 0, 1)},
@@ -2010,14 +2007,11 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 		writer := parquet.NewGenericWriter[Row](buf, parquet.MaxRowsPerRowGroup(10))
 
 		const numGroups = 5
-		rgs := make([]*parquet.ConcurrentRowGroupWriter, numGroups)
+		rgs := make([]parquet.ConcurrentRowGroupWriter, numGroups)
 
 		// Create row groups sequentially
 		for i := range rgs {
-			rg, err := writer.BeginRowGroup()
-			if err != nil {
-				t.Fatal(err)
-			}
+			rg := writer.BeginRowGroup()
 			rgs[i] = rg
 
 			// Write data to this row group
@@ -2074,14 +2068,11 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 		writer := parquet.NewGenericWriter[Row](buf, parquet.MaxRowsPerRowGroup(10))
 
 		const numGroups = 5
-		rgs := make([]*parquet.ConcurrentRowGroupWriter, numGroups)
+		rgs := make([]parquet.ConcurrentRowGroupWriter, numGroups)
 
 		// Create all row groups
 		for i := range rgs {
-			rg, err := writer.BeginRowGroup()
-			if err != nil {
-				t.Fatal(err)
-			}
+			rg := writer.BeginRowGroup()
 			rgs[i] = rg
 		}
 
@@ -2090,7 +2081,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 		errs := make([]error, numGroups)
 		for i := range rgs {
 			wg.Add(1)
-			go func(index int, rg *parquet.ConcurrentRowGroupWriter) {
+			go func(index int, rg parquet.ConcurrentRowGroupWriter) {
 				defer wg.Done()
 				for j := range 10 {
 					rows := []parquet.Row{
@@ -2167,10 +2158,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 		}
 
 		// Create and write to a row group
-		rg, err := writer.BeginRowGroup()
-		if err != nil {
-			t.Fatal(err)
-		}
+		rg := writer.BeginRowGroup()
 
 		rows := []parquet.Row{
 			{parquet.ValueOf(2).Level(0, 0, 0), parquet.ValueOf("rg1").Level(0, 0, 1)},

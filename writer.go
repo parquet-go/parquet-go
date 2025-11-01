@@ -194,14 +194,15 @@ func (w *GenericWriter[T]) Reset(output io.Writer) {
 
 func (w *GenericWriter[T]) Write(rows []T) (written int, err error) {
 	var n int
+	currentRowGroup := w.base.writer.currentRowGroup
 	for len(rows) > 0 {
-		n, err = w.base.writer.currentRowGroup.writeRows(len(rows), func(i, j int) (int, error) {
+		n, err = currentRowGroup.writeRows(len(rows), func(i, j int) (int, error) {
 			n, err := w.write(w, rows[i:j:j])
 			if err != nil {
 				return n, err
 			}
 
-			for _, c := range w.base.writer.currentRowGroup.columns {
+			for _, c := range currentRowGroup.columns {
 				if c.columnBuffer.Size() >= int64(c.bufferSize) {
 					if err := c.Flush(); err != nil {
 						return n, err
@@ -288,6 +289,20 @@ func (w *GenericWriter[T]) File() FileView {
 	return w.base.File()
 }
 
+// ConcurrentRowGroupWriter is a row group writer that can be used to write row groups
+// in parallel with other row groups. However, they must be committed back to the writer
+// serially using CommitRowGroup.
+//
+// See BeginRowGroup for more information on how this can be used.
+//
+// While multiple row groups can be created concurrently, a single row group must be created
+// sequentially.
+type ConcurrentRowGroupWriter interface {
+	RowWriterWithSchema
+	Flush() error
+	ColumnWriters() []*ColumnWriter
+}
+
 // BeginRowGroup returns a new ConcurrentRowGroupWriter that can be written to in parallel with
 // other row groups. However these need to be committed back to the writer serially using
 // CommitRowGroup.
@@ -295,10 +310,10 @@ func (w *GenericWriter[T]) File() FileView {
 // Example usage could look something like:
 //
 //	writer := parquet.NewGenericWriter[any](...)
-//	rgs := make([]*parquet.ConcurrentRowGroupWriter, 5)
+//	rgs := make([]parquet.ConcurrentRowGroupWriter, 5)
 //	var wg sync.WaitGroup
 //	for i := range rgs {
-//	  rg, _ := writer.BeginRowGroup()
+//	  rg := writer.BeginRowGroup()
 //	  rgs[i] = rg
 //	  wg.Add(1)
 //	  go func() {
@@ -313,10 +328,8 @@ func (w *GenericWriter[T]) File() FileView {
 //	  }
 //	}
 //	return writer.Close()
-func (w *GenericWriter[T]) BeginRowGroup() (*ConcurrentRowGroupWriter, error) {
-	return &ConcurrentRowGroupWriter{
-		rowGroup: newWriterRowGroup(w.base.config),
-	}, nil
+func (w *GenericWriter[T]) BeginRowGroup() ConcurrentRowGroupWriter {
+	return newWriterRowGroup(w.base.config)
 }
 
 // CommitRowGroup commits rgw to w, returning the number of rows written and an error if any.
@@ -324,42 +337,15 @@ func (w *GenericWriter[T]) BeginRowGroup() (*ConcurrentRowGroupWriter, error) {
 // If the writer has any pending rows buffered, then they will be flushed before rgw is written.
 //
 // After the method returns successfully, the rgw will be empty and able to be reused.
-func (w *GenericWriter[T]) CommitRowGroup(rgw *ConcurrentRowGroupWriter) (int64, error) {
+func (w *GenericWriter[T]) CommitRowGroup(rgw ConcurrentRowGroupWriter) (int64, error) {
 	if err := w.Flush(); err != nil {
 		return 0, err
 	}
-	return w.base.writer.writeRowGroup(rgw.rowGroup, nil, nil)
-}
-
-// ConcurrentRowGroupWriter is able to create a row group separately from a writer, meaning
-// that creation of a large parquet file can happen in parallel between row groups.
-//
-// See (w *GenericWriter[T]) BeginRowGroup for more information on how this struct can be used.
-//
-// While multiple row groups can be created concurrently, a single row group must be created
-// sequentially.
-type ConcurrentRowGroupWriter struct {
-	rowGroup *writerRowGroup
-}
-
-// WriteRows is called to write rows to the parquet file.
-//
-// The row is expected to contain values for each column of the writer's schema,
-// in the order produced by the parquet.(*Schema).Deconstruct method.
-func (w *ConcurrentRowGroupWriter) WriteRows(rows []Row) (int, error) {
-	return w.rowGroup.WriteRows(rows)
-}
-
-// ColumnWriters returns writers for each column. This allows applications to
-// write values directly to each column instead of having to first assemble
-// values into rows to use WriteRows.
-func (w *ConcurrentRowGroupWriter) ColumnWriters() []*ColumnWriter {
-	return w.rowGroup.columns
-}
-
-// Schema returns the schema this row group writer is configured with.
-func (w *ConcurrentRowGroupWriter) Schema() *Schema {
-	return w.rowGroup.config.Schema
+	rg, ok := rgw.(*writerRowGroup)
+	if !ok {
+		return 0, fmt.Errorf("invalid row group writer type")
+	}
+	return w.base.writer.writeRowGroup(rg, nil, nil)
 }
 
 var (
@@ -375,7 +361,7 @@ var (
 	_ RowReaderFrom       = (*GenericWriter[map[struct{}]struct{}])(nil)
 	_ RowGroupWriter      = (*GenericWriter[map[struct{}]struct{}])(nil)
 
-	_ RowWriterWithSchema = (*ConcurrentRowGroupWriter)(nil)
+	_ ConcurrentRowGroupWriter = (*writerRowGroup)(nil)
 )
 
 // Deprecated: A Writer uses a parquet schema and sequence of Go values to
@@ -603,18 +589,20 @@ func (w *Writer) ColumnWriters() []*ColumnWriter { return w.writer.currentRowGro
 // BeginRowGroup returns a new ConcurrentRowGroupWriter that can be written to in parallel with
 // other row groups. However these need to be committed back to the writer serially using
 // CommitRowGroup.
-func (w *Writer) BeginRowGroup() (*ConcurrentRowGroupWriter, error) {
-	return &ConcurrentRowGroupWriter{
-		rowGroup: newWriterRowGroup(w.config),
-	}, nil
+func (w *Writer) BeginRowGroup() ConcurrentRowGroupWriter {
+	return newWriterRowGroup(w.config)
 }
 
 // CommitRowGroup commits rgw to w, returning the number of rows written and an error if any.
-func (w *Writer) CommitRowGroup(rgw *ConcurrentRowGroupWriter) (int64, error) {
+func (w *Writer) CommitRowGroup(rgw ConcurrentRowGroupWriter) (int64, error) {
 	if err := w.Flush(); err != nil {
 		return 0, err
 	}
-	return w.writer.writeRowGroup(rgw.rowGroup, nil, nil)
+	rg, ok := rgw.(*writerRowGroup)
+	if !ok {
+		return 0, fmt.Errorf("invalid row group writer type")
+	}
+	return w.writer.writeRowGroup(rg, nil, nil)
 }
 
 type writerFileView struct {
@@ -824,6 +812,23 @@ func (rg *writerRowGroup) configureBloomFilters(columnChunks []ColumnChunk) {
 			c.resizeBloomFilter(columnChunks[i].NumValues())
 		}
 	}
+}
+
+func (rg *writerRowGroup) Schema() *Schema {
+	return rg.config.Schema
+}
+
+func (rg *writerRowGroup) ColumnWriters() []*ColumnWriter {
+	return rg.columns
+}
+
+func (rg *writerRowGroup) Flush() error {
+	for _, c := range rg.columns {
+		if err := c.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (rg *writerRowGroup) WriteRows(rows []Row) (int, error) {
