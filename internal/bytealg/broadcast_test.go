@@ -35,7 +35,7 @@ func BenchmarkBroadcast(b *testing.B) {
 		b.Run(fmt.Sprintf("size=%d", size), func(b *testing.B) {
 			data := make([]byte, size)
 
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				bytealg.Broadcast(data, 1)
 			}
 

@@ -117,7 +117,7 @@ func BenchmarkFilterInsertBulk(b *testing.B) {
 		x[i] = r.Uint64()
 	}
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		f.InsertBulk(x)
 	}
 
@@ -126,7 +126,7 @@ func BenchmarkFilterInsertBulk(b *testing.B) {
 
 func BenchmarkFilterInsert(b *testing.B) {
 	f := make(bloom.SplitBlockFilter, 1)
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		f.Insert(uint64(i))
 	}
 	b.SetBytes(bloom.BlockSize)
@@ -135,7 +135,7 @@ func BenchmarkFilterInsert(b *testing.B) {
 func BenchmarkFilterCheck(b *testing.B) {
 	f := make(bloom.SplitBlockFilter, 1)
 	f.Insert(42)
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		f.Check(42)
 	}
 	b.SetBytes(bloom.BlockSize)

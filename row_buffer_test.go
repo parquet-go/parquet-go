@@ -288,9 +288,8 @@ func BenchmarkSortRowBuffer(b *testing.B) {
 	}
 
 	buffer.Write(rows)
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for range 10 {
 			buffer.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
 		}
@@ -338,9 +337,7 @@ func BenchmarkMergeRowBuffers(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		rows := merge.Rows()
 		_, err := parquet.CopyRows(discardRows{}, rows)
 		rows.Close()

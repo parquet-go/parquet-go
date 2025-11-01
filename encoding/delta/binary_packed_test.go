@@ -149,7 +149,7 @@ func BenchmarkBlockDeltaInt32(b *testing.B) {
 func benchmarkBlockDeltaInt32(b *testing.B, f func(*[blockSize]int32, int32) int32) {
 	b.SetBytes(4 * blockSize)
 	block := [blockSize]int32{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = f(&block, 0)
 	}
 }
@@ -161,7 +161,7 @@ func BenchmarkBlockMinInt32(b *testing.B) {
 func benchmarkBlockMinInt32(b *testing.B, f func(*[blockSize]int32) int32) {
 	b.SetBytes(4 * blockSize)
 	block := [blockSize]int32{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = f(&block)
 	}
 }
@@ -173,7 +173,7 @@ func BenchmarkBlockSubInt32(b *testing.B) {
 func benchmarkBlockSubInt32(b *testing.B, f func(*[blockSize]int32, int32)) {
 	b.SetBytes(4 * blockSize)
 	block := [blockSize]int32{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		f(&block, 42)
 	}
 }
@@ -186,7 +186,7 @@ func benchmarkBlockBitWidthsInt32(b *testing.B, f func(*[numMiniBlocks]byte, *[b
 	b.SetBytes(4 * blockSize)
 	bitWidths := [numMiniBlocks]byte{}
 	block := [blockSize]int32{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		f(&bitWidths, &block)
 	}
 }
@@ -201,7 +201,7 @@ func benchmarkEncodeMiniBlockInt32(b *testing.B, f func([]byte, *[miniBlockSize]
 			b.SetBytes(4 * miniBlockSize)
 			dst := [4*miniBlockSize + 32]byte{}
 			src := [miniBlockSize]int32{}
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				f(dst[:], &src, bitWidth)
 			}
 		})
@@ -328,7 +328,7 @@ func BenchmarkBlockDeltaInt64(b *testing.B) {
 func benchmarkBlockDeltaInt64(b *testing.B, f func(*[blockSize]int64, int64) int64) {
 	b.SetBytes(8 * blockSize)
 	block := [blockSize]int64{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = f(&block, 0)
 	}
 }
@@ -340,7 +340,7 @@ func BenchmarkBlockMinInt64(b *testing.B) {
 func benchmarkBlockMinInt64(b *testing.B, f func(*[blockSize]int64) int64) {
 	b.SetBytes(8 * blockSize)
 	block := [blockSize]int64{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = f(&block)
 	}
 }
@@ -352,7 +352,7 @@ func BenchmarkBlockSubInt64(b *testing.B) {
 func benchmarkBlockSubInt64(b *testing.B, f func(*[blockSize]int64, int64)) {
 	b.SetBytes(8 * blockSize)
 	block := [blockSize]int64{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		f(&block, 42)
 	}
 }
@@ -365,7 +365,7 @@ func benchmarkBlockBitWidthsInt64(b *testing.B, f func(*[numMiniBlocks]byte, *[b
 	b.SetBytes(8 * blockSize)
 	bitWidths := [numMiniBlocks]byte{}
 	block := [blockSize]int64{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		f(&bitWidths, &block)
 	}
 }
@@ -380,7 +380,7 @@ func benchmarkEncodeMiniBlockInt64(b *testing.B, f func([]byte, *[miniBlockSize]
 			b.SetBytes(8 * miniBlockSize)
 			dst := [8*miniBlockSize + 64]byte{}
 			src := [miniBlockSize]int64{}
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				f(dst[:], &src, bitWidth)
 			}
 		})

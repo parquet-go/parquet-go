@@ -27,6 +27,7 @@ jobs:
         run: |
           cd tempo
           go mod edit -replace github.com/parquet-go/parquet-go=${{ github.workspace }}
+          go mod tidy
           go mod vendor
       - name: Run critical Tempo tests
         run: |

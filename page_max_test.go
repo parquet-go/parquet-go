@@ -161,7 +161,7 @@ func BenchmarkMaxInt32(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Int31()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			maxInt32(values)
 		}
 	})
@@ -174,7 +174,7 @@ func BenchmarkMaxInt64(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Int63()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			maxInt64(values)
 		}
 	})
@@ -187,7 +187,7 @@ func BenchmarkMaxUint32(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Uint32()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			maxUint32(values)
 		}
 	})
@@ -200,7 +200,7 @@ func BenchmarkMaxUint64(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Uint64()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			maxUint64(values)
 		}
 	})
@@ -213,7 +213,7 @@ func BenchmarkMaxFloat32(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Float32()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			maxFloat32(values)
 		}
 	})
@@ -226,7 +226,7 @@ func BenchmarkMaxFloat64(b *testing.B) {
 		for i := range values {
 			values[i] = prng.Float64()
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			maxFloat64(values)
 		}
 	})
@@ -239,7 +239,7 @@ func BenchmarkMaxBE128(b *testing.B) {
 		for i := range values {
 			prng.Read(values[i][:])
 		}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			maxBE128(values)
 		}
 	})
@@ -250,7 +250,7 @@ func BenchmarkMaxFixedLenByteArray(b *testing.B) {
 		values := make([]byte, bufferSize)
 		prng := rand.New(rand.NewSource(1))
 		prng.Read(values)
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			maxFixedLenByteArray(values, 32)
 		}
 	})

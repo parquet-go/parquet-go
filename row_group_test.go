@@ -231,8 +231,7 @@ func BenchmarkReadModeAsync(b *testing.B) {
 	rows := rowGroups[0].Rows()
 	defer rows.Close()
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		n, err := rows.ReadRows(rbuf)
 		if err != nil {
 			if err == io.EOF {

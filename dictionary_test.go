@@ -186,7 +186,7 @@ func BenchmarkDictionary(b *testing.B) {
 					b.Run(fmt.Sprintf("%s/N=%d", typ, numValues), func(b *testing.B) {
 						start := time.Now()
 
-						for i := 0; i < b.N; i++ {
+						for b.Loop() {
 							test.test(dict, indexes, values)
 						}
 
