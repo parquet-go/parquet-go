@@ -2005,6 +2005,52 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsF
 		return writeRowsFuncOfJSON(t, schema, path)
 	}
 
+	// Special case for nested arrays with list tag (e.g., [][]int):
+	// If we have a Go slice of non-slice elements (e.g., []int but not [][]int)
+	// and the schema at this path is a repeated leaf, the slice represents the
+	// repetition dimension of the schema, so we write elements directly as repeated values.
+	if t.Kind() == reflect.Slice && t.Elem().Kind() != reflect.Uint8 && t.Elem().Kind() != reflect.Slice {
+		if leaf, exists := schema.Lookup(path...); exists && leaf.Node.Repeated() && leaf.Node.Leaf() {
+			// The Go slice maps to the schema's repetition dimension.
+			// Write elements directly as repeated values.
+			elemType := t.Elem()
+			elemSize := uintptr(elemType.Size())
+			writeRows := writeRowsFuncOfRequired(elemType, schema, path)
+
+			return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+				if rows.Len() == 0 {
+					return writeRows(columns, rows, levels)
+				}
+
+				levels.repetitionDepth++
+				levels.definitionLevel++
+
+				for i := range rows.Len() {
+					p := (*sliceHeader)(rows.Index(i))
+					a := makeArray(p.base, p.len, elemSize)
+
+					if a.Len() > 0 {
+						// Write first element
+						if err := writeRows(columns, a.Slice(0, 1), levels); err != nil {
+							return err
+						}
+
+						// Write remaining elements with repetition level
+						if a.Len() > 1 {
+							elemLevels := levels
+							elemLevels.repetitionLevel = elemLevels.repetitionDepth
+							if err := writeRows(columns, a.Slice(1, a.Len()), elemLevels); err != nil {
+								return err
+							}
+						}
+					}
+				}
+
+				return nil
+			}
+		}
+	}
+
 	switch t {
 	case reflect.TypeOf(deprecated.Int96{}):
 		return writeRowsFuncOfRequired(t, schema, path)

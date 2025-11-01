@@ -486,7 +486,13 @@ func deconstructFuncOfRequired(columnIndex int16, node Node) (int16, deconstruct
 }
 
 func deconstructFuncOfList(columnIndex int16, node Node) (int16, deconstructFunc) {
-	return deconstructFuncOf(columnIndex, Repeated(listElementOf(node)))
+	element := listElementOf(node)
+	// For nested arrays (e.g., [][]int), the element is already repeated.
+	// Don't wrap it again to avoid double nesting issues.
+	if element.Repeated() {
+		return deconstructFuncOf(columnIndex, element)
+	}
+	return deconstructFuncOf(columnIndex, Repeated(element))
 }
 
 //go:noinline
@@ -711,7 +717,13 @@ func reconstructFuncOfRequired(columnIndex int16, node Node) (int16, reconstruct
 }
 
 func reconstructFuncOfList(columnIndex int16, node Node) (int16, reconstructFunc) {
-	return reconstructFuncOf(columnIndex, Repeated(listElementOf(node)))
+	element := listElementOf(node)
+	// For nested arrays (e.g., [][]int), the element is already repeated.
+	// Don't wrap it again to avoid double nesting issues.
+	if element.Repeated() {
+		return reconstructFuncOf(columnIndex, element)
+	}
+	return reconstructFuncOf(columnIndex, Repeated(element))
 }
 
 //go:noinline
