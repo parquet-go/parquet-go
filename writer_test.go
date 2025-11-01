@@ -475,7 +475,6 @@ func TestIssueSegmentio302(t *testing.T) {
 
 				b := new(bytes.Buffer)
 				_ = parquet.NewGenericWriter[T](b)
-
 			},
 		},
 
@@ -490,7 +489,6 @@ func TestIssueSegmentio302(t *testing.T) {
 
 				b := new(bytes.Buffer)
 				_ = parquet.NewGenericWriter[T](b)
-
 			},
 		},
 

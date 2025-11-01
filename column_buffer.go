@@ -981,7 +981,6 @@ func (col *int32ColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
 	n := len(col.values)
 	col.values = col.values[:n+rows.Len()]
 	sparse.GatherInt32(col.values[n:], rows.Int32Array())
-
 }
 
 func (col *int32ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
@@ -2000,16 +1999,16 @@ type writeRowsFunc func(columns []ColumnBuffer, rows sparse.Array, levels column
 // writeRowsFuncOf generates a writeRowsFunc function for the given Go type and
 // parquet schema. The column path indicates the column that the function is
 // being generated for in the parquet schema.
-func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	if leaf, exists := schema.Lookup(path...); exists && leaf.Node.Type().LogicalType() != nil && leaf.Node.Type().LogicalType().Json != nil {
-		return writeRowsFuncOfJSON(t, schema, path)
+		return writeRowsFuncOfJSON(t, schema, path, tagReplacements)
 	}
 
 	switch t {
 	case reflect.TypeOf(deprecated.Int96{}):
-		return writeRowsFuncOfRequired(t, schema, path)
+		return writeRowsFuncOfRequired(t, schema, path, tagReplacements)
 	case reflect.TypeOf(time.Time{}):
-		return writeRowsFuncOfTime(t, schema, path)
+		return writeRowsFuncOfTime(t, schema, path, tagReplacements)
 	}
 
 	switch t.Kind() {
@@ -2023,34 +2022,34 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsF
 		reflect.Float32,
 		reflect.Float64,
 		reflect.String:
-		return writeRowsFuncOfRequired(t, schema, path)
+		return writeRowsFuncOfRequired(t, schema, path, tagReplacements)
 
 	case reflect.Slice:
 		if t.Elem().Kind() == reflect.Uint8 {
-			return writeRowsFuncOfRequired(t, schema, path)
+			return writeRowsFuncOfRequired(t, schema, path, tagReplacements)
 		} else {
-			return writeRowsFuncOfSlice(t, schema, path)
+			return writeRowsFuncOfSlice(t, schema, path, tagReplacements)
 		}
 
 	case reflect.Array:
 		if t.Elem().Kind() == reflect.Uint8 {
-			return writeRowsFuncOfArray(t, schema, path)
+			return writeRowsFuncOfArray(t, schema, path, tagReplacements)
 		}
 
 	case reflect.Pointer:
-		return writeRowsFuncOfPointer(t, schema, path)
+		return writeRowsFuncOfPointer(t, schema, path, tagReplacements)
 
 	case reflect.Struct:
-		return writeRowsFuncOfStruct(t, schema, path)
+		return writeRowsFuncOfStruct(t, schema, path, tagReplacements)
 
 	case reflect.Map:
-		return writeRowsFuncOfMap(t, schema, path)
+		return writeRowsFuncOfMap(t, schema, path, tagReplacements)
 	}
 
 	panic("cannot convert Go values of type " + typeNameOf(t) + " to parquet value")
 }
 
-func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := column.columnIndex
 	if columnIndex < 0 {
@@ -2170,20 +2169,20 @@ func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, wr
 	}
 }
 
-func writeRowsFuncOfArray(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfArray(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	arrayLen := t.Len()
 	columnLen := column.node.Type().Length()
 	if arrayLen != columnLen {
 		panic(fmt.Sprintf("cannot convert Go values of type "+typeNameOf(t)+" to FIXED_LEN_BYTE_ARRAY(%d)", columnLen))
 	}
-	return writeRowsFuncOfRequired(t, schema, path)
+	return writeRowsFuncOfRequired(t, schema, path, tagReplacements)
 }
 
-func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	elemType := t.Elem()
 	elemSize := uintptr(elemType.Size())
-	writeRows := writeRowsFuncOf(elemType, schema, path)
+	writeRows := writeRowsFuncOf(elemType, schema, path, tagReplacements)
 
 	if len(path) == 0 {
 		// This code path is taken when generating a writeRowsFunc for a pointer
@@ -2232,10 +2231,10 @@ func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath) wri
 	}
 }
 
-func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	elemType := t.Elem()
 	elemSize := uintptr(elemType.Size())
-	writeRows := writeRowsFuncOf(elemType, schema, path)
+	writeRows := writeRowsFuncOf(elemType, schema, path, tagReplacements)
 
 	// When the element is a pointer type, the writeRows function will be an
 	// instance returned by writeRowsFuncOfPointer, which handles incrementing
@@ -2280,19 +2279,19 @@ func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath) write
 	}
 }
 
-func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	type column struct {
 		offset    uintptr
 		writeRows writeRowsFunc
 	}
 
-	fields := structFieldsOf(t)
+	fields, tags := structFieldsOf(path, t, tagReplacements)
 	columns := make([]column, len(fields))
 
 	for i, f := range fields {
 		list, optional := false, false
 		columnPath := path.append(f.Name)
-		forEachStructTagOption(f, func(_ reflect.Type, option, _ string) {
+		forEachStructTagOption(f, tags[i], func(_ reflect.Type, option, _ string) {
 			switch option {
 			case "list":
 				list = true
@@ -2302,7 +2301,7 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 			}
 		})
 
-		writeRows := writeRowsFuncOf(f.Type, schema, columnPath)
+		writeRows := writeRowsFuncOf(f.Type, schema, columnPath, tagReplacements)
 		if optional {
 			kind := f.Type.Kind()
 			switch {
@@ -2349,7 +2348,7 @@ var (
 // writeRowsFuncOfMapToGroup handles writing a Go map to a Parquet GROUP schema
 // (as opposed to a MAP logical type). This allows map[string]T to be written
 // to schemas with named optional fields.
-func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, groupNode Node) writeRowsFunc {
+func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, groupNode Node, tagReplacements []StructTagOption) writeRowsFunc {
 	if t.Key().Kind() != reflect.String {
 		panic("map keys must be strings when writing to GROUP schema")
 	}
@@ -2377,7 +2376,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 
 			// For interface{} types, create a write function based on the SCHEMA type
 			// This will be used when writing null values
-			writeNull := writeRowsFuncOfSchemaNode(fieldNode, schema, fieldPath, field)
+			writeNull := writeRowsFuncOfSchemaNode(fieldNode, schema, fieldPath, field, tagReplacements)
 
 			// Capture variables for the closure
 			writeValue := func(columns []ColumnBuffer, mapValue reflect.Value, levels columnLevels) error {
@@ -2394,7 +2393,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 				if actualValueKind == reflect.Pointer {
 					actualValue = actualValue.Elem()
 				}
-				return writeInterfaceValue(columns, actualValue, field, schema, fieldPath, levels)
+				return writeInterfaceValue(columns, actualValue, field, schema, fieldPath, levels, tagReplacements)
 			}
 
 			writers[i] = fieldWriter{
@@ -2410,7 +2409,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 			fieldPath := path.append(field.Name())
 
 			// For concrete types, we can pre-create the write function
-			writeRows := writeRowsFuncOf(valueType, schema, fieldPath)
+			writeRows := writeRowsFuncOf(valueType, schema, fieldPath, tagReplacements)
 
 			// Check if the field is optional
 			if field.Optional() {
@@ -2535,7 +2534,7 @@ var stringArrayPool sync.Pool // *stringArray
 // writeRowsFuncOfSchemaNode creates a write function based on the schema node type
 // rather than a Go type. This is used for interface{} values where we need to write
 // nulls based on the schema structure.
-func writeRowsFuncOfSchemaNode(node Node, schema *Schema, path columnPath, field Node) writeRowsFunc {
+func writeRowsFuncOfSchemaNode(node Node, schema *Schema, path columnPath, field Node, tagReplacements []StructTagOption) writeRowsFunc {
 	if node == nil {
 		panic(fmt.Sprintf("schema node not found at path: %v", path))
 	}
@@ -2579,7 +2578,7 @@ func writeRowsFuncOfSchemaNode(node Node, schema *Schema, path columnPath, field
 		childPath := path.append(childField.Name())
 		childNode := findByPath(schema, childPath)
 		children[i] = childWriter{
-			writeRows: writeRowsFuncOfSchemaNode(childNode, schema, childPath, childField),
+			writeRows: writeRowsFuncOfSchemaNode(childNode, schema, childPath, childField, tagReplacements),
 		}
 	}
 
@@ -2596,7 +2595,7 @@ func writeRowsFuncOfSchemaNode(node Node, schema *Schema, path columnPath, field
 
 // writeInterfaceValue writes an interface{} value at runtime, determining the appropriate
 // write function based on the actual type.
-func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node, schema *Schema, path columnPath, levels columnLevels) error {
+func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node, schema *Schema, path columnPath, levels columnLevels, tagReplacements []StructTagOption) error {
 	actualType := value.Type()
 	schemaCache := schema.lazyLoadCache()
 
@@ -2628,24 +2627,24 @@ func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node
 	return writeRows(columns, valueArray, levels)
 }
 
-func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	// Check if the schema at this path is a MAP or a GROUP.
 	node := findByPath(schema, path)
 	if node != nil && !isMap(node) {
 		// The schema is a GROUP (not a MAP), so we need to handle it differently.
 		// Instead of using key_value structure, we iterate through the GROUP's fields
 		// and look up corresponding map keys.
-		return writeRowsFuncOfMapToGroup(t, schema, path, node)
+		return writeRowsFuncOfMapToGroup(t, schema, path, node, tagReplacements)
 	}
 
 	// Standard MAP logical type handling
 	keyPath := path.append("key_value", "key")
 	keyType := t.Key()
-	writeKeys := writeRowsFuncOf(keyType, schema, keyPath)
+	writeKeys := writeRowsFuncOf(keyType, schema, keyPath, tagReplacements)
 
 	valuePath := path.append("key_value", "value")
 	valueType := t.Elem()
-	writeValues := writeRowsFuncOf(valueType, schema, valuePath)
+	writeValues := writeRowsFuncOf(valueType, schema, valuePath, tagReplacements)
 
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		if rows.Len() == 0 {
@@ -2701,20 +2700,20 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRo
 	}
 }
 
-func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	// If this is a string or a byte array write directly.
 	switch t.Kind() {
 	case reflect.String:
-		return writeRowsFuncOfRequired(t, schema, path)
+		return writeRowsFuncOfRequired(t, schema, path, tagReplacements)
 	case reflect.Slice:
 		if t.Elem().Kind() == reflect.Uint8 {
-			return writeRowsFuncOfRequired(t, schema, path)
+			return writeRowsFuncOfRequired(t, schema, path, tagReplacements)
 		}
 	}
 
 	// Otherwise handle with a json.Marshal
 	asStrT := reflect.TypeOf(string(""))
-	writer := writeRowsFuncOfRequired(asStrT, schema, path)
+	writer := writeRowsFuncOfRequired(asStrT, schema, path, tagReplacements)
 
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		if rows.Len() == 0 {
@@ -2739,10 +2738,10 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 	}
 }
 
-func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	t := reflect.TypeOf(int64(0))
 	elemSize := uintptr(t.Size())
-	writeRows := writeRowsFuncOf(t, schema, path)
+	writeRows := writeRowsFuncOf(t, schema, path, tagReplacements)
 
 	col, _ := schema.Lookup(path...)
 	unit := Nanosecond.TimeUnit()

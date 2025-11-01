@@ -148,7 +148,7 @@ func TestWriteRowsFuncOfRequiredColumnNotFound(t *testing.T) {
 		}
 	}()
 
-	writeRowsFuncOfRequired(reflect.TypeOf(""), schema, columnPath{"nonexistent"})
+	writeRowsFuncOfRequired(reflect.TypeOf(""), schema, columnPath{"nonexistent"}, nil)
 }
 
 // TestMapFieldToGroupSchema tests writing a Go struct with a map[string]string
