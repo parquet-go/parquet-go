@@ -27,6 +27,12 @@ const (
 	maxUncompressedPageSize = math.MaxInt32
 )
 
+type closerFunc func() error
+
+func (c closerFunc) Close() error {
+	return c()
+}
+
 // GenericWriter is similar to a Writer but uses a type parameter to define the
 // Go type representing the schema of rows being written.
 //
@@ -181,7 +187,11 @@ func makeWriteFunc[T any](t reflect.Type, schema *Schema) writeFunc[T] {
 }
 
 func (w *GenericWriter[T]) Close() error {
-	return w.base.Close()
+	if err := w.base.Close(); err != nil {
+		return err
+	}
+	w.columns = nil
+	return nil
 }
 
 func (w *GenericWriter[T]) Flush() error {
@@ -366,6 +376,11 @@ func (w *Writer) configure(schema *Schema) {
 // Close must be called after all values were produced to the writer in order to
 // flush all buffers and write the parquet footer.
 func (w *Writer) Close() error {
+	for _, c := range w.ColumnWriters() {
+		if err := c.Close(); err != nil {
+			return err
+		}
+	}
 	if w.writer != nil {
 		return w.writer.close()
 	}
@@ -1270,6 +1285,8 @@ type ColumnWriter struct {
 
 	columnChunk *format.ColumnChunk
 	offsetIndex *format.OffsetIndex
+
+	closer io.Closer
 }
 
 func (c *ColumnWriter) reset() {
@@ -1388,7 +1405,7 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 		pageReader = rbuf
 	}
 
-	pbuf := (*buffer)(nil)
+	pbuf := (*buffer[byte])(nil)
 	defer func() {
 		if pbuf != nil {
 			pbuf.unref()
@@ -1449,7 +1466,19 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 	case c.maxRepetitionLevel > 0:
 		column = newRepeatedColumnBuffer(column, c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
 	case c.maxDefinitionLevel > 0:
-		column = newOptionalColumnBuffer(column, c.maxDefinitionLevel, nullsGoLast)
+		// Since these buffers are pooled, we can afford to allocate a bit more memory in
+		// order to reduce the risk of needing to resize the buffer.
+		var (
+			size             = int(float64(column.Cap()) * 1.5)
+			rows             = int32Buffers.get(size)
+			definitionLevels = buffers.get(size)
+		)
+		c.closer = closerFunc(func() error {
+			rows.unref()
+			definitionLevels.unref()
+			return nil
+		})
+		column = newOptionalColumnBuffer(column, rows.data[:0], definitionLevels.data[:0], c.maxDefinitionLevel, nullsGoLast)
 	}
 	return column
 }
@@ -1490,6 +1519,13 @@ func (c *ColumnWriter) Close() (err error) {
 	if err := c.Flush(); err != nil {
 		return err
 	}
+	if c.closer != nil {
+		if err := c.closer.Close(); err != nil {
+			return err
+		}
+		c.closer = nil
+	}
+
 	c.columnBuffer = nil
 	return nil
 }
