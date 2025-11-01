@@ -1997,7 +1997,7 @@ func TestDictionaryMaxBytes(t *testing.T) {
 	// Create records with unique strings to grow the dictionary
 	numRecords := 1000
 	records := make([]Record, numRecords)
-	for i := 0; i < numRecords; i++ {
+	for i := range numRecords {
 		// Each string is ~50 bytes, so 1000 records = ~50KB
 		records[i].Value = fmt.Sprintf("unique_string_value_%04d_with_padding_to_make_it_longer", i)
 	}
@@ -2032,7 +2032,7 @@ func TestDictionaryMaxBytes(t *testing.T) {
 	}
 
 	// Verify data integrity
-	for i := 0; i < numRecords; i++ {
+	for i := range numRecords {
 		if readRecords[i].Value != records[i].Value {
 			t.Errorf("record %d: expected %q, got %q", i, records[i].Value, readRecords[i].Value)
 		}
@@ -2046,7 +2046,7 @@ func TestDictionaryMaxBytesUnlimited(t *testing.T) {
 	}
 
 	records := make([]Record, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		records[i].Value = fmt.Sprintf("value_%d", i)
 	}
 
@@ -2085,7 +2085,7 @@ func TestDictionaryMaxBytesPerColumn(t *testing.T) {
 
 	numRecords := 500
 	records := make([]Record, numRecords)
-	for i := 0; i < numRecords; i++ {
+	for i := range numRecords {
 		// Small column has small strings (stays under limit)
 		records[i].SmallColumn = fmt.Sprintf("s%d", i%10) // Only 10 unique values
 		// Large column has large unique strings (exceeds limit)
@@ -2121,7 +2121,7 @@ func TestDictionaryMaxBytesPerColumn(t *testing.T) {
 	}
 
 	// Verify data integrity
-	for i := 0; i < numRecords; i++ {
+	for i := range numRecords {
 		if readRecords[i].SmallColumn != records[i].SmallColumn {
 			t.Errorf("record %d small_column: expected %q, got %q", i, records[i].SmallColumn, readRecords[i].SmallColumn)
 		}
@@ -2147,7 +2147,7 @@ func TestDictionaryMaxBytesMultipleRowGroups(t *testing.T) {
 	// Write in two batches - this tests that if the first batch triggers
 	// dictionary-to-plain conversion, subsequent writes still work
 	batch1 := make([]Record, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		// Large unique strings that will exceed dictionary limit
 		batch1[i].Value = fmt.Sprintf("batch_1_unique_value_%04d_with_lots_of_padding", i)
 	}
@@ -2157,7 +2157,7 @@ func TestDictionaryMaxBytesMultipleRowGroups(t *testing.T) {
 	}
 
 	batch2 := make([]Record, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		// More large unique strings
 		batch2[i].Value = fmt.Sprintf("batch_2_unique_value_%04d_with_lots_of_padding", i)
 	}
@@ -2185,13 +2185,13 @@ func TestDictionaryMaxBytesMultipleRowGroups(t *testing.T) {
 	}
 
 	// Verify data integrity
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		expected := fmt.Sprintf("batch_1_unique_value_%04d_with_lots_of_padding", i)
 		if readRecords[i].Value != expected {
 			t.Errorf("record %d: expected %q, got %q", i, expected, readRecords[i].Value)
 		}
 	}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		expected := fmt.Sprintf("batch_2_unique_value_%04d_with_lots_of_padding", i)
 		if readRecords[100+i].Value != expected {
 			t.Errorf("record %d: expected %q, got %q", 100+i, expected, readRecords[100+i].Value)
