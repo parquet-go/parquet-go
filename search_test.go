@@ -1,6 +1,10 @@
 package parquet_test
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"math/rand"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -84,5 +88,104 @@ func testSearch(t *testing.T, pages [][]int32, expectIndex [][]int) {
 		if values[1] != j {
 			t.Errorf("searching for value %v: got=%d want=%d", v, j, values[1])
 		}
+	}
+}
+
+// TestSearchOverlappingBounds verifies that binary search correctly handles
+// overlapping page bounds that occur when min/max values are truncated due to
+// ColumnIndexSizeLimit. This test reproduces the bug fixed in PR #266.
+func TestSearchOverlappingBounds(t *testing.T) {
+	type Row struct {
+		Value string `parquet:"value"`
+	}
+
+	rows := make([]Row, 10000)
+	for i := range rows {
+		rows[i].Value = fmt.Sprintf("value_super_big_%v", i)
+	}
+
+	prng := rand.New(rand.NewSource(0))
+	prng.Shuffle(len(rows), func(i, j int) {
+		rows[i], rows[j] = rows[j], rows[i]
+	})
+
+	buffer := bytes.NewBuffer(nil)
+	writer := parquet.NewSortingWriter[Row](buffer, 99,
+		parquet.PageBufferSize(100),
+		parquet.MaxRowsPerRowGroup(20000),
+		parquet.ColumnIndexSizeLimit(5),
+		parquet.SortingWriterConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("value"),
+			),
+		),
+	)
+
+	_, err := writer.Write(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := parquet.OpenFile(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(f.RowGroups()) != 1 {
+		t.Fatal("expected 1 row groups")
+	}
+
+	if len(f.RowGroups()[0].ColumnChunks()) != 1 {
+		t.Fatal("expected 1 ColumnChunks")
+	}
+
+	ci, _ := f.RowGroups()[0].ColumnChunks()[0].ColumnIndex()
+	found := parquet.Search(ci, parquet.ValueOf("value_super_big_0"), parquet.ByteArrayType)
+
+	if found >= ci.NumPages() {
+		t.Fatal("expected to find at least one row")
+	}
+
+	offset, err := f.RowGroups()[0].ColumnChunks()[0].OffsetIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowFound := false
+
+	pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+	row := offset.FirstRowIndex(found)
+	err = pages.SeekToRow(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for {
+		page, err := pages.ReadPage()
+		if err == io.EOF {
+			break
+		}
+
+		vr := page.Values()
+		values := [100]parquet.Value{}
+
+		for {
+			n, err := vr.ReadValues(values[:])
+			for _, value := range values[:n] {
+				if value.String() == "value_super_big_0" {
+					rowFound = true
+				}
+			}
+			if err == io.EOF {
+				break
+			}
+		}
+	}
+
+	if !rowFound {
+		t.Fatal("expected to find row")
 	}
 }
