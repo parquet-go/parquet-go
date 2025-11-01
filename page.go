@@ -8,6 +8,7 @@ import (
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/internal/debug"
 )
+
 // Page values represent sequences of parquet values. From the Parquet
 // documentation: "Column chunks are a chunk of the data for a particular
 // column. They live in a particular row group and are guaranteed to be
