@@ -181,7 +181,15 @@ func makeWriteFunc[T any](t reflect.Type, schema *Schema) writeFunc[T] {
 }
 
 func (w *GenericWriter[T]) Close() error {
-	return w.base.Close()
+	if err := w.base.Close(); err != nil {
+		return err
+	}
+	// Nil out the columns slice to allow the column buffers to be garbage
+	// collected and to ensure that any subsequent use of this writer after
+	// Close will result in a clear panic rather than operating on closed
+	// resources.
+	w.columns = nil
+	return nil
 }
 
 func (w *GenericWriter[T]) Flush() error {
@@ -366,6 +374,11 @@ func (w *Writer) configure(schema *Schema) {
 // Close must be called after all values were produced to the writer in order to
 // flush all buffers and write the parquet footer.
 func (w *Writer) Close() error {
+	for _, c := range w.ColumnWriters() {
+		if err := c.Close(); err != nil {
+			return err
+		}
+	}
 	if w.writer != nil {
 		return w.writer.close()
 	}
@@ -1270,6 +1283,12 @@ type ColumnWriter struct {
 
 	columnChunk *format.ColumnChunk
 	offsetIndex *format.OffsetIndex
+
+	// Pooled buffers used by optional and repeated column buffers that need
+	// to be released when the writer is closed.
+	rowsBuffer             *buffer[int32]
+	repetitionLevelsBuffer *buffer[byte]
+	definitionLevelsBuffer *buffer[byte]
 }
 
 func (c *ColumnWriter) reset() {
@@ -1388,7 +1407,7 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 		pageReader = rbuf
 	}
 
-	pbuf := (*buffer)(nil)
+	pbuf := (*buffer[byte])(nil)
 	defer func() {
 		if pbuf != nil {
 			pbuf.unref()
@@ -1447,9 +1466,19 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 	column := c.columnType.NewColumnBuffer(int(c.bufferIndex), c.columnType.EstimateNumValues(int(c.bufferSize)))
 	switch {
 	case c.maxRepetitionLevel > 0:
-		column = newRepeatedColumnBuffer(column, c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
+		// Since these buffers are pooled, we can afford to allocate a bit more memory in
+		// order to reduce the risk of needing to resize the buffer.
+		size := int(float64(column.Cap()) * 1.5)
+		c.repetitionLevelsBuffer = buffers.get(size)
+		c.definitionLevelsBuffer = buffers.get(size)
+		column = newRepeatedColumnBuffer(column, c.repetitionLevelsBuffer.data[:0], c.definitionLevelsBuffer.data[:0], c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
 	case c.maxDefinitionLevel > 0:
-		column = newOptionalColumnBuffer(column, c.maxDefinitionLevel, nullsGoLast)
+		// Since these buffers are pooled, we can afford to allocate a bit more memory in
+		// order to reduce the risk of needing to resize the buffer.
+		size := int(float64(column.Cap()) * 1.5)
+		c.rowsBuffer = int32Buffers.get(size)
+		c.definitionLevelsBuffer = buffers.get(size)
+		column = newOptionalColumnBuffer(column, c.rowsBuffer.data[:0], c.definitionLevelsBuffer.data[:0], c.maxDefinitionLevel, nullsGoLast)
 	}
 	return column
 }
@@ -1490,6 +1519,12 @@ func (c *ColumnWriter) Close() (err error) {
 	if err := c.Flush(); err != nil {
 		return err
 	}
+	bufferUnref(c.rowsBuffer)
+	bufferUnref(c.repetitionLevelsBuffer)
+	bufferUnref(c.definitionLevelsBuffer)
+	c.rowsBuffer = nil
+	c.repetitionLevelsBuffer = nil
+	c.definitionLevelsBuffer = nil
 	c.columnBuffer = nil
 	return nil
 }
