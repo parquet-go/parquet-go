@@ -189,3 +189,163 @@ func TestSearchOverlappingBounds(t *testing.T) {
 		t.Fatal("expected to find row")
 	}
 }
+
+// TestSearchBoundaryValues verifies that binary search correctly handles
+// edge cases including values exactly at the truncation limit, values shorter
+// than the limit, and exact boundary matches (value == min/max).
+func TestSearchBoundaryValues(t *testing.T) {
+	type Row struct {
+		Value string `parquet:"value"`
+	}
+
+	tests := []struct {
+		name         string
+		sizeLimit    int
+		values       []string
+		searchValue  string
+		shouldFind   bool
+		description  string
+	}{
+		{
+			name:        "values at truncation limit",
+			sizeLimit:   5,
+			values:      []string{"aaaaa", "bbbbb", "ccccc", "ddddd", "eeeee"},
+			searchValue: "aaaaa",
+			shouldFind:  true,
+			description: "5-byte values with 5-byte limit (no truncation)",
+		},
+		{
+			name:        "values below truncation limit",
+			sizeLimit:   5,
+			values:      []string{"aaa", "bbb", "ccc", "ddd", "eee"},
+			searchValue: "aaa",
+			shouldFind:  true,
+			description: "3-byte values with 5-byte limit (no truncation)",
+		},
+		{
+			name:        "mixed length values",
+			sizeLimit:   5,
+			values:      []string{"aa", "bbbbb", "cccccccc", "dd", "eeeeeeee"},
+			searchValue: "aa",
+			shouldFind:  true,
+			description: "mix of short, exact, and long values",
+		},
+		{
+			name:        "search for last value",
+			sizeLimit:   5,
+			values:      []string{"value_long_0", "value_long_1", "value_long_2"},
+			searchValue: "value_long_2",
+			shouldFind:  true,
+			description: "search for last value with truncation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := make([]Row, len(tt.values))
+			for i, v := range tt.values {
+				rows[i].Value = v
+			}
+
+			buffer := bytes.NewBuffer(nil)
+			writer := parquet.NewSortingWriter[Row](buffer, 99,
+				parquet.PageBufferSize(100),
+				parquet.MaxRowsPerRowGroup(20000),
+				parquet.ColumnIndexSizeLimit(tt.sizeLimit),
+				parquet.SortingWriterConfig(
+					parquet.SortingColumns(
+						parquet.Ascending("value"),
+					),
+				),
+			)
+
+			_, err := writer.Write(rows)
+			if err != nil {
+				t.Fatalf("%s: write failed: %v", tt.description, err)
+			}
+
+			if err := writer.Close(); err != nil {
+				t.Fatalf("%s: close failed: %v", tt.description, err)
+			}
+
+			f, err := parquet.OpenFile(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+			if err != nil {
+				t.Fatalf("%s: open failed: %v", tt.description, err)
+			}
+
+			if len(f.RowGroups()) == 0 {
+				t.Fatalf("%s: no row groups", tt.description)
+			}
+
+			if len(f.RowGroups()[0].ColumnChunks()) == 0 {
+				t.Fatalf("%s: no column chunks", tt.description)
+			}
+
+			ci, _ := f.RowGroups()[0].ColumnChunks()[0].ColumnIndex()
+			found := parquet.Search(ci, parquet.ValueOf(tt.searchValue), parquet.ByteArrayType)
+
+			if tt.shouldFind && found >= ci.NumPages() {
+				t.Errorf("%s: expected to find value %q but got page index %d >= %d pages",
+					tt.description, tt.searchValue, found, ci.NumPages())
+			}
+
+			if !tt.shouldFind && found < ci.NumPages() {
+				t.Errorf("%s: expected not to find value %q but got page index %d",
+					tt.description, tt.searchValue, found)
+			}
+
+			// Verify we can actually read the value from the found page
+			if tt.shouldFind && found < ci.NumPages() {
+				offset, err := f.RowGroups()[0].ColumnChunks()[0].OffsetIndex()
+				if err != nil {
+					t.Fatalf("%s: offset index failed: %v", tt.description, err)
+				}
+
+				pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+				row := offset.FirstRowIndex(found)
+				err = pages.SeekToRow(row)
+				if err != nil {
+					t.Fatalf("%s: seek failed: %v", tt.description, err)
+				}
+
+				rowFound := false
+				for {
+					page, err := pages.ReadPage()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						t.Fatalf("%s: read page failed: %v", tt.description, err)
+					}
+
+					vr := page.Values()
+					values := make([]parquet.Value, 100)
+
+					for {
+						n, err := vr.ReadValues(values)
+						for _, value := range values[:n] {
+							if value.String() == tt.searchValue {
+								rowFound = true
+							}
+						}
+						if err == io.EOF {
+							break
+						}
+						if err != nil {
+							t.Fatalf("%s: read values failed: %v", tt.description, err)
+						}
+					}
+
+					if rowFound {
+						break
+					}
+				}
+
+				if !rowFound {
+					t.Errorf("%s: found page index %d but couldn't read value %q from it",
+						tt.description, found, tt.searchValue)
+				}
+			}
+		})
+	}
+}
