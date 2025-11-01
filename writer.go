@@ -1286,9 +1286,9 @@ type ColumnWriter struct {
 
 	// Pooled buffers used by optional and repeated column buffers that need
 	// to be released when the writer is closed.
-	pooledRowsBuffer             *buffer[int32]
-	pooledRepetitionLevelsBuffer *buffer[byte]
-	pooledDefinitionLevelsBuffer *buffer[byte]
+	rowsBuffer             *buffer[int32]
+	repetitionLevelsBuffer *buffer[byte]
+	definitionLevelsBuffer *buffer[byte]
 }
 
 func (c *ColumnWriter) reset() {
@@ -1469,16 +1469,16 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 		// Since these buffers are pooled, we can afford to allocate a bit more memory in
 		// order to reduce the risk of needing to resize the buffer.
 		size := int(float64(column.Cap()) * 1.5)
-		c.pooledRepetitionLevelsBuffer = buffers.get(size)
-		c.pooledDefinitionLevelsBuffer = buffers.get(size)
-		column = newRepeatedColumnBuffer(column, c.pooledRepetitionLevelsBuffer.data[:0], c.pooledDefinitionLevelsBuffer.data[:0], c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
+		c.repetitionLevelsBuffer = buffers.get(size)
+		c.definitionLevelsBuffer = buffers.get(size)
+		column = newRepeatedColumnBuffer(column, c.repetitionLevelsBuffer.data[:0], c.definitionLevelsBuffer.data[:0], c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
 	case c.maxDefinitionLevel > 0:
 		// Since these buffers are pooled, we can afford to allocate a bit more memory in
 		// order to reduce the risk of needing to resize the buffer.
 		size := int(float64(column.Cap()) * 1.5)
-		c.pooledRowsBuffer = int32Buffers.get(size)
-		c.pooledDefinitionLevelsBuffer = buffers.get(size)
-		column = newOptionalColumnBuffer(column, c.pooledRowsBuffer.data[:0], c.pooledDefinitionLevelsBuffer.data[:0], c.maxDefinitionLevel, nullsGoLast)
+		c.rowsBuffer = int32Buffers.get(size)
+		c.definitionLevelsBuffer = buffers.get(size)
+		column = newOptionalColumnBuffer(column, c.rowsBuffer.data[:0], c.definitionLevelsBuffer.data[:0], c.maxDefinitionLevel, nullsGoLast)
 	}
 	return column
 }
@@ -1519,21 +1519,12 @@ func (c *ColumnWriter) Close() (err error) {
 	if err := c.Flush(); err != nil {
 		return err
 	}
-
-	// Release pooled buffers back to their pools.
-	if c.pooledRowsBuffer != nil {
-		c.pooledRowsBuffer.unref()
-		c.pooledRowsBuffer = nil
-	}
-	if c.pooledRepetitionLevelsBuffer != nil {
-		c.pooledRepetitionLevelsBuffer.unref()
-		c.pooledRepetitionLevelsBuffer = nil
-	}
-	if c.pooledDefinitionLevelsBuffer != nil {
-		c.pooledDefinitionLevelsBuffer.unref()
-		c.pooledDefinitionLevelsBuffer = nil
-	}
-
+	bufferUnref(c.rowsBuffer)
+	bufferUnref(c.repetitionLevelsBuffer)
+	bufferUnref(c.definitionLevelsBuffer)
+	c.rowsBuffer = nil
+	c.repetitionLevelsBuffer = nil
+	c.definitionLevelsBuffer = nil
 	c.columnBuffer = nil
 	return nil
 }
