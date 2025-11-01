@@ -95,7 +95,30 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	optimisticFooterSize -= 8
 	b := optimisticFooterData[optimisticFooterSize:]
 	if string(b[4:]) != "PAR1" {
-		return nil, fmt.Errorf("invalid magic footer of parquet file: %q", b[4:])
+		// Provide a more helpful error message to diagnose the issue
+		actualBytes := b[4:]
+
+		// Check if the file has a valid header to give better diagnostic info
+		var hasValidHeader bool
+		if !c.SkipMagicBytes {
+			var header [4]byte
+			if _, err := readAt(r, header[:], 0); err == nil && string(header[:]) == "PAR1" {
+				hasValidHeader = true
+			}
+		}
+
+		if hasValidHeader {
+			return nil, fmt.Errorf(
+				"invalid magic footer of parquet file: expected %q but got %q (file has valid header but invalid footer, "+
+				"this usually indicates the file was not properly closed during writing or was truncated)",
+				"PAR1", actualBytes,
+			)
+		}
+
+		return nil, fmt.Errorf(
+			"invalid magic footer of parquet file: expected %q but got %q (file may not be a valid parquet file)",
+			"PAR1", actualBytes,
+		)
 	}
 
 	footerSize := int64(binary.LittleEndian.Uint32(b[:4]))
