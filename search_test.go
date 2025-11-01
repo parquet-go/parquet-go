@@ -199,12 +199,12 @@ func TestSearchBoundaryValues(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
-		sizeLimit    int
-		values       []string
-		searchValue  string
-		shouldFind   bool
-		description  string
+		name        string
+		sizeLimit   int
+		values      []string
+		searchValue string
+		shouldFind  bool
+		description string
 	}{
 		{
 			name:        "values at truncation limit",
