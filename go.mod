@@ -1,6 +1,6 @@
 module github.com/parquet-go/parquet-go
 
-go 1.24.9
+go 1.24.7
 
 require (
 	github.com/andybalholm/brotli v1.1.1
