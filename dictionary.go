@@ -3,6 +3,7 @@ package parquet
 import (
 	"io"
 	"math/bits"
+	"reflect"
 	"unsafe"
 
 	"github.com/parquet-go/bitpack"
@@ -1443,6 +1444,28 @@ func (col *indexedColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
 	}
 
 	col.typ.dict.insert(col.values[i:], rows)
+}
+
+func (col *indexedColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
+	// Create a Value from the reflect.Value
+	v := makeValue(col.typ.Type.Kind(), col.typ.Type.LogicalType(), value)
+
+	// Grow the values slice
+	i := len(col.values)
+	if i >= cap(col.values) {
+		newCap := cap(col.values) * 2
+		if newCap == 0 {
+			newCap = 16
+		}
+		tmp := make([]int32, i+1, newCap)
+		copy(tmp, col.values)
+		col.values = tmp
+	} else {
+		col.values = col.values[:i+1]
+	}
+
+	// Insert the value into the dictionary
+	col.typ.dict.Insert(col.values[i:i+1], []Value{v})
 }
 
 func (col *indexedColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

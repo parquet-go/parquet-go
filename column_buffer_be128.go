@@ -1,7 +1,9 @@
 package parquet
 
 import (
+	"fmt"
 	"io"
+	"reflect"
 	"slices"
 
 	"github.com/parquet-go/parquet-go/sparse"
@@ -79,6 +81,14 @@ func (col *be128ColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
 	n := len(col.values)
 	col.values = col.values[:n+rows.Len()]
 	sparse.GatherUint128(col.values[n:], rows.Uint128Array())
+}
+
+func (col *be128ColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
+	b := value.Bytes()
+	if len(b) != 16 {
+		panic(fmt.Sprintf("cannot write %d bytes to [16]byte column", len(b)))
+	}
+	col.values = append(col.values, [16]byte(b))
 }
 
 func (col *be128ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

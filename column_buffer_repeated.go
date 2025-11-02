@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"reflect"
 	"slices"
 
 	"github.com/parquet-go/parquet-go/sparse"
@@ -298,6 +299,25 @@ func (col *repeatedColumnBuffer) writeValues(row sparse.Array, levels columnLeve
 
 	if levels.definitionLevel == col.maxDefinitionLevel {
 		col.base.writeValues(row, levels)
+	}
+}
+
+func (col *repeatedColumnBuffer) writeReflectValue(levels columnLevels, value reflect.Value) {
+	// If this is the start of a new row (repetition level 0)
+	if levels.repetitionLevel == 0 {
+		col.rows = append(col.rows, offsetMapping{
+			offset:     uint32(len(col.repetitionLevels)),
+			baseOffset: uint32(col.base.NumValues()),
+		})
+	}
+
+	// Write the repetition and definition levels for this value
+	col.repetitionLevels = append(col.repetitionLevels, levels.repetitionLevel)
+	col.definitionLevels = append(col.definitionLevels, levels.definitionLevel)
+
+	// If definition level indicates the value is present, write it to the base column
+	if levels.definitionLevel == col.maxDefinitionLevel {
+		col.base.writeReflectValue(levels, value)
 	}
 }
 

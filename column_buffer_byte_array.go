@@ -3,6 +3,7 @@ package parquet
 import (
 	"bytes"
 	"io"
+	"reflect"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/encoding/plain"
@@ -140,6 +141,17 @@ func (col *byteArrayColumnBuffer) writeValues(rows sparse.Array, _ columnLevels)
 		p := rows.Index(i)
 		col.append(*(*string)(p))
 	}
+}
+
+func (col *byteArrayColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
+	var s string
+	switch value.Kind() {
+	case reflect.Array, reflect.Slice:
+		s = unsafecast.String(value.Bytes())
+	default:
+		s = value.String()
+	}
+	col.append(s)
 }
 
 func (col *byteArrayColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

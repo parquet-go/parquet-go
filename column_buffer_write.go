@@ -545,7 +545,6 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		if rows.Len() == 0 {
-			// Write empty values for all fields
 			for _, w := range writers {
 				if err := w.writeRows(columns, sparse.Array{}, levels); err != nil {
 					return err
@@ -625,8 +624,9 @@ func writeRowsFuncOfSchemaNode(node Node, schema *Schema, path columnPath, field
 
 // writeInterfaceValue writes an interface{} value at runtime, determining the appropriate
 // write function based on the actual type.
-func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node, schema *Schema, path columnPath, levels columnLevels) error {
-	actualType := value.Type()
+func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node, schema *Schema, path columnPath, levels columnLevels) (err error) {
+	// Use the new writeValueFunc approach which works directly with reflect.Value
+	// instead of converting to sparse.Array first
 	schemaCache := schema.lazyLoadCache()
 
 	hash := maphash.Hash{}
@@ -637,24 +637,30 @@ func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node
 		hash.WriteByte(0)
 	}
 
-	writeRowsKey := writeRowsCacheKey{
-		gotype: actualType,
-		column: hash.Sum64(),
-	}
-
-	writeRows := schemaCache.writeRows.load(writeRowsKey, func() writeRowsFunc {
-		return writeRowsFuncOf(actualType, schema, path)
+	writeValue := schemaCache.writeValue.load(hash.Sum64(), func() writeValueFunc {
+		node := findByPath(schema, path)
+		if node == nil {
+			panic("column not found: " + path.String())
+		}
+		_, fn := writeValueFuncOf(0, node)
+		return fn
 	})
 
-	// Handle optional fields
-	if field.Optional() {
-		// For optional fields with actual values, we need to increment definition level
-		levels.definitionLevel++
-		defer func() { levels.definitionLevel-- }()
-	}
+	// The reflect package uses panics for invalid operations, we capture them
+	// here and convert to errors.
+	defer func() {
+		if r := recover(); r != nil {
+			switch v := r.(type) {
+			case error:
+				err = v
+			default:
+				err = fmt.Errorf("%v", r)
+			}
+		}
+	}()
 
-	valueArray := makeArray(reflectValuePointer(value), 1, actualType.Size())
-	return writeRows(columns, valueArray, levels)
+	writeValue(columns, levels, value)
+	return
 }
 
 func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {

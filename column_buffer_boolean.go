@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"io"
+	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack"
@@ -149,6 +150,23 @@ func (col *booleanColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
 	}
 
 	col.bits = col.bits[:bitpack.ByteCount(uint(col.numValues))]
+}
+
+func (col *booleanColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
+	b := value.Bool()
+	numBytes := bitpack.ByteCount(uint(col.numValues) + 1)
+	if cap(col.bits) < numBytes {
+		col.bits = append(make([]byte, 0, max(numBytes, 2*cap(col.bits))), col.bits...)
+	}
+	col.bits = col.bits[:numBytes]
+	x := uint(col.numValues) / 8
+	y := uint(col.numValues) % 8
+	bit := byte(0)
+	if b {
+		bit = 1
+	}
+	col.bits[x] = (bit << y) | (col.bits[x] & ^(1 << y))
+	col.numValues++
 }
 
 func (col *booleanColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

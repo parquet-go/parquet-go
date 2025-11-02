@@ -3,6 +3,8 @@ package parquet
 import (
 	"fmt"
 	"io"
+	"math"
+	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -85,6 +87,27 @@ func (col *int32ColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
 	col.values = col.values[:n+rows.Len()]
 	sparse.GatherInt32(col.values[n:], rows.Int32Array())
 
+}
+
+func (col *int32ColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
+	var v int32
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		i := value.Int()
+		if i < math.MinInt32 || i > math.MaxInt32 {
+			panic(fmt.Sprintf("int value %d out of range for int32", i))
+		}
+		v = int32(i)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		u := value.Uint()
+		if u > math.MaxInt32 {
+			panic(fmt.Sprintf("uint value %d out of range for int32", u))
+		}
+		v = int32(u)
+	default:
+		panic("cannot write value of type " + value.Type().String() + " to int32 column")
+	}
+	col.values = append(col.values, v)
 }
 
 func (col *int32ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

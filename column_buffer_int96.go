@@ -3,6 +3,7 @@ package parquet
 import (
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -85,6 +86,10 @@ func (col *int96ColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
 		p := rows.Index(i)
 		col.values = append(col.values, *(*deprecated.Int96)(p))
 	}
+}
+
+func (col *int96ColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
+	col.values = append(col.values, value.Interface().(deprecated.Int96))
 }
 
 func (col *int96ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"reflect"
+
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -69,6 +71,12 @@ type ColumnBuffer interface {
 	// extensibility in the public APIs, we might revisit in the future if we
 	// learn about valid use cases for custom column buffer types.
 	writeValues(rows sparse.Array, levels columnLevels)
+
+	// This method is similar to writeValues but accepts a single reflect.Value
+	// instead of a sparse.Array. Each column buffer implementation is responsible
+	// for validating the type of the value and converting it appropriately.
+	// Panics if the type is incompatible (similar to reflect package behavior).
+	writeReflectValue(levels columnLevels, value reflect.Value)
 }
 
 type columnLevels struct {

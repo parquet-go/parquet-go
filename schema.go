@@ -45,13 +45,8 @@ type schemaState struct {
 }
 
 type schemaCache struct {
-	hashSeed  maphash.Seed
-	writeRows cacheMap[writeRowsCacheKey, writeRowsFunc]
-}
-
-type writeRowsCacheKey struct {
-	gotype reflect.Type
-	column uint64
+	hashSeed   maphash.Seed
+	writeValue cacheMap[uint64, writeValueFunc]
 }
 
 type cacheMap[K comparable, V any] struct {

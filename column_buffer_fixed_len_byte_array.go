@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"unsafe"
 
@@ -122,6 +123,14 @@ func (col *fixedLenByteArrayColumnBuffer) writeValues(rows sparse.Array, _ colum
 		p := rows.Index(i)
 		copy(newData[i*col.size:], unsafe.Slice((*byte)(p), col.size))
 	}
+}
+
+func (col *fixedLenByteArrayColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
+	b := value.Bytes()
+	if len(b) != col.size {
+		panic(fmt.Sprintf("cannot write byte array of length %d to fixed length byte array column of size %d", len(b), col.size))
+	}
+	col.data = append(col.data, b...)
 }
 
 func (col *fixedLenByteArrayColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

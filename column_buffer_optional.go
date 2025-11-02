@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"io"
+	"reflect"
 	"slices"
 
 	"github.com/parquet-go/parquet-go/sparse"
@@ -235,6 +236,25 @@ func (col *optionalColumnBuffer) writeValues(rows sparse.Array, levels columnLev
 		broadcastRangeInt32(col.rows[i:], int32(col.base.Len()))
 		col.base.writeValues(rows, levels)
 	}
+}
+
+func (col *optionalColumnBuffer) writeReflectValue(levels columnLevels, value reflect.Value) {
+	if levels.definitionLevel != col.maxDefinitionLevel {
+		col.definitionLevels = append(col.definitionLevels, levels.definitionLevel)
+		col.rows = append(col.rows, -1)
+		return
+	}
+
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		value = value.Elem()
+	}
+
+	levels.definitionLevel = col.maxDefinitionLevel
+	col.base.writeReflectValue(levels, value)
+
+	col.definitionLevels = append(col.definitionLevels, col.maxDefinitionLevel)
+	col.rows = append(col.rows, int32(col.base.Len()-1))
 }
 
 func (col *optionalColumnBuffer) ReadValuesAt(values []Value, offset int64) (int, error) {
