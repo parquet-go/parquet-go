@@ -239,7 +239,8 @@ func (col *optionalColumnBuffer) writeValues(rows sparse.Array, levels columnLev
 }
 
 func (col *optionalColumnBuffer) writeReflectValue(levels columnLevels, value reflect.Value) {
-	if levels.definitionLevel != col.maxDefinitionLevel {
+	// If definition level is not max, or the value is invalid, write as null
+	if levels.definitionLevel != col.maxDefinitionLevel || !value.IsValid() {
 		col.definitionLevels = append(col.definitionLevels, levels.definitionLevel)
 		col.rows = append(col.rows, -1)
 		return

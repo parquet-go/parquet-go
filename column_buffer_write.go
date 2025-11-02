@@ -3,7 +3,6 @@ package parquet
 import (
 	"encoding/json"
 	"fmt"
-	"hash/maphash"
 	"math/bits"
 	"reflect"
 	"slices"
@@ -53,29 +52,25 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath) writeRowsF
 		reflect.Float64,
 		reflect.String:
 		return writeRowsFuncOfRequired(t, schema, path)
-
 	case reflect.Slice:
 		if t.Elem().Kind() == reflect.Uint8 {
 			return writeRowsFuncOfRequired(t, schema, path)
 		} else {
 			return writeRowsFuncOfSlice(t, schema, path)
 		}
-
 	case reflect.Array:
 		if t.Elem().Kind() == reflect.Uint8 {
 			return writeRowsFuncOfArray(t, schema, path)
 		}
-
 	case reflect.Pointer:
 		return writeRowsFuncOfPointer(t, schema, path)
-
 	case reflect.Struct:
 		return writeRowsFuncOfStruct(t, schema, path)
-
 	case reflect.Map:
 		return writeRowsFuncOfMap(t, schema, path)
+	case reflect.Interface:
+		return writeRowsFuncOfInterface(t, schema, path)
 	}
-
 	panic("cannot convert Go values of type " + typeNameOf(t) + " to parquet value")
 }
 
@@ -93,6 +88,18 @@ func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) wr
 
 func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
 	if t.Kind() == reflect.Slice && t.Elem().Kind() != reflect.Uint8 { // assume nested list; []byte is scalar
+		return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+			if rows.Len() == 0 {
+				return writeRows(columns, rows, levels)
+			}
+			levels.definitionLevel++
+			return writeRows(columns, rows, levels)
+		}
+	}
+	// Interface types are handled by writeRowsFuncOfInterface, which manages
+	// definition levels internally based on the schema. We just need to increment
+	// the definition level for present values.
+	if t.Kind() == reflect.Interface {
 		return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 			if rows.Len() == 0 {
 				return writeRows(columns, rows, levels)
@@ -370,6 +377,53 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 	}
 }
 
+func writeRowsFuncOfInterface(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+	node := findByPath(schema, path)
+	if node == nil {
+		panic("column not found: " + path.String())
+	}
+
+	// Compute the starting column index for this node in the schema
+	col := schema.lazyLoadState().mapping.lookup(path)
+	columnIndex := col.columnIndex
+	if columnIndex < 0 {
+		// This is a group node - find the first leaf column to get the starting index
+		if node.Leaf() {
+			panic("node is a leaf but has no column index: " + path.String())
+		}
+		fields := node.Fields()
+		if len(fields) == 0 {
+			// Empty group node - nothing to write
+			return func([]ColumnBuffer, sparse.Array, columnLevels) error { return nil }
+		}
+		firstLeafPath := path.append(fields[0].Name())
+		columnIndex = findFirstLeafColumnIndex(schema, fields[0], firstLeafPath)
+	}
+
+	// Get the schema-based write function for this node
+	_, writeValue := writeValueFuncOf(columnIndex, node)
+
+	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+		for i := range rows.Len() {
+			// Get the interface{} value at runtime
+			interfaceValue := reflect.NewAt(t, rows.Index(i)).Elem()
+
+			var value reflect.Value
+			// Unwrap the interface to get the actual value if it's not nil
+			if interfaceValue.IsValid() && !interfaceValue.IsNil() {
+				value = interfaceValue.Elem()
+			} else {
+				// For nil or invalid interfaces, pass invalid value
+				value = reflect.Value{}
+			}
+
+			// Write using the schema-based function
+			writeValue(columns, levels, value)
+		}
+		return nil
+	}
+}
+
 var (
 	mapStringStringType = reflect.TypeOf((map[string]string)(nil))
 	mapStringAnyType    = reflect.TypeOf((map[string]any)(nil))
@@ -396,49 +450,51 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 	valueType := t.Elem()
 	valueSize := uintptr(valueType.Size())
 
-	// Check if the value type is interface{} - if so, we need runtime type handling
-	// We split into two separate loops to avoid branching inside the loop
+	// For interface{} value types, we use writeValueFunc to write individual values.
+	// For concrete types, we use writeRowsFunc to write arrays of values.
 	if valueType.Kind() == reflect.Interface {
-		// Interface{} path - need runtime type handling
+		// Interface{} path - use writeValueFunc for each field
 		for i, field := range fields {
 			fieldPath := path.append(field.Name())
-			fieldNode := findByPath(schema, fieldPath)
 
-			// For interface{} types, create a write function based on the SCHEMA type
-			// This will be used when writing null values
-			writeNull := writeRowsFuncOfSchemaNode(fieldNode, schema, fieldPath, field)
+			// Find the column index for this field
+			col := schema.lazyLoadState().mapping.lookup(fieldPath)
+			columnIndex := col.columnIndex
+			if columnIndex < 0 {
+				// Group node - find first leaf column
+				columnIndex = findFirstLeafColumnIndex(schema, field, fieldPath)
+			}
 
-			// Capture variables for the closure
-			writeValue := func(columns []ColumnBuffer, mapValue reflect.Value, levels columnLevels) error {
-				actualValue := mapValue
-				actualValueKind := actualValue.Kind()
-				if actualValueKind == reflect.Interface && !actualValue.IsNil() {
-					actualValue = actualValue.Elem()
-					actualValueKind = actualValue.Kind()
-				}
-				if !actualValue.IsValid() || (actualValueKind == reflect.Pointer && actualValue.IsNil()) {
-					// Nil interface or nil pointer - write null
-					return writeNull(columns, sparse.Array{}, levels)
-				}
-				if actualValueKind == reflect.Pointer {
-					actualValue = actualValue.Elem()
-				}
-				return writeInterfaceValue(columns, actualValue, field, schema, fieldPath, levels)
+			// Get the value-based write function
+			_, writeValue := writeValueFuncOf(columnIndex, field)
+
+			// Create a closure that writes the value extracted from the map
+			writeMapValue := func(columns []ColumnBuffer, mapValue reflect.Value, levels columnLevels) error {
+				// mapValue is the interface{} value from the map
+				// writeValue will handle unwrapping and writing it
+				writeValue(columns, levels, mapValue)
+				return nil
+			}
+
+			// For the writeRows function (used when value is missing), we need to write null
+			writeRows := func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+				writeValue(columns, levels, reflect.Value{})
+				return nil
 			}
 
 			writers[i] = fieldWriter{
 				fieldName:  field.Name(),
 				fieldPath:  fieldPath,
-				writeRows:  writeNull,
-				writeValue: writeValue,
+				writeRows:  writeRows,
+				writeValue: writeMapValue,
 			}
 		}
 	} else {
-		// Concrete type path - can pre-create write functions
+		// Concrete type path - use writeRowsFunc for arrays
 		for i, field := range fields {
 			fieldPath := path.append(field.Name())
 
-			// For concrete types, we can pre-create the write function
+			// Get the write function - works for concrete types
 			writeRows := writeRowsFuncOf(valueType, schema, fieldPath)
 
 			// Check if the field is optional
@@ -446,7 +502,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 				writeRows = writeRowsFuncOfOptional(valueType, schema, fieldPath, writeRows)
 			}
 
-			// Both null and value use the same function for concrete types
+			// Create a closure that wraps the value in a sparse.Array
 			writeValue := func(columns []ColumnBuffer, mapValue reflect.Value, levels columnLevels) error {
 				valueArray := makeArray(reflectValuePointer(mapValue), 1, valueSize)
 				return writeRows(columns, valueArray, levels)
@@ -560,107 +616,20 @@ type stringArray struct{ values []string }
 
 var stringArrayPool sync.Pool // *stringArray
 
-// writeRowsFuncOfSchemaNode creates a write function based on the schema node type
-// rather than a Go type. This is used for interface{} values where we need to write
-// nulls based on the schema structure.
-func writeRowsFuncOfSchemaNode(node Node, schema *Schema, path columnPath, field Node) writeRowsFunc {
-	if node == nil {
-		panic(fmt.Sprintf("schema node not found at path: %v", path))
+// findFirstLeafColumnIndex recursively finds the column index of the first leaf
+// under the given node starting from the given path.
+func findFirstLeafColumnIndex(schema *Schema, node Node, path columnPath) int16 {
+	if node.Leaf() {
+		col := schema.lazyLoadState().mapping.lookup(path)
+		return col.columnIndex
 	}
-
-	// Check if this is a leaf or a group
-	if len(node.Fields()) == 0 {
-		// It's a leaf node - create a simple write function
-		return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
-			leaf, ok := schema.Lookup(path...)
-			if !ok {
-				return fmt.Errorf("leaf not found: %v", path)
-			}
-
-			// For optional fields with no data, we need to write at the parent's definition level
-			// For non-optional or when there's data, increment the definition level
-			if rows.Len() == 0 && field.Optional() {
-				// Write null - don't increment definition level
-				columns[leaf.ColumnIndex].writeValues(rows, levels)
-			} else if field.Optional() {
-				// Write value - increment definition level
-				levels.definitionLevel++
-				columns[leaf.ColumnIndex].writeValues(rows, levels)
-				levels.definitionLevel--
-			} else {
-				// Required field
-				columns[leaf.ColumnIndex].writeValues(rows, levels)
-			}
-			return nil
-		}
-	}
-
-	// It's a group - recursively create write functions for all children
-	type childWriter struct {
-		writeRows writeRowsFunc
-	}
-
+	// Recurse into first field
 	fields := node.Fields()
-	children := make([]childWriter, len(fields))
-
-	for i, childField := range fields {
-		childPath := path.append(childField.Name())
-		childNode := findByPath(schema, childPath)
-		children[i] = childWriter{
-			writeRows: writeRowsFuncOfSchemaNode(childNode, schema, childPath, childField),
-		}
+	if len(fields) == 0 {
+		panic("group node has no fields at path: " + path.String())
 	}
-
-	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
-		// For groups, we need to write to all child columns
-		for _, child := range children {
-			if err := child.writeRows(columns, rows, levels); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-}
-
-// writeInterfaceValue writes an interface{} value at runtime, determining the appropriate
-// write function based on the actual type.
-func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node, schema *Schema, path columnPath, levels columnLevels) (err error) {
-	// Use the new writeValueFunc approach which works directly with reflect.Value
-	// instead of converting to sparse.Array first
-	schemaCache := schema.lazyLoadCache()
-
-	hash := maphash.Hash{}
-	hash.SetSeed(schemaCache.hashSeed)
-
-	for _, name := range path {
-		hash.WriteString(name)
-		hash.WriteByte(0)
-	}
-
-	writeValue := schemaCache.writeValue.load(hash.Sum64(), func() writeValueFunc {
-		node := findByPath(schema, path)
-		if node == nil {
-			panic("column not found: " + path.String())
-		}
-		_, fn := writeValueFuncOf(0, node)
-		return fn
-	})
-
-	// The reflect package uses panics for invalid operations, we capture them
-	// here and convert to errors.
-	defer func() {
-		if r := recover(); r != nil {
-			switch v := r.(type) {
-			case error:
-				err = v
-			default:
-				err = fmt.Errorf("%v", r)
-			}
-		}
-	}()
-
-	writeValue(columns, levels, value)
-	return
+	firstFieldPath := path.append(fields[0].Name())
+	return findFirstLeafColumnIndex(schema, fields[0], firstFieldPath)
 }
 
 func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {

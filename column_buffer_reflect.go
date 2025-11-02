@@ -158,13 +158,36 @@ func writeValueFuncOf(columnIndex int16, node Node) (int16, writeValueFunc) {
 func writeValueFuncOfOptional(columnIndex int16, node Node) (int16, writeValueFunc) {
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
-		if value.IsValid() && !value.IsZero() {
-			switch value.Kind() {
-			case reflect.Pointer, reflect.Interface:
-				value = value.Elem()
-			}
-			levels.definitionLevel++
+		// Handle invalid values
+		if !value.IsValid() {
+			writeValue(columns, levels, value)
+			return
 		}
+
+		// Check for nil pointers/interfaces
+		switch value.Kind() {
+		case reflect.Pointer, reflect.Interface:
+			if value.IsNil() {
+				// Nil pointer/interface - write as null
+				writeValue(columns, levels, value)
+				return
+			}
+			// Non-nil - unwrap and increment definition level
+			value = value.Elem()
+			levels.definitionLevel++
+			writeValue(columns, levels, value)
+			return
+		}
+
+		// For other types, check if zero value
+		if value.IsZero() {
+			// Zero value - write as null
+			writeValue(columns, levels, value)
+			return
+		}
+
+		// Non-zero value - increment definition level
+		levels.definitionLevel++
 		writeValue(columns, levels, value)
 	}
 }
@@ -262,6 +285,11 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 
 // getFieldValue gets a field value for writing (without allocating nil pointers)
 func getFieldValue(field Field, base reflect.Value) reflect.Value {
+	if !base.IsValid() {
+		// Invalid base - return invalid value
+		return reflect.Value{}
+	}
+
 	switch base.Kind() {
 	case reflect.Map:
 		// For maps, use MapIndex to get the value (returns invalid value if key doesn't exist)
@@ -291,7 +319,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 
 	return columnIndex + 1, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 		// Unwrap interface{} values before passing to writeReflectValue
-		if value.Kind() == reflect.Interface {
+		if value.IsValid() && value.Kind() == reflect.Interface {
 			value = value.Elem()
 		}
 		columns[columnIndex].writeReflectValue(levels, value)
