@@ -87,27 +87,27 @@ func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) wr
 }
 
 func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
-	if t.Kind() == reflect.Slice && t.Elem().Kind() != reflect.Uint8 { // assume nested list; []byte is scalar
-		return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
-			if rows.Len() == 0 {
-				return writeRows(columns, rows, levels)
-			}
-			levels.definitionLevel++
+	// For slices (nested lists) and interface types, we just increment the
+	// definition level for present values without checking for null indexes.
+	// - Slices: []byte is treated as scalar, other slices are nested lists
+	// - Interface: handled by writeRowsFuncOfInterface which manages levels internally
+	writeOptional := func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
+		if rows.Len() == 0 {
 			return writeRows(columns, rows, levels)
 		}
+		levels.definitionLevel++
+		return writeRows(columns, rows, levels)
 	}
-	// Interface types are handled by writeRowsFuncOfInterface, which manages
-	// definition levels internally based on the schema. We just need to increment
-	// the definition level for present values.
-	if t.Kind() == reflect.Interface {
-		return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
-			if rows.Len() == 0 {
-				return writeRows(columns, rows, levels)
-			}
-			levels.definitionLevel++
-			return writeRows(columns, rows, levels)
+
+	switch t.Kind() {
+	case reflect.Interface:
+		return writeOptional
+	case reflect.Slice:
+		if t.Elem().Kind() != reflect.Uint8 {
+			return writeOptional
 		}
 	}
+
 	nullIndex := nullIndexFuncOf(t)
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		if rows.Len() == 0 {
@@ -344,10 +344,13 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath) writ
 			switch {
 			case kind == reflect.Pointer:
 			case kind == reflect.Slice && !list && f.Type.Elem().Kind() != reflect.Uint8:
-				// For slices other than []byte, optional applies to the element, not the list
+				// For slices other than []byte, optional applies
+				// to the element, not the list.
 			case f.Type == reflect.TypeOf(time.Time{}):
-				// time.Time is a struct but has IsZero() method, so it needs special handling
-				// Don't use writeRowsFuncOfOptional which relies on bitmap batching
+				// time.Time is a struct but has IsZero() method,
+				// so it needs special handling.
+				// Don't use writeRowsFuncOfOptional which relies
+				// on bitmap batching.
 			default:
 				writeRows = writeRowsFuncOfOptional(f.Type, schema, columnPath, writeRows)
 			}
@@ -387,15 +390,10 @@ func writeRowsFuncOfInterface(t reflect.Type, schema *Schema, path columnPath) w
 	col := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := col.columnIndex
 	if columnIndex < 0 {
-		// This is a group node - find the first leaf column to get the starting index
 		if node.Leaf() {
 			panic("node is a leaf but has no column index: " + path.String())
 		}
 		fields := node.Fields()
-		if len(fields) == 0 {
-			// Empty group node - nothing to write
-			return func([]ColumnBuffer, sparse.Array, columnLevels) error { return nil }
-		}
 		firstLeafPath := path.append(fields[0].Name())
 		columnIndex = findFirstLeafColumnIndex(schema, fields[0], firstLeafPath)
 	}
@@ -405,20 +403,7 @@ func writeRowsFuncOfInterface(t reflect.Type, schema *Schema, path columnPath) w
 
 	return func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) error {
 		for i := range rows.Len() {
-			// Get the interface{} value at runtime
-			interfaceValue := reflect.NewAt(t, rows.Index(i)).Elem()
-
-			var value reflect.Value
-			// Unwrap the interface to get the actual value if it's not nil
-			if interfaceValue.IsValid() && !interfaceValue.IsNil() {
-				value = interfaceValue.Elem()
-			} else {
-				// For nil or invalid interfaces, pass invalid value
-				value = reflect.Value{}
-			}
-
-			// Write using the schema-based function
-			writeValue(columns, levels, value)
+			writeValue(columns, levels, reflect.NewAt(t, rows.Index(i)).Elem())
 		}
 		return nil
 	}
