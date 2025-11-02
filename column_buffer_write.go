@@ -379,11 +379,6 @@ func writeRowsFuncOfInterface(t reflect.Type, schema *Schema, path columnPath) w
 	}
 }
 
-var (
-	mapStringStringType = reflect.TypeOf((map[string]string)(nil))
-	mapStringAnyType    = reflect.TypeOf((map[string]any)(nil))
-)
-
 // writeRowsFuncOfMapToGroup handles writing a Go map to a Parquet GROUP schema
 // (as opposed to a MAP logical type). This allows map[string]T to be written
 // to schemas with named optional fields.
@@ -398,60 +393,25 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 		writeValue writeValueFunc
 	}
 
-	// Get all fields from the GROUP and create write functions for each
 	fields := groupNode.Fields()
 	writers := make([]fieldWriter, len(fields))
 	valueType := t.Elem()
-	valueSize := uintptr(valueType.Size())
+	columnIndex := findColumnIndex(schema, findByPath(schema, path), path)
 
-	// For interface{} value types, we use writeValueFunc to write individual values.
-	// For concrete types, we use writeRowsFunc to write arrays of values.
-	if valueType.Kind() == reflect.Interface {
-		// Interface{} path - use writeValueFunc for each field
-		for i, field := range fields {
-			fieldPath := path.append(field.Name())
-
-			// Find the column index for this field
-			columnIndex := findColumnIndex(schema, field, fieldPath)
-
-			// Get the value-based write function
-			_, writeValue := writeValueFuncOf(columnIndex, field)
-
-			// For the writeRows function (used when value is missing), we need to write null
-			writeRows := func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) {
-				writeValue(columns, levels, reflect.Value{})
-			}
-
-			writers[i] = fieldWriter{
-				fieldName:  field.Name(),
-				writeRows:  writeRows,
-				writeValue: writeValue,
-			}
+	for i, field := range fields {
+		fieldPath := path.append(field.Name())
+		writeRows := writeRowsFuncOf(valueType, schema, fieldPath)
+		if field.Optional() {
+			writeRows = writeRowsFuncOfOptional(valueType, schema, fieldPath, writeRows)
 		}
-	} else {
-		// Concrete type path - use writeRowsFunc for arrays
-		for i, field := range fields {
-			fieldPath := path.append(field.Name())
 
-			// Get the write function - works for concrete types
-			writeRows := writeRowsFuncOf(valueType, schema, fieldPath)
+		var writeValue writeValueFunc
+		columnIndex, writeValue = writeValueFuncOf(columnIndex, field)
 
-			// Check if the field is optional
-			if field.Optional() {
-				writeRows = writeRowsFuncOfOptional(valueType, schema, fieldPath, writeRows)
-			}
-
-			// Create a closure that wraps the value in a sparse.Array
-			writeValue := func(columns []ColumnBuffer, levels columnLevels, mapValue reflect.Value) {
-				valueArray := makeArray(reflectValuePointer(mapValue), 1, valueSize)
-				writeRows(columns, valueArray, levels)
-			}
-
-			writers[i] = fieldWriter{
-				fieldName:  field.Name(),
-				writeRows:  writeRows,
-				writeValue: writeValue,
-			}
+		writers[i] = fieldWriter{
+			fieldName:  field.Name(),
+			writeRows:  writeRows,
+			writeValue: writeValue,
 		}
 	}
 
@@ -460,7 +420,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 	// allocated on the heap.
 	var writeMaps writeRowsFunc
 	switch {
-	case t.ConvertibleTo(mapStringStringType):
+	case t.ConvertibleTo(reflect.TypeOf((map[string]string)(nil))):
 		writeMaps = func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) {
 			buffer, _ := stringArrayPool.Get().(*stringArray)
 			if buffer == nil {
@@ -470,6 +430,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 			numValues := len(writers) * numRows
 			buffer.values = slices.Grow(buffer.values, numValues)[:numValues]
 			defer stringArrayPool.Put(buffer)
+			defer clear(buffer.values)
 
 			for i := range numRows {
 				m := *(*map[string]string)(reflect.NewAt(t, rows.Index(i)).UnsafePointer())
@@ -486,20 +447,15 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 
 		}
 
-	case t.ConvertibleTo(mapStringAnyType):
+	case t.ConvertibleTo(reflect.TypeOf((map[string]any)(nil))):
 		writeMaps = func(columns []ColumnBuffer, rows sparse.Array, levels columnLevels) {
 			for i := range rows.Len() {
 				m := *(*map[string]any)(reflect.NewAt(t, rows.Index(i)).UnsafePointer())
 
 				for j := range writers {
 					w := &writers[j]
-					v, ok := m[w.fieldName]
-
-					if !ok {
-						w.writeRows(columns, sparse.Array{}, levels)
-					} else {
-						w.writeValue(columns, levels, reflect.ValueOf(v))
-					}
+					v := m[w.fieldName]
+					w.writeValue(columns, levels, reflect.ValueOf(v))
 				}
 			}
 		}
@@ -513,12 +469,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 					w := &writers[j]
 					keyValue := reflect.ValueOf(&w.fieldName).Elem()
 					mapValue := m.MapIndex(keyValue)
-
-					if !mapValue.IsValid() {
-						w.writeRows(columns, sparse.Array{}, levels)
-					} else {
-						w.writeValue(columns, levels, mapValue)
-					}
+					w.writeValue(columns, levels, mapValue)
 				}
 			}
 		}
@@ -529,9 +480,9 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 			for _, w := range writers {
 				w.writeRows(columns, sparse.Array{}, levels)
 			}
-			return
+		} else {
+			writeMaps(columns, rows, levels)
 		}
-		writeMaps(columns, rows, levels)
 	}
 }
 
@@ -672,24 +623,29 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeR
 		}
 
 		// If we're optional and the current definition level is already > 0,
-		// then we're in a pointer/nested context where writeRowsFuncOfPointer already handles optionality.
-		// Don't double-handle it here. For simple optional fields, definitionLevel starts at 0.
+		// then we're in a pointer/nested context where writeRowsFuncOfPointer
+		// already handles optionality.
+		//
+		// Don't double-handle it here. For simple optional fields,
+		// definitionLevel starts at 0.
 		alreadyHandled := isOptional && levels.definitionLevel > 0
 
 		times := rows.TimeArray()
 		for i := range times.Len() {
 			t := times.Index(i)
 
-			// For optional fields, check if the value is zero (unless already handled by pointer wrapper)
+			// For optional fields, check if the value is zero
+			// (unless already handled by pointer wrapper).
 			elemLevels := levels
 			if isOptional && !alreadyHandled && t.IsZero() {
-				// Write as NULL (don't increment definition level)
+				// Write as NULL (don't increment definition level).
 				empty := sparse.Array{}
 				writeRows(columns, empty, elemLevels)
 				continue
 			}
 
-			// For optional non-zero values, increment definition level (unless already handled)
+			// For optional non-zero values, increment definition level
+			// (unless already handled).
 			if isOptional && !alreadyHandled {
 				elemLevels.definitionLevel++
 			}
