@@ -79,12 +79,6 @@ type ColumnBuffer interface {
 	writeReflectValue(levels columnLevels, value reflect.Value)
 }
 
-type columnLevels struct {
-	repetitionDepth byte
-	repetitionLevel byte
-	definitionLevel byte
-}
-
 func columnIndexOfNullable(base ColumnBuffer, maxDefinitionLevel byte, definitionLevels []byte) (ColumnIndex, error) {
 	index, err := base.ColumnIndex()
 	if err != nil {
