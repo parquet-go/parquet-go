@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
@@ -581,7 +580,7 @@ func (c *Column) decompress(compressedPageData []byte, uncompressedPageSize int3
 // DecodeDataPageV1 decodes a data page from the header, compressed data, and
 // optional dictionary passed as arguments.
 func (c *Column) DecodeDataPageV1(header DataPageHeaderV1, page []byte, dict Dictionary) (Page, error) {
-	return c.decodeDataPageV1(header, &buffer[byte]{data: page}, dict, -1)
+	return c.decodeDataPageV1(header, newBuffer(page), dict, -1)
 }
 
 func (c *Column) decodeDataPageV1(header DataPageHeaderV1, page *buffer[byte], dict Dictionary, size int32) (Page, error) {
@@ -628,13 +627,14 @@ func (c *Column) decodeDataPageV1(header DataPageHeaderV1, page *buffer[byte], d
 // DecodeDataPageV2 decodes a data page from the header, compressed data, and
 // optional dictionary passed as arguments.
 func (c *Column) DecodeDataPageV2(header DataPageHeaderV2, page []byte, dict Dictionary) (Page, error) {
-	return c.decodeDataPageV2(header, &buffer[byte]{data: page}, dict, -1)
+	return c.decodeDataPageV2(header, newBuffer(page), dict, -1)
 }
 
 func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], dict Dictionary, size int32) (Page, error) {
 	var numValues = int(header.NumValues())
 	var pageData = page.data
 	var err error
+
 	var repetitionLevels *buffer[byte]
 	var definitionLevels *buffer[byte]
 
@@ -693,6 +693,7 @@ func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], d
 func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetitionLevels, definitionLevels, page *buffer[byte], data []byte, dict Dictionary) (Page, error) {
 	pageEncoding := LookupEncoding(header.Encoding())
 	pageType := c.Type()
+	pageKind := pageType.Kind()
 
 	if isDictionaryEncoding(pageEncoding) {
 		// In some legacy configurations, the PLAIN_DICTIONARY encoding is used
@@ -703,24 +704,30 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 		pageType = indexedPageType{newIndexedType(pageType, dict)}
 	}
 
-	var vbuf, obuf *buffer[byte]
-	var pageValues []byte
+	var obuf *buffer[uint32]
+	var vbuf *buffer[byte]
 	var pageOffsets []uint32
-
-	if pageEncoding.CanDecodeInPlace() {
+	var pageValues []byte
+	// For ByteArray/FixedLenByteArray columns, use a heap buffer because the
+	// content might be retained by the application after reading the pages,
+	// which would cause memory corruption if the buffers were reused.
+	switch {
+	case pageKind == ByteArray || pageKind == FixedLenByteArray:
+		pageValues = make([]byte, pageType.EstimateDecodeSize(numValues, data, pageEncoding))
+	case pageEncoding.CanDecodeInPlace():
 		vbuf = page
 		pageValues = data
-	} else {
+	default:
 		vbuf = buffers.get(pageType.EstimateDecodeSize(numValues, data, pageEncoding))
 		defer vbuf.unref()
 		pageValues = vbuf.data
 	}
 
 	// Page offsets not needed when dictionary-encoded
-	if pageType.Kind() == ByteArray && !isDictionaryEncoding(pageEncoding) {
-		obuf = buffers.get(4 * (numValues + 1))
+	if pageKind == ByteArray && !isDictionaryEncoding(pageEncoding) {
+		obuf = offsets.get(numValues + 1)
 		defer obuf.unref()
-		pageOffsets = unsafecast.Slice[uint32](obuf.data)
+		pageOffsets = obuf.data
 	}
 
 	values := pageType.NewValues(pageValues, pageOffsets)
@@ -747,7 +754,7 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 		)
 	}
 
-	return newBufferedPage(newPage, vbuf, obuf, definitionLevels, repetitionLevels), nil
+	return newBufferedPage(newPage, obuf, vbuf, definitionLevels, repetitionLevels), nil
 }
 
 func decodeLevelsV1(enc encoding.Encoding, numValues int, data []byte) (*buffer[byte], []byte, error) {
@@ -795,7 +802,7 @@ func skipLevelsV2(data []byte, length int64) ([]byte, error) {
 // DecodeDictionary decodes a data page from the header and compressed data
 // passed as arguments.
 func (c *Column) DecodeDictionary(header DictionaryPageHeader, page []byte) (Dictionary, error) {
-	return c.decodeDictionary(header, &buffer[byte]{data: page}, -1)
+	return c.decodeDictionary(header, newBuffer(page), -1)
 }
 
 func (c *Column) decodeDictionary(header DictionaryPageHeader, page *buffer[byte], size int32) (Dictionary, error) {

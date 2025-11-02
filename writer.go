@@ -1514,7 +1514,7 @@ func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
 		// Since these buffers are pooled, we can afford to allocate a bit more memory in
 		// order to reduce the risk of needing to resize the buffer.
 		size := int(float64(column.Cap()) * 1.5)
-		c.rowsBuffer = int32Buffers.get(size)
+		c.rowsBuffer = indexes.get(size)
 		c.definitionLevelsBuffer = buffers.get(size)
 		column = newOptionalColumnBuffer(column, c.rowsBuffer.data[:0], c.definitionLevelsBuffer.data[:0], c.maxDefinitionLevel, nullsGoLast)
 	}

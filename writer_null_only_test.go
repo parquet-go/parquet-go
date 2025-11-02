@@ -151,7 +151,10 @@ func TestMergeRowGroupsWithNullOnlyColumns(t *testing.T) {
 	var mergedBuf bytes.Buffer
 	mergedWriter := parquet.NewWriter(&mergedBuf, merged.Schema())
 
-	if _, err := parquet.CopyRows(mergedWriter, merged.Rows()); err != nil {
+	mergedRows := merged.Rows()
+	defer mergedRows.Close()
+
+	if _, err := parquet.CopyRows(mergedWriter, mergedRows); err != nil {
 		t.Fatalf("CopyRows failed: %v", err)
 	}
 

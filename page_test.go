@@ -530,11 +530,13 @@ func TestReslicingBooleanPage(t *testing.T) {
 	rg := pf.RowGroups()[0]
 	cc := rg.ColumnChunks()
 	pgs := cc[0].Pages()
+	defer pgs.Close()
 
 	pg, err := pgs.ReadPage()
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer parquet.Release(pg)
 
 	// continue reslicing and reading the values
 	sliceEvery := 3
@@ -550,6 +552,8 @@ func TestReslicingBooleanPage(t *testing.T) {
 
 		// slice the page
 		pg = pg.Slice(low, high)
+		defer parquet.Release(pg)
+
 		v := pg.Values()
 		v.ReadValues(vs)
 
