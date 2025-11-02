@@ -74,11 +74,11 @@ func (col *floatColumnBuffer) WriteFloats(values []float32) (int, error) {
 }
 
 func (col *floatColumnBuffer) WriteValues(values []Value) (int, error) {
-	col.writeValues(makeArrayValue(values, offsetOfU32), columnLevels{})
+	col.writeValues(columnLevels{}, makeArrayValue(values, offsetOfU32))
 	return len(values), nil
 }
 
-func (col *floatColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+func (col *floatColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	if n := len(col.values) + rows.Len(); n > cap(col.values) {
 		col.values = append(make([]float32, 0, max(n, 2*cap(col.values))), col.values...)
 	}

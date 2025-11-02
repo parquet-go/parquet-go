@@ -132,11 +132,11 @@ func (col *byteArrayColumnBuffer) writeByteArrays(values []byte) (count, bytes i
 }
 
 func (col *byteArrayColumnBuffer) WriteValues(values []Value) (int, error) {
-	col.writeValues(makeArrayValue(values, offsetOfPtr), columnLevels{})
+	col.writeValues(columnLevels{}, makeArrayValue(values, offsetOfPtr))
 	return len(values), nil
 }
 
-func (col *byteArrayColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+func (col *byteArrayColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	for i := range rows.Len() {
 		p := rows.Index(i)
 		col.append(*(*string)(p))

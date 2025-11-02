@@ -107,7 +107,7 @@ func (col *fixedLenByteArrayColumnBuffer) WriteValues(values []Value) (int, erro
 	return len(values), nil
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+func (col *fixedLenByteArrayColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	n := col.size * rows.Len()
 	i := len(col.data)
 	j := len(col.data) + n

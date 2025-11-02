@@ -280,7 +280,7 @@ func (col *repeatedColumnBuffer) writeRow(row []Value) error {
 	return nil
 }
 
-func (col *repeatedColumnBuffer) writeValues(row sparse.Array, levels columnLevels) {
+func (col *repeatedColumnBuffer) writeValues(levels columnLevels, row sparse.Array) {
 	if levels.repetitionLevel == 0 {
 		col.rows = append(col.rows, offsetMapping{
 			offset:     uint32(len(col.repetitionLevels)),
@@ -298,7 +298,7 @@ func (col *repeatedColumnBuffer) writeValues(row sparse.Array, levels columnLeve
 	col.definitionLevels = appendLevel(col.definitionLevels, levels.definitionLevel, row.Len())
 
 	if levels.definitionLevel == col.maxDefinitionLevel {
-		col.base.writeValues(row, levels)
+		col.base.writeValues(levels, row)
 	}
 }
 

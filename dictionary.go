@@ -1431,7 +1431,7 @@ func (col *indexedColumnBuffer) WriteValues(values []Value) (int, error) {
 	return len(values), nil
 }
 
-func (col *indexedColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+func (col *indexedColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	i := len(col.values)
 	j := len(col.values) + rows.Len()
 

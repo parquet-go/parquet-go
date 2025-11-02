@@ -92,16 +92,16 @@ func (col *booleanColumnBuffer) Swap(i, j int) {
 }
 
 func (col *booleanColumnBuffer) WriteBooleans(values []bool) (int, error) {
-	col.writeValues(sparse.MakeBoolArray(values).UnsafeArray(), columnLevels{})
+	col.writeValues(columnLevels{}, sparse.MakeBoolArray(values).UnsafeArray())
 	return len(values), nil
 }
 
 func (col *booleanColumnBuffer) WriteValues(values []Value) (int, error) {
-	col.writeValues(makeArrayValue(values, offsetOfBool), columnLevels{})
+	col.writeValues(columnLevels{}, makeArrayValue(values, offsetOfBool))
 	return len(values), nil
 }
 
-func (col *booleanColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+func (col *booleanColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	numBytes := bitpack.ByteCount(uint(col.numValues) + uint(rows.Len()))
 	if cap(col.bits) < numBytes {
 		col.bits = append(make([]byte, 0, max(numBytes, 2*cap(col.bits))), col.bits...)

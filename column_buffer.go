@@ -70,7 +70,7 @@ type ColumnBuffer interface {
 	// trade off for now as it is preferrable to optimize for safety over
 	// extensibility in the public APIs, we might revisit in the future if we
 	// learn about valid use cases for custom column buffer types.
-	writeValues(rows sparse.Array, levels columnLevels)
+	writeValues(levels columnLevels, rows sparse.Array)
 
 	// This method is similar to writeValues but accepts a single reflect.Value
 	// instead of a sparse.Array. Each column buffer implementation is responsible

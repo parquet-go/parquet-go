@@ -81,7 +81,7 @@ func (col *int96ColumnBuffer) WriteValues(values []Value) (int, error) {
 	return len(values), nil
 }
 
-func (col *int96ColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+func (col *int96ColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	for i := range rows.Len() {
 		p := rows.Index(i)
 		col.values = append(col.values, *(*deprecated.Int96)(p))

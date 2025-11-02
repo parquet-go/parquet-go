@@ -75,11 +75,11 @@ func (col *int32ColumnBuffer) WriteInt32s(values []int32) (int, error) {
 }
 
 func (col *int32ColumnBuffer) WriteValues(values []Value) (int, error) {
-	col.writeValues(makeArrayValue(values, offsetOfU32), columnLevels{})
+	col.writeValues(columnLevels{}, makeArrayValue(values, offsetOfU32))
 	return len(values), nil
 }
 
-func (col *int32ColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+func (col *int32ColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	if n := len(col.values) + rows.Len(); n > cap(col.values) {
 		col.values = append(make([]int32, 0, max(n, 2*cap(col.values))), col.values...)
 	}

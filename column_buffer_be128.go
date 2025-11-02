@@ -74,7 +74,7 @@ func (col *be128ColumnBuffer) WriteValues(values []Value) (int, error) {
 	return len(values), nil
 }
 
-func (col *be128ColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
+func (col *be128ColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	if n := len(col.values) + rows.Len(); n > cap(col.values) {
 		col.values = append(make([][16]byte, 0, max(n, 2*cap(col.values))), col.values...)
 	}

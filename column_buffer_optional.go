@@ -207,7 +207,7 @@ func (col *optionalColumnBuffer) WriteValues(values []Value) (n int, err error) 
 	return n, nil
 }
 
-func (col *optionalColumnBuffer) writeValues(rows sparse.Array, levels columnLevels) {
+func (col *optionalColumnBuffer) writeValues(levels columnLevels, rows sparse.Array) {
 	// The row count is zero when writing an null optional value, in which case
 	// we still need to output a row to the buffer to record the definition
 	// level.
@@ -234,7 +234,7 @@ func (col *optionalColumnBuffer) writeValues(rows sparse.Array, levels columnLev
 		broadcastValueInt32(col.rows[i:], -1)
 	} else {
 		broadcastRangeInt32(col.rows[i:], int32(col.base.Len()))
-		col.base.writeValues(rows, levels)
+		col.base.writeValues(levels, rows)
 	}
 }
 
