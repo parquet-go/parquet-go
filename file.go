@@ -764,10 +764,8 @@ func (f *FilePages) init(c *FileColumnChunk, reader io.ReaderAt) {
 	f.rbuf, f.rbufpool = getBufioReader(&f.section, f.bufferSize)
 	f.decoder.Reset(f.protocol.NewReader(f.rbuf))
 	f.index = 0
-	if f.lastPage != nil {
-		Release(f.lastPage)
-		f.lastPage = nil
-	}
+	Release(f.lastPage)
+	f.lastPage = nil
 	f.lastPageIndex = -1
 	f.serveLastPage = false
 }
@@ -1098,10 +1096,8 @@ func (f *FilePages) Close() error {
 	f.dataOffset = 0
 	f.dictOffset = 0
 	f.index = 0
-	if f.lastPage != nil {
-		Release(f.lastPage)
-		f.lastPage = nil
-	}
+	Release(f.lastPage)
+	f.lastPage = nil
 	f.lastPageIndex = -1
 	f.serveLastPage = false
 	f.skip = 0

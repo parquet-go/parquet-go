@@ -602,6 +602,7 @@ func TestColumnPages_SeekToRow(t *testing.T) {
 				t.Errorf("read value of page mismatch, row index %d: got=%d want=%d", idx, values[0], row.ID)
 			}
 
+			parquet.Release(page)
 			idx++
 		}
 	}

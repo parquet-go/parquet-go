@@ -78,19 +78,18 @@ type ColumnChunkValueReader interface {
 // NewColumnChunkValueReader creates a new ColumnChunkValueReader for the given
 // column chunk.
 func NewColumnChunkValueReader(column ColumnChunk) ColumnChunkValueReader {
-	return &columnChunkValueReader{pages: column.Pages(), release: Release}
+	return &columnChunkValueReader{pages: column.Pages()}
 }
 
 type columnChunkValueReader struct {
-	pages   Pages
-	page    Page
-	values  ValueReader
-	release func(Page)
+	pages  Pages
+	page   Page
+	values ValueReader
 }
 
 func (r *columnChunkValueReader) clear() {
 	if r.page != nil {
-		r.release(r.page)
+		Release(r.page)
 		r.page = nil
 		r.values = nil
 	}
