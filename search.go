@@ -48,20 +48,39 @@ func binarySearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 		// nextIdx is set to halfway between curIdx and topIdx
 		nextIdx := ((topIdx - curIdx) / 2) + curIdx
 
-		// Compare against both min and max to handle overlapping page bounds.
-		// When page bounds overlap due to truncation, we need to search left
-		// to find the first page that might contain the value.
+		smallerThanMin := cmp(value, index.MinValue(nextIdx))
+
 		switch {
-		case cmp(value, index.MinValue(nextIdx)) < 0:
-			// value < min: can't be in this page or any after it
+		// search below pages[nextIdx]
+		case smallerThanMin < 0:
 			topIdx = nextIdx
-		case cmp(value, index.MaxValue(nextIdx)) > 0:
-			// value > max: can't be in this page or any before it
+		// search pages[nextIdx] and above
+		case smallerThanMin > 0:
 			curIdx = nextIdx
-		default:
-			// min <= value <= max: value might be in this page or an earlier one
-			// with overlapping bounds, so search left to find the first occurrence
-			topIdx = nextIdx
+		case smallerThanMin == 0:
+			// this case is hit when value == min of nextIdx
+			// we must check below this index to find if there's
+			// another page before this.
+			// e.g. searching for first page 3 is in:
+			// [1,2,3]
+			// [3,4,5]
+			// [6,7,8]
+
+			// if the page proceeding this has a maxValue matching the value we're
+			// searching, continue the search.
+			// otherwise, we can return early
+			//
+			// cases covered by else block
+			// if cmp(value, index.MaxValue(nextIdx-1)) < 0: the value is only in this page
+			// if cmp(value, index.MaxValue(nextIdx-1)) > 0: we've got a sorting problem with overlapping pages
+			//
+			// bounds check not needed for nextIdx-1 because nextIdx is guaranteed to be at least curIdx + 1
+			// from the loop condition and the index calculation above
+			if cmp(value, index.MaxValue(nextIdx-1)) == 0 {
+				topIdx = nextIdx
+			} else {
+				return nextIdx
+			}
 		}
 	}
 
@@ -76,6 +95,15 @@ func binarySearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 		if cmp(value, min) < 0 || cmp(value, max) > 0 {
 			curIdx = n
 		}
+	}
+
+	// for overlapping pages we need to backtrack to find the smallest page
+	// this handles the case where page bounds overlap due to min/max truncation
+	for ; curIdx != 0; curIdx-- {
+		if cmp(value, index.MinValue(curIdx-1)) >= 0 && cmp(value, index.MaxValue(curIdx-1)) <= 0 {
+			continue
+		}
+		break
 	}
 
 	return curIdx
