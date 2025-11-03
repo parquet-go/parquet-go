@@ -148,7 +148,7 @@ func TestWriteRowsFuncOfRequiredColumnNotFound(t *testing.T) {
 		}
 	}()
 
-	writeRowsFuncOfRequired(reflect.TypeOf(""), schema, columnPath{"nonexistent"}, nil)
+	writeRowsFuncOfRequired(reflect.TypeOf(""), schema, columnPath{"nonexistent"})
 }
 
 // TestMapFieldToGroupSchema tests writing a Go struct with a map[string]string
@@ -786,12 +786,12 @@ func benchmarkMapToGroupNested(b *testing.B) {
 		records[i] = RecordWithMap{
 			ID: int64(i),
 			Nested: map[string]map[string]string{
-				"Group1": map[string]string{
+				"Group1": {
 					"A": "value_a_" + string(rune('a'+i%26)),
 					"B": "value_b_" + string(rune('a'+i%26)),
 					"C": "value_c_" + string(rune('a'+i%26)),
 				},
-				"Group2": map[string]string{
+				"Group2": {
 					"X": "value_x_" + string(rune('a'+i%26)),
 					"Y": "value_y_" + string(rune('a'+i%26)),
 					"Z": "value_z_" + string(rune('a'+i%26)),

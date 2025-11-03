@@ -735,6 +735,19 @@ func (p *convertedPage) Slice(i, j int64) Page {
 	}
 }
 
+func (p *convertedPage) Retain() {
+	Retain(p.page)
+}
+
+func (p *convertedPage) Release() {
+	Release(p.page)
+}
+
+var (
+	_ retainable = (*convertedPage)(nil)
+	_ releasable = (*convertedPage)(nil)
+)
+
 // convertedValueReader wraps a ValueReader to rewrite columnIndex in values.
 type convertedValueReader struct {
 	reader            ValueReader

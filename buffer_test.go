@@ -903,6 +903,9 @@ func TestOptionalDictWriteRowGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestNullsSortFirst(t *testing.T) {
