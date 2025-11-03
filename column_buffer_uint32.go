@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -88,25 +88,42 @@ func (col *uint32ColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	sparse.GatherUint32(col.values[n:], rows.Uint32Array())
 }
 
-func (col *uint32ColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	var v uint32
-	switch value.Kind() {
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		u := value.Uint()
-		if u > math.MaxUint32 {
-			panic(fmt.Sprintf("uint value %d out of range for uint32", u))
-		}
-		v = uint32(u)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		i := value.Int()
-		if i < 0 || i > math.MaxUint32 {
-			panic(fmt.Sprintf("int value %d out of range for uint32", i))
-		}
-		v = uint32(i)
-	default:
-		panic("cannot write value of type " + value.Type().String() + " to uint32 column")
+func (col *uint32ColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
+	panic("cannot write boolean to uint32 column")
+}
+
+func (col *uint32ColumnBuffer) writeInt32(_ columnLevels, value int32) {
+	if value < 0 {
+		panic(fmt.Sprintf("int32 value %d out of range for uint32", value))
 	}
-	col.values = append(col.values, v)
+	col.values = append(col.values, uint32(value))
+}
+
+func (col *uint32ColumnBuffer) writeInt64(_ columnLevels, value int64) {
+	if value < 0 || value > math.MaxUint32 {
+		panic(fmt.Sprintf("int64 value %d out of range for uint32", value))
+	}
+	col.values = append(col.values, uint32(value))
+}
+
+func (col *uint32ColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
+	panic("cannot write int96 to uint32 column")
+}
+
+func (col *uint32ColumnBuffer) writeFloat(_ columnLevels, _ float32) {
+	panic("cannot write float to uint32 column")
+}
+
+func (col *uint32ColumnBuffer) writeDouble(_ columnLevels, _ float64) {
+	panic("cannot write double to uint32 column")
+}
+
+func (col *uint32ColumnBuffer) writeByteArray(_ columnLevels, _ []byte) {
+	panic("cannot write byte array to uint32 column")
+}
+
+func (col *uint32ColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to uint32 column")
 }
 
 func (col *uint32ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

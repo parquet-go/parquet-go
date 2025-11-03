@@ -1,9 +1,8 @@
 package parquet
 
 import (
-	"reflect"
-
 	"github.com/parquet-go/bitpack/unsafecast"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/sparse"
 )
@@ -131,15 +130,32 @@ func (d *byteArrayDictionary) Page() Page {
 	return &d.byteArrayPage
 }
 
-func (d *byteArrayDictionary) insertReflectValue(value reflect.Value) int32 {
-	var s string
-	switch value.Kind() {
-	case reflect.Array, reflect.Slice:
-		s = unsafecast.String(value.Bytes())
-	default:
-		s = value.String()
-	}
+func (d *byteArrayDictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into byte array dictionary")
+}
 
+func (d *byteArrayDictionary) insertInt32(value int32) int32 {
+	panic("cannot insert int32 value into byte array dictionary")
+}
+
+func (d *byteArrayDictionary) insertInt64(value int64) int32 {
+	panic("cannot insert int64 value into byte array dictionary")
+}
+
+func (d *byteArrayDictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into byte array dictionary")
+}
+
+func (d *byteArrayDictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into byte array dictionary")
+}
+
+func (d *byteArrayDictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into byte array dictionary")
+}
+
+func (d *byteArrayDictionary) insertByteArray(value []byte) int32 {
+	s := unsafecast.String(value)
 	var indexes [1]int32
 	d.insert(indexes[:], makeArrayFromPointer(&s))
 	return indexes[0]

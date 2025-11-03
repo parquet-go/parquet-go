@@ -3,10 +3,10 @@ package parquet
 import (
 	"fmt"
 	"io"
-	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -87,21 +87,42 @@ func (col *uint64ColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	sparse.GatherUint64(col.values[n:], rows.Uint64Array())
 }
 
-func (col *uint64ColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	var v uint64
-	switch value.Kind() {
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		v = value.Uint()
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		i := value.Int()
-		if i < 0 {
-			panic(fmt.Sprintf("int value %d out of range for uint64", i))
-		}
-		v = uint64(i)
-	default:
-		panic("cannot write value of type " + value.Type().String() + " to uint64 column")
+func (col *uint64ColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
+	panic("cannot write boolean to uint64 column")
+}
+
+func (col *uint64ColumnBuffer) writeInt32(_ columnLevels, value int32) {
+	if value < 0 {
+		panic(fmt.Sprintf("int32 value %d out of range for uint64", value))
 	}
-	col.values = append(col.values, v)
+	col.values = append(col.values, uint64(value))
+}
+
+func (col *uint64ColumnBuffer) writeInt64(_ columnLevels, value int64) {
+	if value < 0 {
+		panic(fmt.Sprintf("int64 value %d out of range for uint64", value))
+	}
+	col.values = append(col.values, uint64(value))
+}
+
+func (col *uint64ColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
+	panic("cannot write int96 to uint64 column")
+}
+
+func (col *uint64ColumnBuffer) writeFloat(_ columnLevels, _ float32) {
+	panic("cannot write float to uint64 column")
+}
+
+func (col *uint64ColumnBuffer) writeDouble(_ columnLevels, _ float64) {
+	panic("cannot write double to uint64 column")
+}
+
+func (col *uint64ColumnBuffer) writeByteArray(_ columnLevels, _ []byte) {
+	panic("cannot write byte array to uint64 column")
+}
+
+func (col *uint64ColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to uint64 column")
 }
 
 func (col *uint64ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

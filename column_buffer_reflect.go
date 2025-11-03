@@ -7,6 +7,7 @@ import (
 	"sort"
 	"unsafe"
 
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -158,35 +159,14 @@ func writeValueFuncOf(columnIndex int16, node Node) (int16, writeValueFunc) {
 func writeValueFuncOfOptional(columnIndex int16, node Node) (int16, writeValueFunc) {
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
-		// Handle invalid values
 		if !value.IsValid() {
 			writeValue(columns, levels, value)
 			return
 		}
-
-		// Check for nil pointers/interfaces
-		switch value.Kind() {
-		case reflect.Pointer, reflect.Interface:
-			if value.IsNil() {
-				// Nil pointer/interface - write as null
-				writeValue(columns, levels, value)
-				return
-			}
-			// Non-nil - unwrap and increment definition level
-			value = value.Elem()
-			levels.definitionLevel++
-			writeValue(columns, levels, value)
-			return
-		}
-
-		// For other types, check if zero value
 		if value.IsZero() {
-			// Zero value - write as null
 			writeValue(columns, levels, value)
 			return
 		}
-
-		// Non-zero value - increment definition level
 		levels.definitionLevel++
 		writeValue(columns, levels, value)
 	}
@@ -195,24 +175,43 @@ func writeValueFuncOfOptional(columnIndex int16, node Node) (int16, writeValueFu
 func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFunc) {
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
-		if value.Kind() == reflect.Interface {
+		for {
+			if !value.IsValid() {
+				writeValue(columns, levels, reflect.Value{})
+				return
+			}
+			kind := value.Kind()
+			if kind != reflect.Interface && kind != reflect.Pointer {
+				break
+			}
+			if value.IsNil() {
+				writeValue(columns, levels, reflect.Value{})
+				break
+			}
 			value = value.Elem()
 		}
 
-		if !value.IsValid() || value.Len() == 0 {
-			writeValue(columns, levels, value)
-			return
-		}
-
-		levels.repetitionDepth++
-		levels.definitionLevel++
-		writeValue(columns, levels, value.Index(0))
-
-		if n := value.Len(); n > 1 {
-			levels.repetitionLevel = levels.repetitionDepth
-			for i := 1; i < n; i++ {
-				writeValue(columns, levels, value.Index(i))
+		switch value.Kind() {
+		case reflect.Slice, reflect.Array:
+			if value.Len() == 0 {
+				writeValue(columns, levels, reflect.Value{})
+				return
 			}
+
+			levels.repetitionDepth++
+			levels.definitionLevel++
+			writeValue(columns, levels, value.Index(0))
+
+			if n := value.Len(); n > 1 {
+				levels.repetitionLevel = levels.repetitionDepth
+				for i := 1; i < n; i++ {
+					writeValue(columns, levels, value.Index(i))
+				}
+			}
+		default:
+			levels.repetitionDepth++
+			levels.definitionLevel++
+			writeValue(columns, levels, value)
 		}
 	}
 }
@@ -247,13 +246,19 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 		levels.repetitionDepth++
 		levels.definitionLevel++
 
+		mapType := mapValue.Type()
+		mapKey := reflect.New(mapType.Key()).Elem()
+		mapElem := reflect.New(mapType.Elem()).Elem()
+
 		elem := reflect.New(keyValueElem).Elem()
 		k := elem.Field(0)
 		v := elem.Field(1)
 
-		for _, key := range mapValue.MapKeys() {
-			k.Set(key.Convert(keyType))
-			v.Set(mapValue.MapIndex(key).Convert(valueType))
+		for it := mapValue.MapRange(); it.Next(); {
+			mapKey.SetIterKey(it)
+			mapElem.SetIterValue(it)
+			k.Set(mapKey.Convert(keyType))
+			v.Set(mapElem.Convert(valueType))
 			writeValue(columns, levels, elem)
 			levels.repetitionLevel = levels.repetitionDepth
 		}
@@ -343,12 +348,45 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 	if columnIndex > MaxColumnIndex {
 		panic("row cannot be written because it has more than 127 columns")
 	}
-
 	return columnIndex + 1, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
-		// Unwrap interface{} values before passing to writeReflectValue
-		if value.IsValid() && value.Kind() == reflect.Interface {
-			value = value.Elem()
+		col := columns[columnIndex]
+		for {
+			if !value.IsValid() {
+				col.writeNull(levels)
+				return
+			}
+			switch value.Kind() {
+			case reflect.Pointer, reflect.Interface:
+				if value.IsNil() {
+					col.writeNull(levels)
+					return
+				}
+				value = value.Elem()
+				continue
+			case reflect.Bool:
+				col.writeBoolean(levels, value.Bool())
+			case reflect.Int8, reflect.Int16, reflect.Int32:
+				col.writeInt32(levels, int32(value.Int()))
+			case reflect.Int, reflect.Int64:
+				col.writeInt64(levels, value.Int())
+			case reflect.Uint8, reflect.Uint16, reflect.Uint32:
+				col.writeInt32(levels, int32(value.Uint()))
+			case reflect.Uint, reflect.Uint64:
+				col.writeInt64(levels, int64(value.Uint()))
+			case reflect.Float32:
+				col.writeFloat(levels, float32(value.Float()))
+			case reflect.Float64:
+				col.writeDouble(levels, value.Float())
+			case reflect.String:
+				s := value.String()
+				col.writeByteArray(levels, unsafe.Slice(unsafe.StringData(s), len(s)))
+			case reflect.Slice, reflect.Array:
+				col.writeByteArray(levels, value.Bytes())
+			default:
+				col.writeInt96(levels, value.Interface().(deprecated.Int96))
+			}
+			return
 		}
-		columns[columnIndex].writeReflectValue(levels, value)
+
 	}
 }

@@ -2,8 +2,8 @@ package parquet
 
 import (
 	"fmt"
-	"reflect"
 
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -97,22 +97,42 @@ func (d *uint64Dictionary) Page() Page {
 	return &d.uint64Page
 }
 
-func (d *uint64Dictionary) insertReflectValue(value reflect.Value) int32 {
-	var v uint64
-	switch value.Kind() {
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		v = value.Uint()
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		i := value.Int()
-		if i < 0 {
-			panic(fmt.Sprintf("int value %d out of range for uint64", i))
-		}
-		v = uint64(i)
-	default:
-		panic("cannot insert value of type " + value.Type().String() + " into uint64 dictionary")
-	}
+func (d *uint64Dictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into uint64 dictionary")
+}
 
+func (d *uint64Dictionary) insertInt32(value int32) int32 {
+	if value < 0 {
+		panic(fmt.Sprintf("int32 value %d out of range for uint64", value))
+	}
+	v := uint64(value)
 	var indexes [1]int32
 	d.insert(indexes[:], makeArrayFromPointer(&v))
 	return indexes[0]
+}
+
+func (d *uint64Dictionary) insertInt64(value int64) int32 {
+	if value < 0 {
+		panic(fmt.Sprintf("int64 value %d out of range for uint64", value))
+	}
+	v := uint64(value)
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&v))
+	return indexes[0]
+}
+
+func (d *uint64Dictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into uint64 dictionary")
+}
+
+func (d *uint64Dictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into uint64 dictionary")
+}
+
+func (d *uint64Dictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into uint64 dictionary")
+}
+
+func (d *uint64Dictionary) insertByteArray(value []byte) int32 {
+	panic("cannot insert byte array value into uint64 dictionary")
 }

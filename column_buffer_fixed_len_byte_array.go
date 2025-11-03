@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"reflect"
 	"slices"
 	"unsafe"
 
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -125,12 +125,39 @@ func (col *fixedLenByteArrayColumnBuffer) writeValues(_ columnLevels, rows spars
 	}
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	b := value.Bytes()
-	if len(b) != col.size {
-		panic(fmt.Sprintf("cannot write byte array of length %d to fixed length byte array column of size %d", len(b), col.size))
+func (col *fixedLenByteArrayColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
+	panic("cannot write boolean to fixed length byte array column")
+}
+
+func (col *fixedLenByteArrayColumnBuffer) writeInt32(_ columnLevels, _ int32) {
+	panic("cannot write int32 to fixed length byte array column")
+}
+
+func (col *fixedLenByteArrayColumnBuffer) writeInt64(_ columnLevels, _ int64) {
+	panic("cannot write int64 to fixed length byte array column")
+}
+
+func (col *fixedLenByteArrayColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
+	panic("cannot write int96 to fixed length byte array column")
+}
+
+func (col *fixedLenByteArrayColumnBuffer) writeFloat(_ columnLevels, _ float32) {
+	panic("cannot write float to fixed length byte array column")
+}
+
+func (col *fixedLenByteArrayColumnBuffer) writeDouble(_ columnLevels, _ float64) {
+	panic("cannot write double to fixed length byte array column")
+}
+
+func (col *fixedLenByteArrayColumnBuffer) writeByteArray(_ columnLevels, value []byte) {
+	if len(value) != col.size {
+		panic(fmt.Sprintf("cannot write byte array of length %d to fixed length byte array column of size %d", len(value), col.size))
 	}
-	col.data = append(col.data, b...)
+	col.data = append(col.data, value...)
+}
+
+func (col *fixedLenByteArrayColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to fixed length byte array column")
 }
 
 func (col *fixedLenByteArrayColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

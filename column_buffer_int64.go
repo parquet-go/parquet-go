@@ -3,11 +3,10 @@ package parquet
 import (
 	"fmt"
 	"io"
-	"math"
-	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -88,21 +87,36 @@ func (col *int64ColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	sparse.GatherInt64(col.values[n:], rows.Int64Array())
 }
 
-func (col *int64ColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	var v int64
-	switch value.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		v = value.Int()
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		u := value.Uint()
-		if u > math.MaxInt64 {
-			panic(fmt.Sprintf("uint value %d out of range for int64", u))
-		}
-		v = int64(u)
-	default:
-		panic("cannot write value of type " + value.Type().String() + " to int64 column")
-	}
-	col.values = append(col.values, v)
+func (col *int64ColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
+	panic("cannot write boolean to int64 column")
+}
+
+func (col *int64ColumnBuffer) writeInt32(_ columnLevels, value int32) {
+	col.values = append(col.values, int64(value))
+}
+
+func (col *int64ColumnBuffer) writeInt64(_ columnLevels, value int64) {
+	col.values = append(col.values, value)
+}
+
+func (col *int64ColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
+	panic("cannot write int96 to int64 column")
+}
+
+func (col *int64ColumnBuffer) writeFloat(_ columnLevels, _ float32) {
+	panic("cannot write float to int64 column")
+}
+
+func (col *int64ColumnBuffer) writeDouble(_ columnLevels, _ float64) {
+	panic("cannot write double to int64 column")
+}
+
+func (col *int64ColumnBuffer) writeByteArray(_ columnLevels, _ []byte) {
+	panic("cannot write byte array to int64 column")
+}
+
+func (col *int64ColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to int64 column")
 }
 
 func (col *int64ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

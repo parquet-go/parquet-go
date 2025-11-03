@@ -3,9 +3,9 @@ package parquet
 import (
 	"fmt"
 	"io"
-	"reflect"
 	"slices"
 
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -83,12 +83,39 @@ func (col *be128ColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	sparse.GatherUint128(col.values[n:], rows.Uint128Array())
 }
 
-func (col *be128ColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	b := value.Bytes()
-	if len(b) != 16 {
-		panic(fmt.Sprintf("cannot write %d bytes to [16]byte column", len(b)))
+func (col *be128ColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
+	panic("cannot write boolean to be128 column")
+}
+
+func (col *be128ColumnBuffer) writeInt32(_ columnLevels, _ int32) {
+	panic("cannot write int32 to be128 column")
+}
+
+func (col *be128ColumnBuffer) writeInt64(_ columnLevels, _ int64) {
+	panic("cannot write int64 to be128 column")
+}
+
+func (col *be128ColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
+	panic("cannot write int96 to be128 column")
+}
+
+func (col *be128ColumnBuffer) writeFloat(_ columnLevels, _ float32) {
+	panic("cannot write float to be128 column")
+}
+
+func (col *be128ColumnBuffer) writeDouble(_ columnLevels, _ float64) {
+	panic("cannot write double to be128 column")
+}
+
+func (col *be128ColumnBuffer) writeByteArray(_ columnLevels, value []byte) {
+	if len(value) != 16 {
+		panic(fmt.Sprintf("cannot write %d bytes to [16]byte column", len(value)))
 	}
-	col.values = append(col.values, [16]byte(b))
+	col.values = append(col.values, [16]byte(value))
+}
+
+func (col *be128ColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to be128 column")
 }
 
 func (col *be128ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

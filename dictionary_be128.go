@@ -1,9 +1,10 @@
 package parquet
 
 import (
-	"reflect"
+	"fmt"
 	"unsafe"
 
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -129,8 +130,36 @@ func (d *be128Dictionary) Page() Page {
 	return &d.be128Page
 }
 
-func (d *be128Dictionary) insertReflectValue(value reflect.Value) int32 {
-	b := ([16]byte)(value.Bytes())
+func (d *be128Dictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into be128 dictionary")
+}
+
+func (d *be128Dictionary) insertInt32(value int32) int32 {
+	panic("cannot insert int32 value into be128 dictionary")
+}
+
+func (d *be128Dictionary) insertInt64(value int64) int32 {
+	panic("cannot insert int64 value into be128 dictionary")
+}
+
+func (d *be128Dictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into be128 dictionary")
+}
+
+func (d *be128Dictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into be128 dictionary")
+}
+
+func (d *be128Dictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into be128 dictionary")
+}
+
+func (d *be128Dictionary) insertByteArray(value []byte) int32 {
+	if len(value) != 16 {
+		panic(fmt.Sprintf("byte array length %d does not match required length 16 for be128", len(value)))
+	}
+
+	b := ([16]byte)(value)
 	i := [1]int32{}
 	d.insert(i[:], makeArrayFromPointer(&b))
 	return i[0]

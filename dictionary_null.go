@@ -1,8 +1,7 @@
 package parquet
 
 import (
-	"reflect"
-
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/sparse"
 )
@@ -47,7 +46,30 @@ func (d *nullDictionary) Page() Page { return &d.nullPage }
 
 func (d *nullDictionary) insert(indexes []int32, rows sparse.Array) {}
 
-func (d *nullDictionary) insertReflectValue(value reflect.Value) int32 {
-	// Null dictionary has only one value (null), always return index 0
-	return 0
+func (d *nullDictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into null dictionary")
+}
+
+func (d *nullDictionary) insertInt32(value int32) int32 {
+	panic("cannot insert int32 value into null dictionary")
+}
+
+func (d *nullDictionary) insertInt64(value int64) int32 {
+	panic("cannot insert int64 value into null dictionary")
+}
+
+func (d *nullDictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into null dictionary")
+}
+
+func (d *nullDictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into null dictionary")
+}
+
+func (d *nullDictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into null dictionary")
+}
+
+func (d *nullDictionary) insertByteArray(value []byte) int32 {
+	panic("cannot insert byte array value into null dictionary")
 }

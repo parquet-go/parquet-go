@@ -2,10 +2,10 @@ package parquet
 
 import (
 	"io"
-	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -152,8 +152,7 @@ func (col *booleanColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	col.bits = col.bits[:bitpack.ByteCount(uint(col.numValues))]
 }
 
-func (col *booleanColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	b := value.Bool()
+func (col *booleanColumnBuffer) writeBoolean(_ columnLevels, value bool) {
 	numBytes := bitpack.ByteCount(uint(col.numValues) + 1)
 	if cap(col.bits) < numBytes {
 		col.bits = append(make([]byte, 0, max(numBytes, 2*cap(col.bits))), col.bits...)
@@ -162,11 +161,39 @@ func (col *booleanColumnBuffer) writeReflectValue(_ columnLevels, value reflect.
 	x := uint(col.numValues) / 8
 	y := uint(col.numValues) % 8
 	bit := byte(0)
-	if b {
+	if value {
 		bit = 1
 	}
 	col.bits[x] = (bit << y) | (col.bits[x] & ^(1 << y))
 	col.numValues++
+}
+
+func (col *booleanColumnBuffer) writeInt32(_ columnLevels, _ int32) {
+	panic("cannot write int32 to boolean column")
+}
+
+func (col *booleanColumnBuffer) writeInt64(_ columnLevels, _ int64) {
+	panic("cannot write int64 to boolean column")
+}
+
+func (col *booleanColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
+	panic("cannot write int96 to boolean column")
+}
+
+func (col *booleanColumnBuffer) writeFloat(_ columnLevels, _ float32) {
+	panic("cannot write float to boolean column")
+}
+
+func (col *booleanColumnBuffer) writeDouble(_ columnLevels, _ float64) {
+	panic("cannot write double to boolean column")
+}
+
+func (col *booleanColumnBuffer) writeByteArray(_ columnLevels, _ []byte) {
+	panic("cannot write byte array to boolean column")
+}
+
+func (col *booleanColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to boolean column")
 }
 
 func (col *booleanColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

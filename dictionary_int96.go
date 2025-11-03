@@ -1,8 +1,6 @@
 package parquet
 
 import (
-	"reflect"
-
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -105,13 +103,34 @@ func (d *int96Dictionary) Page() Page {
 	return &d.int96Page
 }
 
-func (d *int96Dictionary) insertReflectValue(value reflect.Value) int32 {
-	v := value.Interface().(deprecated.Int96)
+func (d *int96Dictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into int96 dictionary")
+}
 
-	// Use the existing insertValues method
+func (d *int96Dictionary) insertInt32(value int32) int32 {
+	panic("cannot insert int32 value into int96 dictionary")
+}
+
+func (d *int96Dictionary) insertInt64(value int64) int32 {
+	panic("cannot insert int64 value into int96 dictionary")
+}
+
+func (d *int96Dictionary) insertInt96(value deprecated.Int96) int32 {
 	indexes := [1]int32{0}
 	d.insertValues(indexes[:], 1, func(i int) deprecated.Int96 {
-		return v
+		return value
 	})
 	return indexes[0]
+}
+
+func (d *int96Dictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into int96 dictionary")
+}
+
+func (d *int96Dictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into int96 dictionary")
+}
+
+func (d *int96Dictionary) insertByteArray(value []byte) int32 {
+	panic("cannot insert byte array value into int96 dictionary")
 }

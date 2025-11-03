@@ -3,10 +3,10 @@ package parquet
 import (
 	"fmt"
 	"io"
-	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -87,19 +87,36 @@ func (col *floatColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	sparse.GatherFloat32(col.values[n:], rows.Float32Array())
 }
 
-func (col *floatColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	var v float32
-	switch value.Kind() {
-	case reflect.Float32, reflect.Float64:
-		v = float32(value.Float())
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		v = float32(value.Int())
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		v = float32(value.Uint())
-	default:
-		panic("cannot write value of type " + value.Type().String() + " to float column")
-	}
-	col.values = append(col.values, v)
+func (col *floatColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
+	panic("cannot write boolean to float column")
+}
+
+func (col *floatColumnBuffer) writeInt32(_ columnLevels, value int32) {
+	col.values = append(col.values, float32(value))
+}
+
+func (col *floatColumnBuffer) writeInt64(_ columnLevels, value int64) {
+	col.values = append(col.values, float32(value))
+}
+
+func (col *floatColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
+	panic("cannot write int96 to float column")
+}
+
+func (col *floatColumnBuffer) writeFloat(_ columnLevels, value float32) {
+	col.values = append(col.values, value)
+}
+
+func (col *floatColumnBuffer) writeDouble(_ columnLevels, value float64) {
+	col.values = append(col.values, float32(value))
+}
+
+func (col *floatColumnBuffer) writeByteArray(_ columnLevels, _ []byte) {
+	panic("cannot write byte array to float column")
+}
+
+func (col *floatColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to float column")
 }
 
 func (col *floatColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

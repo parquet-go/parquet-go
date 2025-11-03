@@ -3,8 +3,8 @@ package parquet
 import (
 	"fmt"
 	"math"
-	"reflect"
 
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -98,26 +98,42 @@ func (d *uint32Dictionary) Page() Page {
 	return &d.uint32Page
 }
 
-func (d *uint32Dictionary) insertReflectValue(value reflect.Value) int32 {
-	var v uint32
-	switch value.Kind() {
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		u := value.Uint()
-		if u > math.MaxUint32 {
-			panic(fmt.Sprintf("uint value %d out of range for uint32", u))
-		}
-		v = uint32(u)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		i := value.Int()
-		if i < 0 || i > math.MaxUint32 {
-			panic(fmt.Sprintf("int value %d out of range for uint32", i))
-		}
-		v = uint32(i)
-	default:
-		panic("cannot insert value of type " + value.Type().String() + " into uint32 dictionary")
-	}
+func (d *uint32Dictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into uint32 dictionary")
+}
 
+func (d *uint32Dictionary) insertInt32(value int32) int32 {
+	if value < 0 {
+		panic(fmt.Sprintf("int32 value %d out of range for uint32", value))
+	}
+	v := uint32(value)
 	var indexes [1]int32
 	d.insert(indexes[:], makeArrayFromPointer(&v))
 	return indexes[0]
+}
+
+func (d *uint32Dictionary) insertInt64(value int64) int32 {
+	if value < 0 || value > math.MaxUint32 {
+		panic(fmt.Sprintf("int64 value %d out of range for uint32", value))
+	}
+	v := uint32(value)
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&v))
+	return indexes[0]
+}
+
+func (d *uint32Dictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into uint32 dictionary")
+}
+
+func (d *uint32Dictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into uint32 dictionary")
+}
+
+func (d *uint32Dictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into uint32 dictionary")
+}
+
+func (d *uint32Dictionary) insertByteArray(value []byte) int32 {
+	panic("cannot insert byte array value into uint32 dictionary")
 }

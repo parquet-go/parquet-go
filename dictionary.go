@@ -3,9 +3,11 @@ package parquet
 import (
 	"io"
 	"reflect"
+	"unsafe"
 
 	"slices"
 
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/sparse"
 )
@@ -83,8 +85,65 @@ type Dictionary interface {
 	// See ColumnBuffer.writeValues for details on the use of unexported methods
 	// on interfaces.
 	insert(indexes []int32, rows sparse.Array)
-	insertReflectValue(value reflect.Value) int32
+
+	// Parquet primitive type insert methods. Each dictionary implementation
+	// supports only the Parquet types it can handle and panics for others.
+	// Returns the index at which the value was inserted (or already existed).
+	insertBoolean(value bool) int32
+	insertInt32(value int32) int32
+	insertInt64(value int64) int32
+	insertInt96(value deprecated.Int96) int32
+	insertFloat(value float32) int32
+	insertDouble(value float64) int32
+	insertByteArray(value []byte) int32
+
 	//lookup(indexes []int32, rows sparse.Array)
+}
+
+// insertReflectValueToDictionary converts a reflect.Value to the appropriate Parquet primitive type
+// and inserts it into the dictionary using the type-specific insert method.
+func insertReflectValueToDictionary(dict Dictionary, value reflect.Value) int32 {
+	switch value.Kind() {
+	case reflect.Bool:
+		return dict.insertBoolean(value.Bool())
+	case reflect.Int8, reflect.Int16, reflect.Int32:
+		return dict.insertInt32(int32(value.Int()))
+	case reflect.Int, reflect.Int64:
+		// reflect.Int might be 64-bit on 64-bit platforms
+		return dict.insertInt64(value.Int())
+	case reflect.Uint8, reflect.Uint16, reflect.Uint32:
+		return dict.insertInt32(int32(value.Uint()))
+	case reflect.Uint, reflect.Uint64:
+		// reflect.Uint might be 64-bit on 64-bit platforms
+		return dict.insertInt64(int64(value.Uint()))
+	case reflect.Float32:
+		return dict.insertFloat(float32(value.Float()))
+	case reflect.Float64:
+		return dict.insertDouble(value.Float())
+	case reflect.String:
+		// Use unsafe.StringData for zero-copy conversion
+		s := value.String()
+		return dict.insertByteArray(unsafe.Slice(unsafe.StringData(s), len(s)))
+	case reflect.Slice:
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			return dict.insertByteArray(value.Bytes())
+		} else {
+			panic("unsupported slice type for Parquet dictionary insert: " + value.Type().String())
+		}
+	case reflect.Array:
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			return dict.insertByteArray(value.Bytes())
+		} else {
+			panic("unsupported array type for Parquet dictionary insert: " + value.Type().String())
+		}
+	default:
+		// Handle special types
+		if value.Type() == reflect.TypeOf(deprecated.Int96{}) {
+			return dict.insertInt96(value.Interface().(deprecated.Int96))
+		} else {
+			panic("unsupported type for Parquet dictionary insert: " + value.Type().String())
+		}
+	}
 }
 
 func checkLookupIndexBounds(indexes []int32, rows sparse.Array) {
@@ -320,8 +379,36 @@ func (col *indexedColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	col.typ.dict.insert(col.values[i:], rows)
 }
 
-func (col *indexedColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	col.values = append(col.values, col.typ.dict.insertReflectValue(value))
+func (col *indexedColumnBuffer) writeBoolean(_ columnLevels, value bool) {
+	col.values = append(col.values, col.typ.dict.insertBoolean(value))
+}
+
+func (col *indexedColumnBuffer) writeInt32(_ columnLevels, value int32) {
+	col.values = append(col.values, col.typ.dict.insertInt32(value))
+}
+
+func (col *indexedColumnBuffer) writeInt64(_ columnLevels, value int64) {
+	col.values = append(col.values, col.typ.dict.insertInt64(value))
+}
+
+func (col *indexedColumnBuffer) writeInt96(_ columnLevels, value deprecated.Int96) {
+	col.values = append(col.values, col.typ.dict.insertInt96(value))
+}
+
+func (col *indexedColumnBuffer) writeFloat(_ columnLevels, value float32) {
+	col.values = append(col.values, col.typ.dict.insertFloat(value))
+}
+
+func (col *indexedColumnBuffer) writeDouble(_ columnLevels, value float64) {
+	col.values = append(col.values, col.typ.dict.insertDouble(value))
+}
+
+func (col *indexedColumnBuffer) writeByteArray(_ columnLevels, value []byte) {
+	col.values = append(col.values, col.typ.dict.insertByteArray(value))
+}
+
+func (col *indexedColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to indexed column")
 }
 
 func (col *indexedColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

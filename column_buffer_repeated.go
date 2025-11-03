@@ -2,9 +2,9 @@ package parquet
 
 import (
 	"bytes"
-	"reflect"
 	"slices"
 
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -302,23 +302,62 @@ func (col *repeatedColumnBuffer) writeValues(levels columnLevels, row sparse.Arr
 	}
 }
 
-func (col *repeatedColumnBuffer) writeReflectValue(levels columnLevels, value reflect.Value) {
-	// If this is the start of a new row (repetition level 0)
+func (col *repeatedColumnBuffer) writeLevel(levels columnLevels) bool {
 	if levels.repetitionLevel == 0 {
 		col.rows = append(col.rows, offsetMapping{
 			offset:     uint32(len(col.repetitionLevels)),
 			baseOffset: uint32(col.base.NumValues()),
 		})
 	}
-
-	// Write the repetition and definition levels for this value
 	col.repetitionLevels = append(col.repetitionLevels, levels.repetitionLevel)
 	col.definitionLevels = append(col.definitionLevels, levels.definitionLevel)
+	return levels.definitionLevel == col.maxDefinitionLevel
+}
 
-	// If definition level indicates the value is present, write it to the base column
-	if levels.definitionLevel == col.maxDefinitionLevel {
-		col.base.writeReflectValue(levels, value)
+func (col *repeatedColumnBuffer) writeBoolean(levels columnLevels, value bool) {
+	if col.writeLevel(levels) {
+		col.base.writeBoolean(levels, value)
 	}
+}
+
+func (col *repeatedColumnBuffer) writeInt32(levels columnLevels, value int32) {
+	if col.writeLevel(levels) {
+		col.base.writeInt32(levels, value)
+	}
+}
+
+func (col *repeatedColumnBuffer) writeInt64(levels columnLevels, value int64) {
+	if col.writeLevel(levels) {
+		col.base.writeInt64(levels, value)
+	}
+}
+
+func (col *repeatedColumnBuffer) writeInt96(levels columnLevels, value deprecated.Int96) {
+	if col.writeLevel(levels) {
+		col.base.writeInt96(levels, value)
+	}
+}
+
+func (col *repeatedColumnBuffer) writeFloat(levels columnLevels, value float32) {
+	if col.writeLevel(levels) {
+		col.base.writeFloat(levels, value)
+	}
+}
+
+func (col *repeatedColumnBuffer) writeDouble(levels columnLevels, value float64) {
+	if col.writeLevel(levels) {
+		col.base.writeDouble(levels, value)
+	}
+}
+
+func (col *repeatedColumnBuffer) writeByteArray(levels columnLevels, value []byte) {
+	if col.writeLevel(levels) {
+		col.base.writeByteArray(levels, value)
+	}
+}
+
+func (col *repeatedColumnBuffer) writeNull(levels columnLevels) {
+	col.writeLevel(levels)
 }
 
 func (col *repeatedColumnBuffer) ReadValuesAt(values []Value, offset int64) (int, error) {

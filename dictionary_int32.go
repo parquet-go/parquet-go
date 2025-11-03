@@ -3,8 +3,8 @@ package parquet
 import (
 	"fmt"
 	"math"
-	"reflect"
 
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -111,26 +111,38 @@ func (d *int32Dictionary) Page() Page {
 	return &d.int32Page
 }
 
-func (d *int32Dictionary) insertReflectValue(value reflect.Value) int32 {
-	var v int32
-	switch value.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		i := value.Int()
-		if i < math.MinInt32 || i > math.MaxInt32 {
-			panic(fmt.Sprintf("int value %d out of range for int32", i))
-		}
-		v = int32(i)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		u := value.Uint()
-		if u > math.MaxInt32 {
-			panic(fmt.Sprintf("uint value %d out of range for int32", u))
-		}
-		v = int32(u)
-	default:
-		panic("cannot insert value of type " + value.Type().String() + " into int32 dictionary")
-	}
+func (d *int32Dictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into int32 dictionary")
+}
 
+func (d *int32Dictionary) insertInt32(value int32) int32 {
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&value))
+	return indexes[0]
+}
+
+func (d *int32Dictionary) insertInt64(value int64) int32 {
+	if value < math.MinInt32 || value > math.MaxInt32 {
+		panic(fmt.Sprintf("int64 value %d out of range for int32", value))
+	}
+	v := int32(value)
 	var indexes [1]int32
 	d.insert(indexes[:], makeArrayFromPointer(&v))
 	return indexes[0]
+}
+
+func (d *int32Dictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into int32 dictionary")
+}
+
+func (d *int32Dictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into int32 dictionary")
+}
+
+func (d *int32Dictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into int32 dictionary")
+}
+
+func (d *int32Dictionary) insertByteArray(value []byte) int32 {
+	panic("cannot insert byte array value into int32 dictionary")
 }

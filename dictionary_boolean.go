@@ -2,9 +2,9 @@ package parquet
 
 import (
 	"math/bits"
-	"reflect"
 
 	"github.com/parquet-go/bitpack"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -133,9 +133,7 @@ func (d *booleanDictionary) Page() Page {
 	return &d.booleanPage
 }
 
-func (d *booleanDictionary) insertReflectValue(value reflect.Value) int32 {
-	v := value.Bool()
-
+func (d *booleanDictionary) insertBoolean(value bool) int32 {
 	// Ensure both indexes are initialized
 	if d.table[0] < 0 {
 		d.table[0] = d.numValues
@@ -148,8 +146,32 @@ func (d *booleanDictionary) insertReflectValue(value reflect.Value) int32 {
 		d.bits = plain.AppendBoolean(d.bits, int(d.table[1]), true)
 	}
 
-	if v {
+	if value {
 		return d.table[1]
 	}
 	return d.table[0]
+}
+
+func (d *booleanDictionary) insertInt32(value int32) int32 {
+	panic("cannot insert int32 value into boolean dictionary")
+}
+
+func (d *booleanDictionary) insertInt64(value int64) int32 {
+	panic("cannot insert int64 value into boolean dictionary")
+}
+
+func (d *booleanDictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into boolean dictionary")
+}
+
+func (d *booleanDictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into boolean dictionary")
+}
+
+func (d *booleanDictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into boolean dictionary")
+}
+
+func (d *booleanDictionary) insertByteArray(value []byte) int32 {
+	panic("cannot insert byte array value into boolean dictionary")
 }

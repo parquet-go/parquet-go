@@ -3,10 +3,10 @@ package parquet
 import (
 	"fmt"
 	"io"
-	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -87,19 +87,36 @@ func (col *doubleColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	sparse.GatherFloat64(col.values[n:], rows.Float64Array())
 }
 
-func (col *doubleColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	var v float64
-	switch value.Kind() {
-	case reflect.Float32, reflect.Float64:
-		v = value.Float()
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		v = float64(value.Int())
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		v = float64(value.Uint())
-	default:
-		panic("cannot write value of type " + value.Type().String() + " to double column")
-	}
-	col.values = append(col.values, v)
+func (col *doubleColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
+	panic("cannot write boolean to double column")
+}
+
+func (col *doubleColumnBuffer) writeInt32(_ columnLevels, value int32) {
+	col.values = append(col.values, float64(value))
+}
+
+func (col *doubleColumnBuffer) writeInt64(_ columnLevels, value int64) {
+	col.values = append(col.values, float64(value))
+}
+
+func (col *doubleColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
+	panic("cannot write int96 to double column")
+}
+
+func (col *doubleColumnBuffer) writeFloat(_ columnLevels, value float32) {
+	col.values = append(col.values, float64(value))
+}
+
+func (col *doubleColumnBuffer) writeDouble(_ columnLevels, value float64) {
+	col.values = append(col.values, value)
+}
+
+func (col *doubleColumnBuffer) writeByteArray(_ columnLevels, _ []byte) {
+	panic("cannot write byte array to double column")
+}
+
+func (col *doubleColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to double column")
 }
 
 func (col *doubleColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

@@ -3,7 +3,6 @@ package parquet
 import (
 	"fmt"
 	"io"
-	"reflect"
 	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -88,8 +87,36 @@ func (col *int96ColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	}
 }
 
-func (col *int96ColumnBuffer) writeReflectValue(_ columnLevels, value reflect.Value) {
-	col.values = append(col.values, value.Interface().(deprecated.Int96))
+func (col *int96ColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
+	panic("cannot write boolean to int96 column")
+}
+
+func (col *int96ColumnBuffer) writeInt32(_ columnLevels, _ int32) {
+	panic("cannot write int32 to int96 column")
+}
+
+func (col *int96ColumnBuffer) writeInt64(_ columnLevels, _ int64) {
+	panic("cannot write int64 to int96 column")
+}
+
+func (col *int96ColumnBuffer) writeInt96(_ columnLevels, value deprecated.Int96) {
+	col.values = append(col.values, value)
+}
+
+func (col *int96ColumnBuffer) writeFloat(_ columnLevels, _ float32) {
+	panic("cannot write float to int96 column")
+}
+
+func (col *int96ColumnBuffer) writeDouble(_ columnLevels, _ float64) {
+	panic("cannot write double to int96 column")
+}
+
+func (col *int96ColumnBuffer) writeByteArray(_ columnLevels, _ []byte) {
+	panic("cannot write byte array to int96 column")
+}
+
+func (col *int96ColumnBuffer) writeNull(_ columnLevels) {
+	panic("cannot write null to int96 column")
 }
 
 func (col *int96ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

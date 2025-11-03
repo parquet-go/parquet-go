@@ -1,10 +1,11 @@
 package parquet
 
 import (
-	"reflect"
+	"fmt"
 	"unsafe"
 
 	"github.com/parquet-go/bitpack/unsafecast"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/sparse"
 )
@@ -126,13 +127,38 @@ func (d *fixedLenByteArrayDictionary) Page() Page {
 	return &d.fixedLenByteArrayPage
 }
 
-func (d *fixedLenByteArrayDictionary) insertReflectValue(value reflect.Value) int32 {
-	b := value.Bytes()
+func (d *fixedLenByteArrayDictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into fixed length byte array dictionary")
+}
 
-	// Use the existing insertValues method
+func (d *fixedLenByteArrayDictionary) insertInt32(value int32) int32 {
+	panic("cannot insert int32 value into fixed length byte array dictionary")
+}
+
+func (d *fixedLenByteArrayDictionary) insertInt64(value int64) int32 {
+	panic("cannot insert int64 value into fixed length byte array dictionary")
+}
+
+func (d *fixedLenByteArrayDictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into fixed length byte array dictionary")
+}
+
+func (d *fixedLenByteArrayDictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into fixed length byte array dictionary")
+}
+
+func (d *fixedLenByteArrayDictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into fixed length byte array dictionary")
+}
+
+func (d *fixedLenByteArrayDictionary) insertByteArray(value []byte) int32 {
+	if len(value) != d.size {
+		panic(fmt.Sprintf("byte array length %d does not match fixed length %d", len(value), d.size))
+	}
+
 	indexes := [1]int32{0}
 	d.insertValues(indexes[:], 1, func(i int) *byte {
-		return &b[0]
+		return &value[0]
 	})
 	return indexes[0]
 }

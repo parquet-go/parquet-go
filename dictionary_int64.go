@@ -1,10 +1,7 @@
 package parquet
 
 import (
-	"fmt"
-	"math"
-	"reflect"
-
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -98,22 +95,35 @@ func (d *int64Dictionary) Page() Page {
 	return &d.int64Page
 }
 
-func (d *int64Dictionary) insertReflectValue(value reflect.Value) int32 {
-	var v int64
-	switch value.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		v = value.Int()
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		u := value.Uint()
-		if u > math.MaxInt64 {
-			panic(fmt.Sprintf("uint value %d out of range for int64", u))
-		}
-		v = int64(u)
-	default:
-		panic("cannot insert value of type " + value.Type().String() + " into int64 dictionary")
-	}
+func (d *int64Dictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into int64 dictionary")
+}
 
+func (d *int64Dictionary) insertInt32(value int32) int32 {
+	v := int64(value)
 	var indexes [1]int32
 	d.insert(indexes[:], makeArrayFromPointer(&v))
 	return indexes[0]
+}
+
+func (d *int64Dictionary) insertInt64(value int64) int32 {
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&value))
+	return indexes[0]
+}
+
+func (d *int64Dictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into int64 dictionary")
+}
+
+func (d *int64Dictionary) insertFloat(value float32) int32 {
+	panic("cannot insert float value into int64 dictionary")
+}
+
+func (d *int64Dictionary) insertDouble(value float64) int32 {
+	panic("cannot insert double value into int64 dictionary")
+}
+
+func (d *int64Dictionary) insertByteArray(value []byte) int32 {
+	panic("cannot insert byte array value into int64 dictionary")
 }

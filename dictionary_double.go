@@ -1,8 +1,7 @@
 package parquet
 
 import (
-	"reflect"
-
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -96,20 +95,41 @@ func (d *doubleDictionary) Page() Page {
 	return &d.doublePage
 }
 
-func (d *doubleDictionary) insertReflectValue(value reflect.Value) int32 {
-	var v float64
-	switch value.Kind() {
-	case reflect.Float32, reflect.Float64:
-		v = value.Float()
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		v = float64(value.Int())
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		v = float64(value.Uint())
-	default:
-		panic("cannot insert value of type " + value.Type().String() + " into double dictionary")
-	}
+func (d *doubleDictionary) insertBoolean(value bool) int32 {
+	panic("cannot insert boolean value into double dictionary")
+}
 
+func (d *doubleDictionary) insertInt32(value int32) int32 {
+	v := float64(value)
 	var indexes [1]int32
 	d.insert(indexes[:], makeArrayFromPointer(&v))
 	return indexes[0]
+}
+
+func (d *doubleDictionary) insertInt64(value int64) int32 {
+	v := float64(value)
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&v))
+	return indexes[0]
+}
+
+func (d *doubleDictionary) insertInt96(value deprecated.Int96) int32 {
+	panic("cannot insert int96 value into double dictionary")
+}
+
+func (d *doubleDictionary) insertFloat(value float32) int32 {
+	v := float64(value)
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&v))
+	return indexes[0]
+}
+
+func (d *doubleDictionary) insertDouble(value float64) int32 {
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&value))
+	return indexes[0]
+}
+
+func (d *doubleDictionary) insertByteArray(value []byte) int32 {
+	panic("cannot insert byte array value into double dictionary")
 }
