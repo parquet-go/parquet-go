@@ -31,7 +31,7 @@ func (m *gomap[K]) Swap(i, j int) {
 }
 
 func (m *gomap[K]) entries() (keys, values sparse.Array) {
-	return makeArrayOf(m.keys), makeArray(m.vals.UnsafePointer(), m.Len(), m.size)
+	return makeArrayFromSlice(m.keys), makeArray(m.vals.UnsafePointer(), m.Len(), m.size)
 }
 
 type reflectMap struct {

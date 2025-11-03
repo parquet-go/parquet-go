@@ -273,6 +273,12 @@ func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath) write
 	}
 
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+		type sliceHeader struct {
+			base unsafe.Pointer
+			len  int
+			cap  int
+		}
+
 		if rows.Len() == 0 {
 			writeRows(columns, levels, rows)
 			return
