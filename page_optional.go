@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"io"
+
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
@@ -59,4 +61,52 @@ func (page *optionalPage) Slice(i, j int64) Page {
 		maxDefinitionLevel,
 		definitionLevels[i:j:j],
 	)
+}
+
+type optionalPageValues struct {
+	page   *optionalPage
+	values ValueReader
+	offset int
+}
+
+func (r *optionalPageValues) ReadValues(values []Value) (n int, err error) {
+	maxDefinitionLevel := r.page.maxDefinitionLevel
+	definitionLevels := r.page.definitionLevels
+	columnIndex := ^int16(r.page.Column())
+
+	for n < len(values) && r.offset < len(definitionLevels) {
+		for n < len(values) && r.offset < len(definitionLevels) && definitionLevels[r.offset] != maxDefinitionLevel {
+			values[n] = Value{
+				definitionLevel: definitionLevels[r.offset],
+				columnIndex:     columnIndex,
+			}
+			r.offset++
+			n++
+		}
+
+		i := n
+		j := r.offset
+		for i < len(values) && j < len(definitionLevels) && definitionLevels[j] == maxDefinitionLevel {
+			i++
+			j++
+		}
+
+		if n < i {
+			for j, err = r.values.ReadValues(values[n:i]); j > 0; j-- {
+				values[n].definitionLevel = maxDefinitionLevel
+				r.offset++
+				n++
+			}
+			// Do not return on an io.EOF here as we may still have null values to read.
+			if err != nil && err != io.EOF {
+				return n, err
+			}
+			err = nil
+		}
+	}
+
+	if r.offset == len(definitionLevels) {
+		err = io.EOF
+	}
+	return n, err
 }

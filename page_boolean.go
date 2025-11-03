@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"io"
+
 	"github.com/parquet-go/bitpack"
 	"github.com/parquet-go/parquet-go/encoding"
 )
@@ -121,4 +123,33 @@ func (page *booleanPage) makeValue(v bool) Value {
 	value := makeValueBoolean(v)
 	value.columnIndex = page.columnIndex
 	return value
+}
+
+type booleanPageValues struct {
+	page   *booleanPage
+	offset int
+}
+
+func (r *booleanPageValues) ReadBooleans(values []bool) (n int, err error) {
+	for n < len(values) && r.offset < int(r.page.numValues) {
+		values[n] = r.page.valueAt(r.offset)
+		r.offset++
+		n++
+	}
+	if r.offset == int(r.page.numValues) {
+		err = io.EOF
+	}
+	return n, err
+}
+
+func (r *booleanPageValues) ReadValues(values []Value) (n int, err error) {
+	for n < len(values) && r.offset < int(r.page.numValues) {
+		values[n] = r.page.makeValue(r.page.valueAt(r.offset))
+		r.offset++
+		n++
+	}
+	if r.offset == int(r.page.numValues) {
+		err = io.EOF
+	}
+	return n, err
 }
