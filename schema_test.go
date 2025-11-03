@@ -547,20 +547,17 @@ func TestSchemaRoundTrip(t *testing.T) {
 			name: "floats_and_decimals",
 			schema: parquet.NewSchema("root", parquet.Group{
 				"floats_and_decimals": parquet.Optional(parquet.Group{
+					"decimal_bytes30": parquet.Decimal(3, 30, parquet.ByteArrayType),
 					"decimal_fixed20": parquet.Decimal(2, 20, parquet.FixedLenByteArrayType(9)),
 					"decimal_int15":   parquet.Decimal(1, 15, parquet.Int64Type),
 					"decimal_int5":    parquet.Decimal(0, 5, parquet.Int32Type),
-					// TODO: Decimal field backed by byte array.
-					//       Spec allows it (https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal),
-					//       but parquet-go currently panics:
-					//			DECIMAL node must annotate Int32, Int64 or FixedLenByteArray but got BYTE_ARRAY
-					//"decimal_bytes30": parquet.Decimal(3, 30, parquet.ByteArrayType),
-					"double": parquet.Leaf(parquet.DoubleType),
-					"float":  parquet.Leaf(parquet.FloatType),
+					"double":          parquet.Leaf(parquet.DoubleType),
+					"float":           parquet.Leaf(parquet.FloatType),
 				}),
 			}),
 			roundTripped: `message root {
 	optional group floats_and_decimals {
+		required binary decimal_bytes30 (DECIMAL(30,3));
 		required fixed_len_byte_array(9) decimal_fixed20 (DECIMAL(20,2));
 		required int64 decimal_int15 (DECIMAL(15,1));
 		required int32 decimal_int5 (DECIMAL(5,0));
