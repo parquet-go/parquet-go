@@ -1,6 +1,9 @@
 package parquet
 
 import (
+	"io"
+
+	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 )
@@ -70,4 +73,35 @@ func (page *int96Page) makeValue(v deprecated.Int96) Value {
 	value := makeValueInt96(v)
 	value.columnIndex = page.columnIndex
 	return value
+}
+
+type int96PageValues struct {
+	page   *int96Page
+	offset int
+}
+
+func (r *int96PageValues) Read(b []byte) (n int, err error) {
+	n, err = r.ReadInt96s(unsafecast.Slice[deprecated.Int96](b))
+	return 12 * n, err
+}
+
+func (r *int96PageValues) ReadInt96s(values []deprecated.Int96) (n int, err error) {
+	n = copy(values, r.page.values[r.offset:])
+	r.offset += n
+	if r.offset == len(r.page.values) {
+		err = io.EOF
+	}
+	return n, err
+}
+
+func (r *int96PageValues) ReadValues(values []Value) (n int, err error) {
+	for n < len(values) && r.offset < len(r.page.values) {
+		values[n] = r.page.makeValue(r.page.values[r.offset])
+		r.offset++
+		n++
+	}
+	if r.offset == len(r.page.values) {
+		err = io.EOF
+	}
+	return n, err
 }

@@ -2,8 +2,10 @@ package parquet
 
 import (
 	"bytes"
+	"io"
 
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/encoding/plain"
 )
 
 type byteArrayPage struct {
@@ -144,4 +146,58 @@ func (page *byteArrayPage) makeValueString(v string) Value {
 	value := makeValueString(ByteArray, v)
 	value.columnIndex = page.columnIndex
 	return value
+}
+
+type byteArrayPageValues struct {
+	page   *byteArrayPage
+	offset int
+}
+
+func (r *byteArrayPageValues) Read(b []byte) (int, error) {
+	_, n, err := r.readByteArrays(b)
+	return n, err
+}
+
+func (r *byteArrayPageValues) ReadRequired(values []byte) (int, error) {
+	return r.ReadByteArrays(values)
+}
+
+func (r *byteArrayPageValues) ReadByteArrays(values []byte) (int, error) {
+	n, _, err := r.readByteArrays(values)
+	return n, err
+}
+
+func (r *byteArrayPageValues) readByteArrays(values []byte) (c, n int, err error) {
+	numValues := r.page.len()
+	for r.offset < numValues {
+		b := r.page.index(r.offset)
+		k := plain.ByteArrayLengthSize + len(b)
+		if k > (len(values) - n) {
+			break
+		}
+		plain.PutByteArrayLength(values[n:], len(b))
+		n += plain.ByteArrayLengthSize
+		n += copy(values[n:], b)
+		r.offset++
+		c++
+	}
+	if r.offset == numValues {
+		err = io.EOF
+	} else if n == 0 && len(values) > 0 {
+		err = io.ErrShortBuffer
+	}
+	return c, n, err
+}
+
+func (r *byteArrayPageValues) ReadValues(values []Value) (n int, err error) {
+	numValues := r.page.len()
+	for n < len(values) && r.offset < numValues {
+		values[n] = r.page.makeValueBytes(r.page.index(r.offset))
+		r.offset++
+		n++
+	}
+	if r.offset == numValues {
+		err = io.EOF
+	}
+	return n, err
 }

@@ -1,6 +1,9 @@
 package parquet
 
 import (
+	"io"
+
+	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
@@ -67,4 +70,35 @@ func (page *int32Page) makeValue(v int32) Value {
 	value := makeValueInt32(v)
 	value.columnIndex = page.columnIndex
 	return value
+}
+
+type int32PageValues struct {
+	page   *int32Page
+	offset int
+}
+
+func (r *int32PageValues) Read(b []byte) (n int, err error) {
+	n, err = r.ReadInt32s(unsafecast.Slice[int32](b))
+	return 4 * n, err
+}
+
+func (r *int32PageValues) ReadInt32s(values []int32) (n int, err error) {
+	n = copy(values, r.page.values[r.offset:])
+	r.offset += n
+	if r.offset == len(r.page.values) {
+		err = io.EOF
+	}
+	return n, err
+}
+
+func (r *int32PageValues) ReadValues(values []Value) (n int, err error) {
+	for n < len(values) && r.offset < len(r.page.values) {
+		values[n] = r.page.makeValue(r.page.values[r.offset])
+		r.offset++
+		n++
+	}
+	if r.offset == len(r.page.values) {
+		err = io.EOF
+	}
+	return n, err
 }
