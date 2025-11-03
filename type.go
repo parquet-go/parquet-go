@@ -1,15 +1,8 @@
 package parquet
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"math/bits"
 	"reflect"
-	"time"
-	"unsafe"
 
-	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
