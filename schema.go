@@ -465,7 +465,7 @@ type structNode struct {
 func structNodeOf(path []string, t reflect.Type, tagReplacements []StructTagOption) *structNode {
 	// Collect struct fields first so we can order them before generating the
 	// column indexes.
-	fields, tags := structFieldsOf(path, t, tagReplacements)
+	fields := structFieldsOf(path, t, tagReplacements)
 
 	s := &structNode{
 		gotype: t,
@@ -474,8 +474,8 @@ func structNodeOf(path []string, t reflect.Type, tagReplacements []StructTagOpti
 
 	for i := range fields {
 		field := structField{name: fields[i].Name, index: fields[i].Index}
-
-		field.Node = makeNodeOf(append(path, fields[i].Name), fields[i].Type, fields[i].Name, tags[i], tagReplacements)
+		tags := fromStructTag(fields[i].Tag)
+		field.Node = makeNodeOf(append(path, fields[i].Name), fields[i].Type, fields[i].Name, tags, tagReplacements)
 
 		s.fields[i] = field
 	}
@@ -483,11 +483,13 @@ func structNodeOf(path []string, t reflect.Type, tagReplacements []StructTagOpti
 	return s
 }
 
-func structFieldsOf(path []string, t reflect.Type, tagReplacements []StructTagOption) ([]reflect.StructField, []parquetTags) {
-	return appendStructFields(path, t, nil, nil, nil, 0, tagReplacements)
+// structFieldsOf returns the list of fields for the given path and type. Struct tags are replaced
+// and fields potentially renamed using the provided options.
+func structFieldsOf(path []string, t reflect.Type, tagReplacements []StructTagOption) []reflect.StructField {
+	return appendStructFields(path, t, nil, nil, 0, tagReplacements)
 }
 
-func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, tags []parquetTags, index []int, offset uintptr, tagReplacements []StructTagOption) ([]reflect.StructField, []parquetTags) {
+func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, index []int, offset uintptr, tagReplacements []StructTagOption) []reflect.StructField {
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
 
@@ -521,14 +523,13 @@ func appendStructFields(path []string, t reflect.Type, fields []reflect.StructFi
 		f.Offset += offset
 
 		if f.Anonymous {
-			fields, tags = appendStructFields(path, f.Type, fields, tags, fieldIndex, f.Offset, tagReplacements)
+			fields = appendStructFields(path, f.Type, fields, fieldIndex, f.Offset, tagReplacements)
 		} else if f.IsExported() {
 			f.Index = fieldIndex
 			fields = append(fields, f)
-			tags = append(tags, ftags)
 		}
 	}
-	return fields, tags
+	return fields
 }
 
 func (s *structNode) Optional() bool { return false }
@@ -637,8 +638,8 @@ func decimalFixedLenByteArraySize(precision int) int {
 	return int(math.Ceil((math.Log10(2) + float64(precision)) / math.Log10(256)))
 }
 
-func forEachStructTagOption(sf reflect.StructField, tags parquetTags, do func(t reflect.Type, option, args string)) {
-	if tag := tags.parquet; tag != "" {
+func forEachStructTagOption(sf reflect.StructField, do func(t reflect.Type, option, args string)) {
+	if tag := fromStructTag(sf.Tag).parquet; tag != "" {
 		_, tag = split(tag) // skip the field name
 		for tag != "" {
 			option := ""

@@ -315,13 +315,13 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagR
 		writeRows writeRowsFunc
 	}
 
-	fields, tags := structFieldsOf(path, t, tagReplacements)
+	fields := structFieldsOf(path, t, tagReplacements)
 	columns := make([]column, len(fields))
 
 	for i, f := range fields {
 		list, optional := false, false
 		columnPath := path.append(f.Name)
-		forEachStructTagOption(f, tags[i], func(_ reflect.Type, option, _ string) {
+		forEachStructTagOption(f, func(_ reflect.Type, option, _ string) {
 			switch option {
 			case "list":
 				list = true

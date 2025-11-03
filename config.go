@@ -828,8 +828,8 @@ var (
 	_ WriterOption = (*StructTagOption)(nil)
 )
 
-// StructTag performs runtime replacement of the "parquet..." struct tags when deriving a schema
-// from a Go struct for the column at the given path.  This option can be used anywhere a schema is
+// StructTag performs runtime replacement of struct tags when deriving a schema from
+// a Go struct for the column at the given path.  This option can be used anywhere a schema is
 // derived from a Go struct including SchemaOf, NewGenericReader, and NewGenericWriter.
 //
 // This option is additive, it may be used multiple times to affect multiple columns.
