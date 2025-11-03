@@ -2613,7 +2613,7 @@ func writeInterfaceValue(columns []ColumnBuffer, value reflect.Value, field Node
 	}
 
 	writeRows := schemaCache.writeRows.load(writeRowsKey, func() writeRowsFunc {
-		return writeRowsFuncOf(actualType, schema, path)
+		return writeRowsFuncOf(actualType, schema, path, tagReplacements)
 	})
 
 	// Handle optional fields

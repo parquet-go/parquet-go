@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"reflect"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -803,26 +804,8 @@ func DefaultSchemaConfig() *SchemaConfig {
 // option can be used anywhere a schema is derived from a Go struct including
 // SchemaOf, NewGenericReader, and NewGenericWriter.
 type StructTagOption struct {
-	ColumnPath     []string
-	Parquet        string
-	ParquetKey     string
-	ParquetValue   string
-	ParquetElement string
-}
-
-func (s StructTagOption) apply(tags *parquetTags) {
-	if s.Parquet != "" {
-		tags.parquet = s.Parquet
-	}
-	if s.ParquetKey != "" {
-		tags.parquetKey = s.ParquetKey
-	}
-	if s.ParquetValue != "" {
-		tags.parquetValue = s.ParquetValue
-	}
-	if s.ParquetElement != "" {
-		tags.parquetElement = s.ParquetElement
-	}
+	ColumnPath []string
+	StructTag  reflect.StructTag
 }
 
 var (
@@ -831,46 +814,15 @@ var (
 	_ WriterOption = (*StructTagOption)(nil)
 )
 
-// ParquetTag performs runtime replacement of the "parquet" struct tag when deriving a schema
+// StructTag performs runtime replacement of the "parquet..." struct tags when deriving a schema
 // from a Go struct for the column at the given path.  This option can be used anywhere a schema is
 // derived from a Go struct including SchemaOf, NewGenericReader, and NewGenericWriter.
 //
-// This option is additive, it may be used multiple times to affect multiple columns. An empty
-// tag value has no effect and is ignored.
+// This option is additive, it may be used multiple times to affect multiple columns.
 //
 // When renaming a column, configure the option by its original name.
-func ParquetTag(tag string, path ...string) SchemaOption {
-	return &StructTagOption{Parquet: tag, ColumnPath: path}
-}
-
-// ParquetKey performs runtime replacement of the "parquet-key" struct tag when deriving a schema
-// from a Go struct for the column at the given path.  This option can be used anywhere a schema is
-// derived from a Go struct including SchemaOf, NewGenericReader, and NewGenericWriter.
-//
-// This option is additive, it may be used multiple times to affect multiple columns. An empty
-// tag value has no effect and is ignored.
-func ParquetKey(tag string, path ...string) SchemaOption {
-	return &StructTagOption{ParquetKey: tag, ColumnPath: path}
-}
-
-// ParquetValue performs runtime replacement of the "parquet-value" struct tag when deriving a schema
-// from a Go struct for the column at the given path.  This option can be used anywhere a schema is
-// derived from a Go struct including SchemaOf, NewGenericReader, and NewGenericWriter.
-//
-// This option is additive, it may be used multiple times to affect multiple columns. An empty
-// tag value has no effect and is ignored.
-func ParquetValue(tag string, path ...string) SchemaOption {
-	return &StructTagOption{ColumnPath: path, ParquetValue: tag}
-}
-
-// ParquetElement performs runtime replacement of the "parquet-element" struct tag when deriving a schema
-// from a Go struct.  This option can be used anywhere a schema is derived from a Go struct
-// including SchemaOf, NewGenericReader, and NewGenericWriter.
-//
-// This option is additive, it may be used multiple times to affect multiple columns. An empty
-// tag value has no effect and is ignored.
-func ParquetElement(tag string, path ...string) SchemaOption {
-	return &StructTagOption{ColumnPath: path, ParquetElement: tag}
+func StructTag(tag reflect.StructTag, path ...string) SchemaOption {
+	return &StructTagOption{StructTag: tag, ColumnPath: path}
 }
 
 func (f *StructTagOption) ConfigureSchema(config *SchemaConfig) {

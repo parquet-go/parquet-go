@@ -806,8 +806,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				}
 			}),
 			options: []parquet.SchemaOption{
-				parquet.ParquetTag("C2,zstd,dict", "B", "C"),
-				parquet.ParquetTag("-", "B", "D"),
+				parquet.StructTag(`parquet:"C2,zstd,dict"`, "B", "C"),
+				parquet.StructTag(`parquet:"-"`, "B", "D"),
 			},
 			expected: new(struct {
 				A string
@@ -828,8 +828,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.ParquetTag("A2,snappy,dict", "A"),
-				parquet.ParquetTag("-", "B"),
+				parquet.StructTag(`parquet:"A2,snappy,dict"`, "A"),
+				parquet.StructTag(`parquet:"-"`, "B"),
 			},
 			expected: func() any {
 				type Embedded struct {
@@ -851,8 +851,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.ParquetTag("B2,zstd,dict", "A", "key_value", "value", "B"),
-				parquet.ParquetTag("-", "A", "key_value", "value", "C"),
+				parquet.StructTag(`parquet:"B2,zstd,dict"`, "A", "key_value", "value", "B"),
+				parquet.StructTag(`parquet:"-"`, "A", "key_value", "value", "C"),
 			},
 			expected: func() any {
 				return new(struct {
@@ -873,8 +873,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.ParquetTag("B2,zstd,dict", "A", "B"),
-				parquet.ParquetTag("-", "A", "C"),
+				parquet.StructTag(`parquet:"B2,zstd,dict"`, "A", "B"),
+				parquet.StructTag(`parquet:"-"`, "A", "C"),
 			},
 			expected: func() any {
 				return new(struct {
@@ -895,8 +895,8 @@ func TestSchemaOfOptions(t *testing.T) {
 				})
 			}(),
 			options: []parquet.SchemaOption{
-				parquet.ParquetTag("B2,zstd,dict", "A", "list", "element", "B"),
-				parquet.ParquetTag("-", "A", "list", "element", "C"),
+				parquet.StructTag(`parquet:"B2,zstd,dict"`, "A", "list", "element", "B"),
+				parquet.StructTag(`parquet:"-"`, "A", "list", "element", "C"),
 			},
 			expected: func() any {
 				return new(struct {
@@ -1036,8 +1036,8 @@ func TestSchemaInteroperability(t *testing.T) {
 		s1      = parquet.SchemaOf(&One{})
 		s2      = parquet.SchemaOf(&Two{})
 		s3      = parquet.SchemaOf(&Three{})
-		tag1    = parquet.ParquetTag("A", "C")
-		tag2    = parquet.ParquetTag("-", "D")
+		tag1    = parquet.StructTag(`parquet:"A"`, "C")
+		tag2    = parquet.StructTag(`parquet:"-"`, "D")
 		s4      = parquet.SchemaOf(&Four{}, tag1, tag2)
 		schemas = []*parquet.Schema{s1, s2, s3, s4}
 	)

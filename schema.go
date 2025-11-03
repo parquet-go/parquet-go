@@ -490,7 +490,6 @@ func structFieldsOf(path []string, t reflect.Type, tagReplacements []StructTagOp
 func appendStructFields(path []string, t reflect.Type, fields []reflect.StructField, tags []parquetTags, index []int, offset uintptr, tagReplacements []StructTagOption) ([]reflect.StructField, []parquetTags) {
 	for i, n := 0, t.NumField(); i < n; i++ {
 		f := t.Field(i)
-		ftags := fromStructTag(f.Tag)
 
 		// Tag replacements if present.
 		// Embedded anonymous fields do not extend the
@@ -499,10 +498,12 @@ func appendStructFields(path []string, t reflect.Type, fields []reflect.StructFi
 			fpath := append(path, f.Name)
 			for _, opt := range tagReplacements {
 				if slices.Equal(fpath, opt.ColumnPath) {
-					opt.apply(&ftags)
+					f.Tag = opt.StructTag
 				}
 			}
 		}
+
+		ftags := fromStructTag(f.Tag)
 
 		if tag := ftags.parquet; tag != "" {
 			name, _ := split(tag)
