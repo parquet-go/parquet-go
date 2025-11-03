@@ -440,7 +440,6 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 
 			for i := range numRows {
 				m := *(*map[string]string)(reflect.NewAt(t, rows.Index(i)).UnsafePointer())
-
 				for j := range writers {
 					buffer.values[j*numRows+i] = m[writers[j].fieldName]
 				}
@@ -450,7 +449,6 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 				a := sparse.MakeStringArray(buffer.values[j*numRows : (j+1)*numRows])
 				writers[j].writeRows(columns, levels, a.UnsafeArray())
 			}
-
 		}
 
 	case t.ConvertibleTo(reflect.TypeOf((map[string]any)(nil))):
@@ -669,6 +667,5 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath) writeR
 			a := makeArray(reflectValueData(reflect.ValueOf(val)), 1, elemSize)
 			writeRows(columns, elemLevels, a)
 		}
-
 	}
 }

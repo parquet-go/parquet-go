@@ -261,54 +261,81 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 }
 
 func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc) {
-	fields := node.Fields()
-	funcs := make([]writeValueFunc, len(fields))
-	for i, field := range fields {
-		columnIndex, funcs[i] = writeValueFuncOf(columnIndex, field)
+	type fieldWriter struct {
+		fieldName  string
+		writeValue writeValueFunc
 	}
+
+	fields := node.Fields()
+	writers := make([]fieldWriter, len(fields))
+	for i, field := range fields {
+		writers[i].fieldName = field.Name()
+		columnIndex, writers[i].writeValue = writeValueFuncOf(columnIndex, field)
+	}
+
+	// Pre-compute type information for common map types
+	mapStringStringType := reflect.TypeOf((map[string]string)(nil))
+	mapStringAnyType := reflect.TypeOf((map[string]any)(nil))
 
 	return columnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
-		if !value.IsValid() {
-			for _, f := range funcs {
-				f(columns, levels, value)
+		for {
+			if !value.IsValid() {
+				for i := range writers {
+					w := &writers[i]
+					w.writeValue(columns, levels, reflect.Value{})
+				}
+				return
 			}
-		} else {
-			if value.Kind() == reflect.Interface {
-				value = value.Elem()
-			}
-			for i, f := range funcs {
-				f(columns, levels, getFieldValue(fields[i], value))
+
+			switch t := value.Type(); t.Kind() {
+			case reflect.Map:
+				switch {
+				case t.ConvertibleTo(mapStringStringType):
+					m := value.Convert(mapStringStringType).Interface().(map[string]string)
+					v := new(string)
+					for i := range writers {
+						w := &writers[i]
+						*v = m[w.fieldName]
+						w.writeValue(columns, levels, reflect.ValueOf(v).Elem())
+					}
+
+				case t.ConvertibleTo(mapStringAnyType):
+					m := value.Convert(mapStringAnyType).Interface().(map[string]any)
+					for i := range writers {
+						w := &writers[i]
+						v := m[w.fieldName]
+						w.writeValue(columns, levels, reflect.ValueOf(v))
+					}
+
+				default:
+					for i := range writers {
+						w := &writers[i]
+						fieldName := reflect.ValueOf(&w.fieldName).Elem()
+						fieldValue := value.MapIndex(fieldName)
+						w.writeValue(columns, levels, fieldValue)
+					}
+				}
+				return
+
+			case reflect.Struct:
+				for i := range writers {
+					w := &writers[i]
+					fieldValue := value.FieldByName(w.fieldName)
+					w.writeValue(columns, levels, fieldValue)
+				}
+				return
+
+			case reflect.Pointer, reflect.Interface:
+				if value.IsNil() {
+					value = reflect.Value{}
+				} else {
+					value = value.Elem()
+				}
+
+			default:
+				value = reflect.Value{}
 			}
 		}
-	}
-}
-
-// getFieldValue gets a field value for writing (without allocating nil pointers)
-func getFieldValue(field Field, base reflect.Value) reflect.Value {
-	if !base.IsValid() {
-		// Invalid base - return invalid value
-		return reflect.Value{}
-	}
-
-	switch base.Kind() {
-	case reflect.Map:
-		// For maps, use MapIndex to get the value (returns invalid value if key doesn't exist)
-		// The key type might be string or other types - convert the field name appropriately
-		keyValue := reflect.ValueOf(field.Name()).Convert(base.Type().Key())
-		return base.MapIndex(keyValue)
-	case reflect.Struct:
-		// For structs, get the field directly by name
-		return base.FieldByName(field.Name())
-	case reflect.Ptr:
-		if base.IsNil() {
-			// Nil pointer - return invalid value
-			return reflect.Value{}
-		}
-		// Dereference and recurse
-		return getFieldValue(field, base.Elem())
-	default:
-		// Unknown type - return invalid value
-		return reflect.Value{}
 	}
 }
 
