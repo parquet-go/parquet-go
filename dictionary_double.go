@@ -100,17 +100,11 @@ func (d *doubleDictionary) insertBoolean(value bool) int32 {
 }
 
 func (d *doubleDictionary) insertInt32(value int32) int32 {
-	v := float64(value)
-	var indexes [1]int32
-	d.insert(indexes[:], makeArrayFromPointer(&v))
-	return indexes[0]
+	return d.insertDouble(float64(value))
 }
 
 func (d *doubleDictionary) insertInt64(value int64) int32 {
-	v := float64(value)
-	var indexes [1]int32
-	d.insert(indexes[:], makeArrayFromPointer(&v))
-	return indexes[0]
+	return d.insertDouble(float64(value))
 }
 
 func (d *doubleDictionary) insertInt96(value deprecated.Int96) int32 {
@@ -118,10 +112,7 @@ func (d *doubleDictionary) insertInt96(value deprecated.Int96) int32 {
 }
 
 func (d *doubleDictionary) insertFloat(value float32) int32 {
-	v := float64(value)
-	var indexes [1]int32
-	d.insert(indexes[:], makeArrayFromPointer(&v))
-	return indexes[0]
+	return d.insertDouble(float64(value))
 }
 
 func (d *doubleDictionary) insertDouble(value float64) int32 {

@@ -155,10 +155,7 @@ func (d *fixedLenByteArrayDictionary) insertByteArray(value []byte) int32 {
 	if len(value) != d.size {
 		panic(fmt.Sprintf("byte array length %d does not match fixed length %d", len(value), d.size))
 	}
-
 	indexes := [1]int32{0}
-	d.insertValues(indexes[:], 1, func(i int) *byte {
-		return &value[0]
-	})
+	d.insertValues(indexes[:], 1, func(i int) *byte { return &value[0] })
 	return indexes[0]
 }

@@ -100,10 +100,7 @@ func (d *int64Dictionary) insertBoolean(value bool) int32 {
 }
 
 func (d *int64Dictionary) insertInt32(value int32) int32 {
-	v := int64(value)
-	var indexes [1]int32
-	d.insert(indexes[:], makeArrayFromPointer(&v))
-	return indexes[0]
+	return d.insertInt64(int64(value))
 }
 
 func (d *int64Dictionary) insertInt64(value int64) int32 {

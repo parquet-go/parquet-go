@@ -145,7 +145,6 @@ func (d *booleanDictionary) insertBoolean(value bool) int32 {
 		d.numValues++
 		d.bits = plain.AppendBoolean(d.bits, int(d.table[1]), true)
 	}
-
 	if value {
 		return d.table[1]
 	}

@@ -117,9 +117,7 @@ func (d *int96Dictionary) insertInt64(value int64) int32 {
 
 func (d *int96Dictionary) insertInt96(value deprecated.Int96) int32 {
 	indexes := [1]int32{0}
-	d.insertValues(indexes[:], 1, func(i int) deprecated.Int96 {
-		return value
-	})
+	d.insertValues(indexes[:], 1, func(i int) deprecated.Int96 { return value })
 	return indexes[0]
 }
 

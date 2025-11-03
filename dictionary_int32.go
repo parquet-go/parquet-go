@@ -125,10 +125,7 @@ func (d *int32Dictionary) insertInt64(value int64) int32 {
 	if value < math.MinInt32 || value > math.MaxInt32 {
 		panic(fmt.Sprintf("int64 value %d out of range for int32", value))
 	}
-	v := int32(value)
-	var indexes [1]int32
-	d.insert(indexes[:], makeArrayFromPointer(&v))
-	return indexes[0]
+	return d.insertInt32(int32(value))
 }
 
 func (d *int32Dictionary) insertInt96(value deprecated.Int96) int32 {

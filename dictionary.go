@@ -2,8 +2,6 @@ package parquet
 
 import (
 	"io"
-	"reflect"
-	"unsafe"
 
 	"slices"
 
@@ -98,52 +96,6 @@ type Dictionary interface {
 	insertByteArray(value []byte) int32
 
 	//lookup(indexes []int32, rows sparse.Array)
-}
-
-// insertReflectValueToDictionary converts a reflect.Value to the appropriate Parquet primitive type
-// and inserts it into the dictionary using the type-specific insert method.
-func insertReflectValueToDictionary(dict Dictionary, value reflect.Value) int32 {
-	switch value.Kind() {
-	case reflect.Bool:
-		return dict.insertBoolean(value.Bool())
-	case reflect.Int8, reflect.Int16, reflect.Int32:
-		return dict.insertInt32(int32(value.Int()))
-	case reflect.Int, reflect.Int64:
-		// reflect.Int might be 64-bit on 64-bit platforms
-		return dict.insertInt64(value.Int())
-	case reflect.Uint8, reflect.Uint16, reflect.Uint32:
-		return dict.insertInt32(int32(value.Uint()))
-	case reflect.Uint, reflect.Uint64:
-		// reflect.Uint might be 64-bit on 64-bit platforms
-		return dict.insertInt64(int64(value.Uint()))
-	case reflect.Float32:
-		return dict.insertFloat(float32(value.Float()))
-	case reflect.Float64:
-		return dict.insertDouble(value.Float())
-	case reflect.String:
-		// Use unsafe.StringData for zero-copy conversion
-		s := value.String()
-		return dict.insertByteArray(unsafe.Slice(unsafe.StringData(s), len(s)))
-	case reflect.Slice:
-		if value.Type().Elem().Kind() == reflect.Uint8 {
-			return dict.insertByteArray(value.Bytes())
-		} else {
-			panic("unsupported slice type for Parquet dictionary insert: " + value.Type().String())
-		}
-	case reflect.Array:
-		if value.Type().Elem().Kind() == reflect.Uint8 {
-			return dict.insertByteArray(value.Bytes())
-		} else {
-			panic("unsupported array type for Parquet dictionary insert: " + value.Type().String())
-		}
-	default:
-		// Handle special types
-		if value.Type() == reflect.TypeOf(deprecated.Int96{}) {
-			return dict.insertInt96(value.Interface().(deprecated.Int96))
-		} else {
-			panic("unsupported type for Parquet dictionary insert: " + value.Type().String())
-		}
-	}
 }
 
 func checkLookupIndexBounds(indexes []int32, rows sparse.Array) {
