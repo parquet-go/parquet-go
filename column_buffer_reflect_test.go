@@ -578,6 +578,117 @@ func TestWriteValueFuncOfStructWithRepeated(t *testing.T) {
 	}
 }
 
+// TestWriteValueFuncOfMapWithSliceValues tests map[string]any where values include slices
+// This reproduces the production panic where []any values were not handled correctly
+func TestWriteValueFuncOfMapWithSliceValues(t *testing.T) {
+	type Record struct {
+		Name   string   `parquet:",optional"`
+		Values []string `parquet:",optional"`
+	}
+	schema := SchemaOf(Record{})
+
+	tests := []struct {
+		name              string
+		value             any
+		expectName        string
+		expectValues      []string
+		expectNameNull    bool
+		expectValuesCount int
+	}{
+		{
+			name: "map_with_slice_value",
+			value: map[string]any{
+				"Name":   "test",
+				"Values": []any{"a", "b", "c"},
+			},
+			expectName:        "test",
+			expectValues:      []string{"a", "b", "c"},
+			expectNameNull:    false,
+			expectValuesCount: 3,
+		},
+		{
+			name: "map_with_empty_slice",
+			value: map[string]any{
+				"Name":   "test",
+				"Values": []any{},
+			},
+			expectName:        "test",
+			expectNameNull:    false,
+			expectValuesCount: 0,
+		},
+		{
+			name: "map_with_nil_slice",
+			value: map[string]any{
+				"Name":   "test",
+				"Values": nil,
+			},
+			expectName:        "test",
+			expectNameNull:    false,
+			expectValuesCount: 0,
+		},
+		{
+			name: "map_missing_slice_field",
+			value: map[string]any{
+				"Name": "test",
+			},
+			expectName:        "test",
+			expectNameNull:    false,
+			expectValuesCount: 0,
+		},
+		{
+			name: "map_with_interface_slice_of_any",
+			value: map[string]any{
+				"Name":   "test",
+				"Values": []any{"x", "y"},
+			},
+			expectName:        "test",
+			expectValues:      []string{"x", "y"},
+			expectNameNull:    false,
+			expectValuesCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			columns := makeColumnBuffersForSchema(schema)
+			if len(columns) != 2 {
+				t.Fatalf("expected 2 columns, got %d", len(columns))
+			}
+
+			_, writeFunc := writeValueFuncOf(0, schema)
+			val := reflect.ValueOf(tt.value)
+			writeFunc(columns, columnLevels{}, val)
+
+			// Check Name column
+			nameCol := columns[0].(*optionalColumnBuffer)
+			if nameCol.Len() != 1 {
+				t.Fatalf("Name column: expected 1 row, got %d", nameCol.Len())
+			}
+			checkOptionalColumn(t, "Name", nameCol, tt.expectNameNull, tt.expectName)
+
+			// Check Values column (repeated)
+			valuesCol := columns[1].(*repeatedColumnBuffer)
+			if valuesCol.Len() != 1 {
+				t.Fatalf("Values column: expected 1 row, got %d", valuesCol.Len())
+			}
+			if int(valuesCol.base.NumValues()) != tt.expectValuesCount {
+				t.Errorf("Values column: expected %d values, got %d", tt.expectValuesCount, valuesCol.base.NumValues())
+			}
+
+			// If we have values, verify them
+			if tt.expectValuesCount > 0 && len(tt.expectValues) > 0 {
+				baseCol := valuesCol.base.(*byteArrayColumnBuffer)
+				for i, expectedVal := range tt.expectValues {
+					actualVal := string(baseCol.index(i))
+					if actualVal != expectedVal {
+						t.Errorf("Values[%d]: expected %q, got %q", i, expectedVal, actualVal)
+					}
+				}
+			}
+		})
+	}
+}
+
 // Helper functions
 
 func intPtr(v int32) *int32 {
