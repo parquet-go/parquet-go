@@ -513,6 +513,21 @@ func TestDeconstructionReconstruction(t *testing.T) {
 				},
 			},
 		},
+		{
+			scenario: "uuids",
+			input: struct {
+				A [16]byte `parquet:",uuid"`
+				B string   `parquet:",uuid"`
+			}{A: uuid.MustParse("a65b576d-9299-4769-9d93-04be0583f027"), B: "a65b576d-9299-4769-9d93-04be0583f027"},
+			values: [][]parquet.Value{
+				0: {
+					parquet.ValueOf(uuid.MustParse("a65b576d-9299-4769-9d93-04be0583f027")).Level(0, 0, 0),
+				},
+				1: {
+					parquet.ValueOf(uuid.MustParse("a65b576d-9299-4769-9d93-04be0583f027")).Level(0, 0, 1),
+				},
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -667,7 +682,7 @@ func BenchmarkDeconstruct(b *testing.B) {
 	schema := parquet.SchemaOf(row)
 	buffer := parquet.Row{}
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buffer = schema.Deconstruct(buffer[:0], row)
 	}
 }
@@ -694,7 +709,7 @@ func BenchmarkReconstruct(b *testing.B) {
 	values := schema.Deconstruct(nil, row)
 	buffer := AddressBook{}
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buffer = AddressBook{}
 
 		if err := schema.Reconstruct(&buffer, values); err != nil {

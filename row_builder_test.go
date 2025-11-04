@@ -276,7 +276,7 @@ func BenchmarkRowBuilderAdd(b *testing.B) {
 		"ids": parquet.Repeated(parquet.Int(64)),
 	})
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		builder.Add(0, parquet.Int64Value(int64(i)))
 
 		if (i % 128) == 0 {

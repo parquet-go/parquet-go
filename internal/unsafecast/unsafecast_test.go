@@ -3,7 +3,7 @@ package unsafecast_test
 import (
 	"testing"
 
-	"github.com/parquet-go/parquet-go/internal/unsafecast"
+	"github.com/parquet-go/bitpack/unsafecast"
 	"golang.org/x/sys/cpu"
 )
 

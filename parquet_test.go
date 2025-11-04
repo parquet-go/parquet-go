@@ -253,6 +253,7 @@ func TestIssueSegmentio362ParquetReadFromGenericReaders(t *testing.T) {
 	if err != nil && err != io.EOF {
 		t.Fatal(err)
 	}
+	r1.Close()
 
 	r2 := parquet.NewGenericReader[any](fp)
 	rows2 := make([]any, r2.NumRows())
@@ -260,6 +261,7 @@ func TestIssueSegmentio362ParquetReadFromGenericReaders(t *testing.T) {
 	if err != nil && err != io.EOF {
 		t.Fatal(err)
 	}
+	r2.Close()
 }
 
 func TestIssueSegmentio362ParquetReadFile(t *testing.T) {
@@ -1036,11 +1038,11 @@ func copyRowsAndClose(w parquet.RowWriter, r parquet.Rows) (int64, error) {
 }
 
 func benchmarkRowsPerSecond(b *testing.B, f func() int) {
-	b.ResetTimer()
+
 	start := time.Now()
 	numRows := int64(0)
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		n := f()
 		numRows += int64(n)
 	}

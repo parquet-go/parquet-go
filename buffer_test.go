@@ -257,9 +257,8 @@ func BenchmarkSortGenericBuffer(b *testing.B) {
 	}
 
 	buffer.Write(rows)
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for range 10 {
 			buffer.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
 		}
@@ -902,6 +901,9 @@ func TestOptionalDictWriteRowGroup(t *testing.T) {
 	w := parquet.NewWriter(b)
 	_, err := w.WriteRowGroup(buf)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

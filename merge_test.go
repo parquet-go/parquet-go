@@ -45,7 +45,7 @@ func TestMergeRowGroups(t *testing.T) {
 		output   parquet.RowGroup
 	}{
 		{
-			scenario: "no row groups",
+			scenario: "no row groups with schema",
 			options: []parquet.RowGroupOption{
 				parquet.SchemaOf(Person{}),
 			},
@@ -915,6 +915,19 @@ func equalSortingColumns(a, b []parquet.SortingColumn) bool {
 	}
 
 	return true
+}
+
+// TestMergeRowGroupsEmptyWithoutSchema tests that MergeRowGroups returns an error
+// when called with an empty slice and no schema option (issue #322)
+func TestMergeRowGroupsEmptyWithoutSchema(t *testing.T) {
+	_, err := parquet.MergeRowGroups([]parquet.RowGroup{})
+	if err == nil {
+		t.Fatal("expected error when merging empty row groups without schema, got nil")
+	}
+	expectedErrMsg := "cannot merge empty row groups without a schema"
+	if err.Error() != expectedErrMsg {
+		t.Errorf("expected error message %q, got %q", expectedErrMsg, err.Error())
+	}
 }
 
 func TestMergeRowGroupsCursorsAreClosed(t *testing.T) {
@@ -1837,8 +1850,7 @@ func BenchmarkMergeNodes(b *testing.B) {
 		},
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = parquet.MergeNodes(nodes...)
 	}
 }
@@ -2057,6 +2069,174 @@ func createExpectedMergedWithOptionalFields(rows ...Person) parquet.RowGroup {
 		buf.Write(row)
 	}
 	return buf
+}
+
+// TestMergeRowGroupsRetainsDictionaryEncoding tests that dictionary encoding
+// is preserved when merging row groups
+func TestMergeRowGroupsRetainsDictionaryEncoding(t *testing.T) {
+	// Define a schema with dictionary-encoded columns
+	type Record struct {
+		ID   int64
+		Name utf8string
+		City utf8string
+	}
+
+	// Create a schema with dictionary encoding on string columns
+	nameNode := parquet.String()
+	nameNode = parquet.Encoded(nameNode, &parquet.RLEDictionary)
+
+	cityNode := parquet.String()
+	cityNode = parquet.Encoded(cityNode, &parquet.RLEDictionary)
+
+	schema := parquet.NewSchema("test", parquet.Group{
+		"ID":   parquet.Leaf(parquet.Int64Type),
+		"Name": nameNode,
+		"City": cityNode,
+	})
+
+	// Create first row group with dictionary encoding
+	buffer1 := &bytes.Buffer{}
+	writer1 := parquet.NewGenericWriter[Record](buffer1, schema)
+	records1 := []Record{
+		{ID: 1, Name: "Alice", City: "NYC"},
+		{ID: 2, Name: "Bob", City: "LA"},
+		{ID: 3, Name: "Alice", City: "NYC"}, // Repeated values for dictionary
+	}
+	if _, err := writer1.Write(records1); err != nil {
+		t.Fatalf("Failed to write records to first file: %v", err)
+	}
+	if err := writer1.Close(); err != nil {
+		t.Fatalf("Failed to close first writer: %v", err)
+	}
+
+	// Create second row group with dictionary encoding
+	buffer2 := &bytes.Buffer{}
+	writer2 := parquet.NewGenericWriter[Record](buffer2, schema)
+	records2 := []Record{
+		{ID: 4, Name: "Charlie", City: "SF"},
+		{ID: 5, Name: "Diana", City: "NYC"},
+		{ID: 6, Name: "Charlie", City: "SF"}, // Repeated values for dictionary
+	}
+	if _, err := writer2.Write(records2); err != nil {
+		t.Fatalf("Failed to write records to second file: %v", err)
+	}
+	if err := writer2.Close(); err != nil {
+		t.Fatalf("Failed to close second writer: %v", err)
+	}
+
+	// Read back the parquet files
+	reader1 := parquet.NewReader(bytes.NewReader(buffer1.Bytes()))
+	reader2 := parquet.NewReader(bytes.NewReader(buffer2.Bytes()))
+
+	file1 := reader1.File()
+	file2 := reader2.File()
+
+	rowGroup1 := file1.RowGroups()[0]
+	rowGroup2 := file2.RowGroups()[0]
+
+	// Verify original files have dictionary encoding
+	t.Log("Original file 1 schema:")
+	for i, col := range file1.Schema().Columns() {
+		leaf, _ := file1.Schema().Lookup(col...)
+		t.Logf("  Column %d (%v): encoding=%v", i, col, leaf.Node.Encoding())
+	}
+
+	t.Log("Original file 2 schema:")
+	for i, col := range file2.Schema().Columns() {
+		leaf, _ := file2.Schema().Lookup(col...)
+		t.Logf("  Column %d (%v): encoding=%v", i, col, leaf.Node.Encoding())
+	}
+
+	// Merge the row groups
+	mergedRowGroup, err := parquet.MergeRowGroups([]parquet.RowGroup{rowGroup1, rowGroup2})
+	if err != nil {
+		t.Fatalf("Failed to merge row groups: %v", err)
+	}
+
+	// Check merged schema
+	mergedSchema := mergedRowGroup.Schema()
+	t.Log("Merged schema:")
+	for i, col := range mergedSchema.Columns() {
+		leaf, found := mergedSchema.Lookup(col...)
+		if !found {
+			t.Fatalf("Column not found in merged schema: %v", col)
+		}
+		t.Logf("  Column %d (%v): encoding=%v", i, col, leaf.Node.Encoding())
+
+		// Verify dictionary encoding is preserved for Name and City columns
+		colName := col[len(col)-1]
+		if colName == "Name" || colName == "City" {
+			encoding := leaf.Node.Encoding()
+			if encoding == nil || encoding.Encoding() != parquet.RLEDictionary.Encoding() {
+				t.Errorf("Column %s should have RLEDictionary encoding, got: %v", colName, encoding)
+			}
+		}
+	}
+
+	// Write the merged result to a new file to ensure encoding is actually used
+	buffer3 := &bytes.Buffer{}
+	writer3 := parquet.NewWriter(buffer3, mergedSchema)
+
+	rows := mergedRowGroup.Rows()
+	defer rows.Close()
+
+	numCopied, err := parquet.CopyRows(writer3, rows)
+	if err != nil {
+		t.Fatalf("Failed to copy merged rows: %v", err)
+	}
+	if numCopied != int64(len(records1)+len(records2)) {
+		t.Errorf("Expected to copy %d rows, but copied %d", len(records1)+len(records2), numCopied)
+	}
+
+	if err := writer3.Close(); err != nil {
+		t.Fatalf("Failed to close merged writer: %v", err)
+	}
+
+	// Read back the merged file and verify encoding
+	reader3 := parquet.NewReader(bytes.NewReader(buffer3.Bytes()))
+	file3 := reader3.File()
+
+	t.Log("Final merged file schema:")
+	for i, col := range file3.Schema().Columns() {
+		leaf, _ := file3.Schema().Lookup(col...)
+		t.Logf("  Column %d (%v): encoding=%v", i, col, leaf.Node.Encoding())
+	}
+
+	// Verify that the actual column chunks use dictionary encoding
+	finalRowGroup := file3.RowGroups()[0]
+	columnChunks := finalRowGroup.ColumnChunks()
+
+	for i, col := range file3.Schema().Columns() {
+		colName := col[len(col)-1]
+		if colName == "Name" || colName == "City" {
+			chunk := columnChunks[i]
+			// Check if the column chunk has dictionary
+			pages := chunk.Pages()
+			defer pages.Close()
+
+			hasDictionary := false
+			for {
+				page, err := pages.ReadPage()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("Error reading page: %v", err)
+				}
+				// Check if page has a dictionary
+				dict := page.Dictionary()
+				if dict != nil {
+					hasDictionary = true
+					t.Logf("Column %s has dictionary with %d entries", colName, dict.Len())
+					break
+				}
+			}
+
+			if !hasDictionary {
+				t.Errorf("Column %s does not use dictionary encoding in actual pages", colName)
+			}
+		}
+	}
 }
 
 func BenchmarkMergeFiles(b *testing.B) {

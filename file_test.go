@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -548,8 +550,583 @@ func TestCopyFilePages(t *testing.T) {
 	runtime.GC()
 }
 
+func TestSeekToRowGeneral(t *testing.T) {
+	type Row struct {
+		A int `parquet:","`
+		B int `parquet:",dict"`
+	}
+
+	// Create test data with 100 rows
+	const numRows = 100
+
+	// Create a parquet file in memory with a small page buffer to force many pages
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[Row](buf, parquet.PageBufferSize(128))
+
+	// Write rows individually with frequent flushes to create multiple row groups
+	for i := range numRows {
+		if _, err := w.Write([]Row{{A: i, B: i}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Random rows to seek to
+	randomRows := make([]int, 100)
+	for i := range randomRows {
+		randomRows[i] = rand.Intn(numRows)
+	}
+	t.Logf("Testing random rows: %v", randomRows)
+
+	// values to read
+	vals := make([]parquet.Value, 1)
+
+	for _, col := range []int{0, 1} {
+		for _, mode := range []parquet.ReadMode{parquet.ReadModeSync, parquet.ReadModeAsync} {
+			t.Run(fmt.Sprintf("%s/col%d", readModeToString(mode), col), func(t *testing.T) {
+				// Open parquet file for reading
+				pf, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()), parquet.FileReadMode(mode))
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				rgs := pf.RowGroups()
+				if len(rgs) != 1 {
+					t.Fatalf("expected exactly 1 row group, got %d", len(rgs))
+				}
+
+				// Test 1: SeekToRow forward through every row
+				t.Run("forward", func(t *testing.T) {
+					pages := rgs[0].ColumnChunks()[col].Pages()
+					t.Cleanup(func() {
+						_ = pages.Close()
+					})
+
+					for i := range numRows {
+						err = pages.SeekToRow(int64(i))
+						if err != nil {
+							t.Fatalf("SeekToRow(%d) failed: %v", i, err)
+						}
+
+						pg1, err := pages.ReadPage()
+						if err != nil {
+							t.Fatalf("ReadPage failed at row %d: %v", i, err)
+						}
+
+						pg2, err := pages.ReadPage()
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadPage failed at row %d: %v", i, err)
+						}
+						parquet.Release(pg2)
+
+						n, err := pg1.Values().ReadValues(vals)
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadValues failed at row %d: %v", i, err)
+						}
+						parquet.Release(pg1)
+
+						if n != 1 {
+							t.Fatalf("expected 1 value, got %d at position %d", n, i)
+						}
+
+						if vals[0].Int64() != int64(i) {
+							t.Errorf("row %d: expected value %d, got %d", i, i, vals[0].Int64())
+						}
+					}
+				})
+
+				// Test 2: SeekToRow backward through every row
+				t.Run("backward", func(t *testing.T) {
+					pages := rgs[0].ColumnChunks()[col].Pages()
+					t.Cleanup(func() {
+						_ = pages.Close()
+					})
+
+					for i := numRows - 1; i >= 0; i-- {
+						err = pages.SeekToRow(int64(i))
+						if err != nil {
+							t.Fatalf("SeekToRow(%d) failed: %v", i, err)
+						}
+
+						pg1, err := pages.ReadPage()
+						if err != nil {
+							t.Fatalf("ReadPage failed at row %d: %v", i, err)
+						}
+
+						pg2, err := pages.ReadPage()
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadPage failed at row %d: %v", i, err)
+						}
+						parquet.Release(pg2)
+
+						n, err := pg1.Values().ReadValues(vals)
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadValues failed at row %d: %v", i, err)
+						}
+						parquet.Release(pg1)
+
+						if n != 1 {
+							t.Fatalf("expected 1 value, got %d at position %d", n, i)
+						}
+
+						if vals[0].Int64() != int64(i) {
+							t.Errorf("row %d: expected value %d, got %d", i, i, vals[0].Int64())
+						}
+					}
+				})
+
+				// Test 3: SeekToRow to random rows
+				t.Run("random", func(t *testing.T) {
+					pages := rgs[0].ColumnChunks()[col].Pages()
+					t.Cleanup(func() {
+						_ = pages.Close()
+					})
+
+					for _, rowNum := range randomRows {
+						err = pages.SeekToRow(int64(rowNum))
+						if err != nil {
+							t.Fatalf("SeekToRow(%d) failed: %v", rowNum, err)
+						}
+
+						pg1, err := pages.ReadPage()
+						if err != nil {
+							t.Fatalf("ReadPage failed at row %d: %v", rowNum, err)
+						}
+
+						pg2, err := pages.ReadPage()
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadPage failed at row %d: %v", rowNum, err)
+						}
+						parquet.Release(pg2)
+
+						n, err := pg1.Values().ReadValues(vals)
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatalf("ReadValues failed at row %d: %v", rowNum, err)
+						}
+						parquet.Release(pg1)
+
+						if n != 1 {
+							t.Fatalf("expected 1 value, got %d at position %d", n, rowNum)
+						}
+
+						if vals[0].Int64() != int64(rowNum) {
+							t.Errorf("row %d: expected value %d, got %d", rowNum, rowNum, vals[0].Int64())
+						}
+					}
+				})
+			})
+		}
+	}
+}
+
 type nopPageWriter struct{}
 
 func (n nopPageWriter) WritePage(page parquet.Page) (int64, error) {
 	return page.NumValues(), nil
+}
+
+type countingReaderAt struct {
+	ra    io.ReaderAt
+	reads int64
+}
+
+func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	atomic.AddInt64(&c.reads, 1)
+	return c.ra.ReadAt(p, off)
+}
+
+type benchRow struct {
+	K string   `parquet:",snappy,dict"`
+	V []string `parquet:",snappy,list"`
+}
+
+// BenchmarkSeekThroughFile reads / seeks through the whole file while tracking the number of reads.
+// Hypothesis: seeking through the whole file should always require equal or fewer reads than reading
+// the whole file.
+func BenchmarkSeekThroughFile(b *testing.B) {
+	rnd := rand.New(rand.NewSource(1234))
+
+	var numRows int64 = 10_000
+	data := makeSeekBenchFile(b, numRows)
+
+	steps := [6]int64{0, 7, 29, 61, 127, 251}
+	var positions [6][]int64
+
+	// precompute all seek positions for all steps
+	for i, stepSize := range steps {
+		positions[i] = make([]int64, 0, numRows/10)
+		if stepSize > 0 {
+			var pos int64
+			for range numRows {
+				jitter := rnd.Int63n(stepSize)
+				pos += stepSize/2 + jitter
+				positions[i] = append(positions[i], pos)
+				if pos >= int64(numRows) {
+					break
+				}
+			}
+		}
+	}
+
+	// wrap bytes.Reader with counting ReaderAt and open file
+	br := bytes.NewReader(data)
+	ctr := &countingReaderAt{ra: br}
+
+	for _, mode := range []parquet.ReadMode{parquet.ReadModeSync, parquet.ReadModeAsync} {
+		b.Run(readModeToString(mode), func(b *testing.B) {
+			opts := []parquet.FileOption{
+				parquet.SkipBloomFilters(true),
+				parquet.FileReadMode(mode),
+				parquet.ReadBufferSize(90 * 1024), // roughly 1.5x the page size in the 'V' column
+			}
+
+			f, err := parquet.OpenFile(ctr, int64(len(data)), opts...)
+			if err != nil {
+				b.Fatalf("open file: %v", err)
+			}
+
+			// seek / read through the whole file using Reader
+			b.Run("reader", func(b *testing.B) {
+				row := make([]benchRow, 1)
+
+				for i, stepSize := range steps {
+					name := fmt.Sprintf("step size=%d", stepSize)
+					if stepSize == 0 {
+						name = "no-seek"
+					}
+					b.Run(name, func(b *testing.B) {
+						atomic.StoreInt64(&ctr.reads, 0)
+
+						// benchmark loop: read / seek through the whole file
+						b.ResetTimer()
+						for b.Loop() {
+							r := parquet.NewGenericReader[benchRow](f)
+
+							for j := range numRows {
+								if stepSize > 0 { // if seek is zero, we don't seek at all (baseline)
+									err = r.SeekToRow(positions[i][j])
+									if err != nil {
+										if errors.Is(err, io.EOF) {
+											break
+										}
+										b.Fatalf("read row %d: %v", j, err)
+									}
+								}
+
+								_, err = r.Read(row)
+								if err != nil {
+									if errors.Is(err, io.EOF) {
+										break
+									}
+									b.Fatalf("read row %d: %v", j, err)
+								}
+							}
+							_ = r.Close()
+						}
+
+						b.ReportMetric(float64(atomic.LoadInt64(&ctr.reads))/float64(b.N), "reads/op")
+					})
+				}
+			})
+
+			// seek / read through the whole column 1 using Pages
+			b.Run("pages", func(b *testing.B) {
+				for i, stepSize := range steps {
+					name := fmt.Sprintf("step size=%d", stepSize)
+					if stepSize == 0 {
+						name = "no-seek"
+					}
+					b.Run(name, func(b *testing.B) {
+						atomic.StoreInt64(&ctr.reads, 0)
+
+						b.ResetTimer()
+						for b.Loop() {
+							// sequentially read all pages of column 1 (baseline)
+							if stepSize == 0 {
+								for _, rg := range f.RowGroups() {
+									pages := rg.ColumnChunks()[1].Pages()
+									for {
+										_, err := pages.ReadPage()
+										if err != nil {
+											if errors.Is(err, io.EOF) {
+												break
+											}
+											b.Fatalf("read page: %v", err)
+										}
+									}
+									_ = pages.Close()
+								}
+								continue
+							}
+
+							// read column 1 seeking through rg pages
+							var j int
+							var rgOffset int64
+							for _, rg := range f.RowGroups() {
+								pages := rg.ColumnChunks()[1].Pages()
+
+								for {
+									pos := positions[i][j] - rgOffset
+									if pos >= rg.NumRows() {
+										_ = pages.Close()
+										rgOffset += rg.NumRows()
+										break
+									}
+
+									err = pages.SeekToRow(pos)
+									if err != nil {
+										b.Fatalf("seek page: %v", err)
+									}
+
+									_, err := pages.ReadPage()
+									if err != nil {
+										if errors.Is(err, io.EOF) {
+											break
+										}
+										b.Fatalf("read page: %v", err)
+									}
+									j++
+								}
+							}
+						}
+
+						b.ReportMetric(float64(atomic.LoadInt64(&ctr.reads))/float64(b.N), "reads/op")
+					})
+				}
+			})
+		})
+	}
+}
+
+func makeSeekBenchFile(t testing.TB, numRows int64) []byte {
+	rnd := rand.New(rand.NewSource(1234))
+	var buf bytes.Buffer
+
+	w := parquet.NewGenericWriter[benchRow](&buf,
+		parquet.MaxRowsPerRowGroup(numRows/3),
+	)
+
+	strs := make([]string, 500) // max cardinality
+	for i := range strs {
+		b := make([]byte, 50+rnd.Intn(50))
+		for k := range b {
+			b[k] = byte('a' + rnd.Intn(26))
+		}
+		strs[i] = string(b)
+	}
+
+	baseLen := 10
+	for i := range numRows {
+		if i != 0 && i%50 == 0 { // make pages with varying sizes
+			baseLen = 1 + rnd.Intn(75)
+		}
+		vals := make([]string, baseLen+rnd.Intn(10))
+		for j := range vals {
+			vals[j] = strs[rnd.Intn(len(strs))]
+		}
+
+		_, err := w.Write([]benchRow{{K: fmt.Sprintf("key-%s", strs[rnd.Intn(len(strs))]), V: vals}})
+		if err != nil {
+			t.Fatalf("write row %d: %v", i, err)
+		}
+	}
+
+	err := w.Close()
+	if err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
+func readModeToString(m parquet.ReadMode) string {
+	switch m {
+	case parquet.ReadModeSync:
+		return "sync"
+	case parquet.ReadModeAsync:
+		return "async"
+	default:
+		return "unknown"
+	}
+}
+
+// TestEmptyGroup tests reading and writing a struct with an empty group field
+func TestEmptyGroup(t *testing.T) {
+	type EmptyStruct struct {
+		// This struct has no fields, creating an empty GROUP in parquet
+	}
+
+	type Record struct {
+		ID    int         `parquet:"id"`
+		Empty EmptyStruct `parquet:"empty"`
+		Name  string      `parquet:"name"`
+	}
+
+	// Create some test data
+	records := []Record{
+		{ID: 1, Name: "Alice"},
+		{ID: 2, Name: "Bob"},
+		{ID: 3, Name: "Charlie"},
+	}
+
+	// Write to parquet
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf)
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+	if n != len(records) {
+		t.Fatalf("expected to write %d records, wrote %d", len(records), n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	t.Logf("Successfully wrote %d bytes", buf.Len())
+
+	// Read back
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, len(records))
+	n, err = reader.Read(readRecords)
+	// EOF is expected when all rows have been read
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	if n != len(records) {
+		t.Fatalf("expected to read %d records, read %d", len(records), n)
+	}
+
+	// Verify data
+	for i := range readRecords {
+		if readRecords[i].ID != records[i].ID {
+			t.Errorf("record %d: expected ID=%d, got %d", i, records[i].ID, readRecords[i].ID)
+		}
+		if readRecords[i].Name != records[i].Name {
+			t.Errorf("record %d: expected Name=%s, got %s", i, records[i].Name, readRecords[i].Name)
+		}
+	}
+
+	t.Logf("Successfully read back %d records", n)
+}
+
+// TestOptionalEmptyGroup tests an optional empty group.
+// Note: Optional empty groups cannot preserve nullability information
+// since there are no columns to store definition levels.
+func TestOptionalEmptyGroup(t *testing.T) {
+	type EmptyStruct struct{}
+
+	type Record struct {
+		ID    int          `parquet:"id"`
+		Empty *EmptyStruct `parquet:"empty,optional"`
+		Name  string       `parquet:"name"`
+	}
+
+	records := []Record{
+		{ID: 1, Empty: &EmptyStruct{}, Name: "Alice"},
+		{ID: 2, Empty: nil, Name: "Bob"},
+		{ID: 3, Empty: &EmptyStruct{}, Name: "Charlie"},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf)
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, len(records))
+	n, err = reader.Read(readRecords)
+	// EOF is expected when all rows have been read
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	if n != len(records) {
+		t.Fatalf("expected to read %d records, read %d", len(records), n)
+	}
+
+	// Verify basic data (ID and Name)
+	for i := range readRecords {
+		if readRecords[i].ID != records[i].ID {
+			t.Errorf("record %d: expected ID=%d, got %d", i, records[i].ID, readRecords[i].ID)
+		}
+		if readRecords[i].Name != records[i].Name {
+			t.Errorf("record %d: expected Name=%s, got %s", i, records[i].Name, readRecords[i].Name)
+		}
+		// Note: We cannot verify Empty field nullability because empty groups
+		// have no columns to store definition levels
+	}
+}
+
+// TestRepeatedEmptyGroup tests a repeated empty group.
+// Note: Repeated empty groups cannot preserve array length information
+// since there are no columns to store repetition levels.
+func TestRepeatedEmptyGroup(t *testing.T) {
+	type EmptyStruct struct{}
+
+	type Record struct {
+		ID      int           `parquet:"id"`
+		Empties []EmptyStruct `parquet:"empties"`
+		Name    string        `parquet:"name"`
+	}
+
+	records := []Record{
+		{ID: 1, Empties: []EmptyStruct{{}}, Name: "Alice"},
+		{ID: 2, Empties: []EmptyStruct{{}, {}}, Name: "Bob"},
+		{ID: 3, Empties: nil, Name: "Charlie"},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf)
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, len(records))
+	n, err = reader.Read(readRecords)
+	// EOF is expected when all rows have been read
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	if n != len(records) {
+		t.Fatalf("expected to read %d records, read %d", len(records), n)
+	}
+
+	// Verify basic data (ID and Name)
+	for i := range readRecords {
+		if readRecords[i].ID != records[i].ID {
+			t.Errorf("record %d: expected ID=%d, got %d", i, records[i].ID, readRecords[i].ID)
+		}
+		if readRecords[i].Name != records[i].Name {
+			t.Errorf("record %d: expected Name=%s, got %s", i, records[i].Name, readRecords[i].Name)
+		}
+		// Note: We cannot verify Empties array length because empty groups
+		// have no columns to store repetition levels
+	}
 }
