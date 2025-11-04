@@ -80,7 +80,11 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 		return newMultiRowGroup(schema, nil, mergedRowGroups), nil
 	}
 
-	mergedCompare := compareRowsFuncOf(schema, mergedSortingColumns)
+	var pool ColumnPool
+	if config.Comparator != nil {
+		pool = config.Comparator.ColumnPool
+	}
+	mergedCompare := compareRowsFuncOf(schema, mergedSortingColumns, pool)
 	// Optimization: detect non-overlapping row groups and create segments
 	rowGroupSegments := make([]RowGroup, 0)
 	for segment := range overlappingRowGroups(mergedRowGroups, schema, mergedSortingColumns, mergedCompare) {

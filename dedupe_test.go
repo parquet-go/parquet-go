@@ -40,11 +40,11 @@ func TestDedupeRowReader(t *testing.T) {
 
 	buffer2 := parquet.NewRowBuffer[Row]()
 
-	_, err := parquet.CopyRows(buffer2,
-		parquet.DedupeRowReader(buffer1Rows,
-			buffer1.Schema().Comparator(parquet.Ascending("value")),
-		),
-	)
+		_, err := parquet.CopyRows(buffer2,
+			parquet.DedupeRowReader(buffer1Rows,
+				buffer1.Schema().Comparator(nil, parquet.Ascending("value")),
+			),
+		)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestDedupeRowWriter(t *testing.T) {
 
 	_, err := parquet.CopyRows(
 		parquet.DedupeRowWriter(buffer2,
-			buffer1.Schema().Comparator(parquet.Ascending("value")),
+			buffer1.Schema().Comparator(nil, parquet.Ascending("value")),
 		),
 		buffer1Rows,
 	)

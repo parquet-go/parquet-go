@@ -435,8 +435,38 @@ func (s *Schema) Columns() [][]string { return s.lazyLoadState().columns }
 
 // Comparator constructs a comparator function which orders rows according to
 // the list of sorting columns passed as arguments.
-func (s *Schema) Comparator(sortingColumns ...SortingColumn) func(Row, Row) int {
-	return compareRowsFuncOf(s, sortingColumns)
+//
+// The method accepts an optional ComparatorConfig followed by sorting columns.
+// If config is nil, default settings are used (sync.Pool-based buffer allocation).
+//
+// Example:
+//
+//	// Using default pool
+//	comparator := schema.Comparator(nil,
+//		parquet.Ascending("col1"),
+//		parquet.Descending("col2"),
+//	)
+//
+//	// Using custom pool
+//	comparator := schema.Comparator(
+//		parquet.WithColumnPool(customPool),
+//		parquet.Ascending("col1"),
+//		parquet.Descending("col2"),
+//	)
+//
+// The same ComparatorConfig can be used with MergeRowGroups:
+//
+//	merged, err := parquet.MergeRowGroups(rowGroups,
+//		parquet.ComparatorRowGroupConfig(
+//			parquet.WithColumnPool(customPool),
+//		),
+//	)
+func (s *Schema) Comparator(config *ComparatorConfig, sortingColumns ...SortingColumn) func(Row, Row) int {
+	var pool ColumnPool
+	if config != nil {
+		pool = config.ColumnPool
+	}
+	return compareRowsFuncOf(s, sortingColumns, pool)
 }
 
 func (s *Schema) forEachNode(do func(name string, node Node)) {

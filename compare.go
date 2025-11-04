@@ -178,7 +178,60 @@ func lessBE128(v1, v2 *[16]byte) bool {
 	return x < y
 }
 
-func compareRowsFuncOf(schema *Schema, sortingColumns []SortingColumn) func(Row, Row) int {
+// ColumnPool is an interface for pooling [][2]int32 buffers used during row comparison.
+// Implementations should provide Get and Put methods to acquire and release buffers.
+// The Get method accepts a maxCapacity hint to allocate buffers with appropriate capacity.
+type ColumnPool interface {
+	Get(maxCapacity int) [][2]int32
+	Put(buf [][2]int32)
+}
+
+// ComparatorConfig carries configuration options for row comparators.
+type ComparatorConfig struct {
+	ColumnPool ColumnPool
+}
+
+// WithColumnPool creates a comparator config which sets the ColumnPool used for
+// buffer allocation during row comparison.
+//
+// If pool is nil, a default sync.Pool-based implementation is used.
+func WithColumnPool(pool ColumnPool) *ComparatorConfig {
+	return &ComparatorConfig{ColumnPool: pool}
+}
+
+// defaultColumnPool is a default implementation using sync.Pool for backward compatibility.
+type defaultColumnPool struct {
+	pool sync.Pool
+}
+
+func newDefaultColumnPool() *defaultColumnPool {
+	return &defaultColumnPool{
+		pool: sync.Pool{
+			New: func() any { return make([][2]int32, 0, 128) },
+		},
+	}
+}
+
+func (p *defaultColumnPool) Get(maxCapacity int) [][2]int32 {
+	buf := p.pool.Get().([][2]int32)
+	if cap(buf) < maxCapacity {
+		buf = make([][2]int32, 0, maxCapacity)
+	} else {
+		buf = buf[:0]
+	}
+	return buf
+}
+
+func (p *defaultColumnPool) Put(buf [][2]int32) {
+	buf = buf[:0]
+	p.pool.Put(buf)
+}
+
+var defaultPool ColumnPool = newDefaultColumnPool()
+
+const stackAllocThreshold = 32
+
+func compareRowsFuncOf(schema *Schema, sortingColumns []SortingColumn, pool ColumnPool) func(Row, Row) int {
 	leafColumns := make([]leafColumn, len(sortingColumns))
 	canCompareRows := true
 
@@ -207,7 +260,7 @@ func compareRowsFuncOf(schema *Schema, sortingColumns []SortingColumn) func(Row,
 		return compareRowsFuncOfColumnIndexes(leafColumns, sortingColumns)
 	}
 
-	return compareRowsFuncOfColumnValues(leafColumns, sortingColumns)
+	return compareRowsFuncOfColumnValues(leafColumns, sortingColumns, pool)
 }
 
 func compareRowsUnordered(Row, Row) int { return 0 }
@@ -259,10 +312,12 @@ func compareRowsFuncOfColumnIndexes(leafColumns []leafColumn, sortingColumns []S
 	}
 }
 
-var columnPool = &sync.Pool{New: func() any { return make([][2]int32, 0, 128) }}
-
 //go:noinline
-func compareRowsFuncOfColumnValues(leafColumns []leafColumn, sortingColumns []SortingColumn) func(Row, Row) int {
+func compareRowsFuncOfColumnValues(leafColumns []leafColumn, sortingColumns []SortingColumn, pool ColumnPool) func(Row, Row) int {
+	if pool == nil {
+		pool = defaultPool
+	}
+
 	highestColumnIndex := int16(0)
 	columnIndexes := make([]int16, len(sortingColumns))
 	compareFuncs := make([]func(Value, Value) int, len(sortingColumns))
@@ -291,15 +346,29 @@ func compareRowsFuncOfColumnValues(leafColumns []leafColumn, sortingColumns []So
 		}
 	}
 
+	requiredCapacity := int(highestColumnIndex) + 1
+	useStackAlloc := requiredCapacity <= stackAllocThreshold
+
 	return func(row1, row2 Row) int {
-		columns1 := columnPool.Get().([][2]int32)
-		columns2 := columnPool.Get().([][2]int32)
-		defer func() {
-			columns1 = columns1[:0]
-			columns2 = columns2[:0]
-			columnPool.Put(columns1)
-			columnPool.Put(columns2)
-		}()
+		var columns1, columns2 [][2]int32
+
+		if useStackAlloc {
+			// Use stack allocation for small sizes
+			var stack1, stack2 [stackAllocThreshold][2]int32
+			columns1 = stack1[:0:requiredCapacity]
+			columns2 = stack2[:0:requiredCapacity]
+		} else {
+			// Use pool with capacity hint
+			columns1 = pool.Get(requiredCapacity)
+			columns2 = pool.Get(requiredCapacity)
+			defer func() {
+				pool.Put(columns1)
+				pool.Put(columns2)
+			}()
+			// Pre-allocate with correct capacity to avoid append reallocations
+			columns1 = columns1[:0:requiredCapacity]
+			columns2 = columns2[:0:requiredCapacity]
+		}
 
 		i1 := 0
 		i2 := 0
@@ -326,8 +395,11 @@ func compareRowsFuncOfColumnValues(leafColumns []leafColumn, sortingColumns []So
 			columnIndex := columnIndexes[i]
 			offsets1 := columns1[columnIndex]
 			offsets2 := columns2[columnIndex]
-			values1 := row1[offsets1[0]:offsets1[1]:offsets1[1]]
-			values2 := row2[offsets2[0]:offsets2[1]:offsets2[1]]
+			// Compute offsets inline to reduce slice view allocations
+			start1, end1 := int(offsets1[0]), int(offsets1[1])
+			start2, end2 := int(offsets2[0]), int(offsets2[1])
+			values1 := row1[start1:end1]
+			values2 := row2[start2:end2]
 			i1 := 0
 			i2 := 0
 

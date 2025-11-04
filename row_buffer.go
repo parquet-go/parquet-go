@@ -48,7 +48,7 @@ func NewRowBuffer[T any](options ...RowGroupOption) *RowBuffer[T] {
 	return &RowBuffer[T]{
 		schema:  config.Schema,
 		sorting: config.Sorting.SortingColumns,
-		compare: config.Schema.Comparator(config.Sorting.SortingColumns...),
+		compare: config.Schema.Comparator(nil, config.Sorting.SortingColumns...),
 	}
 }
 

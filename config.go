@@ -323,6 +323,7 @@ type RowGroupConfig struct {
 	ColumnBufferCapacity int
 	Schema               *Schema
 	Sorting              SortingConfig
+	Comparator           *ComparatorConfig
 }
 
 // DefaultRowGroupConfig returns a new RowGroupConfig value initialized with the
@@ -367,7 +368,15 @@ func (c *RowGroupConfig) ConfigureRowGroup(config *RowGroupConfig) {
 		ColumnBufferCapacity: coalesceInt(c.ColumnBufferCapacity, config.ColumnBufferCapacity),
 		Schema:               coalesceSchema(c.Schema, config.Schema),
 		Sorting:              coalesceSortingConfig(c.Sorting, config.Sorting),
+		Comparator:           coalesceComparatorConfig(c.Comparator, config.Comparator),
 	}
+}
+
+func coalesceComparatorConfig(c1, c2 *ComparatorConfig) *ComparatorConfig {
+	if c1 != nil {
+		return c1
+	}
+	return c2
 }
 
 // The SortingConfig type carries configuration options for parquet row groups.
@@ -725,6 +734,20 @@ func DictionaryMaxBytes(size int64) WriterOption {
 // Defaults to 16384.
 func ColumnBufferCapacity(size int) RowGroupOption {
 	return rowGroupOption(func(config *RowGroupConfig) { config.ColumnBufferCapacity = size })
+}
+
+// ComparatorRowGroupConfig creates a row group option which sets the ComparatorConfig
+// used for row comparison during merge operations.
+//
+// Example:
+//
+//	merged, err := parquet.MergeRowGroups(rowGroups,
+//		parquet.ComparatorRowGroupConfig(
+//			parquet.WithColumnPool(customPool),
+//		),
+//	)
+func ComparatorRowGroupConfig(comparatorConfig *ComparatorConfig) RowGroupOption {
+	return rowGroupOption(func(config *RowGroupConfig) { config.Comparator = comparatorConfig })
 }
 
 // SortingRowGroupConfig is a row group option which applies configuration
