@@ -298,22 +298,39 @@ func (w *GenericWriter[T]) File() FileView {
 }
 
 // ConcurrentRowGroupWriter is a row group writer that can be used to write row groups
-// in parallel with other row groups. However, they must be committed back to the writer
-// serially using CommitRowGroup.
+// in parallel. Multiple row groups can be created concurrently and written to independently,
+// but they must be committed serially to maintain the order of row groups in the file.
 //
 // See BeginRowGroup for more information on how this can be used.
 //
-// While multiple row groups can be created concurrently, a single row group must be created
+// While multiple row groups can be created concurrently, a single row group must be written
 // sequentially.
 type ConcurrentRowGroupWriter interface {
 	RowWriterWithSchema
+
+	// Flush flushes any buffered data in the row group's column writers.
+	// This could be called before Commit to ensure all data pages are flushed.
 	Flush() error
+
+	// ColumnWriters returns the column writers for this row group, allowing
+	// direct access to write values to individual columns.
 	ColumnWriters() []*ColumnWriter
+
+	// Commit commits the row group to the parent writer, returning the number
+	// of rows written and an error if any. This method must be called serially
+	// (not concurrently) to maintain row group order in the file.
+	//
+	// If the parent writer has any pending rows buffered, they will be flushed
+	// before this row group is written.
+	//
+	// After Commit returns successfully, the row group will be empty and can
+	// be reused.
+	Commit() (int64, error)
 }
 
 // BeginRowGroup returns a new ConcurrentRowGroupWriter that can be written to in parallel with
-// other row groups. However these need to be committed back to the writer serially using
-// CommitRowGroup.
+// other row groups. However these need to be committed back to the writer serially using the
+// Commit method on the row group.
 //
 // Example usage could look something like:
 //
@@ -331,29 +348,13 @@ type ConcurrentRowGroupWriter interface {
 //	}
 //	wg.Wait()
 //	for _, rg := range rgs {
-//	  if _, err := writer.CommitRowGroup(rg); err != nil {
+//	  if _, err := rg.Commit(); err != nil {
 //	    return err
 //	  }
 //	}
 //	return writer.Close()
 func (w *GenericWriter[T]) BeginRowGroup() ConcurrentRowGroupWriter {
-	return newWriterRowGroup(w.base.config)
-}
-
-// CommitRowGroup commits rgw to w, returning the number of rows written and an error if any.
-//
-// If the writer has any pending rows buffered, then they will be flushed before rgw is written.
-//
-// After the method returns successfully, the rgw will be empty and able to be reused.
-func (w *GenericWriter[T]) CommitRowGroup(rgw ConcurrentRowGroupWriter) (int64, error) {
-	if err := w.Flush(); err != nil {
-		return 0, err
-	}
-	rg, ok := rgw.(*writerRowGroup)
-	if !ok {
-		return 0, fmt.Errorf("invalid row group writer type")
-	}
-	return w.base.writer.writeRowGroup(rg, nil, nil)
+	return newWriterRowGroup(w.base.writer, w.base.config)
 }
 
 var (
@@ -600,22 +601,10 @@ func (w *Writer) SetKeyValueMetadata(key, value string) {
 func (w *Writer) ColumnWriters() []*ColumnWriter { return w.writer.currentRowGroup.columns }
 
 // BeginRowGroup returns a new ConcurrentRowGroupWriter that can be written to in parallel with
-// other row groups. However these need to be committed back to the writer serially using
-// CommitRowGroup.
+// other row groups. However these need to be committed back to the writer serially using the
+// Commit method on the row group.
 func (w *Writer) BeginRowGroup() ConcurrentRowGroupWriter {
-	return newWriterRowGroup(w.config)
-}
-
-// CommitRowGroup commits rgw to w, returning the number of rows written and an error if any.
-func (w *Writer) CommitRowGroup(rgw ConcurrentRowGroupWriter) (int64, error) {
-	if err := w.Flush(); err != nil {
-		return 0, err
-	}
-	rg, ok := rgw.(*writerRowGroup)
-	if !ok {
-		return 0, fmt.Errorf("invalid row group writer type")
-	}
-	return w.writer.writeRowGroup(rg, nil, nil)
+	return newWriterRowGroup(w.writer, w.config)
 }
 
 type writerFileView struct {
@@ -688,6 +677,7 @@ func (w *writerFileView) RowGroups() []RowGroup {
 }
 
 type writerRowGroup struct {
+	writer      *writer
 	config      *WriterConfig
 	values      [][]Value
 	numRows     int64
@@ -698,8 +688,9 @@ type writerRowGroup struct {
 	offsetIndex []format.OffsetIndex
 }
 
-func newWriterRowGroup(config *WriterConfig) *writerRowGroup {
+func newWriterRowGroup(w *writer, config *WriterConfig) *writerRowGroup {
 	rg := &writerRowGroup{
+		writer:  w,
 		config:  config,
 		maxRows: config.MaxRowsPerRowGroup,
 	}
@@ -847,6 +838,13 @@ func (rg *writerRowGroup) Flush() error {
 	return nil
 }
 
+func (rg *writerRowGroup) Commit() (int64, error) {
+	if err := rg.writer.flush(); err != nil {
+		return 0, err
+	}
+	return rg.writer.writeRowGroup(rg, nil, nil)
+}
+
 func (rg *writerRowGroup) WriteRows(rows []Row) (int, error) {
 	return rg.writeRows(len(rows), func(start, end int) (int, error) {
 		defer func() {
@@ -984,7 +982,7 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 		})
 	})
 
-	w.currentRowGroup = newWriterRowGroup(config)
+	w.currentRowGroup = newWriterRowGroup(w, config)
 
 	if len(config.Sorting.SortingColumns) > 0 {
 		forEachLeafColumnOf(config.Schema, func(leaf leafColumn) {

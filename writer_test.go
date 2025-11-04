@@ -2011,7 +2011,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 			t.Fatalf("expected 1 row written, got %d", n)
 		}
 
-		if _, err := writer.CommitRowGroup(rg); err != nil {
+		if _, err := rg.Commit(); err != nil {
 			t.Fatal(err)
 		}
 
@@ -2058,7 +2058,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 
 		// Commit in order
 		for _, rg := range rgs {
-			if _, err := writer.CommitRowGroup(rg); err != nil {
+			if _, err := rg.Commit(); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -2136,7 +2136,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 
 		// Commit in order
 		for _, rg := range rgs {
-			if _, err := writer.CommitRowGroup(rg); err != nil {
+			if _, err := rg.Commit(); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -2199,7 +2199,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 		}
 
 		// Commit should flush pending rows first
-		if _, err := writer.CommitRowGroup(rg); err != nil {
+		if _, err := rg.Commit(); err != nil {
 			t.Fatal(err)
 		}
 
@@ -2212,7 +2212,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Should have 2 row groups (one from Flush, one from CommitRowGroup)
+		// Should have 2 row groups (one from Flush, one from Commit)
 		if len(f.RowGroups()) != 2 {
 			t.Fatalf("expected 2 row groups, got %d", len(f.RowGroups()))
 		}
