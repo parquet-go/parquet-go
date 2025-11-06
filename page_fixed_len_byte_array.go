@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"io"
+
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
@@ -83,4 +85,41 @@ func (page *fixedLenByteArrayPage) makeValueString(v string) Value {
 	value := makeValueString(FixedLenByteArray, v)
 	value.columnIndex = page.columnIndex
 	return value
+}
+
+type fixedLenByteArrayPageValues struct {
+	page   *fixedLenByteArrayPage
+	offset int
+}
+
+func (r *fixedLenByteArrayPageValues) Read(b []byte) (n int, err error) {
+	n, err = r.ReadFixedLenByteArrays(b)
+	return n * r.page.size, err
+}
+
+func (r *fixedLenByteArrayPageValues) ReadRequired(values []byte) (int, error) {
+	return r.ReadFixedLenByteArrays(values)
+}
+
+func (r *fixedLenByteArrayPageValues) ReadFixedLenByteArrays(values []byte) (n int, err error) {
+	n = copy(values, r.page.data[r.offset:]) / r.page.size
+	r.offset += n * r.page.size
+	if r.offset == len(r.page.data) {
+		err = io.EOF
+	} else if n == 0 && len(values) > 0 {
+		err = io.ErrShortBuffer
+	}
+	return n, err
+}
+
+func (r *fixedLenByteArrayPageValues) ReadValues(values []Value) (n int, err error) {
+	for n < len(values) && r.offset < len(r.page.data) {
+		values[n] = r.page.makeValueBytes(r.page.data[r.offset : r.offset+r.page.size])
+		r.offset += r.page.size
+		n++
+	}
+	if r.offset == len(r.page.data) {
+		err = io.EOF
+	}
+	return n, err
 }

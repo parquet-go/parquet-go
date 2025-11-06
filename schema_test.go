@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -770,5 +771,333 @@ func TestSchemaRoundTrip(t *testing.T) {
 				t.Errorf("\nexpected:\n\n%s\n\nfound:\n\n%s\n", test.roundTripped, s)
 			}
 		})
+	}
+}
+
+func TestSchemaOfOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    any
+		expected any
+		options  []parquet.SchemaOption
+	}{
+		{
+			name: "noop",
+			value: new(struct {
+				A string
+				B struct {
+					C string
+				}
+			}),
+			expected: new(struct {
+				A string
+				B struct {
+					C string
+				}
+			}),
+		},
+		{
+			name: "nested", // Change name, encoding, compression, and drop columns of nested struct
+			value: new(struct {
+				A string
+				B struct {
+					C string `parquet:",snappy,dict"`
+					D string
+				}
+			}),
+			options: []parquet.SchemaOption{
+				parquet.StructTag(`parquet:"C2,zstd,dict"`, "B", "C"),
+				parquet.StructTag(`parquet:"-"`, "B", "D"),
+			},
+			expected: new(struct {
+				A string
+				B struct {
+					C2 string `parquet:",zstd,dict"`
+				}
+			}),
+		},
+		{
+			name: "embedded", // Change name, encoding, compression, and drop of embedded field
+			value: func() any {
+				type Embedded struct {
+					A string
+					B string
+				}
+				return new(struct {
+					Embedded
+				})
+			}(),
+			options: []parquet.SchemaOption{
+				parquet.StructTag(`parquet:"A2,snappy,dict"`, "A"),
+				parquet.StructTag(`parquet:"-"`, "B"),
+			},
+			expected: func() any {
+				type Embedded struct {
+					A2 string `parquet:",snappy,dict"`
+				}
+				return new(struct {
+					Embedded
+				})
+			}(),
+		},
+		{
+			name: "nested map", // Change name, encoding, compression, and drop of nested map
+			value: func() any {
+				return new(struct {
+					A map[string]struct {
+						B string `parquet:",snappy"`
+						C string
+					}
+				})
+			}(),
+			options: []parquet.SchemaOption{
+				parquet.StructTag(`parquet:"B2,zstd,dict"`, "A", "key_value", "value", "B"),
+				parquet.StructTag(`parquet:"-"`, "A", "key_value", "value", "C"),
+			},
+			expected: func() any {
+				return new(struct {
+					A map[string]struct {
+						B2 string `parquet:",zstd,dict"`
+					}
+				})
+			}(),
+		},
+		{
+			name: "nested slice", // Change name, encoding, compression, and drop within nested slice (non-LIST)
+			value: func() any {
+				return new(struct {
+					A []struct {
+						B string `parquet:",snappy"`
+						C string
+					}
+				})
+			}(),
+			options: []parquet.SchemaOption{
+				parquet.StructTag(`parquet:"B2,zstd,dict"`, "A", "B"),
+				parquet.StructTag(`parquet:"-"`, "A", "C"),
+			},
+			expected: func() any {
+				return new(struct {
+					A []struct {
+						B2 string `parquet:",zstd,dict"`
+					}
+				})
+			}(),
+		},
+		{
+			name: "nested list", // Change name, encoding, compression, and drop within nested LIST
+			value: func() any {
+				return new(struct {
+					A []struct {
+						B string `parquet:",snappy"`
+						C string
+					} `parquet:",list"`
+				})
+			}(),
+			options: []parquet.SchemaOption{
+				parquet.StructTag(`parquet:"B2,zstd,dict"`, "A", "list", "element", "B"),
+				parquet.StructTag(`parquet:"-"`, "A", "list", "element", "C"),
+			},
+			expected: func() any {
+				return new(struct {
+					A []struct {
+						B2 string `parquet:",zstd,dict"`
+					} `parquet:",list"`
+				})
+			}(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			want := parquet.SchemaOf(test.expected)
+			got := parquet.SchemaOf(test.value, test.options...)
+
+			if !identicalNodes(want, got) {
+				t.Errorf("schema not identical want: %v got: %v", want, got)
+			}
+		})
+	}
+}
+
+// identicalNodes is like EqualNodes but also checks field order, encoding, and compression.
+func identicalNodes(node1, node2 parquet.Node) bool {
+	if node1.Leaf() {
+		return node2.Leaf() && leafNodesAreIdentical(node1, node2)
+	} else {
+		return !node2.Leaf() && groupNodesAreIdentical(node1, node2)
+	}
+}
+
+func leafNodesAreIdentical(node1, node2 parquet.Node) bool {
+	if node1.ID() != node2.ID() {
+		return false
+	}
+
+	if !parquet.EqualTypes(node1.Type(), node2.Type()) {
+		return false
+	}
+
+	// Leaf nodes must have the same final type.
+	if node1.GoType() != node2.GoType() {
+		return false
+	}
+
+	repetitionsAreEqual := node1.Optional() == node2.Optional() && node1.Repeated() == node2.Repeated()
+	if !repetitionsAreEqual {
+		return false
+	}
+
+	enc1 := node1.Encoding()
+	enc2 := node2.Encoding()
+	if (enc1 != nil) != (enc2 != nil) {
+		return false
+	}
+	if enc1 != nil && enc2 != nil && enc1.String() != enc2.String() {
+		return false
+	}
+
+	comp1 := node1.Compression()
+	comp2 := node2.Compression()
+	if (comp1 != nil) != (comp2 != nil) {
+		return false
+	}
+	if comp1 != nil && comp2 != nil && comp1.String() != comp2.String() {
+		return false
+	}
+
+	return true
+}
+
+func groupNodesAreIdentical(node1, node2 parquet.Node) bool {
+	if node1.ID() != node2.ID() {
+		return false
+	}
+	fields1 := node1.Fields()
+	fields2 := node2.Fields()
+	if len(fields1) != len(fields2) {
+		return false
+	}
+	repetitionsAreEqual := node1.Optional() == node2.Optional() && node1.Repeated() == node2.Repeated()
+	if !repetitionsAreEqual {
+		return false
+	}
+	if !fieldsAreEqual(fields1, fields2, identicalNodes) {
+		return false
+	}
+
+	// TODO - Check for equivalent but not exact go type?
+	// For testing, a different go type might be present for structs.
+	/*if node1.GoType() != node2.GoType() {
+		return false
+	}*/
+
+	equalLogicalTypes := reflect.DeepEqual(node1.Type().LogicalType(), node2.Type().LogicalType())
+	return equalLogicalTypes
+}
+
+func fieldsAreEqual(fields1, fields2 []parquet.Field, equal func(parquet.Node, parquet.Node) bool) bool {
+	if len(fields1) != len(fields2) {
+		return false
+	}
+	for i := range fields1 {
+		if fields1[i].Name() != fields2[i].Name() {
+			return false
+		}
+	}
+	for i := range fields1 {
+		if !equal(fields1[i], fields2[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestSchemaInteroperability(t *testing.T) {
+	// All of these types generate the same parquet/leaf structure
+	// with one column named A. This test verifies that the schemas
+	// and structs can be used interchangeably when reading and writing
+	// using the generic reader and writer.
+	type One struct {
+		A int `parquet:",snappy"`
+	}
+	type Two struct {
+		A int `parquet:",gzip"`
+		B int `parquet:"-"`
+	}
+	type Three struct {
+		B int `parquet:"A"`
+	}
+	type Four struct {
+		C int
+		D int
+	}
+
+	var (
+		s1      = parquet.SchemaOf(&One{})
+		s2      = parquet.SchemaOf(&Two{})
+		s3      = parquet.SchemaOf(&Three{})
+		tag1    = parquet.StructTag(`parquet:"A"`, "C")
+		tag2    = parquet.StructTag(`parquet:"-"`, "D")
+		s4      = parquet.SchemaOf(&Four{}, tag1, tag2)
+		schemas = []*parquet.Schema{s1, s2, s3, s4}
+	)
+
+	t.Run("T=One", func(t *testing.T) {
+		for _, schema := range schemas {
+			t.Run("Schema="+schema.Name(), func(t *testing.T) {
+				roundtripTester[One]{}.test(t, One{A: 1}, schema, nil, nil)
+			})
+		}
+	})
+
+	t.Run("T=Two", func(t *testing.T) {
+		for _, schema := range schemas {
+			t.Run("Schema="+schema.Name(), func(t *testing.T) {
+				roundtripTester[Two]{}.test(t, Two{A: 1}, schema, nil, nil)
+			})
+		}
+	})
+	t.Run("T=Three", func(t *testing.T) {
+		for _, schema := range schemas {
+			t.Run("Schema="+schema.Name(), func(t *testing.T) {
+				roundtripTester[Three]{}.test(t, Three{B: 1}, schema, nil, nil)
+			})
+		}
+	})
+	t.Run("T=Four", func(t *testing.T) {
+		writerOptions := []parquet.WriterOption{tag1, tag2}
+		readerOptions := []parquet.ReaderOption{tag1, tag2}
+
+		for _, schema := range schemas {
+			t.Run("Schema="+schema.Name(), func(t *testing.T) {
+				roundtripTester[Four]{}.test(t, Four{C: 1}, schema, writerOptions, readerOptions)
+			})
+		}
+	})
+}
+
+type roundtripTester[T any] struct{}
+
+func (_ roundtripTester[T]) test(t *testing.T, val T, schema *parquet.Schema, writerOptions []parquet.WriterOption, readerOptions []parquet.ReaderOption) {
+	buf := bytes.NewBuffer(nil)
+	w := parquet.NewGenericWriter[T](buf, append(writerOptions, schema)...)
+	if _, err := w.Write([]T{val}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := make([]T, 1)
+	r := parquet.NewGenericReader[T](bytes.NewReader(buf.Bytes()), append(readerOptions, schema)...)
+	n, err := r.Read(rows)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 || len(rows) != 1 {
+		t.Fatal("expected 1 row, got ", n)
+	}
+	if !reflect.DeepEqual(rows[0], val) {
+		t.Fatal("expected ", val, " got ", rows[0])
 	}
 }

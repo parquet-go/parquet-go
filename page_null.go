@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"io"
+
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
@@ -35,3 +37,21 @@ func (page *nullPage) Slice(i, j int64) Page {
 func (page *nullPage) RepetitionLevels() []byte { return nil }
 func (page *nullPage) DefinitionLevels() []byte { return nil }
 func (page *nullPage) Data() encoding.Values    { return encoding.Values{} }
+
+type nullPageValues struct {
+	column int
+	remain int
+}
+
+func (r *nullPageValues) ReadValues(values []Value) (n int, err error) {
+	columnIndex := ^int16(r.column)
+	values = values[:min(r.remain, len(values))]
+	for i := range values {
+		values[i] = Value{columnIndex: columnIndex}
+	}
+	r.remain -= len(values)
+	if r.remain == 0 {
+		err = io.EOF
+	}
+	return len(values), err
+}

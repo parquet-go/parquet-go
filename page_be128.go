@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"io"
+
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
@@ -77,4 +79,21 @@ func (page *be128Page) makeValueString(v string) Value {
 	value := makeValueString(FixedLenByteArray, v)
 	value.columnIndex = page.columnIndex
 	return value
+}
+
+type be128PageValues struct {
+	page   *be128Page
+	offset int
+}
+
+func (r *be128PageValues) ReadValues(values []Value) (n int, err error) {
+	for n < len(values) && r.offset < len(r.page.values) {
+		values[n] = r.page.makeValue(&r.page.values[r.offset])
+		r.offset++
+		n++
+	}
+	if r.offset == len(r.page.values) {
+		err = io.EOF
+	}
+	return n, err
 }
