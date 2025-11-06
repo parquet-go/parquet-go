@@ -63,11 +63,11 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplace
 			return writeRowsFuncOfArray(t, schema, path)
 		}
 	case reflect.Pointer:
-		return writeRowsFuncOfPointer(t, schema, path)
+		return writeRowsFuncOfPointer(t, schema, path, tagReplacements)
 	case reflect.Struct:
-		return writeRowsFuncOfStruct(t, schema, path)
+		return writeRowsFuncOfStruct(t, schema, path, tagReplacements)
 	case reflect.Map:
-		return writeRowsFuncOfMap(t, schema, path)
+		return writeRowsFuncOfMap(t, schema, path, tagReplacements)
 	case reflect.Interface:
 		return writeRowsFuncOfInterface(t, schema, path)
 	}
@@ -406,7 +406,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 
 	for i, field := range fields {
 		fieldPath := path.append(field.Name())
-		writeRows := writeRowsFuncOf(valueType, schema, fieldPath)
+		writeRows := writeRowsFuncOf(valueType, schema, fieldPath, tagReplacements)
 		if field.Optional() {
 			writeRows = writeRowsFuncOfOptional(valueType, schema, fieldPath, writeRows)
 		}
