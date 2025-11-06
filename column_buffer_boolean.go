@@ -152,7 +152,7 @@ func (col *booleanColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	col.bits = col.bits[:bitpack.ByteCount(uint(col.numValues))]
 }
 
-func (col *booleanColumnBuffer) writeBoolean(_ columnLevels, value bool) {
+func (col *booleanColumnBuffer) writeBoolean(levels columnLevels, value bool) {
 	numBytes := bitpack.ByteCount(uint(col.numValues) + 1)
 	if cap(col.bits) < numBytes {
 		col.bits = append(make([]byte, 0, max(numBytes, 2*cap(col.bits))), col.bits...)
@@ -168,32 +168,32 @@ func (col *booleanColumnBuffer) writeBoolean(_ columnLevels, value bool) {
 	col.numValues++
 }
 
-func (col *booleanColumnBuffer) writeInt32(_ columnLevels, _ int32) {
-	panic("cannot write int32 to boolean column")
+func (col *booleanColumnBuffer) writeInt32(levels columnLevels, value int32) {
+	col.writeBoolean(levels, value != 0)
 }
 
-func (col *booleanColumnBuffer) writeInt64(_ columnLevels, _ int64) {
-	panic("cannot write int64 to boolean column")
+func (col *booleanColumnBuffer) writeInt64(levels columnLevels, value int64) {
+	col.writeBoolean(levels, value != 0)
 }
 
-func (col *booleanColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
-	panic("cannot write int96 to boolean column")
+func (col *booleanColumnBuffer) writeInt96(levels columnLevels, value deprecated.Int96) {
+	col.writeBoolean(levels, !value.IsZero())
 }
 
-func (col *booleanColumnBuffer) writeFloat(_ columnLevels, _ float32) {
-	panic("cannot write float to boolean column")
+func (col *booleanColumnBuffer) writeFloat(levels columnLevels, value float32) {
+	col.writeBoolean(levels, value != 0)
 }
 
-func (col *booleanColumnBuffer) writeDouble(_ columnLevels, _ float64) {
-	panic("cannot write double to boolean column")
+func (col *booleanColumnBuffer) writeDouble(levels columnLevels, value float64) {
+	col.writeBoolean(levels, value != 0)
 }
 
-func (col *booleanColumnBuffer) writeByteArray(_ columnLevels, _ []byte) {
-	panic("cannot write byte array to boolean column")
+func (col *booleanColumnBuffer) writeByteArray(levels columnLevels, value []byte) {
+	col.writeBoolean(levels, len(value) != 0)
 }
 
-func (col *booleanColumnBuffer) writeNull(_ columnLevels) {
-	panic("cannot write null to boolean column")
+func (col *booleanColumnBuffer) writeNull(levels columnLevels) {
+	col.writeBoolean(levels, false)
 }
 
 func (col *booleanColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

@@ -2,8 +2,10 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"unsafe"
 
@@ -125,39 +127,63 @@ func (col *fixedLenByteArrayColumnBuffer) writeValues(_ columnLevels, rows spars
 	}
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
-	panic("cannot write boolean to fixed length byte array column")
+func (col *fixedLenByteArrayColumnBuffer) writeBoolean(levels columnLevels, value bool) {
+	var fixedLenByteArrayValue [1]byte
+	if value {
+		fixedLenByteArrayValue[0] = 1
+	}
+	col.writeBigEndian(fixedLenByteArrayValue[:])
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeInt32(_ columnLevels, _ int32) {
-	panic("cannot write int32 to fixed length byte array column")
+func (col *fixedLenByteArrayColumnBuffer) writeInt32(levels columnLevels, value int32) {
+	var fixedLenByteArrayValue [4]byte
+	binary.BigEndian.PutUint32(fixedLenByteArrayValue[:], uint32(value))
+	col.writeBigEndian(fixedLenByteArrayValue[:])
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeInt64(_ columnLevels, _ int64) {
-	panic("cannot write int64 to fixed length byte array column")
+func (col *fixedLenByteArrayColumnBuffer) writeInt64(levels columnLevels, value int64) {
+	var fixedLenByteArrayValue [8]byte
+	binary.BigEndian.PutUint64(fixedLenByteArrayValue[:], uint64(value))
+	col.writeBigEndian(fixedLenByteArrayValue[:])
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
-	panic("cannot write int96 to fixed length byte array column")
+func (col *fixedLenByteArrayColumnBuffer) writeInt96(levels columnLevels, value deprecated.Int96) {
+	var fixedLenByteArrayValue [12]byte
+	binary.BigEndian.PutUint32(fixedLenByteArrayValue[0:4], value[2])
+	binary.BigEndian.PutUint32(fixedLenByteArrayValue[4:8], value[1])
+	binary.BigEndian.PutUint32(fixedLenByteArrayValue[8:12], value[0])
+	col.writeBigEndian(fixedLenByteArrayValue[:])
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeFloat(_ columnLevels, _ float32) {
-	panic("cannot write float to fixed length byte array column")
+func (col *fixedLenByteArrayColumnBuffer) writeFloat(levels columnLevels, value float32) {
+	var fixedLenByteArrayValue [4]byte
+	binary.BigEndian.PutUint32(fixedLenByteArrayValue[:], math.Float32bits(value))
+	col.writeBigEndian(fixedLenByteArrayValue[:])
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeDouble(_ columnLevels, _ float64) {
-	panic("cannot write double to fixed length byte array column")
+func (col *fixedLenByteArrayColumnBuffer) writeDouble(levels columnLevels, value float64) {
+	var fixedLenByteArrayValue [8]byte
+	binary.BigEndian.PutUint64(fixedLenByteArrayValue[:], math.Float64bits(value))
+	col.writeBigEndian(fixedLenByteArrayValue[:])
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeByteArray(_ columnLevels, value []byte) {
-	if len(value) != col.size {
+func (col *fixedLenByteArrayColumnBuffer) writeByteArray(levels columnLevels, value []byte) {
+	if col.size != len(value) {
 		panic(fmt.Sprintf("cannot write byte array of length %d to fixed length byte array column of size %d", len(value), col.size))
 	}
 	col.data = append(col.data, value...)
 }
 
-func (col *fixedLenByteArrayColumnBuffer) writeNull(_ columnLevels) {
-	panic("cannot write null to fixed length byte array column")
+func (col *fixedLenByteArrayColumnBuffer) writeNull(levels columnLevels) {
+	col.data = append(col.data, make([]byte, col.size)...)
+}
+
+func (col *fixedLenByteArrayColumnBuffer) writeBigEndian(value []byte) {
+	if col.size < len(value) {
+		panic(fmt.Sprintf("cannot write byte array of length %d to fixed length byte array column of size %d", len(value), col.size))
+	}
+	col.data = append(col.data, make([]byte, col.size-len(value))...)
+	col.data = append(col.data, value...)
 }
 
 func (col *fixedLenByteArrayColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
