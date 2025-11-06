@@ -1,8 +1,10 @@
 package parquet
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -83,28 +85,44 @@ func (col *be128ColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	sparse.GatherUint128(col.values[n:], rows.Uint128Array())
 }
 
-func (col *be128ColumnBuffer) writeBoolean(_ columnLevels, _ bool) {
-	panic("cannot write boolean to be128 column")
+func (col *be128ColumnBuffer) writeBoolean(levels columnLevels, value bool) {
+	var be128Value [16]byte
+	if value {
+		be128Value[15] = 1
+	}
+	col.values = append(col.values, be128Value)
 }
 
-func (col *be128ColumnBuffer) writeInt32(_ columnLevels, _ int32) {
-	panic("cannot write int32 to be128 column")
+func (col *be128ColumnBuffer) writeInt32(levels columnLevels, value int32) {
+	var be128Value [16]byte
+	binary.BigEndian.PutUint32(be128Value[12:16], uint32(value))
+	col.values = append(col.values, be128Value)
 }
 
-func (col *be128ColumnBuffer) writeInt64(_ columnLevels, _ int64) {
-	panic("cannot write int64 to be128 column")
+func (col *be128ColumnBuffer) writeInt64(levels columnLevels, value int64) {
+	var be128Value [16]byte
+	binary.BigEndian.PutUint64(be128Value[8:16], uint64(value))
+	col.values = append(col.values, be128Value)
 }
 
-func (col *be128ColumnBuffer) writeInt96(_ columnLevels, _ deprecated.Int96) {
-	panic("cannot write int96 to be128 column")
+func (col *be128ColumnBuffer) writeInt96(levels columnLevels, value deprecated.Int96) {
+	var be128Value [16]byte
+	binary.BigEndian.PutUint32(be128Value[4:8], value[2])
+	binary.BigEndian.PutUint32(be128Value[8:12], value[1])
+	binary.BigEndian.PutUint32(be128Value[12:16], value[0])
+	col.values = append(col.values, be128Value)
 }
 
-func (col *be128ColumnBuffer) writeFloat(_ columnLevels, _ float32) {
-	panic("cannot write float to be128 column")
+func (col *be128ColumnBuffer) writeFloat(levels columnLevels, value float32) {
+	var be128Value [16]byte
+	binary.BigEndian.PutUint32(be128Value[12:16], math.Float32bits(value))
+	col.values = append(col.values, be128Value)
 }
 
-func (col *be128ColumnBuffer) writeDouble(_ columnLevels, _ float64) {
-	panic("cannot write double to be128 column")
+func (col *be128ColumnBuffer) writeDouble(levels columnLevels, value float64) {
+	var be128Value [16]byte
+	binary.BigEndian.PutUint64(be128Value[8:16], math.Float64bits(value))
+	col.values = append(col.values, be128Value)
 }
 
 func (col *be128ColumnBuffer) writeByteArray(_ columnLevels, value []byte) {
@@ -114,8 +132,8 @@ func (col *be128ColumnBuffer) writeByteArray(_ columnLevels, value []byte) {
 	col.values = append(col.values, [16]byte(value))
 }
 
-func (col *be128ColumnBuffer) writeNull(_ columnLevels) {
-	panic("cannot write null to be128 column")
+func (col *be128ColumnBuffer) writeNull(levels columnLevels) {
+	col.values = append(col.values, [16]byte{})
 }
 
 func (col *be128ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
