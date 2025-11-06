@@ -1,7 +1,9 @@
 package parquet
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -131,27 +133,43 @@ func (d *be128Dictionary) Page() Page {
 }
 
 func (d *be128Dictionary) insertBoolean(value bool) int32 {
-	panic("cannot insert boolean value into be128 dictionary")
+	var buf [16]byte
+	if value {
+		buf[15] = 1
+	}
+	return d.insertByteArray(buf[:])
 }
 
 func (d *be128Dictionary) insertInt32(value int32) int32 {
-	panic("cannot insert int32 value into be128 dictionary")
+	var buf [16]byte
+	binary.BigEndian.PutUint32(buf[12:16], uint32(value))
+	return d.insertByteArray(buf[:])
 }
 
 func (d *be128Dictionary) insertInt64(value int64) int32 {
-	panic("cannot insert int64 value into be128 dictionary")
+	var buf [16]byte
+	binary.BigEndian.PutUint64(buf[8:16], uint64(value))
+	return d.insertByteArray(buf[:])
 }
 
 func (d *be128Dictionary) insertInt96(value deprecated.Int96) int32 {
-	panic("cannot insert int96 value into be128 dictionary")
+	var buf [16]byte
+	binary.BigEndian.PutUint32(buf[4:8], value[2])
+	binary.BigEndian.PutUint32(buf[8:12], value[1])
+	binary.BigEndian.PutUint32(buf[12:16], value[0])
+	return d.insertByteArray(buf[:])
 }
 
 func (d *be128Dictionary) insertFloat(value float32) int32 {
-	panic("cannot insert float value into be128 dictionary")
+	var buf [16]byte
+	binary.BigEndian.PutUint32(buf[12:16], math.Float32bits(value))
+	return d.insertByteArray(buf[:])
 }
 
 func (d *be128Dictionary) insertDouble(value float64) int32 {
-	panic("cannot insert double value into be128 dictionary")
+	var buf [16]byte
+	binary.BigEndian.PutUint64(buf[8:16], math.Float64bits(value))
+	return d.insertByteArray(buf[:])
 }
 
 func (d *be128Dictionary) insertByteArray(value []byte) int32 {

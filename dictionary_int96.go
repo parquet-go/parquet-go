@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"math/big"
+
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -104,15 +106,18 @@ func (d *int96Dictionary) Page() Page {
 }
 
 func (d *int96Dictionary) insertBoolean(value bool) int32 {
-	panic("cannot insert boolean value into int96 dictionary")
+	if value {
+		return d.insertInt96(deprecated.Int96{1, 0, 0})
+	}
+	return d.insertInt96(deprecated.Int96{0, 0, 0})
 }
 
 func (d *int96Dictionary) insertInt32(value int32) int32 {
-	panic("cannot insert int32 value into int96 dictionary")
+	return d.insertInt96(deprecated.Int96{uint32(value), 0, 0})
 }
 
 func (d *int96Dictionary) insertInt64(value int64) int32 {
-	panic("cannot insert int64 value into int96 dictionary")
+	return d.insertInt96(deprecated.Int64ToInt96(value))
 }
 
 func (d *int96Dictionary) insertInt96(value deprecated.Int96) int32 {
@@ -122,13 +127,17 @@ func (d *int96Dictionary) insertInt96(value deprecated.Int96) int32 {
 }
 
 func (d *int96Dictionary) insertFloat(value float32) int32 {
-	panic("cannot insert float value into int96 dictionary")
+	return d.insertInt96(deprecated.Int64ToInt96(int64(value)))
 }
 
 func (d *int96Dictionary) insertDouble(value float64) int32 {
-	panic("cannot insert double value into int96 dictionary")
+	return d.insertInt96(deprecated.Int64ToInt96(int64(value)))
 }
 
 func (d *int96Dictionary) insertByteArray(value []byte) int32 {
-	panic("cannot insert byte array value into int96 dictionary")
+	v, ok := new(big.Int).SetString(string(value), 10)
+	if !ok || v == nil {
+		panic("invalid byte array for int96: cannot parse")
+	}
+	return d.insertInt96(deprecated.Int64ToInt96(v.Int64()))
 }

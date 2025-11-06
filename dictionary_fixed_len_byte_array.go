@@ -1,7 +1,9 @@
 package parquet
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -128,27 +130,58 @@ func (d *fixedLenByteArrayDictionary) Page() Page {
 }
 
 func (d *fixedLenByteArrayDictionary) insertBoolean(value bool) int32 {
-	panic("cannot insert boolean value into fixed length byte array dictionary")
+	buf := make([]byte, d.size)
+	if value {
+		buf[d.size-1] = 1
+	}
+	return d.insertByteArray(buf)
 }
 
 func (d *fixedLenByteArrayDictionary) insertInt32(value int32) int32 {
-	panic("cannot insert int32 value into fixed length byte array dictionary")
+	if d.size < 4 {
+		panic(fmt.Sprintf("cannot write 4-byte int32 to fixed length byte array of size %d", d.size))
+	}
+	buf := make([]byte, d.size)
+	binary.BigEndian.PutUint32(buf[d.size-4:], uint32(value))
+	return d.insertByteArray(buf)
 }
 
 func (d *fixedLenByteArrayDictionary) insertInt64(value int64) int32 {
-	panic("cannot insert int64 value into fixed length byte array dictionary")
+	if d.size < 8 {
+		panic(fmt.Sprintf("cannot write 8-byte int64 to fixed length byte array of size %d", d.size))
+	}
+	buf := make([]byte, d.size)
+	binary.BigEndian.PutUint64(buf[d.size-8:], uint64(value))
+	return d.insertByteArray(buf)
 }
 
 func (d *fixedLenByteArrayDictionary) insertInt96(value deprecated.Int96) int32 {
-	panic("cannot insert int96 value into fixed length byte array dictionary")
+	if d.size < 12 {
+		panic(fmt.Sprintf("cannot write 12-byte int96 to fixed length byte array of size %d", d.size))
+	}
+	buf := make([]byte, d.size)
+	binary.BigEndian.PutUint32(buf[d.size-12:d.size-8], value[2])
+	binary.BigEndian.PutUint32(buf[d.size-8:d.size-4], value[1])
+	binary.BigEndian.PutUint32(buf[d.size-4:], value[0])
+	return d.insertByteArray(buf)
 }
 
 func (d *fixedLenByteArrayDictionary) insertFloat(value float32) int32 {
-	panic("cannot insert float value into fixed length byte array dictionary")
+	if d.size < 4 {
+		panic(fmt.Sprintf("cannot write 4-byte float to fixed length byte array of size %d", d.size))
+	}
+	buf := make([]byte, d.size)
+	binary.BigEndian.PutUint32(buf[d.size-4:], math.Float32bits(value))
+	return d.insertByteArray(buf)
 }
 
 func (d *fixedLenByteArrayDictionary) insertDouble(value float64) int32 {
-	panic("cannot insert double value into fixed length byte array dictionary")
+	if d.size < 8 {
+		panic(fmt.Sprintf("cannot write 8-byte double to fixed length byte array of size %d", d.size))
+	}
+	buf := make([]byte, d.size)
+	binary.BigEndian.PutUint64(buf[d.size-8:], math.Float64bits(value))
+	return d.insertByteArray(buf)
 }
 
 func (d *fixedLenByteArrayDictionary) insertByteArray(value []byte) int32 {

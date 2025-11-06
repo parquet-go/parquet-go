@@ -152,25 +152,25 @@ func (d *booleanDictionary) insertBoolean(value bool) int32 {
 }
 
 func (d *booleanDictionary) insertInt32(value int32) int32 {
-	panic("cannot insert int32 value into boolean dictionary")
+	return d.insertBoolean(value != 0)
 }
 
 func (d *booleanDictionary) insertInt64(value int64) int32 {
-	panic("cannot insert int64 value into boolean dictionary")
+	return d.insertBoolean(value != 0)
 }
 
 func (d *booleanDictionary) insertInt96(value deprecated.Int96) int32 {
-	panic("cannot insert int96 value into boolean dictionary")
+	return d.insertBoolean(!value.IsZero())
 }
 
 func (d *booleanDictionary) insertFloat(value float32) int32 {
-	panic("cannot insert float value into boolean dictionary")
+	return d.insertBoolean(value != 0)
 }
 
 func (d *booleanDictionary) insertDouble(value float64) int32 {
-	panic("cannot insert double value into boolean dictionary")
+	return d.insertBoolean(value != 0)
 }
 
 func (d *booleanDictionary) insertByteArray(value []byte) int32 {
-	panic("cannot insert byte array value into boolean dictionary")
+	return d.insertBoolean(len(value) != 0)
 }

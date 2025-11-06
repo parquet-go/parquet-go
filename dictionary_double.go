@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"strconv"
+
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
@@ -96,7 +98,10 @@ func (d *doubleDictionary) Page() Page {
 }
 
 func (d *doubleDictionary) insertBoolean(value bool) int32 {
-	panic("cannot insert boolean value into double dictionary")
+	if value {
+		return d.insertDouble(1)
+	}
+	return d.insertDouble(0)
 }
 
 func (d *doubleDictionary) insertInt32(value int32) int32 {
@@ -108,7 +113,7 @@ func (d *doubleDictionary) insertInt64(value int64) int32 {
 }
 
 func (d *doubleDictionary) insertInt96(value deprecated.Int96) int32 {
-	panic("cannot insert int96 value into double dictionary")
+	return d.insertDouble(float64(value.Int64()))
 }
 
 func (d *doubleDictionary) insertFloat(value float32) int32 {
@@ -122,5 +127,9 @@ func (d *doubleDictionary) insertDouble(value float64) int32 {
 }
 
 func (d *doubleDictionary) insertByteArray(value []byte) int32 {
-	panic("cannot insert byte array value into double dictionary")
+	v, err := strconv.ParseFloat(string(value), 64)
+	if err != nil {
+		panic(err)
+	}
+	return d.insertDouble(v)
 }

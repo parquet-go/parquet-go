@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"strconv"
+
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
@@ -110,17 +112,21 @@ func (d *int64Dictionary) insertInt64(value int64) int32 {
 }
 
 func (d *int64Dictionary) insertInt96(value deprecated.Int96) int32 {
-	panic("cannot insert int96 value into int64 dictionary")
+	return d.insertInt64(value.Int64())
 }
 
 func (d *int64Dictionary) insertFloat(value float32) int32 {
-	panic("cannot insert float value into int64 dictionary")
+	return d.insertInt64(int64(value))
 }
 
 func (d *int64Dictionary) insertDouble(value float64) int32 {
-	panic("cannot insert double value into int64 dictionary")
+	return d.insertInt64(int64(value))
 }
 
 func (d *int64Dictionary) insertByteArray(value []byte) int32 {
-	panic("cannot insert byte array value into int64 dictionary")
+	v, err := strconv.ParseInt(string(value), 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return d.insertInt64(v)
 }

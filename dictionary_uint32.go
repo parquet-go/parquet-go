@@ -1,8 +1,7 @@
 package parquet
 
 import (
-	"fmt"
-	"math"
+	"strconv"
 
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
@@ -99,41 +98,42 @@ func (d *uint32Dictionary) Page() Page {
 }
 
 func (d *uint32Dictionary) insertBoolean(value bool) int32 {
-	panic("cannot insert boolean value into uint32 dictionary")
+	if value {
+		return d.insertUint32(1)
+	}
+	return d.insertUint32(0)
 }
 
 func (d *uint32Dictionary) insertInt32(value int32) int32 {
-	if value < 0 {
-		panic(fmt.Sprintf("int32 value %d out of range for uint32", value))
-	}
-	v := uint32(value)
-	var indexes [1]int32
-	d.insert(indexes[:], makeArrayFromPointer(&v))
-	return indexes[0]
+	return d.insertUint32(uint32(value))
 }
 
 func (d *uint32Dictionary) insertInt64(value int64) int32 {
-	if value < 0 || value > math.MaxUint32 {
-		panic(fmt.Sprintf("int64 value %d out of range for uint32", value))
-	}
-	v := uint32(value)
-	var indexes [1]int32
-	d.insert(indexes[:], makeArrayFromPointer(&v))
-	return indexes[0]
+	return d.insertUint32(uint32(value))
 }
 
 func (d *uint32Dictionary) insertInt96(value deprecated.Int96) int32 {
-	panic("cannot insert int96 value into uint32 dictionary")
+	return d.insertUint32(value[0])
 }
 
 func (d *uint32Dictionary) insertFloat(value float32) int32 {
-	panic("cannot insert float value into uint32 dictionary")
+	return d.insertUint32(uint32(value))
 }
 
 func (d *uint32Dictionary) insertDouble(value float64) int32 {
-	panic("cannot insert double value into uint32 dictionary")
+	return d.insertUint32(uint32(value))
 }
 
 func (d *uint32Dictionary) insertByteArray(value []byte) int32 {
-	panic("cannot insert byte array value into uint32 dictionary")
+	v, err := strconv.ParseUint(string(value), 10, 32)
+	if err != nil {
+		panic(err)
+	}
+	return d.insertUint32(uint32(v))
+}
+
+func (d *uint32Dictionary) insertUint32(value uint32) int32 {
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&value))
+	return indexes[0]
 }
