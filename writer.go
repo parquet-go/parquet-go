@@ -859,10 +859,9 @@ func (rg *writerRowGroup) WriteRows(rows []Row) (int, error) {
 		// using the writer after getting an error, but maybe we could ensure that
 		// we are preventing further use as well?
 		for _, row := range rows[start:end] {
-			row.Range(func(columnIndex int, columnValues []Value) bool {
+			for columnIndex, columnValues := range row.Range {
 				rg.values[columnIndex] = append(rg.values[columnIndex], columnValues...)
-				return true
-			})
+			}
 		}
 
 		for i, values := range rg.values {

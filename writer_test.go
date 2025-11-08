@@ -2223,6 +2223,245 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 	})
 }
 
+func TestConcurrentRowGroupWriterWithColumnWriters(t *testing.T) {
+	type Row struct {
+		ID   int    `parquet:"id"`
+		Name string `parquet:"name"`
+	}
+
+	t.Run("single row group with column writers", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf)
+
+		rg := writer.BeginRowGroup()
+		cols := rg.ColumnWriters()
+
+		if len(cols) != 2 {
+			t.Fatalf("expected 2 column writers, got %d", len(cols))
+		}
+
+		// Write values directly to columns
+		idValues := []parquet.Value{
+			parquet.Int32Value(1).Level(0, 0, 0),
+			parquet.Int32Value(2).Level(0, 0, 0),
+			parquet.Int32Value(3).Level(0, 0, 0),
+		}
+		nameValues := []parquet.Value{
+			parquet.ByteArrayValue([]byte("Alice")).Level(0, 0, 1),
+			parquet.ByteArrayValue([]byte("Bob")).Level(0, 0, 1),
+			parquet.ByteArrayValue([]byte("Charlie")).Level(0, 0, 1),
+		}
+
+		if _, err := cols[0].WriteRowValues(idValues); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cols[1].WriteRowValues(nameValues); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := rg.Commit(); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify the written data
+		reader := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		rows := make([]Row, 3)
+		n, err := reader.Read(rows)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n != 3 {
+			t.Fatalf("expected to read 3 rows, got %d", n)
+		}
+
+		expected := []Row{
+			{ID: 1, Name: "Alice"},
+			{ID: 2, Name: "Bob"},
+			{ID: 3, Name: "Charlie"},
+		}
+
+		if !reflect.DeepEqual(rows, expected) {
+			t.Fatalf("expected %+v, got %+v", expected, rows)
+		}
+	})
+
+	t.Run("parallel row groups with column writers", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf)
+
+		const numGroups = 3
+		rgs := make([]parquet.ConcurrentRowGroupWriter, numGroups)
+
+		// Create row groups
+		for i := range rgs {
+			rgs[i] = writer.BeginRowGroup()
+		}
+
+		// Write to them in parallel using column writers
+		var wg sync.WaitGroup
+		for i := range rgs {
+			wg.Add(1)
+			go func(index int, rg parquet.ConcurrentRowGroupWriter) {
+				defer wg.Done()
+
+				cols := rg.ColumnWriters()
+				if len(cols) != 2 {
+					t.Errorf("expected 2 column writers, got %d", len(cols))
+					return
+				}
+
+				// Each row group writes 2 rows with different IDs
+				startID := index * 2
+				idValues := []parquet.Value{
+					parquet.Int32Value(int32(startID)).Level(0, 0, 0),
+					parquet.Int32Value(int32(startID+1)).Level(0, 0, 0),
+				}
+				nameValues := []parquet.Value{
+					parquet.ByteArrayValue(fmt.Appendf(nil, "Name%d", startID)).Level(0, 0, 1),
+					parquet.ByteArrayValue(fmt.Appendf(nil, "Name%d", startID+1)).Level(0, 0, 1),
+				}
+
+				if _, err := cols[0].WriteRowValues(idValues); err != nil {
+					t.Errorf("error writing ID values: %v", err)
+					return
+				}
+				if _, err := cols[1].WriteRowValues(nameValues); err != nil {
+					t.Errorf("error writing name values: %v", err)
+					return
+				}
+			}(i, rgs[i])
+		}
+		wg.Wait()
+
+		// Commit in order
+		for _, rg := range rgs {
+			if _, err := rg.Commit(); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify the written data
+		reader := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		rows := make([]Row, 6)
+		n, err := reader.Read(rows)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n != 6 {
+			t.Fatalf("expected to read 6 rows, got %d", n)
+		}
+
+		// Data should be in the order of row group commits
+		expected := []Row{
+			{ID: 0, Name: "Name0"},
+			{ID: 1, Name: "Name1"},
+			{ID: 2, Name: "Name2"},
+			{ID: 3, Name: "Name3"},
+			{ID: 4, Name: "Name4"},
+			{ID: 5, Name: "Name5"},
+		}
+
+		if !reflect.DeepEqual(rows, expected) {
+			t.Fatalf("expected %+v, got %+v", expected, rows)
+		}
+	})
+
+	t.Run("mixing WriteRows and ColumnWriters", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf)
+
+		rg1 := writer.BeginRowGroup()
+		rg2 := writer.BeginRowGroup()
+
+		// First row group uses WriteRows
+		rows1 := []parquet.Row{
+			{parquet.Int32Value(1).Level(0, 0, 0), parquet.ByteArrayValue([]byte("Alice")).Level(0, 0, 1)},
+			{parquet.Int32Value(2).Level(0, 0, 0), parquet.ByteArrayValue([]byte("Bob")).Level(0, 0, 1)},
+		}
+		if _, err := rg1.WriteRows(rows1); err != nil {
+			t.Fatal(err)
+		}
+
+		// Second row group uses ColumnWriters
+		cols := rg2.ColumnWriters()
+		idValues := []parquet.Value{
+			parquet.Int32Value(3).Level(0, 0, 0),
+			parquet.Int32Value(4).Level(0, 0, 0),
+		}
+		nameValues := []parquet.Value{
+			parquet.ByteArrayValue([]byte("Charlie")).Level(0, 0, 1),
+			parquet.ByteArrayValue([]byte("Dave")).Level(0, 0, 1),
+		}
+		if _, err := cols[0].WriteRowValues(idValues); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cols[1].WriteRowValues(nameValues); err != nil {
+			t.Fatal(err)
+		}
+
+		// Commit both
+		if _, err := rg1.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rg2.Commit(); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify the written data
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if f.NumRows() != 4 {
+			t.Fatalf("expected 4 rows, got %d", f.NumRows())
+		}
+
+		if len(f.RowGroups()) != 2 {
+			t.Fatalf("expected 2 row groups, got %d", len(f.RowGroups()))
+		}
+
+		reader := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		rows := make([]Row, 4)
+		n, err := reader.Read(rows)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n != 4 {
+			t.Fatalf("expected to read 4 rows, got %d", n)
+		}
+
+		expected := []Row{
+			{ID: 1, Name: "Alice"},
+			{ID: 2, Name: "Bob"},
+			{ID: 3, Name: "Charlie"},
+			{ID: 4, Name: "Dave"},
+		}
+
+		if !reflect.DeepEqual(rows, expected) {
+			t.Fatalf("expected %+v, got %+v", expected, rows)
+		}
+	})
+}
+
 func TestDictionaryMaxBytes(t *testing.T) {
 	// Test that dictionary encoding switches to PLAIN when size limit is exceeded
 	type Record struct {
