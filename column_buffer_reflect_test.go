@@ -84,23 +84,23 @@ func TestWriteValueFuncOfOptional(t *testing.T) {
 		expected   any
 	}{
 		{
-			name:       "nil_pointer",
+			name:       "nil pointer",
 			value:      (*int32)(nil),
 			expectNull: true,
 		},
 		{
-			name:       "valid_pointer",
+			name:       "valid pointer",
 			value:      ptrTo(int32(42)),
 			expectNull: false,
 			expected:   int32(42),
 		},
 		{
-			name:       "zero_value",
+			name:       "zero value",
 			value:      int32(0),
 			expectNull: true,
 		},
 		{
-			name:       "non_zero_value",
+			name:       "non zero value",
 			value:      int32(42),
 			expectNull: false,
 			expected:   int32(42),
@@ -160,7 +160,7 @@ func TestWriteValueFuncOfOptionalGroup(t *testing.T) {
 		expectID    string
 	}{
 		{
-			name:        "all_present",
+			name:        "all present",
 			value:       Record{Point: &Point{X: 1.5, Y: 2.5}, ID: "test"},
 			expectNulls: [3]bool{false, false, false},
 			expectX:     1.5,
@@ -168,13 +168,13 @@ func TestWriteValueFuncOfOptionalGroup(t *testing.T) {
 			expectID:    "test",
 		},
 		{
-			name:        "nil_point",
+			name:        "nil point",
 			value:       Record{Point: nil, ID: "test"},
 			expectNulls: [3]bool{true, true, false},
 			expectID:    "test",
 		},
 		{
-			name:        "empty_id",
+			name:        "empty id",
 			value:       Record{Point: &Point{X: 3.5, Y: 4.5}, ID: ""},
 			expectNulls: [3]bool{false, false, true},
 			expectX:     3.5,
@@ -226,26 +226,26 @@ func TestWriteValueFuncOfMapToGroup(t *testing.T) {
 		expectNulls [2]bool // [X is null, Y is null]
 	}{
 		{
-			name:        "map_with_both_keys",
+			name:        "map with both keys",
 			value:       map[string]float64{"X": 1.5, "Y": 2.5},
 			expectX:     1.5,
 			expectY:     2.5,
 			expectNulls: [2]bool{false, false},
 		},
 		{
-			name:        "map_with_missing_Y",
+			name:        "map with missing Y",
 			value:       map[string]float64{"X": 1.5},
 			expectX:     1.5,
 			expectNulls: [2]bool{false, true},
 		},
 		{
-			name:        "map_with_missing_X",
+			name:        "map with missing X",
 			value:       map[string]float64{"Y": 2.5},
 			expectY:     2.5,
 			expectNulls: [2]bool{true, false},
 		},
 		{
-			name:        "empty_map",
+			name:        "empty map",
 			value:       map[string]float64{},
 			expectNulls: [2]bool{true, true},
 		},
@@ -300,7 +300,7 @@ func TestWriteValueFuncOfNestedMapToGroup(t *testing.T) {
 		expectNulls [3]bool // [X, Y, ID]
 	}{
 		{
-			name: "all_present",
+			name: "all present",
 			value: map[string]any{
 				"Nested": map[string]any{
 					"Coordinates": map[string]float64{"X": 1.5, "Y": 2.5},
@@ -313,7 +313,7 @@ func TestWriteValueFuncOfNestedMapToGroup(t *testing.T) {
 			expectNulls: [3]bool{false, false, false},
 		},
 		{
-			name: "missing_coordinates",
+			name: "missing coordinates",
 			value: map[string]any{
 				"Nested": map[string]any{
 					"ID": "test456",
@@ -323,7 +323,7 @@ func TestWriteValueFuncOfNestedMapToGroup(t *testing.T) {
 			expectNulls: [3]bool{true, true, false},
 		},
 		{
-			name: "missing_id",
+			name: "missing id",
 			value: map[string]any{
 				"Nested": map[string]any{
 					"Coordinates": map[string]float64{"X": 3.5, "Y": 4.5},
@@ -334,7 +334,7 @@ func TestWriteValueFuncOfNestedMapToGroup(t *testing.T) {
 			expectNulls: [3]bool{false, false, true},
 		},
 		{
-			name: "missing_coord_X",
+			name: "missing coord X",
 			value: map[string]any{
 				"Nested": map[string]any{
 					"Coordinates": map[string]float64{"Y": 5.5},
@@ -393,17 +393,17 @@ func TestWriteValueFuncOfRepeated(t *testing.T) {
 		expectedCount int
 	}{
 		{
-			name:          "empty_slice",
+			name:          "empty slice",
 			value:         []int32{},
 			expectedCount: 0,
 		},
 		{
-			name:          "single_element",
+			name:          "single element",
 			value:         []int32{42},
 			expectedCount: 1,
 		},
 		{
-			name:          "multiple_elements",
+			name:          "multiple elements",
 			value:         []int32{1, 2, 3, 4, 5},
 			expectedCount: 5,
 		},
@@ -450,21 +450,21 @@ func TestWriteValueFuncOfRepeatedStruct(t *testing.T) {
 		expectedYCount int
 	}{
 		{
-			name:           "empty_slice",
+			name:           "empty slice",
 			value:          []Point{},
 			expectedRows:   1,
 			expectedXCount: 0,
 			expectedYCount: 0,
 		},
 		{
-			name:           "single_struct",
+			name:           "single struct",
 			value:          []Point{{X: 10, Y: 20}},
 			expectedRows:   1,
 			expectedXCount: 1,
 			expectedYCount: 1,
 		},
 		{
-			name:           "multiple_structs",
+			name:           "multiple structs",
 			value:          []Point{{X: 1, Y: 2}, {X: 3, Y: 4}, {X: 5, Y: 6}},
 			expectedRows:   1,
 			expectedXCount: 3,
@@ -525,21 +525,21 @@ func TestWriteValueFuncOfStructWithRepeated(t *testing.T) {
 		expectedValueCount int
 	}{
 		{
-			name:               "empty_values",
+			name:               "empty values",
 			value:              Record{ID: "test1", Values: []int32{}},
 			expectedRows:       1,
 			expectedIDCount:    1,
 			expectedValueCount: 0,
 		},
 		{
-			name:               "single_value",
+			name:               "single value",
 			value:              Record{ID: "test2", Values: []int32{42}},
 			expectedRows:       1,
 			expectedIDCount:    1,
 			expectedValueCount: 1,
 		},
 		{
-			name:               "multiple_values",
+			name:               "multiple values",
 			value:              Record{ID: "test3", Values: []int32{10, 20, 30, 40}},
 			expectedRows:       1,
 			expectedIDCount:    1,
@@ -597,7 +597,7 @@ func TestWriteValueFuncOfMapWithSliceValues(t *testing.T) {
 		expectValuesCount int
 	}{
 		{
-			name: "map_with_slice_value",
+			name: "map with slice value",
 			value: map[string]any{
 				"Name":   "test",
 				"Values": []any{"a", "b", "c"},
@@ -608,7 +608,7 @@ func TestWriteValueFuncOfMapWithSliceValues(t *testing.T) {
 			expectValuesCount: 3,
 		},
 		{
-			name: "map_with_empty_slice",
+			name: "map with empty slice",
 			value: map[string]any{
 				"Name":   "test",
 				"Values": []any{},
@@ -618,7 +618,7 @@ func TestWriteValueFuncOfMapWithSliceValues(t *testing.T) {
 			expectValuesCount: 0,
 		},
 		{
-			name: "map_with_nil_slice",
+			name: "map with nil slice",
 			value: map[string]any{
 				"Name":   "test",
 				"Values": nil,
@@ -628,7 +628,7 @@ func TestWriteValueFuncOfMapWithSliceValues(t *testing.T) {
 			expectValuesCount: 0,
 		},
 		{
-			name: "map_missing_slice_field",
+			name: "map missing slice field",
 			value: map[string]any{
 				"Name": "test",
 			},
@@ -637,7 +637,7 @@ func TestWriteValueFuncOfMapWithSliceValues(t *testing.T) {
 			expectValuesCount: 0,
 		},
 		{
-			name: "map_with_interface_slice_of_any",
+			name: "map with interface slice of any",
 			value: map[string]any{
 				"Name":   "test",
 				"Values": []any{"x", "y"},
@@ -810,25 +810,25 @@ func TestWriteValueFuncOfSingleValueRepeatedGroup(t *testing.T) {
 		expectedValue string
 	}{
 		{
-			name:          "single_string_value",
+			name:          "single string value",
 			value:         "hello",
 			expectedCount: 1,
 			expectedValue: "hello",
 		},
 		{
-			name:          "empty_string",
+			name:          "empty string",
 			value:         "",
 			expectedCount: 1,
 			expectedValue: "",
 		},
 		{
-			name:          "struct_with_element_field",
+			name:          "struct with element field",
 			value:         struct{ Element string }{Element: "world"},
 			expectedCount: 1,
 			expectedValue: "world",
 		},
 		{
-			name: "slice_of_structs",
+			name: "slice of structs",
 			value: []struct{ Element string }{
 				{Element: "one"},
 				{Element: "two"},
@@ -884,7 +884,7 @@ func TestWriteValueFuncOfSingleValueRepeatedGroupMultipleTypes(t *testing.T) {
 		checkValue    func(t *testing.T, val Value)
 	}{
 		{
-			name:          "int32_value",
+			name:          "int32 value",
 			schema:        Repeated(Group{"Num": Leaf(Int32Type)}),
 			value:         int32(42),
 			expectedCount: 1,
@@ -895,7 +895,7 @@ func TestWriteValueFuncOfSingleValueRepeatedGroupMultipleTypes(t *testing.T) {
 			},
 		},
 		{
-			name:          "int64_value",
+			name:          "int64 value",
 			schema:        Repeated(Group{"Num": Leaf(Int64Type)}),
 			value:         int64(999),
 			expectedCount: 1,
@@ -906,7 +906,7 @@ func TestWriteValueFuncOfSingleValueRepeatedGroupMultipleTypes(t *testing.T) {
 			},
 		},
 		{
-			name:          "float64_value",
+			name:          "float64 value",
 			schema:        Repeated(Group{"Val": Leaf(DoubleType)}),
 			value:         float64(3.14),
 			expectedCount: 1,
@@ -917,7 +917,7 @@ func TestWriteValueFuncOfSingleValueRepeatedGroupMultipleTypes(t *testing.T) {
 			},
 		},
 		{
-			name:          "bool_value",
+			name:          "bool value",
 			schema:        Repeated(Group{"Flag": Leaf(BooleanType)}),
 			value:         true,
 			expectedCount: 1,
@@ -983,13 +983,13 @@ func TestWriteValueFuncOfSingleValueInStruct(t *testing.T) {
 		expectedValue string
 	}{
 		{
-			name:          "single_value",
+			name:          "single value",
 			row:           Row{Value: "test"},
 			expectedCount: 1,
 			expectedValue: "test",
 		},
 		{
-			name:          "empty_string",
+			name:          "empty string",
 			row:           Row{Value: ""},
 			expectedCount: 1,
 			expectedValue: "",
@@ -1042,7 +1042,7 @@ func TestMapStringAnyToRepeatedGroupDirect(t *testing.T) {
 	_, writeFunc := writeValueFuncOf(0, schema)
 
 	// Test 1: Direct string value
-	t.Run("direct_string", func(t *testing.T) {
+	t.Run("direct string", func(t *testing.T) {
 		val := reflect.ValueOf("hello")
 		writeFunc(columns, columnLevels{}, val)
 
@@ -1053,7 +1053,7 @@ func TestMapStringAnyToRepeatedGroupDirect(t *testing.T) {
 	})
 
 	// Test 2: String from map[string]any
-	t.Run("string_from_map_any", func(t *testing.T) {
+	t.Run("string from map any", func(t *testing.T) {
 		columns := makeColumnBuffersForSchema(schema)
 		_, writeFunc := writeValueFuncOf(0, schema)
 
@@ -1100,7 +1100,7 @@ func TestMapStringAnyToRepeatedGroup(t *testing.T) {
 		expected ExpectedRow
 	}{
 		{
-			name: "scalar_string",
+			name: "scalar string",
 			input: Row{
 				Value: "hello, world!",
 			},
@@ -1111,7 +1111,7 @@ func TestMapStringAnyToRepeatedGroup(t *testing.T) {
 			},
 		},
 		{
-			name: "empty_string",
+			name: "empty string",
 			input: Row{
 				Value: "",
 			},
