@@ -58,7 +58,7 @@ func binarySearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 		case smallerThanMin > 0:
 			curIdx = nextIdx
 		case smallerThanMin == 0:
-			// this case is hit when winValue == value of nextIdx
+			// this case is hit when value == min of nextIdx
 			// we must check below this index to find if there's
 			// another page before this.
 			// e.g. searching for first page 3 is in:
@@ -75,7 +75,7 @@ func binarySearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 			// if cmp(value, index.MaxValue(nextIdx-1)) > 0: we've got a sorting problem with overlapping pages
 			//
 			// bounds check not needed for nextIdx-1 because nextIdx is guaranteed to be at least curIdx + 1
-			// line 82 & 85 above
+			// from the loop condition and the index calculation above
 			if cmp(value, index.MaxValue(nextIdx-1)) == 0 {
 				topIdx = nextIdx
 			} else {
@@ -95,6 +95,15 @@ func binarySearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 		if cmp(value, min) < 0 || cmp(value, max) > 0 {
 			curIdx = n
 		}
+	}
+
+	// for overlapping pages we need to backtrack to find the smallest page
+	// this handles the case where page bounds overlap due to min/max truncation
+	for ; curIdx != 0; curIdx-- {
+		if cmp(value, index.MinValue(curIdx-1)) >= 0 && cmp(value, index.MaxValue(curIdx-1)) <= 0 {
+			continue
+		}
+		break
 	}
 
 	return curIdx
