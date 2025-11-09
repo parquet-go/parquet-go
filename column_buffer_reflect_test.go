@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"bytes"
 	"reflect"
 	"testing"
 )
@@ -790,5 +791,377 @@ func checkOptionalColumn(t *testing.T, name string, col *optionalColumnBuffer, e
 			return
 		}
 		checkValue(t, values[0], expectedValue)
+	}
+}
+
+// TestWriteValueFuncOfSingleValueRepeatedGroup tests writing single scalar values
+// to repeated groups with a single field. This allows writing individual values
+// that get wrapped into single-element repeated columns.
+func TestWriteValueFuncOfSingleValueRepeatedGroup(t *testing.T) {
+	// Schema: repeated group value { required string Element; }
+	schema := Repeated(Group{
+		"Element": Leaf(ByteArrayType),
+	})
+
+	tests := []struct {
+		name          string
+		value         any
+		expectedCount int
+		expectedValue string
+	}{
+		{
+			name:          "single_string_value",
+			value:         "hello",
+			expectedCount: 1,
+			expectedValue: "hello",
+		},
+		{
+			name:          "empty_string",
+			value:         "",
+			expectedCount: 1,
+			expectedValue: "",
+		},
+		{
+			name:          "struct_with_element_field",
+			value:         struct{ Element string }{Element: "world"},
+			expectedCount: 1,
+			expectedValue: "world",
+		},
+		{
+			name: "slice_of_structs",
+			value: []struct{ Element string }{
+				{Element: "one"},
+				{Element: "two"},
+			},
+			expectedCount: 2,
+			expectedValue: "one", // We'll check the first value
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			columns := makeColumnBuffersForSchema(schema)
+			if len(columns) != 1 {
+				t.Fatalf("expected 1 column, got %d", len(columns))
+			}
+
+			_, writeFunc := writeValueFuncOf(0, schema)
+			val := reflect.ValueOf(tt.value)
+			writeFunc(columns, columnLevels{}, val)
+
+			col := columns[0].(*repeatedColumnBuffer)
+			if col.Len() != 1 {
+				t.Errorf("expected 1 row, got %d", col.Len())
+			}
+
+			if int(col.base.NumValues()) != tt.expectedCount {
+				t.Errorf("expected %d values, got %d", tt.expectedCount, col.base.NumValues())
+			}
+
+			// Check the first value
+			if col.base.NumValues() > 0 {
+				values := make([]Value, 1)
+				n, err := col.base.ReadValuesAt(values, 0)
+				if err != nil || n != 1 {
+					t.Fatalf("failed to read value: %v", err)
+				}
+				if string(values[0].ByteArray()) != tt.expectedValue {
+					t.Errorf("expected value %q, got %q", tt.expectedValue, string(values[0].ByteArray()))
+				}
+			}
+		})
+	}
+}
+
+// TestWriteValueFuncOfSingleValueRepeatedGroupMultipleTypes tests writing
+// single scalar values to repeated groups with different field types.
+func TestWriteValueFuncOfSingleValueRepeatedGroupMultipleTypes(t *testing.T) {
+	tests := []struct {
+		name          string
+		schema        Node
+		value         any
+		expectedCount int
+		checkValue    func(t *testing.T, val Value)
+	}{
+		{
+			name:          "int32_value",
+			schema:        Repeated(Group{"Num": Leaf(Int32Type)}),
+			value:         int32(42),
+			expectedCount: 1,
+			checkValue: func(t *testing.T, val Value) {
+				if val.Int32() != 42 {
+					t.Errorf("expected 42, got %d", val.Int32())
+				}
+			},
+		},
+		{
+			name:          "int64_value",
+			schema:        Repeated(Group{"Num": Leaf(Int64Type)}),
+			value:         int64(999),
+			expectedCount: 1,
+			checkValue: func(t *testing.T, val Value) {
+				if val.Int64() != 999 {
+					t.Errorf("expected 999, got %d", val.Int64())
+				}
+			},
+		},
+		{
+			name:          "float64_value",
+			schema:        Repeated(Group{"Val": Leaf(DoubleType)}),
+			value:         float64(3.14),
+			expectedCount: 1,
+			checkValue: func(t *testing.T, val Value) {
+				if val.Double() != 3.14 {
+					t.Errorf("expected 3.14, got %f", val.Double())
+				}
+			},
+		},
+		{
+			name:          "bool_value",
+			schema:        Repeated(Group{"Flag": Leaf(BooleanType)}),
+			value:         true,
+			expectedCount: 1,
+			checkValue: func(t *testing.T, val Value) {
+				if !val.Boolean() {
+					t.Errorf("expected true, got false")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			columns := makeColumnBuffersForSchema(tt.schema)
+			if len(columns) != 1 {
+				t.Fatalf("expected 1 column, got %d", len(columns))
+			}
+
+			_, writeFunc := writeValueFuncOf(0, tt.schema)
+			val := reflect.ValueOf(tt.value)
+			writeFunc(columns, columnLevels{}, val)
+
+			col := columns[0].(*repeatedColumnBuffer)
+			if col.Len() != 1 {
+				t.Errorf("expected 1 row, got %d", col.Len())
+			}
+
+			if int(col.base.NumValues()) != tt.expectedCount {
+				t.Errorf("expected %d values, got %d", tt.expectedCount, col.base.NumValues())
+			}
+
+			if col.base.NumValues() > 0 {
+				values := make([]Value, 1)
+				n, err := col.base.ReadValuesAt(values, 0)
+				if err != nil || n != 1 {
+					t.Fatalf("failed to read value: %v", err)
+				}
+				tt.checkValue(t, values[0])
+			}
+		})
+	}
+}
+
+// TestWriteValueFuncOfSingleValueInStruct tests the full use case:
+// a struct field mapped to a repeated group, where a single value creates
+// a single-element repeated column.
+func TestWriteValueFuncOfSingleValueInStruct(t *testing.T) {
+	// Schema matching: message { repeated group Value { required string Element; } }
+	schema := Group{
+		"Value": Repeated(Group{
+			"Element": Leaf(ByteArrayType),
+		}),
+	}
+
+	type Row struct {
+		Value string
+	}
+
+	tests := []struct {
+		name          string
+		row           Row
+		expectedCount int
+		expectedValue string
+	}{
+		{
+			name:          "single_value",
+			row:           Row{Value: "test"},
+			expectedCount: 1,
+			expectedValue: "test",
+		},
+		{
+			name:          "empty_string",
+			row:           Row{Value: ""},
+			expectedCount: 1,
+			expectedValue: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			columns := makeColumnBuffersForSchema(schema)
+			if len(columns) != 1 {
+				t.Fatalf("expected 1 column, got %d", len(columns))
+			}
+
+			_, writeFunc := writeValueFuncOf(0, schema)
+			val := reflect.ValueOf(tt.row)
+			writeFunc(columns, columnLevels{}, val)
+
+			col := columns[0].(*repeatedColumnBuffer)
+			if col.Len() != 1 {
+				t.Errorf("expected 1 row, got %d", col.Len())
+			}
+
+			if int(col.base.NumValues()) != tt.expectedCount {
+				t.Errorf("expected %d values, got %d", tt.expectedCount, col.base.NumValues())
+			}
+
+			if col.base.NumValues() > 0 {
+				values := make([]Value, 1)
+				n, err := col.base.ReadValuesAt(values, 0)
+				if err != nil || n != 1 {
+					t.Fatalf("failed to read value: %v", err)
+				}
+				if string(values[0].ByteArray()) != tt.expectedValue {
+					t.Errorf("expected value %q, got %q", tt.expectedValue, string(values[0].ByteArray()))
+				}
+			}
+		})
+	}
+}
+
+// TestMapStringAnyToRepeatedGroupDirect tests writeValueFuncOf directly
+// to debug what's happening with map[string]any values.
+func TestMapStringAnyToRepeatedGroupDirect(t *testing.T) {
+	// Schema: repeated group value { required string element; }
+	schema := Repeated(Group{
+		"Element": Leaf(ByteArrayType),
+	})
+
+	columns := makeColumnBuffersForSchema(schema)
+	_, writeFunc := writeValueFuncOf(0, schema)
+
+	// Test 1: Direct string value
+	t.Run("direct_string", func(t *testing.T) {
+		val := reflect.ValueOf("hello")
+		writeFunc(columns, columnLevels{}, val)
+
+		col := columns[0].(*repeatedColumnBuffer)
+		if col.base.NumValues() != 1 {
+			t.Errorf("expected 1 value, got %d", col.base.NumValues())
+		}
+	})
+
+	// Test 2: String from map[string]any
+	t.Run("string_from_map_any", func(t *testing.T) {
+		columns := makeColumnBuffersForSchema(schema)
+		_, writeFunc := writeValueFuncOf(0, schema)
+
+		m := map[string]any{"key": "world"}
+		v := m["key"]
+		val := reflect.ValueOf(v)
+
+		writeFunc(columns, columnLevels{}, val)
+
+		col := columns[0].(*repeatedColumnBuffer)
+		if col.base.NumValues() != 1 {
+			t.Errorf("expected 1 value, got %d", col.base.NumValues())
+		}
+	})
+}
+
+// TestMapStringAnyToRepeatedGroup tests the dynamic map[string]any code path
+// where scalar values should be automatically wrapped into repeated lists.
+func TestMapStringAnyToRepeatedGroup(t *testing.T) {
+	// Simplified: no optional wrapper, just repeated group
+	type SchemaStruct struct {
+		Value []struct {
+			Element string
+		}
+	}
+
+	// Define the input type with map[string]any
+	type Row struct {
+		Value any // Should accept either string or []string
+	}
+
+	// Define the expected output type
+	type ExpectedRow struct {
+		Value []struct {
+			Element string
+		}
+	}
+
+	schema := SchemaOf(SchemaStruct{})
+
+	tests := []struct {
+		name     string
+		input    Row
+		expected ExpectedRow
+	}{
+		{
+			name: "scalar_string",
+			input: Row{
+				Value: "hello, world!",
+			},
+			expected: ExpectedRow{
+				Value: []struct{ Element string }{
+					{Element: "hello, world!"},
+				},
+			},
+		},
+		{
+			name: "empty_string",
+			input: Row{
+				Value: "",
+			},
+			expected: ExpectedRow{
+				Value: []struct{ Element string }{
+					{Element: ""},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			writer := NewGenericWriter[Row](buf, schema)
+
+			n, err := writer.Write([]Row{tt.input})
+			if err != nil {
+				t.Fatalf("failed to write: %v", err)
+			}
+			if n != 1 {
+				t.Fatalf("expected to write 1 row, wrote %d", n)
+			}
+
+			if err := writer.Close(); err != nil {
+				t.Fatalf("failed to close writer: %v", err)
+			}
+
+			if buf.Len() == 0 {
+				t.Fatal("no data was written to buffer")
+			}
+
+			reader := NewReader(bytes.NewReader(buf.Bytes()))
+			defer reader.Close()
+
+			var got ExpectedRow
+			err = reader.Read(&got)
+			if err != nil {
+				t.Fatalf("failed to read: %v", err)
+			}
+
+			if len(got.Value) != len(tt.expected.Value) {
+				t.Fatalf("expected %d values, got %d", len(tt.expected.Value), len(got.Value))
+			}
+
+			for i, expectedVal := range tt.expected.Value {
+				if got.Value[i].Element != expectedVal.Element {
+					t.Errorf("value[%d]: expected %q, got %q", i, expectedVal.Element, got.Value[i].Element)
+				}
+			}
+		})
 	}
 }

@@ -211,6 +211,33 @@ func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFu
 		default:
 			levels.repetitionDepth++
 			levels.definitionLevel++
+
+			// If this is a repeated group with a single field, and the value is a scalar,
+			// wrap the scalar into a struct with that field name.
+			if !node.Leaf() && value.IsValid() && value.Kind() != reflect.Struct && value.Kind() != reflect.Map {
+				fields := Required(node).Fields()
+				if len(fields) == 1 {
+					field := fields[0]
+					fieldType := field.GoType()
+					fieldName := field.Name()
+
+					if value.Type().AssignableTo(fieldType) || value.Type().ConvertibleTo(fieldType) {
+						structType := reflect.StructOf([]reflect.StructField{
+							{Name: fieldName, Type: fieldType},
+						})
+						wrappedValue := reflect.New(structType).Elem()
+
+						if value.Type().AssignableTo(fieldType) {
+							wrappedValue.Field(0).Set(value)
+						} else {
+							wrappedValue.Field(0).Set(value.Convert(fieldType))
+						}
+
+						value = wrappedValue
+					}
+				}
+			}
+
 			writeValue(columns, levels, value)
 		}
 	}
@@ -387,6 +414,5 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			}
 			return
 		}
-
 	}
 }
