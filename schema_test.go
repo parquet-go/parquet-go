@@ -1043,34 +1043,43 @@ func TestSchemaInteroperability(t *testing.T) {
 	)
 
 	t.Run("T=One", func(t *testing.T) {
+		t.Run("Schema=nil", func(t *testing.T) {
+			roundtripTester[One]{}.test(t, One{A: 1})
+		})
 		for _, schema := range schemas {
 			t.Run("Schema="+schema.Name(), func(t *testing.T) {
-				roundtripTester[One]{}.test(t, One{A: 1}, schema, nil, nil)
+				roundtripTester[One]{}.test(t, One{A: 1}, schema)
 			})
 		}
 	})
 
 	t.Run("T=Two", func(t *testing.T) {
+		t.Run("Schema=nil", func(t *testing.T) {
+			roundtripTester[Two]{}.test(t, Two{A: 1})
+		})
 		for _, schema := range schemas {
 			t.Run("Schema="+schema.Name(), func(t *testing.T) {
-				roundtripTester[Two]{}.test(t, Two{A: 1}, schema, nil, nil)
+				roundtripTester[Two]{}.test(t, Two{A: 1}, schema)
 			})
 		}
 	})
 	t.Run("T=Three", func(t *testing.T) {
+		t.Run("Schema=nil", func(t *testing.T) {
+			roundtripTester[Three]{}.test(t, Three{B: 1})
+		})
 		for _, schema := range schemas {
 			t.Run("Schema="+schema.Name(), func(t *testing.T) {
-				roundtripTester[Three]{}.test(t, Three{B: 1}, schema, nil, nil)
+				roundtripTester[Three]{}.test(t, Three{B: 1}, schema)
 			})
 		}
 	})
 	t.Run("T=Four", func(t *testing.T) {
-		writerOptions := []parquet.WriterOption{tag1, tag2}
-		readerOptions := []parquet.ReaderOption{tag1, tag2}
-
+		t.Run("Schema=nil", func(t *testing.T) {
+			roundtripTester[Four]{}.test(t, Four{C: 1}, tag1, tag2)
+		})
 		for _, schema := range schemas {
 			t.Run("Schema="+schema.Name(), func(t *testing.T) {
-				roundtripTester[Four]{}.test(t, Four{C: 1}, schema, writerOptions, readerOptions)
+				roundtripTester[Four]{}.test(t, Four{C: 1}, schema, tag1, tag2)
 			})
 		}
 	})
@@ -1078,9 +1087,21 @@ func TestSchemaInteroperability(t *testing.T) {
 
 type roundtripTester[T any] struct{}
 
-func (_ roundtripTester[T]) test(t *testing.T, val T, schema *parquet.Schema, writerOptions []parquet.WriterOption, readerOptions []parquet.ReaderOption) {
+func (_ roundtripTester[T]) test(t *testing.T, val T, options ...any) {
 	buf := bytes.NewBuffer(nil)
-	w := parquet.NewGenericWriter[T](buf, append(writerOptions, schema)...)
+
+	readerOptions := []parquet.ReaderOption{}
+	writerOptions := []parquet.WriterOption{}
+	for _, option := range options {
+		if r, ok := option.(parquet.ReaderOption); ok {
+			readerOptions = append(readerOptions, r)
+		}
+		if w, ok := option.(parquet.WriterOption); ok {
+			writerOptions = append(writerOptions, w)
+		}
+	}
+
+	w := parquet.NewGenericWriter[T](buf, writerOptions...)
 	if _, err := w.Write([]T{val}); err != nil {
 		t.Fatal(err)
 	}
@@ -1089,7 +1110,7 @@ func (_ roundtripTester[T]) test(t *testing.T, val T, schema *parquet.Schema, wr
 	}
 
 	rows := make([]T, 1)
-	r := parquet.NewGenericReader[T](bytes.NewReader(buf.Bytes()), append(readerOptions, schema)...)
+	r := parquet.NewGenericReader[T](bytes.NewReader(buf.Bytes()), readerOptions...)
 	n, err := r.Read(rows)
 	if err != nil && err != io.EOF {
 		t.Fatal(err)
