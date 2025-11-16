@@ -2,6 +2,8 @@ package parquet
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,11 +68,72 @@ func writeProtoDuration(col ColumnBuffer, levels columnLevels, dur *durationpb.D
 }
 
 func writeProtoStruct(col ColumnBuffer, levels columnLevels, s *structpb.Struct, node Node) {
-	data, err := s.MarshalJSON()
-	if err != nil {
-		panic(fmt.Sprintf("failed to marshal structpb.Struct: %v", err))
+	var json []byte
+	json = make([]byte, 0, 2*proto.Size(s))
+	json = appendProtoStructJSON(json, s)
+	col.writeByteArray(levels, json)
+}
+
+func appendProtoStructJSON(b []byte, s *structpb.Struct) []byte {
+	if s == nil {
+		return append(b, "null"...)
 	}
-	col.writeByteArray(levels, data)
+
+	fields := s.GetFields()
+	if len(fields) == 0 {
+		return append(b, "{}"...)
+	}
+
+	keys := make([]string, 0, 20)
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	b = append(b, '{')
+	for i, key := range keys {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		b = strconv.AppendQuote(b, key)
+		b = append(b, ':')
+		b = appendProtoValueJSON(b, fields[key])
+	}
+	b = append(b, '}')
+	return b
+}
+
+func appendProtoValueJSON(b []byte, v *structpb.Value) []byte {
+	switch k := v.GetKind().(type) {
+	case *structpb.Value_NumberValue:
+		return strconv.AppendFloat(b, k.NumberValue, 'g', -1, 64)
+	case *structpb.Value_StringValue:
+		return strconv.AppendQuote(b, k.StringValue)
+	case *structpb.Value_BoolValue:
+		return strconv.AppendBool(b, k.BoolValue)
+	case *structpb.Value_StructValue:
+		return appendProtoStructJSON(b, k.StructValue)
+	case *structpb.Value_ListValue:
+		return appendProtoListValueJSON(b, k.ListValue)
+	default:
+		return append(b, "null"...)
+	}
+}
+
+func appendProtoListValueJSON(b []byte, l *structpb.ListValue) []byte {
+	if l == nil {
+		return append(b, "null"...)
+	}
+	values := l.GetValues()
+	b = append(b, '[')
+	for i, v := range values {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		b = appendProtoValueJSON(b, v)
+	}
+	b = append(b, ']')
+	return b
 }
 
 func writeProtoAny(col ColumnBuffer, levels columnLevels, a *anypb.Any, node Node) {
