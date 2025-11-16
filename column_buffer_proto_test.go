@@ -1483,6 +1483,9 @@ func TestProtoMapNested(t *testing.T) {
 }
 
 func TestProtoAnyNestedGroup(t *testing.T) {
+	if purego {
+		t.Skip("anypb.Any requires protoreflect, not available in purego mode")
+	}
 	// Test Any field that maps to a nested group structure
 	now := time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)
 
@@ -1597,6 +1600,9 @@ func TestProtoAnyNestedGroup(t *testing.T) {
 }
 
 func TestProtoAnyLeafColumn(t *testing.T) {
+	if purego {
+		t.Skip("anypb.Any requires protoreflect, not available in purego mode")
+	}
 	// Test Any field on a leaf column (should write as marshaled proto)
 	payload := &testproto.ProtoPayload{
 		Id:      42,
@@ -1660,6 +1666,9 @@ func TestProtoAnyLeafColumn(t *testing.T) {
 }
 
 func TestProtoAnyNil(t *testing.T) {
+	if purego {
+		t.Skip("anypb.Any requires protoreflect, not available in purego mode")
+	}
 	// Test nil Any field writes null
 	schema := NewSchema("test", Group{
 		"id": Leaf(Int64Type),
@@ -1720,6 +1729,9 @@ func TestProtoAnyNil(t *testing.T) {
 }
 
 func TestProtoAnyInvalidTypeURL(t *testing.T) {
+	if purego {
+		t.Skip("anypb.Any requires protoreflect, not available in purego mode")
+	}
 	// Test that invalid type_url prefix causes panic when Any is in a group
 	// (not a leaf column)
 	payload := &testproto.ProtoPayload{
@@ -1772,6 +1784,9 @@ func TestProtoAnyInvalidTypeURL(t *testing.T) {
 }
 
 func TestProtoAnyPathMismatch(t *testing.T) {
+	if purego {
+		t.Skip("anypb.Any requires protoreflect, not available in purego mode")
+	}
 	// Test that path mismatch causes panic
 	payload := &testproto.ProtoPayload{
 		Id:      42,
@@ -1819,6 +1834,9 @@ func TestProtoAnyPathMismatch(t *testing.T) {
 }
 
 func TestProtoAnyOptional(t *testing.T) {
+	if purego {
+		t.Skip("anypb.Any requires protoreflect, not available in purego mode")
+	}
 	// Test optional Any fields
 	now := time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)
 

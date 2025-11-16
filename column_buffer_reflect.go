@@ -6,7 +6,6 @@ import (
 	"math/bits"
 	"reflect"
 	"sort"
-	"strings"
 	"time"
 	"unsafe"
 
@@ -23,6 +22,11 @@ import (
 
 type anymap interface {
 	entries() (keys, values sparse.Array)
+}
+
+type fieldWriter struct {
+	fieldName  string
+	writeValue writeValueFunc
 }
 
 type gomap[K cmp.Ordered] struct {
@@ -464,11 +468,6 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 }
 
 func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc) {
-	type fieldWriter struct {
-		fieldName  string
-		writeValue writeValueFunc
-	}
-
 	fields := node.Fields()
 	writers := make([]fieldWriter, len(fields))
 	for i, field := range fields {
@@ -544,48 +543,12 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 					w.writeValue(columns, levels, v)
 				}
 			case *anypb.Any:
-				if msg == nil {
-					for i := range writers {
-						w := &writers[i]
-						w.writeValue(columns, levels, reflect.Value{})
-					}
+				if writeProtoAnyToGroup(msg, columns, levels, writers, node, &value) {
 					return
 				}
-
-				typeURL := msg.GetTypeUrl()
-				const prefix = "type.googleapis.com/"
-				if !strings.HasPrefix(typeURL, prefix) {
-					panic(fmt.Sprintf("invalid type_url %q: expected %q prefix", typeURL, prefix))
-				}
-				path := typeURL[len(prefix):]
-				_ = navigateToNestedGroup(node, path)
-
-				unmarshaled, err := msg.UnmarshalNew()
-				if err != nil {
-					panic(fmt.Sprintf("failed to unmarshal Any: %v", err))
-				}
-
-				value = reflect.ValueOf(makeNestedMap(path, unmarshaled))
 				goto writeGroupValue
 			case proto.Message:
-				protoMsg := msg.ProtoReflect()
-				descriptor := protoMsg.Descriptor()
-				for i := range writers {
-					w := &writers[i]
-					protoField := descriptor.Fields().ByName(protoreflect.Name(w.fieldName))
-					if protoField == nil || !protoMsg.Has(protoField) {
-						w.writeValue(columns, levels, reflect.Value{})
-						continue
-					}
-					protoValue := protoMsg.Get(protoField)
-					var fieldValue reflect.Value
-					if protoField.Kind() == protoreflect.MessageKind {
-						fieldValue = reflect.ValueOf(protoValue.Message().Interface())
-					} else {
-						fieldValue = reflect.ValueOf(protoValue.Interface())
-					}
-					w.writeValue(columns, levels, fieldValue)
-				}
+				writeProtoMessageToGroup(msg, columns, levels, writers)
 			default:
 				value = value.Elem()
 				goto writeGroupValue
