@@ -2,9 +2,12 @@ package parquet
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/parquet-go/parquet-go/format"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -68,4 +71,53 @@ func writeProtoStruct(col ColumnBuffer, levels columnLevels, s *structpb.Struct,
 		panic(fmt.Sprintf("failed to marshal structpb.Struct: %v", err))
 	}
 	col.writeByteArray(levels, data)
+}
+
+func writeProtoAny(col ColumnBuffer, levels columnLevels, a *anypb.Any, node Node) {
+	if a == nil {
+		col.writeNull(levels)
+		return
+	}
+	data, err := proto.Marshal(a)
+	if err != nil {
+		panic(fmt.Sprintf("failed to marshal anypb.Any: %v", err))
+	}
+	col.writeByteArray(levels, data)
+}
+
+// makeNestedMap creates a nested map structure from a dot-separated path.
+// For example, "testproto.ProtoPayload" with value v creates:
+// map["testproto"] = map["ProtoPayload"] = v
+func makeNestedMap(path string, value any) any {
+	components := make([]string, 0, 8)
+	for component := range strings.SplitSeq(path, ".") {
+		components = append(components, component)
+	}
+
+	result := value
+	for i := len(components) - 1; i >= 0; i-- {
+		result = map[string]any{
+			components[i]: result,
+		}
+	}
+	return result
+}
+
+// navigateToNestedGroup walks through a nested group structure following the given path.
+// The path is expected to be a dot-separated string (e.g., "testproto.ProtoPayload").
+// Returns the node at the end of the path, or panics if the path doesn't match the schema.
+func navigateToNestedGroup(node Node, path string) Node {
+	for component := range strings.SplitSeq(path, ".") {
+		var found bool
+		for _, field := range node.Fields() {
+			if field.Name() == component {
+				node, found = field, true
+				break
+			}
+		}
+		if !found {
+			panic(fmt.Sprintf("field %q not found in schema while navigating path %q", component, path))
+		}
+	}
+	return node
 }

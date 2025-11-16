@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1478,5 +1479,393 @@ func TestProtoMapNested(t *testing.T) {
 
 	if !reflect.DeepEqual(records, readRecords) {
 		t.Errorf("records mismatch:\nexpected: %+v\ngot: %+v", records, readRecords)
+	}
+}
+
+func TestProtoAnyNestedGroup(t *testing.T) {
+	// Test Any field that maps to a nested group structure
+	now := time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)
+
+	// Create a ProtoPayload to pack into Any
+	payload := &testproto.ProtoPayload{
+		Id:        42,
+		Message:   "test message",
+		CreatedAt: timestamppb.New(now),
+	}
+
+	// Pack into Any
+	anyPayload, err := anypb.New(payload)
+	if err != nil {
+		t.Fatalf("failed to pack Any: %v", err)
+	}
+
+	// Create schema with nested group matching the type_url path
+	// type.googleapis.com/testproto.ProtoPayload -> testproto/ProtoPayload
+	schema := NewSchema("test", Group{
+		"id":   Leaf(Int64Type),
+		"name": String(),
+		"payload": Group{
+			"testproto": Group{
+				"ProtoPayload": Group{
+					"id":         Leaf(Int64Type),
+					"message":    String(),
+					"created_at": Timestamp(Microsecond),
+				},
+			},
+		},
+	})
+
+	type Record struct {
+		ID      int64         `parquet:"id"`
+		Name    string        `parquet:"name"`
+		Payload proto.Message `parquet:"payload"`
+	}
+
+	records := []Record{
+		{
+			ID:      1,
+			Name:    "record1",
+			Payload: anyPayload,
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Verify we can read the data back
+	// The read schema must match the nested structure
+	type ReadProtoPayload struct {
+		ID        int64     `parquet:"id"`
+		Message   string    `parquet:"message"`
+		CreatedAt time.Time `parquet:"created_at"`
+	}
+
+	type ReadProtoPayloadWrapper struct {
+		ProtoPayload ReadProtoPayload `parquet:"ProtoPayload"`
+	}
+
+	type ReadPayload struct {
+		Testproto ReadProtoPayloadWrapper `parquet:"testproto"`
+	}
+
+	type ReadRecord struct {
+		ID      int64        `parquet:"id"`
+		Name    string       `parquet:"name"`
+		Payload *ReadPayload `parquet:"payload"`
+	}
+
+	reader := NewGenericReader[ReadRecord](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]ReadRecord, len(records))
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	// Verify the data
+	expected := []ReadRecord{
+		{
+			ID:   1,
+			Name: "record1",
+			Payload: &ReadPayload{
+				Testproto: ReadProtoPayloadWrapper{
+					ProtoPayload: ReadProtoPayload{
+						ID:        42,
+						Message:   "test message",
+						CreatedAt: now.Truncate(time.Microsecond),
+					},
+				},
+			},
+		},
+	}
+
+	// Truncate read time for comparison
+	if readRecords[0].Payload != nil {
+		readRecords[0].Payload.Testproto.ProtoPayload.CreatedAt =
+			readRecords[0].Payload.Testproto.ProtoPayload.CreatedAt.Truncate(time.Microsecond)
+	}
+
+	if !reflect.DeepEqual(readRecords, expected) {
+		t.Errorf("records mismatch:\ngot: %+v\nwant: %+v", readRecords, expected)
+	}
+}
+
+func TestProtoAnyLeafColumn(t *testing.T) {
+	// Test Any field on a leaf column (should write as marshaled proto)
+	payload := &testproto.ProtoPayload{
+		Id:      42,
+		Message: "test message",
+	}
+
+	anyPayload, err := anypb.New(payload)
+	if err != nil {
+		t.Fatalf("failed to pack Any: %v", err)
+	}
+
+	// Schema with Any as a byte array leaf
+	schema := NewSchema("test", Group{
+		"id":   Leaf(Int64Type),
+		"data": Leaf(ByteArrayType),
+	})
+
+	type Record struct {
+		ID   int64         `parquet:"id"`
+		Data proto.Message `parquet:"data"`
+	}
+
+	records := []Record{
+		{
+			ID:   1,
+			Data: anyPayload,
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back as byte array
+	type ReadRecord struct {
+		ID   int64  `parquet:"id"`
+		Data []byte `parquet:"data"`
+	}
+
+	reader := NewGenericReader[ReadRecord](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]ReadRecord, len(records))
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	// Verify we can unmarshal it back to an Any
+	var readAny anypb.Any
+	if err := proto.Unmarshal(readRecords[0].Data, &readAny); err != nil {
+		t.Fatalf("failed to unmarshal Any: %v", err)
+	}
+	if !proto.Equal(&readAny, anyPayload) {
+		t.Errorf("Any mismatch:\ngot: %v\nwant: %v", &readAny, anyPayload)
+	}
+}
+
+func TestProtoAnyNil(t *testing.T) {
+	// Test nil Any field writes null
+	schema := NewSchema("test", Group{
+		"id": Leaf(Int64Type),
+		"payload": Group{
+			"testproto": Group{
+				"ProtoPayload": Group{
+					"id":      Leaf(Int64Type),
+					"message": String(),
+				},
+			},
+		},
+	})
+
+	type Record struct {
+		ID      int64         `parquet:"id"`
+		Payload proto.Message `parquet:"payload"`
+	}
+
+	records := []Record{
+		{
+			ID:      1,
+			Payload: nil,
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back
+	type ReadPayload struct {
+		ID      int64  `parquet:"id"`
+		Message string `parquet:"message"`
+	}
+
+	type ReadRecord struct {
+		ID      int64        `parquet:"id"`
+		Payload *ReadPayload `parquet:"payload"`
+	}
+
+	reader := NewGenericReader[ReadRecord](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]ReadRecord, len(records))
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	// Verify payload is nil
+	if readRecords[0].Payload != nil {
+		t.Errorf("expected nil payload, got: %+v", readRecords[0].Payload)
+	}
+}
+
+func TestProtoAnyInvalidTypeURL(t *testing.T) {
+	// Test that invalid type_url prefix causes panic when Any is in a group
+	// (not a leaf column)
+	payload := &testproto.ProtoPayload{
+		Id:      42,
+		Message: "test",
+	}
+
+	anyPayload, err := anypb.New(payload)
+	if err != nil {
+		t.Fatalf("failed to pack Any: %v", err)
+	}
+
+	// Modify the type_url to be invalid
+	anyPayload.TypeUrl = "invalid.prefix/testproto.ProtoPayload"
+
+	schema := NewSchema("test", Group{
+		"id": Leaf(Int64Type),
+		"payload": Group{
+			"testproto": Group{
+				"ProtoPayload": Group{
+					"id": Leaf(Int64Type),
+				},
+			},
+		},
+	})
+
+	type Record struct {
+		ID      int64         `parquet:"id"`
+		Payload proto.Message `parquet:"payload"`
+	}
+
+	records := []Record{
+		{
+			ID:      1,
+			Payload: anyPayload,
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+
+	// Should panic with invalid type_url
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic for invalid type_url, but didn't panic")
+		}
+	}()
+
+	writer.Write(records)
+}
+
+func TestProtoAnyPathMismatch(t *testing.T) {
+	// Test that path mismatch causes panic
+	payload := &testproto.ProtoPayload{
+		Id:      42,
+		Message: "test",
+	}
+
+	anyPayload, err := anypb.New(payload)
+	if err != nil {
+		t.Fatalf("failed to pack Any: %v", err)
+	}
+
+	// Schema with wrong path structure (missing intermediate groups)
+	schema := NewSchema("test", Group{
+		"id": Leaf(Int64Type),
+		"payload": Group{
+			"wrong": Group{
+				"path": Leaf(Int64Type),
+			},
+		},
+	})
+
+	type Record struct {
+		ID      int64         `parquet:"id"`
+		Payload proto.Message `parquet:"payload"`
+	}
+
+	records := []Record{
+		{
+			ID:      1,
+			Payload: anyPayload,
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+
+	// Should panic with path mismatch
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic for path mismatch, but didn't panic")
+		}
+	}()
+
+	writer.Write(records)
+}
+
+func TestProtoAnyOptional(t *testing.T) {
+	// Test optional Any fields
+	now := time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)
+
+	payload1 := &testproto.ProtoPayload{
+		Id:        1,
+		Message:   "first",
+		CreatedAt: timestamppb.New(now),
+	}
+
+	anyPayload1, err := anypb.New(payload1)
+	if err != nil {
+		t.Fatalf("failed to pack Any: %v", err)
+	}
+
+	records := []*testproto.ProtoWithOptionalAny{
+		{
+			Id:   1,
+			Data: anyPayload1,
+		},
+		{
+			Id:   2,
+			Data: nil,
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[*testproto.ProtoWithOptionalAny](buf)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewGenericReader[*testproto.ProtoWithOptionalAny](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]*testproto.ProtoWithOptionalAny, len(records))
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	// Check first record has data, second is nil
+	if readRecords[0].Data == nil {
+		t.Error("expected first record to have data")
+	}
+	if readRecords[1].Data != nil {
+		t.Errorf("expected second record to have nil data, got: %+v", readRecords[1].Data)
 	}
 }

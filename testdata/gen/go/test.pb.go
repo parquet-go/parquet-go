@@ -9,6 +9,7 @@ package testproto
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	anypb "google.golang.org/protobuf/types/known/anypb"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	wrapperspb "google.golang.org/protobuf/types/known/wrapperspb"
@@ -399,12 +400,240 @@ func (x *ProtoWithMap) GetStringMap() map[string]string {
 	return nil
 }
 
+// ProtoPayload is a simple message that can be packed into Any
+type ProtoPayload struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProtoPayload) Reset() {
+	*x = ProtoPayload{}
+	mi := &file_test_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProtoPayload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProtoPayload) ProtoMessage() {}
+
+func (x *ProtoPayload) ProtoReflect() protoreflect.Message {
+	mi := &file_test_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProtoPayload.ProtoReflect.Descriptor instead.
+func (*ProtoPayload) Descriptor() ([]byte, []int) {
+	return file_test_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ProtoPayload) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *ProtoPayload) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *ProtoPayload) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+// ProtoWithAny has an Any field that should map to a nested group
+type ProtoWithAny struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Payload       *anypb.Any             `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProtoWithAny) Reset() {
+	*x = ProtoWithAny{}
+	mi := &file_test_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProtoWithAny) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProtoWithAny) ProtoMessage() {}
+
+func (x *ProtoWithAny) ProtoReflect() protoreflect.Message {
+	mi := &file_test_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProtoWithAny.ProtoReflect.Descriptor instead.
+func (*ProtoWithAny) Descriptor() ([]byte, []int) {
+	return file_test_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ProtoWithAny) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *ProtoWithAny) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ProtoWithAny) GetPayload() *anypb.Any {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+// ProtoWithOptionalAny has an optional Any field
+type ProtoWithOptionalAny struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Data          *anypb.Any             `protobuf:"bytes,2,opt,name=data,proto3,oneof" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProtoWithOptionalAny) Reset() {
+	*x = ProtoWithOptionalAny{}
+	mi := &file_test_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProtoWithOptionalAny) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProtoWithOptionalAny) ProtoMessage() {}
+
+func (x *ProtoWithOptionalAny) ProtoReflect() protoreflect.Message {
+	mi := &file_test_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProtoWithOptionalAny.ProtoReflect.Descriptor instead.
+func (*ProtoWithOptionalAny) Descriptor() ([]byte, []int) {
+	return file_test_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ProtoWithOptionalAny) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *ProtoWithOptionalAny) GetData() *anypb.Any {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// ProtoWithRepeatedAny has repeated Any fields
+type ProtoWithRepeatedAny struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Items         []*anypb.Any           `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProtoWithRepeatedAny) Reset() {
+	*x = ProtoWithRepeatedAny{}
+	mi := &file_test_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProtoWithRepeatedAny) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProtoWithRepeatedAny) ProtoMessage() {}
+
+func (x *ProtoWithRepeatedAny) ProtoReflect() protoreflect.Message {
+	mi := &file_test_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProtoWithRepeatedAny.ProtoReflect.Descriptor instead.
+func (*ProtoWithRepeatedAny) Descriptor() ([]byte, []int) {
+	return file_test_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ProtoWithRepeatedAny) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *ProtoWithRepeatedAny) GetItems() []*anypb.Any {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
 var File_test_proto protoreflect.FileDescriptor
 
 const file_test_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"test.proto\x12\ttestproto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1egoogle/protobuf/wrappers.proto\"\x85\x01\n" +
+	"test.proto\x12\ttestproto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1egoogle/protobuf/wrappers.proto\x1a\x19google/protobuf/any.proto\"\x85\x01\n" +
 	"\rProtoMetadata\x129\n" +
 	"\n" +
 	"created_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
@@ -441,7 +670,23 @@ const file_test_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x05value:\x028\x01\x1a<\n" +
 	"\x0eStringMapEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B<Z:github.com/parquet-go/parquet-go/testdata/gen/go;testprotob\x06proto3"
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"s\n" +
+	"\fProtoPayload\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x129\n" +
+	"\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"b\n" +
+	"\fProtoWithAny\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12.\n" +
+	"\apayload\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\apayload\"^\n" +
+	"\x14ProtoWithOptionalAny\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12-\n" +
+	"\x04data\x18\x02 \x01(\v2\x14.google.protobuf.AnyH\x00R\x04data\x88\x01\x01B\a\n" +
+	"\x05_data\"R\n" +
+	"\x14ProtoWithRepeatedAny\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12*\n" +
+	"\x05items\x18\x02 \x03(\v2\x14.google.protobuf.AnyR\x05itemsB<Z:github.com/parquet-go/parquet-go/testdata/gen/go;testprotob\x06proto3"
 
 var (
 	file_test_proto_rawDescOnce sync.Once
@@ -455,7 +700,7 @@ func file_test_proto_rawDescGZIP() []byte {
 	return file_test_proto_rawDescData
 }
 
-var file_test_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_test_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_test_proto_goTypes = []any{
 	(*ProtoMetadata)(nil),          // 0: testproto.ProtoMetadata
 	(*ProtoEvent)(nil),             // 1: testproto.ProtoEvent
@@ -463,33 +708,42 @@ var file_test_proto_goTypes = []any{
 	(*ProtoWithWrappers)(nil),      // 3: testproto.ProtoWithWrappers
 	(*ProtoWithRepeated)(nil),      // 4: testproto.ProtoWithRepeated
 	(*ProtoWithMap)(nil),           // 5: testproto.ProtoWithMap
-	nil,                            // 6: testproto.ProtoWithMap.TimestampMapEntry
-	nil,                            // 7: testproto.ProtoWithMap.StringMapEntry
-	(*timestamppb.Timestamp)(nil),  // 8: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),    // 9: google.protobuf.Duration
-	(*wrapperspb.BoolValue)(nil),   // 10: google.protobuf.BoolValue
-	(*wrapperspb.Int64Value)(nil),  // 11: google.protobuf.Int64Value
-	(*wrapperspb.StringValue)(nil), // 12: google.protobuf.StringValue
+	(*ProtoPayload)(nil),           // 6: testproto.ProtoPayload
+	(*ProtoWithAny)(nil),           // 7: testproto.ProtoWithAny
+	(*ProtoWithOptionalAny)(nil),   // 8: testproto.ProtoWithOptionalAny
+	(*ProtoWithRepeatedAny)(nil),   // 9: testproto.ProtoWithRepeatedAny
+	nil,                            // 10: testproto.ProtoWithMap.TimestampMapEntry
+	nil,                            // 11: testproto.ProtoWithMap.StringMapEntry
+	(*timestamppb.Timestamp)(nil),  // 12: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),    // 13: google.protobuf.Duration
+	(*wrapperspb.BoolValue)(nil),   // 14: google.protobuf.BoolValue
+	(*wrapperspb.Int64Value)(nil),  // 15: google.protobuf.Int64Value
+	(*wrapperspb.StringValue)(nil), // 16: google.protobuf.StringValue
+	(*anypb.Any)(nil),              // 17: google.protobuf.Any
 }
 var file_test_proto_depIdxs = []int32{
-	8,  // 0: testproto.ProtoMetadata.created_at:type_name -> google.protobuf.Timestamp
-	8,  // 1: testproto.ProtoMetadata.updated_at:type_name -> google.protobuf.Timestamp
-	8,  // 2: testproto.ProtoEvent.timestamp:type_name -> google.protobuf.Timestamp
-	9,  // 3: testproto.ProtoEvent.duration:type_name -> google.protobuf.Duration
+	12, // 0: testproto.ProtoMetadata.created_at:type_name -> google.protobuf.Timestamp
+	12, // 1: testproto.ProtoMetadata.updated_at:type_name -> google.protobuf.Timestamp
+	12, // 2: testproto.ProtoEvent.timestamp:type_name -> google.protobuf.Timestamp
+	13, // 3: testproto.ProtoEvent.duration:type_name -> google.protobuf.Duration
 	0,  // 4: testproto.ProtoNested.metadata:type_name -> testproto.ProtoMetadata
-	10, // 5: testproto.ProtoWithWrappers.active:type_name -> google.protobuf.BoolValue
-	11, // 6: testproto.ProtoWithWrappers.count:type_name -> google.protobuf.Int64Value
-	12, // 7: testproto.ProtoWithWrappers.label:type_name -> google.protobuf.StringValue
-	8,  // 8: testproto.ProtoWithRepeated.timestamps:type_name -> google.protobuf.Timestamp
-	9,  // 9: testproto.ProtoWithRepeated.durations:type_name -> google.protobuf.Duration
-	6,  // 10: testproto.ProtoWithMap.timestamp_map:type_name -> testproto.ProtoWithMap.TimestampMapEntry
-	7,  // 11: testproto.ProtoWithMap.string_map:type_name -> testproto.ProtoWithMap.StringMapEntry
-	8,  // 12: testproto.ProtoWithMap.TimestampMapEntry.value:type_name -> google.protobuf.Timestamp
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	14, // 5: testproto.ProtoWithWrappers.active:type_name -> google.protobuf.BoolValue
+	15, // 6: testproto.ProtoWithWrappers.count:type_name -> google.protobuf.Int64Value
+	16, // 7: testproto.ProtoWithWrappers.label:type_name -> google.protobuf.StringValue
+	12, // 8: testproto.ProtoWithRepeated.timestamps:type_name -> google.protobuf.Timestamp
+	13, // 9: testproto.ProtoWithRepeated.durations:type_name -> google.protobuf.Duration
+	10, // 10: testproto.ProtoWithMap.timestamp_map:type_name -> testproto.ProtoWithMap.TimestampMapEntry
+	11, // 11: testproto.ProtoWithMap.string_map:type_name -> testproto.ProtoWithMap.StringMapEntry
+	12, // 12: testproto.ProtoPayload.created_at:type_name -> google.protobuf.Timestamp
+	17, // 13: testproto.ProtoWithAny.payload:type_name -> google.protobuf.Any
+	17, // 14: testproto.ProtoWithOptionalAny.data:type_name -> google.protobuf.Any
+	17, // 15: testproto.ProtoWithRepeatedAny.items:type_name -> google.protobuf.Any
+	12, // 16: testproto.ProtoWithMap.TimestampMapEntry.value:type_name -> google.protobuf.Timestamp
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_test_proto_init() }
@@ -497,13 +751,14 @@ func file_test_proto_init() {
 	if File_test_proto != nil {
 		return
 	}
+	file_test_proto_msgTypes[8].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_test_proto_rawDesc), len(file_test_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

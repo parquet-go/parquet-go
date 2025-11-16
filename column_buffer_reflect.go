@@ -6,6 +6,7 @@ import (
 	"math/bits"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/parquet-go/parquet-go/sparse"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -541,6 +543,30 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 					v := structpbValueToReflectValue(fields[w.fieldName])
 					w.writeValue(columns, levels, v)
 				}
+			case *anypb.Any:
+				if msg == nil {
+					for i := range writers {
+						w := &writers[i]
+						w.writeValue(columns, levels, reflect.Value{})
+					}
+					return
+				}
+
+				typeURL := msg.GetTypeUrl()
+				const prefix = "type.googleapis.com/"
+				if !strings.HasPrefix(typeURL, prefix) {
+					panic(fmt.Sprintf("invalid type_url %q: expected %q prefix", typeURL, prefix))
+				}
+				path := typeURL[len(prefix):]
+				_ = navigateToNestedGroup(node, path)
+
+				unmarshaled, err := msg.UnmarshalNew()
+				if err != nil {
+					panic(fmt.Sprintf("failed to unmarshal Any: %v", err))
+				}
+
+				value = reflect.ValueOf(makeNestedMap(path, unmarshaled))
+				goto writeGroupValue
 			case proto.Message:
 				protoMsg := msg.ProtoReflect()
 				descriptor := protoMsg.Descriptor()
@@ -615,6 +641,8 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 					col.writeByteArray(levels, msg.GetValue())
 				case *structpb.Struct:
 					writeProtoStruct(col, levels, msg, node)
+				case *anypb.Any:
+					writeProtoAny(col, levels, msg, node)
 				default:
 					value = value.Elem()
 					continue
