@@ -580,6 +580,10 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 					return
 				}
 				switch msg := value.Interface().(type) {
+				case *time.Time:
+					writeTime(col, levels, *msg, node)
+				case *time.Duration:
+					writeDuration(col, levels, *msg, node)
 				case *timestamppb.Timestamp:
 					writeProtoTimestamp(col, levels, msg, node)
 				case *durationpb.Duration:
