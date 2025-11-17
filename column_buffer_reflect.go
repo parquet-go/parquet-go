@@ -2,9 +2,11 @@ package parquet
 
 import (
 	"cmp"
+	"fmt"
 	"math/bits"
 	"reflect"
 	"sort"
+	"time"
 	"unsafe"
 
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -134,9 +136,119 @@ func makeMapFunc[K cmp.Ordered](mapType reflect.Type) func(reflect.Value) anymap
 	}
 }
 
-// writeValueFunc is a function that writes a single reflect.Value to a set of column buffers.
+// writeValueFunc is a function that writes a single reflect.Value to a set of
+// column buffers.
 // Panics if the value cannot be written (similar to reflect package behavior).
 type writeValueFunc func([]ColumnBuffer, columnLevels, reflect.Value)
+
+// timeOfDayNanos returns the nanoseconds since midnight for the given time.
+func timeOfDayNanos(t time.Time) int64 {
+	m := nearestMidnightLessThan(t)
+	return t.Sub(m).Nanoseconds()
+}
+
+func writeTime(col ColumnBuffer, levels columnLevels, t time.Time, node Node) {
+	typ := node.Type()
+
+	if logicalType := typ.LogicalType(); logicalType != nil {
+		switch {
+		case logicalType.Timestamp != nil:
+			// TIMESTAMP logical type -> write to int64
+			unit := logicalType.Timestamp.Unit
+			var val int64
+			switch {
+			case unit.Millis != nil:
+				val = t.UnixMilli()
+			case unit.Micros != nil:
+				val = t.UnixMicro()
+			default:
+				val = t.UnixNano()
+			}
+			col.writeInt64(levels, val)
+			return
+
+		case logicalType.Date != nil:
+			// DATE logical type -> write to int32
+			col.writeInt32(levels, int32(daysSinceUnixEpoch(t)))
+			return
+
+		case logicalType.Time != nil:
+			// TIME logical type -> write time of day
+			unit := logicalType.Time.Unit
+			nanos := timeOfDayNanos(t)
+			switch {
+			case unit.Millis != nil:
+				col.writeInt32(levels, int32(nanos/1e6))
+			case unit.Micros != nil:
+				col.writeInt64(levels, nanos/1e3)
+			default:
+				col.writeInt64(levels, nanos)
+			}
+			return
+		}
+	}
+
+	// No time logical type - use physical type
+	switch typ.Kind() {
+	case Int32:
+		// int32 without logical type -> days since epoch
+		col.writeInt32(levels, int32(daysSinceUnixEpoch(t)))
+	case Int64:
+		// int64 without logical type -> nanoseconds since epoch
+		col.writeInt64(levels, t.UnixNano())
+	case Float:
+		// float -> fractional seconds since epoch
+		col.writeFloat(levels, float32(float64(t.UnixNano())/1e9))
+	case Double:
+		// double -> fractional seconds since epoch
+		col.writeDouble(levels, float64(t.UnixNano())/1e9)
+	case ByteArray:
+		// byte array -> RFC3339Nano
+		s := t.Format(time.RFC3339Nano)
+		col.writeByteArray(levels, unsafe.Slice(unsafe.StringData(s), len(s)))
+	default:
+		panic(fmt.Sprintf("cannot write time.Time to column with physical type %v", typ))
+	}
+}
+
+func writeDuration(col ColumnBuffer, levels columnLevels, d time.Duration, node Node) {
+	typ := node.Type()
+
+	if logicalType := typ.LogicalType(); logicalType != nil && logicalType.Time != nil {
+		// TIME logical type
+		unit := logicalType.Time.Unit
+		switch {
+		case unit.Millis != nil:
+			col.writeInt32(levels, int32(d.Milliseconds()))
+		case unit.Micros != nil:
+			col.writeInt64(levels, d.Microseconds())
+		default:
+			col.writeInt64(levels, d.Nanoseconds())
+		}
+		return
+	}
+
+	// No TIME logical type - use physical type
+	switch typ.Kind() {
+	case Int32:
+		panic("cannot write time.Duration to int32 column without TIME logical type")
+	case Int64:
+		// int64 -> nanoseconds
+		col.writeInt64(levels, d.Nanoseconds())
+	case Float:
+		// float -> seconds
+		col.writeFloat(levels, float32(d.Seconds()))
+	case Double:
+		// double -> seconds
+		col.writeDouble(levels, d.Seconds())
+	case ByteArray:
+		// byte array -> String()
+		s := d.String()
+		col.writeByteArray(levels, unsafe.Slice(unsafe.StringData(s), len(s)))
+	default:
+		panic(fmt.Sprintf("cannot write time.Duration to column with physical type %v", typ))
+	}
+}
 
 // writeValueFuncOf constructs a function that writes reflect.Values to column buffers.
 // It follows the deconstructFuncOf pattern, recursively building functions for the schema tree.
@@ -394,8 +506,14 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				col.writeBoolean(levels, value.Bool())
 			case reflect.Int8, reflect.Int16, reflect.Int32:
 				col.writeInt32(levels, int32(value.Int()))
-			case reflect.Int, reflect.Int64:
+			case reflect.Int:
 				col.writeInt64(levels, value.Int())
+			case reflect.Int64:
+				if value.Type() == reflect.TypeFor[time.Duration]() {
+					writeDuration(col, levels, time.Duration(value.Int()), node)
+				} else {
+					col.writeInt64(levels, value.Int())
+				}
 			case reflect.Uint8, reflect.Uint16, reflect.Uint32:
 				col.writeInt32(levels, int32(value.Uint()))
 			case reflect.Uint, reflect.Uint64:
@@ -409,10 +527,21 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				col.writeByteArray(levels, unsafe.Slice(unsafe.StringData(s), len(s)))
 			case reflect.Slice, reflect.Array:
 				col.writeByteArray(levels, value.Bytes())
+			case reflect.Struct:
+				switch v := value.Interface().(type) {
+				case time.Time:
+					writeTime(col, levels, v, node)
+				case deprecated.Int96:
+					col.writeInt96(levels, v)
+				default:
+					goto unsupported
+				}
 			default:
-				col.writeInt96(levels, value.Interface().(deprecated.Int96))
+				goto unsupported
 			}
 			return
+		unsupported:
+			panic(fmt.Sprintf("cannot write value of type %s to leaf column", value.Type()))
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // TestWriteValueFuncOfPrimitives tests writing primitive types
@@ -1161,6 +1162,587 @@ func TestMapStringAnyToRepeatedGroup(t *testing.T) {
 				if got.Value[i].Element != expectedVal.Element {
 					t.Errorf("value[%d]: expected %q, got %q", i, expectedVal.Element, got.Value[i].Element)
 				}
+			}
+		})
+	}
+}
+
+// TestTimeTimeRoundTrip tests end-to-end writing and reading of time.Time values
+func TestTimeTimeRoundTrip(t *testing.T) {
+	type Row struct {
+		Time time.Time
+	}
+
+	testTime := time.Date(2024, 1, 15, 14, 30, 45, 123456789, time.UTC)
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Row](buf)
+
+	rows := []Row{{Time: testTime}}
+	n, err := writer.Write(rows)
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected to write 1 row, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var got Row
+	if err := reader.Read(&got); err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	if !got.Time.Equal(testTime) {
+		t.Errorf("expected %v, got %v", testTime, got.Time)
+	}
+}
+
+// TestTimeDurationRoundTrip tests end-to-end writing and reading of time.Duration values
+func TestTimeDurationRoundTrip(t *testing.T) {
+	type Row struct {
+		Duration time.Duration
+	}
+
+	testDuration := 14*time.Hour + 30*time.Minute + 45*time.Second + 123456789*time.Nanosecond
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Row](buf)
+
+	rows := []Row{{Duration: testDuration}}
+	n, err := writer.Write(rows)
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected to write 1 row, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var got Row
+	if err := reader.Read(&got); err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	if got.Duration != testDuration {
+		t.Errorf("expected %v, got %v", testDuration, got.Duration)
+	}
+}
+
+// TestTimeTypesWithMultipleRows tests writing and reading multiple rows with time types
+func TestTimeTypesWithMultipleRows(t *testing.T) {
+	type Event struct {
+		Timestamp time.Time
+		Duration  time.Duration
+		Name      string
+	}
+
+	events := []Event{
+		{
+			Timestamp: time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC),
+			Duration:  5 * time.Minute,
+			Name:      "event1",
+		},
+		{
+			Timestamp: time.Date(2024, 1, 2, 15, 30, 0, 0, time.UTC),
+			Duration:  10 * time.Hour,
+			Name:      "event2",
+		},
+		{
+			Timestamp: time.Date(2024, 1, 3, 9, 15, 30, 500000000, time.UTC),
+			Duration:  2*time.Hour + 30*time.Minute,
+			Name:      "event3",
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Event](buf)
+
+	n, err := writer.Write(events)
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if n != len(events) {
+		t.Fatalf("expected to write %d rows, wrote %d", len(events), n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	for i, expected := range events {
+		var got Event
+		if err := reader.Read(&got); err != nil {
+			t.Fatalf("failed to read row %d: %v", i, err)
+		}
+
+		if !got.Timestamp.Equal(expected.Timestamp) {
+			t.Errorf("row %d: expected timestamp %v, got %v", i, expected.Timestamp, got.Timestamp)
+		}
+		if got.Duration != expected.Duration {
+			t.Errorf("row %d: expected duration %v, got %v", i, expected.Duration, got.Duration)
+		}
+		if got.Name != expected.Name {
+			t.Errorf("row %d: expected name %q, got %q", i, expected.Name, got.Name)
+		}
+	}
+}
+
+// TestTimeTypesWithMapIndirection tests the indirection case where we write
+// map[string]any but the schema expects concrete time.Time and time.Duration types.
+// This exercises the writeTime and writeDuration functions in writeValueFuncOfLeaf.
+func TestTimeTypesWithMapIndirection(t *testing.T) {
+	type Metadata struct {
+		CreatedAt time.Time
+		UpdatedAt time.Time
+	}
+
+	type Row struct {
+		Metadata Metadata
+	}
+
+	type DynamicRow struct {
+		Metadata map[string]any
+	}
+
+	schema := SchemaOf(new(Row))
+
+	testTime1 := time.Date(2024, 1, 15, 10, 30, 45, 123456789, time.UTC)
+	testTime2 := time.Date(2024, 2, 20, 15, 45, 30, 987654321, time.UTC)
+
+	dynamicRows := []DynamicRow{
+		{
+			Metadata: map[string]any{
+				"CreatedAt": testTime1,
+				"UpdatedAt": testTime2,
+			},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[DynamicRow](buf, schema)
+
+	n, err := writer.Write(dynamicRows)
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected to write 1 row, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var got Row
+	if err := reader.Read(&got); err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	if !got.Metadata.CreatedAt.Equal(testTime1) {
+		t.Errorf("expected CreatedAt %v, got %v", testTime1, got.Metadata.CreatedAt)
+	}
+	if !got.Metadata.UpdatedAt.Equal(testTime2) {
+		t.Errorf("expected UpdatedAt %v, got %v", testTime2, got.Metadata.UpdatedAt)
+	}
+}
+
+// TestDurationTypesWithMapIndirection tests time.Duration with map indirection
+func TestDurationTypesWithMapIndirection(t *testing.T) {
+	type Metrics struct {
+		RequestDuration  time.Duration
+		ProcessDuration  time.Duration
+		ResponseDuration time.Duration
+	}
+
+	type Row struct {
+		Metrics Metrics
+	}
+
+	type DynamicRow struct {
+		Metrics map[string]any
+	}
+
+	schema := SchemaOf(new(Row))
+
+	dynamicRows := []DynamicRow{
+		{
+			Metrics: map[string]any{
+				"RequestDuration":  5 * time.Second,
+				"ProcessDuration":  250 * time.Millisecond,
+				"ResponseDuration": 10 * time.Millisecond,
+			},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[DynamicRow](buf, schema)
+
+	n, err := writer.Write(dynamicRows)
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected to write 1 row, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var got Row
+	if err := reader.Read(&got); err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	if got.Metrics.RequestDuration != 5*time.Second {
+		t.Errorf("expected RequestDuration %v, got %v", 5*time.Second, got.Metrics.RequestDuration)
+	}
+	if got.Metrics.ProcessDuration != 250*time.Millisecond {
+		t.Errorf("expected ProcessDuration %v, got %v", 250*time.Millisecond, got.Metrics.ProcessDuration)
+	}
+	if got.Metrics.ResponseDuration != 10*time.Millisecond {
+		t.Errorf("expected ResponseDuration %v, got %v", 10*time.Millisecond, got.Metrics.ResponseDuration)
+	}
+}
+
+// TestTimeAndDurationWithMapIndirection tests both time.Time and time.Duration together
+func TestTimeAndDurationWithMapIndirection(t *testing.T) {
+	type Event struct {
+		Timestamp time.Time
+		Duration  time.Duration
+		Name      string
+	}
+
+	type Row struct {
+		Event Event
+	}
+
+	type DynamicRow struct {
+		Event map[string]any
+	}
+
+	schema := SchemaOf(new(Row))
+
+	testTime := time.Date(2024, 3, 10, 14, 30, 0, 0, time.UTC)
+	testDuration := 2*time.Hour + 15*time.Minute
+
+	dynamicRows := []DynamicRow{
+		{
+			Event: map[string]any{
+				"Timestamp": testTime,
+				"Duration":  testDuration,
+				"Name":      "test-event",
+			},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[DynamicRow](buf, schema)
+
+	n, err := writer.Write(dynamicRows)
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected to write 1 row, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var got Row
+	if err := reader.Read(&got); err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	if !got.Event.Timestamp.Equal(testTime) {
+		t.Errorf("expected Timestamp %v, got %v", testTime, got.Event.Timestamp)
+	}
+	if got.Event.Duration != testDuration {
+		t.Errorf("expected Duration %v, got %v", testDuration, got.Event.Duration)
+	}
+	if got.Event.Name != "test-event" {
+		t.Errorf("expected Name %q, got %q", "test-event", got.Event.Name)
+	}
+}
+
+// TestTimeWithDifferentTimestampUnits tests time.Time with different timestamp units (millis, micros, nanos)
+func TestTimeWithDifferentTimestampUnits(t *testing.T) {
+	testTime := time.Date(2024, 1, 15, 10, 30, 45, 123456789, time.UTC)
+
+	tests := []struct {
+		name    string
+		schema  *Schema
+		checkFn func(t *testing.T, got time.Time)
+	}{
+		{
+			name:   "timestamp millis",
+			schema: NewSchema("Row", Group{"Time": Timestamp(Millisecond)}),
+			checkFn: func(t *testing.T, got time.Time) {
+				// Millis precision loses sub-millisecond precision
+				expected := testTime.Truncate(time.Millisecond)
+				if !got.Equal(expected) {
+					t.Errorf("expected %v, got %v", expected, got)
+				}
+			},
+		},
+		{
+			name:   "timestamp micros",
+			schema: NewSchema("Row", Group{"Time": Timestamp(Microsecond)}),
+			checkFn: func(t *testing.T, got time.Time) {
+				// Micros precision loses sub-microsecond precision
+				expected := testTime.Truncate(time.Microsecond)
+				if !got.Equal(expected) {
+					t.Errorf("expected %v, got %v", expected, got)
+				}
+			},
+		},
+		{
+			name:   "timestamp nanos",
+			schema: NewSchema("Row", Group{"Time": Timestamp(Nanosecond)}),
+			checkFn: func(t *testing.T, got time.Time) {
+				if !got.Equal(testTime) {
+					t.Errorf("expected %v, got %v", testTime, got)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			type Row struct {
+				Time time.Time
+			}
+
+			type DynamicRow struct {
+				Time any
+			}
+
+			buf := new(bytes.Buffer)
+			writer := NewGenericWriter[DynamicRow](buf, tt.schema)
+
+			n, err := writer.Write([]DynamicRow{{Time: testTime}})
+			if err != nil {
+				t.Fatalf("failed to write: %v", err)
+			}
+			if n != 1 {
+				t.Fatalf("expected to write 1 row, wrote %d", n)
+			}
+
+			if err := writer.Close(); err != nil {
+				t.Fatalf("failed to close writer: %v", err)
+			}
+
+			reader := NewReader(bytes.NewReader(buf.Bytes()))
+			defer reader.Close()
+
+			var got Row
+			if err := reader.Read(&got); err != nil {
+				t.Fatalf("failed to read: %v", err)
+			}
+
+			tt.checkFn(t, got.Time)
+		})
+	}
+}
+
+// TestTimeWithDateLogicalType tests time.Time with DATE logical type
+func TestTimeWithDateLogicalType(t *testing.T) {
+	testTime := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+
+	type Row struct {
+		Date time.Time
+	}
+
+	type DynamicRow struct {
+		Date any
+	}
+
+	schema := NewSchema("Row", Group{"Date": Date()})
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[DynamicRow](buf, schema)
+
+	n, err := writer.Write([]DynamicRow{{Date: testTime}})
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected to write 1 row, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var got Row
+	if err := reader.Read(&got); err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	// DATE type only stores the date part, not time
+	expected := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+	if !got.Date.Equal(expected) {
+		t.Errorf("expected %v, got %v", expected, got.Date)
+	}
+}
+
+// TestTimeWithTimeLogicalType tests time.Time with TIME logical type
+// Note: TIME type stores time-of-day only and doesn't round-trip well with time.Time.
+// This test verifies that writing works without error. Reading TIME as time.Time
+// is not a primary use case (use time.Duration or int64 instead).
+func TestTimeWithTimeLogicalType(t *testing.T) {
+	testTime := time.Date(2024, 1, 15, 14, 30, 45, 123456789, time.UTC)
+
+	tests := []struct {
+		name   string
+		schema *Schema
+	}{
+		{
+			name:   "time millis",
+			schema: NewSchema("Row", Group{"Time": Time(Millisecond)}),
+		},
+		{
+			name:   "time micros",
+			schema: NewSchema("Row", Group{"Time": Time(Microsecond)}),
+		},
+		{
+			name:   "time nanos",
+			schema: NewSchema("Row", Group{"Time": Time(Nanosecond)}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			type DynamicRow struct {
+				Time any
+			}
+
+			buf := new(bytes.Buffer)
+			writer := NewGenericWriter[DynamicRow](buf, tt.schema)
+
+			n, err := writer.Write([]DynamicRow{{Time: testTime}})
+			if err != nil {
+				t.Fatalf("failed to write: %v", err)
+			}
+			if n != 1 {
+				t.Fatalf("expected to write 1 row, wrote %d", n)
+			}
+
+			if err := writer.Close(); err != nil {
+				t.Fatalf("failed to close writer: %v", err)
+			}
+
+			// Verify the file was written successfully (has non-zero size)
+			if buf.Len() == 0 {
+				t.Fatal("no data was written")
+			}
+		})
+	}
+}
+
+// TestDurationWithTimeLogicalType tests time.Duration with TIME logical type
+// Note: Only TIME(NANOS) round-trips correctly with time.Duration. TIME(MILLIS) and TIME(MICROS)
+// use INT32/INT64 which don't automatically convert units when reading back.
+func TestDurationWithTimeLogicalType(t *testing.T) {
+	testDuration := 14*time.Hour + 30*time.Minute + 45*time.Second + 123456789*time.Nanosecond
+
+	tests := []struct {
+		name          string
+		schema        *Schema
+		expected      time.Duration
+		testRoundtrip bool
+	}{
+		{
+			name:          "time millis",
+			schema:        NewSchema("Row", Group{"Duration": Time(Millisecond)}),
+			testRoundtrip: false, // INT32 doesn't round-trip with time.Duration
+		},
+		{
+			name:          "time micros",
+			schema:        NewSchema("Row", Group{"Duration": Time(Microsecond)}),
+			testRoundtrip: false, // INT64 microseconds don't round-trip with time.Duration
+		},
+		{
+			name:          "time nanos",
+			schema:        NewSchema("Row", Group{"Duration": Time(Nanosecond)}),
+			expected:      testDuration,
+			testRoundtrip: true, // INT64 nanoseconds == time.Duration
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			type Row struct {
+				Duration time.Duration
+			}
+
+			type DynamicRow struct {
+				Duration any
+			}
+
+			buf := new(bytes.Buffer)
+			writer := NewGenericWriter[DynamicRow](buf, tt.schema)
+
+			n, err := writer.Write([]DynamicRow{{Duration: testDuration}})
+			if err != nil {
+				t.Fatalf("failed to write: %v", err)
+			}
+			if n != 1 {
+				t.Fatalf("expected to write 1 row, wrote %d", n)
+			}
+
+			if err := writer.Close(); err != nil {
+				t.Fatalf("failed to close writer: %v", err)
+			}
+
+			if !tt.testRoundtrip {
+				// Just verify writing succeeded
+				if buf.Len() == 0 {
+					t.Fatal("no data was written")
+				}
+				return
+			}
+
+			reader := NewReader(bytes.NewReader(buf.Bytes()))
+			defer reader.Close()
+
+			var got Row
+			if err := reader.Read(&got); err != nil {
+				t.Fatalf("failed to read: %v", err)
+			}
+
+			if got.Duration != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, got.Duration)
 			}
 		})
 	}
