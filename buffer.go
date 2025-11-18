@@ -676,6 +676,21 @@ func (p *bufferedPage) Release() {
 	bufferUnref(p.repetitionLevels)
 }
 
+// ReleaseAndDetachValues releases all underlying buffers except the one backing byte-array contents. This
+// allows row and values read from the buffer to continue to be valid, instead relying
+// on the garbage collector after it is no longer needed.
+func (p *bufferedPage) ReleaseAndDetachValues() {
+	// We don't return the values buffer to the pool and allow
+	// standard GC to track it.  Remove debug finalizer.
+	runtime.SetFinalizer(p.values, nil)
+
+	// Return everything else back to pools.
+	Release(p.Page)
+	bufferUnref(p.offsets)
+	bufferUnref(p.definitionLevels)
+	bufferUnref(p.repetitionLevels)
+}
+
 func bufferRef[T bufferedType](buf *buffer[T]) {
 	if buf != nil {
 		buf.ref()
@@ -730,12 +745,22 @@ func Release(page Page) {
 	}
 }
 
+func ReleaseAndDetachValues(page Page) {
+	if p, _ := page.(detachable); p != nil {
+		p.ReleaseAndDetachValues()
+	}
+}
+
 type retainable interface {
 	Retain()
 }
 
 type releasable interface {
 	Release()
+}
+
+type detachable interface {
+	ReleaseAndDetachValues()
 }
 
 var (
