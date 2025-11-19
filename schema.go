@@ -46,13 +46,8 @@ type schemaState struct {
 }
 
 type schemaCache struct {
-	hashSeed  maphash.Seed
-	writeRows cacheMap[writeRowsCacheKey, writeRowsFunc]
-}
-
-type writeRowsCacheKey struct {
-	gotype reflect.Type
-	column uint64
+	hashSeed   maphash.Seed
+	writeValue cacheMap[uint64, writeValueFunc]
 }
 
 type cacheMap[K comparable, V any] struct {
@@ -345,7 +340,7 @@ func (s *Schema) Deconstruct(row Row, value any) Row {
 		}
 		v = v.Elem()
 	}
-	funcs.deconstruct(columns, levels{}, v)
+	funcs.deconstruct(columns, columnLevels{}, v)
 	return appendRow(row, columns)
 }
 
@@ -386,7 +381,7 @@ func (s *Schema) Reconstruct(value any, row Row) error {
 		return true
 	})
 	// we avoid the defer penalty by releasing b manually
-	err := funcs.reconstruct(v, levels{}, columns)
+	err := funcs.reconstruct(v, columnLevels{}, columns)
 	b.release()
 	return err
 }

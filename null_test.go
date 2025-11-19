@@ -45,7 +45,7 @@ func testNullIndex[T comparable](t *testing.T) {
 				}
 			}
 
-			array := makeArrayOf(data)
+			array := makeArrayFromSlice(data)
 			nullIndex[T](want, array)
 			nullIndexFuncOf(reflect.TypeOf(zero))(got, array)
 
@@ -85,7 +85,7 @@ func benchmarkNullIndex[T any](b *testing.B) {
 	var zero T
 	typ := reflect.TypeOf(zero)
 	null := nullIndexFuncOf(typ)
-	data := makeArrayOf(make([]T, N))
+	data := makeArrayFromSlice(make([]T, N))
 	bits := make([]uint64, (N+63)/64)
 
 	b.Run(typ.String(), func(b *testing.B) {
@@ -108,7 +108,7 @@ func testNullIndexTime(t *testing.T) {
 			time.Date(2024, 12, 25, 12, 30, 0, 0, time.UTC), // non-zero
 		}
 
-		array := makeArrayOf(data)
+		array := makeArrayFromSlice(data)
 		bits := make([]uint64, 1)
 		nullIndexFuncOf(reflect.TypeOf(time.Time{}))(bits, array)
 

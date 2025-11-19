@@ -172,11 +172,8 @@ func makeWriteFunc[T any](t reflect.Type, schema *Schema, tagReplacements []Stru
 				w.columns[i] = c.columnBuffer
 			}
 		}
-		err = writeRows(w.columns, makeArrayOf(rows), columnLevels{})
-		if err == nil {
-			n = len(rows)
-		}
-		return n, err
+		writeRows(w.columns, columnLevels{}, makeArrayFromSlice(rows))
+		return len(rows), nil
 	}
 }
 
