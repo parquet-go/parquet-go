@@ -11,10 +11,22 @@ import (
 
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type anymap interface {
 	entries() (keys, values sparse.Array)
+}
+
+type fieldWriter struct {
+	fieldName  string
+	writeValue writeValueFunc
 }
 
 type gomap[K cmp.Ordered] struct {
@@ -275,51 +287,78 @@ func writeValueFuncOfOptional(columnIndex int16, node Node) (int16, writeValueFu
 			writeValue(columns, levels, value)
 			return
 		}
-		if value.IsZero() {
-			writeValue(columns, levels, value)
-			return
+		var isNull bool
+		switch value.Kind() {
+		case reflect.Pointer, reflect.Interface:
+			isNull = value.IsNil()
+		default:
+			isNull = value.IsZero()
 		}
-		levels.definitionLevel++
-		writeValue(columns, levels, value)
+		if isNull {
+			writeValue(columns, levels, value)
+		} else {
+			levels.definitionLevel++
+			writeValue(columns, levels, value)
+		}
 	}
 }
 
 func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFunc) {
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
-		for {
-			if !value.IsValid() {
-				writeValue(columns, levels, reflect.Value{})
-				return
-			}
-			kind := value.Kind()
-			if kind != reflect.Interface && kind != reflect.Pointer {
-				break
-			}
-			if value.IsNil() {
-				writeValue(columns, levels, reflect.Value{})
-				break
-			}
-			value = value.Elem()
+	writeRepatedValue:
+		if !value.IsValid() {
+			writeValue(columns, levels, reflect.Value{})
+			return
 		}
 
-		switch value.Kind() {
-		case reflect.Slice, reflect.Array:
-			if value.Len() == 0 {
+		switch list := value.Interface().(type) {
+		case protoreflect.List:
+			n := list.Len()
+			if n == 0 {
 				writeValue(columns, levels, reflect.Value{})
 				return
 			}
 
 			levels.repetitionDepth++
 			levels.definitionLevel++
-			writeValue(columns, levels, value.Index(0))
 
-			if n := value.Len(); n > 1 {
-				levels.repetitionLevel = levels.repetitionDepth
-				for i := 1; i < n; i++ {
-					writeValue(columns, levels, value.Index(i))
+			for i := range n {
+				var e = list.Get(i)
+				var v reflect.Value
+				if e.IsValid() {
+					v = reflect.ValueOf(e.Interface())
 				}
+				writeValue(columns, levels, v)
+				levels.repetitionLevel = levels.repetitionDepth
 			}
+			return
+		}
+
+		switch value.Kind() {
+		case reflect.Interface, reflect.Pointer:
+			if value.IsNil() {
+				writeValue(columns, levels, reflect.Value{})
+				return
+			}
+			value = value.Elem()
+			goto writeRepatedValue
+
+		case reflect.Slice, reflect.Array:
+			n := value.Len()
+			if n == 0 {
+				writeValue(columns, levels, reflect.Value{})
+				return
+			}
+
+			levels.repetitionDepth++
+			levels.definitionLevel++
+
+			for i := range n {
+				writeValue(columns, levels, value.Index(i))
+				levels.repetitionLevel = levels.repetitionDepth
+			}
+
 		default:
 			levels.repetitionDepth++
 			levels.definitionLevel++
@@ -377,6 +416,30 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, schemaOf(keyValueElem))
 
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, mapValue reflect.Value) {
+		switch m := mapValue.Interface().(type) {
+		case protoreflect.Map:
+			n := m.Len()
+			if n == 0 {
+				writeValue(columns, levels, reflect.Zero(keyValueElem))
+				return
+			}
+
+			levels.repetitionDepth++
+			levels.definitionLevel++
+
+			elem := reflect.New(keyValueElem).Elem()
+			k := elem.Field(0)
+			v := elem.Field(1)
+
+			for mapKey, mapVal := range m.Range {
+				k.Set(reflect.ValueOf(mapKey.Interface()).Convert(keyType))
+				v.Set(reflect.ValueOf(mapVal.Interface()).Convert(valueType))
+				writeValue(columns, levels, elem)
+				levels.repetitionLevel = levels.repetitionDepth
+			}
+			return
+		}
+
 		if mapValue.Len() == 0 {
 			writeValue(columns, levels, reflect.Zero(keyValueElem))
 			return
@@ -405,11 +468,6 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 }
 
 func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc) {
-	type fieldWriter struct {
-		fieldName  string
-		writeValue writeValueFunc
-	}
-
 	fields := node.Fields()
 	writers := make([]fieldWriter, len(fields))
 	for i, field := range fields {
@@ -422,63 +480,83 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 	mapStringAnyType := reflect.TypeOf((map[string]any)(nil))
 
 	return columnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
-		for {
-			if !value.IsValid() {
-				for i := range writers {
-					w := &writers[i]
-					w.writeValue(columns, levels, reflect.Value{})
-				}
-				return
+	writeGroupValue:
+		if !value.IsValid() {
+			for i := range writers {
+				w := &writers[i]
+				w.writeValue(columns, levels, reflect.Value{})
 			}
+			return
+		}
 
-			switch t := value.Type(); t.Kind() {
-			case reflect.Map:
-				switch {
-				case t.ConvertibleTo(mapStringStringType):
-					m := value.Convert(mapStringStringType).Interface().(map[string]string)
-					v := new(string)
-					for i := range writers {
-						w := &writers[i]
-						*v = m[w.fieldName]
-						w.writeValue(columns, levels, reflect.ValueOf(v).Elem())
-					}
-
-				case t.ConvertibleTo(mapStringAnyType):
-					m := value.Convert(mapStringAnyType).Interface().(map[string]any)
-					for i := range writers {
-						w := &writers[i]
-						v := m[w.fieldName]
-						w.writeValue(columns, levels, reflect.ValueOf(v))
-					}
-
-				default:
-					for i := range writers {
-						w := &writers[i]
-						fieldName := reflect.ValueOf(&w.fieldName).Elem()
-						fieldValue := value.MapIndex(fieldName)
-						w.writeValue(columns, levels, fieldValue)
-					}
-				}
-				return
-
-			case reflect.Struct:
+		switch t := value.Type(); t.Kind() {
+		case reflect.Map:
+			switch {
+			case t.ConvertibleTo(mapStringStringType):
+				m := value.Convert(mapStringStringType).Interface().(map[string]string)
+				v := new(string)
 				for i := range writers {
 					w := &writers[i]
-					fieldValue := value.FieldByName(w.fieldName)
-					w.writeValue(columns, levels, fieldValue)
+					*v = m[w.fieldName]
+					w.writeValue(columns, levels, reflect.ValueOf(v).Elem())
 				}
-				return
 
-			case reflect.Pointer, reflect.Interface:
-				if value.IsNil() {
-					value = reflect.Value{}
-				} else {
-					value = value.Elem()
+			case t.ConvertibleTo(mapStringAnyType):
+				m := value.Convert(mapStringAnyType).Interface().(map[string]any)
+				for i := range writers {
+					w := &writers[i]
+					v := m[w.fieldName]
+					w.writeValue(columns, levels, reflect.ValueOf(v))
 				}
 
 			default:
-				value = reflect.Value{}
+				for i := range writers {
+					w := &writers[i]
+					fieldName := reflect.ValueOf(&w.fieldName).Elem()
+					fieldValue := value.MapIndex(fieldName)
+					w.writeValue(columns, levels, fieldValue)
+				}
 			}
+
+		case reflect.Struct:
+			for i := range writers {
+				w := &writers[i]
+				fieldValue := value.FieldByName(w.fieldName)
+				w.writeValue(columns, levels, fieldValue)
+			}
+
+		case reflect.Pointer, reflect.Interface:
+			if value.IsNil() {
+				value = reflect.Value{}
+				goto writeGroupValue
+			}
+
+			switch msg := value.Interface().(type) {
+			case *structpb.Struct:
+				var fields map[string]*structpb.Value
+				if msg != nil {
+					fields = msg.Fields
+				}
+				for i := range writers {
+					w := &writers[i]
+					v := structpbValueToReflectValue(fields[w.fieldName])
+					w.writeValue(columns, levels, v)
+				}
+			case *anypb.Any:
+				if writeProtoAnyToGroup(msg, columns, levels, writers, node, &value) {
+					return
+				}
+				goto writeGroupValue
+			case proto.Message:
+				writeProtoMessageToGroup(msg, columns, levels, writers)
+			default:
+				value = value.Elem()
+				goto writeGroupValue
+			}
+
+		default:
+			value = reflect.Value{}
+			goto writeGroupValue
 		}
 	}
 }
@@ -489,6 +567,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 	}
 	return columnIndex + 1, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 		col := columns[columnIndex]
+
 		for {
 			if !value.IsValid() {
 				col.writeNull(levels)
@@ -500,8 +579,41 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 					col.writeNull(levels)
 					return
 				}
-				value = value.Elem()
-				continue
+				switch msg := value.Interface().(type) {
+				case *time.Time:
+					writeTime(col, levels, *msg, node)
+				case *time.Duration:
+					writeDuration(col, levels, *msg, node)
+				case *timestamppb.Timestamp:
+					writeProtoTimestamp(col, levels, msg, node)
+				case *durationpb.Duration:
+					writeProtoDuration(col, levels, msg, node)
+				case *wrapperspb.BoolValue:
+					col.writeBoolean(levels, msg.GetValue())
+				case *wrapperspb.Int32Value:
+					col.writeInt32(levels, msg.GetValue())
+				case *wrapperspb.Int64Value:
+					col.writeInt64(levels, msg.GetValue())
+				case *wrapperspb.UInt32Value:
+					col.writeInt32(levels, int32(msg.GetValue()))
+				case *wrapperspb.UInt64Value:
+					col.writeInt64(levels, int64(msg.GetValue()))
+				case *wrapperspb.FloatValue:
+					col.writeFloat(levels, msg.GetValue())
+				case *wrapperspb.DoubleValue:
+					col.writeDouble(levels, msg.GetValue())
+				case *wrapperspb.StringValue:
+					col.writeByteArray(levels, unsafeByteArrayFromString(msg.GetValue()))
+				case *wrapperspb.BytesValue:
+					col.writeByteArray(levels, msg.GetValue())
+				case *structpb.Struct:
+					writeProtoStruct(col, levels, msg, node)
+				case *anypb.Any:
+					writeProtoAny(col, levels, msg, node)
+				default:
+					value = value.Elem()
+					continue
+				}
 			case reflect.Bool:
 				col.writeBoolean(levels, value.Bool())
 			case reflect.Int8, reflect.Int16, reflect.Int32:
@@ -523,8 +635,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			case reflect.Float64:
 				col.writeDouble(levels, value.Float())
 			case reflect.String:
-				s := value.String()
-				col.writeByteArray(levels, unsafe.Slice(unsafe.StringData(s), len(s)))
+				col.writeByteArray(levels, unsafeByteArrayFromString(value.String()))
 			case reflect.Slice, reflect.Array:
 				col.writeByteArray(levels, value.Bytes())
 			case reflect.Struct:
@@ -544,4 +655,29 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			panic(fmt.Sprintf("cannot write value of type %s to leaf column", value.Type()))
 		}
 	}
+}
+
+func structpbValueToReflectValue(v *structpb.Value) reflect.Value {
+	switch kind := v.GetKind().(type) {
+	case nil:
+		return reflect.Value{}
+	case *structpb.Value_NullValue:
+		return reflect.Value{}
+	case *structpb.Value_NumberValue:
+		return reflect.ValueOf(&kind.NumberValue)
+	case *structpb.Value_StringValue:
+		return reflect.ValueOf(&kind.StringValue)
+	case *structpb.Value_BoolValue:
+		return reflect.ValueOf(&kind.BoolValue)
+	case *structpb.Value_StructValue:
+		return reflect.ValueOf(kind.StructValue)
+	case *structpb.Value_ListValue:
+		return reflect.ValueOf(kind.ListValue)
+	default:
+		panic(fmt.Sprintf("unsupported structpb.Value kind: %T", kind))
+	}
+}
+
+func unsafeByteArrayFromString(s string) []byte {
+	return unsafe.Slice(unsafe.StringData(s), len(s))
 }

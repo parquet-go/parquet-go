@@ -336,6 +336,9 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagR
 			kind := f.Type.Kind()
 			switch {
 			case kind == reflect.Pointer:
+			case kind == reflect.Interface:
+				// Interface types handle their own definition levels through
+				// writeRowsFuncOfInterface -> writeValueFuncOf -> writeValueFuncOfOptional
 			case kind == reflect.Slice && !list && f.Type.Elem().Kind() != reflect.Uint8:
 				// For slices other than []byte, optional applies
 				// to the element, not the list.
