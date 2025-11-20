@@ -213,23 +213,24 @@ func (c *ReaderConfig) Validate() error {
 //		CreatedBy: "my test program",
 //	})
 type WriterConfig struct {
-	CreatedBy            string
-	ColumnPageBuffers    BufferPool
-	ColumnIndexSizeLimit int
-	PageBufferSize       int
-	WriteBufferSize      int
-	DataPageVersion      int
-	DataPageStatistics   bool
-	MaxRowsPerRowGroup   int64
-	KeyValueMetadata     map[string]string
-	Schema               *Schema
-	BloomFilters         []BloomFilterColumn
-	Compression          compress.Codec
-	Sorting              SortingConfig
-	SkipPageBounds       [][]string
-	Encodings            map[Kind]encoding.Encoding
-	DictionaryMaxBytes   int64
-	SchemaConfig         *SchemaConfig
+	CreatedBy                     string
+	ColumnPageBuffers             BufferPool
+	ColumnIndexSizeLimit          int
+	ColumnIndexSizeLimitOverrides []ColumnIndexSizeOverride
+	PageBufferSize                int
+	WriteBufferSize               int
+	DataPageVersion               int
+	DataPageStatistics            bool
+	MaxRowsPerRowGroup            int64
+	KeyValueMetadata              map[string]string
+	Schema                        *Schema
+	BloomFilters                  []BloomFilterColumn
+	Compression                   compress.Codec
+	Sorting                       SortingConfig
+	SkipPageBounds                [][]string
+	Encodings                     map[Kind]encoding.Encoding
+	DictionaryMaxBytes            int64
+	SchemaConfig                  *SchemaConfig
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -288,22 +289,23 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 	}
 
 	*config = WriterConfig{
-		CreatedBy:            coalesceString(c.CreatedBy, config.CreatedBy),
-		ColumnPageBuffers:    coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
-		ColumnIndexSizeLimit: coalesceInt(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
-		PageBufferSize:       coalesceInt(c.PageBufferSize, config.PageBufferSize),
-		WriteBufferSize:      coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
-		DataPageVersion:      coalesceInt(c.DataPageVersion, config.DataPageVersion),
-		DataPageStatistics:   coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
-		MaxRowsPerRowGroup:   coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
-		KeyValueMetadata:     keyValueMetadata,
-		Schema:               coalesceSchema(c.Schema, config.Schema),
-		BloomFilters:         coalesceBloomFilters(c.BloomFilters, config.BloomFilters),
-		Compression:          coalesceCompression(c.Compression, config.Compression),
-		Sorting:              coalesceSortingConfig(c.Sorting, config.Sorting),
-		SkipPageBounds:       coalesceSkipPageBounds(c.SkipPageBounds, config.SkipPageBounds),
-		Encodings:            encodings,
-		SchemaConfig:         coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
+		CreatedBy:                     coalesceString(c.CreatedBy, config.CreatedBy),
+		ColumnPageBuffers:             coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
+		ColumnIndexSizeLimit:          coalesceInt(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
+		ColumnIndexSizeLimitOverrides: coalesceSlices(c.ColumnIndexSizeLimitOverrides, config.ColumnIndexSizeLimitOverrides),
+		PageBufferSize:                coalesceInt(c.PageBufferSize, config.PageBufferSize),
+		WriteBufferSize:               coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
+		DataPageVersion:               coalesceInt(c.DataPageVersion, config.DataPageVersion),
+		DataPageStatistics:            coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
+		MaxRowsPerRowGroup:            coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
+		KeyValueMetadata:              keyValueMetadata,
+		Schema:                        coalesceSchema(c.Schema, config.Schema),
+		BloomFilters:                  coalesceSlices(c.BloomFilters, config.BloomFilters),
+		Compression:                   coalesceCompression(c.Compression, config.Compression),
+		Sorting:                       coalesceSortingConfig(c.Sorting, config.Sorting),
+		SkipPageBounds:                coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
+		Encodings:                     encodings,
+		SchemaConfig:                  coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
 	}
 }
 
@@ -613,6 +615,11 @@ func ColumnIndexSizeLimit(sizeLimit int) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.ColumnIndexSizeLimit = sizeLimit })
 }
 
+func ColumnIndexSizeLimitOverrides(limits ...ColumnIndexSizeOverride) WriterOption {
+	limits = slices.Clone(limits)
+	return writerOption(func(config *WriterConfig) { config.ColumnIndexSizeLimitOverrides = limits })
+}
+
 // DataPageVersion creates a configuration option which configures the version of
 // data pages used when creating a parquet file.
 //
@@ -896,11 +903,11 @@ func coalesceString(s1, s2 string) string {
 	return s2
 }
 
-func coalesceBytes(b1, b2 []byte) []byte {
-	if b1 != nil {
-		return b1
+func coalesceSlices[T any](s1, s2 []T) []T {
+	if s1 != nil {
+		return s1
 	}
-	return b2
+	return s2
 }
 
 func coalesceBufferPool(p1, p2 BufferPool) BufferPool {
@@ -917,33 +924,12 @@ func coalesceSchema(s1, s2 *Schema) *Schema {
 	return s2
 }
 
-func coalesceSortingColumns(s1, s2 []SortingColumn) []SortingColumn {
-	if s1 != nil {
-		return s1
-	}
-	return s2
-}
-
 func coalesceSortingConfig(c1, c2 SortingConfig) SortingConfig {
 	return SortingConfig{
 		SortingBuffers:     coalesceBufferPool(c1.SortingBuffers, c2.SortingBuffers),
-		SortingColumns:     coalesceSortingColumns(c1.SortingColumns, c2.SortingColumns),
+		SortingColumns:     coalesceSlices(c1.SortingColumns, c2.SortingColumns),
 		DropDuplicatedRows: c1.DropDuplicatedRows,
 	}
-}
-
-func coalesceBloomFilters(f1, f2 []BloomFilterColumn) []BloomFilterColumn {
-	if f1 != nil {
-		return f1
-	}
-	return f2
-}
-
-func coalesceSkipPageBounds(b1, b2 [][]string) [][]string {
-	if b1 != nil {
-		return b1
-	}
-	return b2
 }
 
 func coalesceCompression(c1, c2 compress.Codec) compress.Codec {

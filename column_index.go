@@ -258,6 +258,22 @@ func (i be128ColumnIndex) MaxValue(int) Value  { return makeValueBytes(FixedLenB
 func (i be128ColumnIndex) IsAscending() bool   { return false }
 func (i be128ColumnIndex) IsDescending() bool  { return false }
 
+// ColumnIndexerOverride is used to override the default indexer size limit for a particular path.
+type ColumnIndexSizeOverride struct {
+	Path      []string
+	SizeLimit int
+}
+
+func searchColumnIndexerSizeLimit(sizes []ColumnIndexSizeOverride, defaultSize int, path columnPath) int {
+	for _, s := range sizes {
+		if path.equal(s.Path) {
+			return s.SizeLimit
+		}
+	}
+	return defaultSize
+
+}
+
 // The ColumnIndexer interface is implemented by types that support generating
 // parquet column indexes.
 //
