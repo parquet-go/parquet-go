@@ -418,13 +418,15 @@ func schemaElementTypeOf(s *format.SchemaElement) Type {
 					typ = Int32Type
 				case Int64:
 					typ = Int64Type
+				case ByteArray:
+					typ = ByteArrayType
 				case FixedLenByteArray:
 					if s.TypeLength == nil {
 						panic("DECIMAL using FIXED_LEN_BYTE_ARRAY must specify a length")
 					}
 					typ = FixedLenByteArrayType(int(*s.TypeLength))
 				default:
-					panic("DECIMAL must be of type INT32, INT64, or FIXED_LEN_BYTE_ARRAY but got " + kind.String())
+					panic("DECIMAL must be of type INT32, INT64, BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY but got " + kind.String())
 				}
 				return &decimalType{
 					decimal: *lt.Decimal,
