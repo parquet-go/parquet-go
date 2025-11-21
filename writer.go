@@ -728,7 +728,7 @@ func newWriterRowGroup(w *writer, config *WriterConfig) *writerRowGroup {
 			columnPath:         leaf.path,
 			columnType:         columnType,
 			originalType:       columnType,
-			columnIndex:        columnType.NewColumnIndexer(config.ColumnIndexSizeLimit),
+			columnIndex:        columnType.NewColumnIndexer(config.ColumnIndexSizeLimit(leaf.path)),
 			columnFilter:       searchBloomFilterColumn(config.BloomFilters, leaf.path),
 			compression:        compression,
 			dictionary:         dictionary,
