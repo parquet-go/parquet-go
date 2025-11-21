@@ -213,24 +213,23 @@ func (c *ReaderConfig) Validate() error {
 //		CreatedBy: "my test program",
 //	})
 type WriterConfig struct {
-	CreatedBy                     string
-	ColumnPageBuffers             BufferPool
-	ColumnIndexSizeLimit          int
-	ColumnIndexSizeLimitOverrides []ColumnIndexSizeOverride
-	PageBufferSize                int
-	WriteBufferSize               int
-	DataPageVersion               int
-	DataPageStatistics            bool
-	MaxRowsPerRowGroup            int64
-	KeyValueMetadata              map[string]string
-	Schema                        *Schema
-	BloomFilters                  []BloomFilterColumn
-	Compression                   compress.Codec
-	Sorting                       SortingConfig
-	SkipPageBounds                [][]string
-	Encodings                     map[Kind]encoding.Encoding
-	DictionaryMaxBytes            int64
-	SchemaConfig                  *SchemaConfig
+	CreatedBy            string
+	ColumnPageBuffers    BufferPool
+	ColumnIndexSizeLimit func(path []string) int
+	PageBufferSize       int
+	WriteBufferSize      int
+	DataPageVersion      int
+	DataPageStatistics   bool
+	MaxRowsPerRowGroup   int64
+	KeyValueMetadata     map[string]string
+	Schema               *Schema
+	BloomFilters         []BloomFilterColumn
+	Compression          compress.Codec
+	Sorting              SortingConfig
+	SkipPageBounds       [][]string
+	Encodings            map[Kind]encoding.Encoding
+	DictionaryMaxBytes   int64
+	SchemaConfig         *SchemaConfig
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -239,7 +238,7 @@ func DefaultWriterConfig() *WriterConfig {
 	return &WriterConfig{
 		CreatedBy:            defaultCreatedBy(),
 		ColumnPageBuffers:    &defaultColumnBufferPool,
-		ColumnIndexSizeLimit: DefaultColumnIndexSizeLimit,
+		ColumnIndexSizeLimit: func(path []string) int { return DefaultColumnIndexSizeLimit },
 		PageBufferSize:       DefaultPageBufferSize,
 		WriteBufferSize:      DefaultWriteBufferSize,
 		DataPageVersion:      DefaultDataPageVersion,
@@ -289,23 +288,22 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 	}
 
 	*config = WriterConfig{
-		CreatedBy:                     coalesceString(c.CreatedBy, config.CreatedBy),
-		ColumnPageBuffers:             coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
-		ColumnIndexSizeLimit:          coalesceInt(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
-		ColumnIndexSizeLimitOverrides: coalesceSlices(c.ColumnIndexSizeLimitOverrides, config.ColumnIndexSizeLimitOverrides),
-		PageBufferSize:                coalesceInt(c.PageBufferSize, config.PageBufferSize),
-		WriteBufferSize:               coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
-		DataPageVersion:               coalesceInt(c.DataPageVersion, config.DataPageVersion),
-		DataPageStatistics:            coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
-		MaxRowsPerRowGroup:            coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
-		KeyValueMetadata:              keyValueMetadata,
-		Schema:                        coalesceSchema(c.Schema, config.Schema),
-		BloomFilters:                  coalesceSlices(c.BloomFilters, config.BloomFilters),
-		Compression:                   coalesceCompression(c.Compression, config.Compression),
-		Sorting:                       coalesceSortingConfig(c.Sorting, config.Sorting),
-		SkipPageBounds:                coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
-		Encodings:                     encodings,
-		SchemaConfig:                  coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
+		CreatedBy:            coalesceString(c.CreatedBy, config.CreatedBy),
+		ColumnPageBuffers:    coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
+		ColumnIndexSizeLimit: coalesceColumnIndexLimit(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
+		PageBufferSize:       coalesceInt(c.PageBufferSize, config.PageBufferSize),
+		WriteBufferSize:      coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
+		DataPageVersion:      coalesceInt(c.DataPageVersion, config.DataPageVersion),
+		DataPageStatistics:   coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
+		MaxRowsPerRowGroup:   coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
+		KeyValueMetadata:     keyValueMetadata,
+		Schema:               coalesceSchema(c.Schema, config.Schema),
+		BloomFilters:         coalesceSlices(c.BloomFilters, config.BloomFilters),
+		Compression:          coalesceCompression(c.Compression, config.Compression),
+		Sorting:              coalesceSortingConfig(c.Sorting, config.Sorting),
+		SkipPageBounds:       coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
+		Encodings:            encodings,
+		SchemaConfig:         coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
 	}
 }
 
@@ -314,7 +312,6 @@ func (c *WriterConfig) Validate() error {
 	const baseName = "parquet.(*WriterConfig)."
 	return errorInvalidConfiguration(
 		validateNotNil(baseName+"ColumnPageBuffers", c.ColumnPageBuffers),
-		validatePositiveInt(baseName+"ColumnIndexSizeLimit", c.ColumnIndexSizeLimit),
 		validatePositiveInt(baseName+"PageBufferSize", c.PageBufferSize),
 		validateOneOfInt(baseName+"DataPageVersion", c.DataPageVersion, 1, 2),
 		c.Sorting.Validate(),
@@ -608,16 +605,12 @@ func ColumnPageBuffers(buffers BufferPool) WriterOption {
 }
 
 // ColumnIndexSizeLimit creates a configuration option to customize the size
-// limit of page boundaries recorded in column indexes.
+// limit of page boundaries recorded in column indexes. The result of the provided
+// function must be larger then 0.
 //
-// Defaults to 16.
-func ColumnIndexSizeLimit(sizeLimit int) WriterOption {
-	return writerOption(func(config *WriterConfig) { config.ColumnIndexSizeLimit = sizeLimit })
-}
-
-func ColumnIndexSizeLimitOverrides(limits ...ColumnIndexSizeOverride) WriterOption {
-	limits = slices.Clone(limits)
-	return writerOption(func(config *WriterConfig) { config.ColumnIndexSizeLimitOverrides = limits })
+// Defaults to the function that returns 16 for all paths.
+func ColumnIndexSizeLimit(f func(path []string) int) WriterOption {
+	return writerOption(func(config *WriterConfig) { config.ColumnIndexSizeLimit = f })
 }
 
 // DataPageVersion creates a configuration option which configures the version of
@@ -908,6 +901,13 @@ func coalesceSlices[T any](s1, s2 []T) []T {
 		return s1
 	}
 	return s2
+}
+
+func coalesceColumnIndexLimit(f1, f2 func([]string) int) func([]string) int {
+	if f1 != nil {
+		return f1
+	}
+	return f2
 }
 
 func coalesceBufferPool(p1, p2 BufferPool) BufferPool {
