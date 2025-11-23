@@ -34,10 +34,14 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplace
 	}
 
 	switch t {
-	case reflect.TypeOf(deprecated.Int96{}):
+	case reflect.TypeFor[deprecated.Int96]():
 		return writeRowsFuncOfRequired(t, schema, path)
-	case reflect.TypeOf(time.Time{}):
+	case reflect.TypeFor[time.Time]():
 		return writeRowsFuncOfTime(t, schema, path, tagReplacements)
+	case reflect.TypeFor[json.RawMessage]():
+		return writeRowsFuncFor[json.RawMessage](schema, path)
+	case reflect.TypeFor[json.Number]():
+		return writeRowsFuncFor[json.Number](schema, path)
 	}
 
 	switch t.Kind() {
@@ -342,7 +346,10 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagR
 			case kind == reflect.Slice && !list && f.Type.Elem().Kind() != reflect.Uint8:
 				// For slices other than []byte, optional applies
 				// to the element, not the list.
-			case f.Type == reflect.TypeOf(time.Time{}):
+			case f.Type == reflect.TypeFor[json.RawMessage]():
+				// json.RawMessage handles its own definition levels through
+				// writeRowsFuncOfJSONRawMessage -> writeValueFuncOf -> writeValueFuncOfOptional
+			case f.Type == reflect.TypeFor[time.Time]():
 				// time.Time is a struct but has IsZero() method,
 				// so it needs special handling.
 				// Don't use writeRowsFuncOfOptional which relies
@@ -429,7 +436,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 	// allocated on the heap.
 	var writeMaps writeRowsFunc
 	switch {
-	case t.ConvertibleTo(reflect.TypeOf((map[string]string)(nil))):
+	case t.ConvertibleTo(reflect.TypeFor[map[string]string]()):
 		writeMaps = func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 			buffer, _ := stringArrayPool.Get().(*stringArray)
 			if buffer == nil {
@@ -454,7 +461,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 			}
 		}
 
-	case t.ConvertibleTo(reflect.TypeOf((map[string]any)(nil))):
+	case t.ConvertibleTo(reflect.TypeFor[map[string]any]()):
 		writeMaps = func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 			for i := range rows.Len() {
 				m := *(*map[string]any)(reflect.NewAt(t, rows.Index(i)).UnsafePointer())
@@ -584,7 +591,7 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 	}
 
 	// Otherwise handle with a json.Marshal
-	asStrT := reflect.TypeOf(string(""))
+	asStrT := reflect.TypeFor[string]()
 	writer := writeRowsFuncOfRequired(asStrT, schema, path)
 
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
@@ -609,7 +616,7 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 }
 
 func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
-	t := reflect.TypeOf(int64(0))
+	t := reflect.TypeFor[int64]()
 	elemSize := uintptr(t.Size())
 	writeRows := writeRowsFuncOf(t, schema, path, tagReplacements)
 
@@ -669,6 +676,36 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagRep
 
 			a := makeArray(reflectValueData(reflect.ValueOf(val)), 1, elemSize)
 			writeRows(columns, elemLevels, a)
+		}
+	}
+}
+
+// countLeafColumns returns the number of leaf columns in a node
+func countLeafColumns(node Node) int16 {
+	if node.Leaf() {
+		return 1
+	}
+	count := int16(0)
+	for _, field := range node.Fields() {
+		count += countLeafColumns(field)
+	}
+	return count
+}
+
+func writeRowsFuncFor[T any](schema *Schema, path columnPath) writeRowsFunc {
+	node := findByPath(schema, path)
+	if node == nil {
+		panic("parquet: column not found: " + path.String())
+	}
+
+	columnIndex := findColumnIndex(schema, node, path)
+	_, writeValue := writeValueFuncOf(columnIndex, node)
+
+	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+		for i := range rows.Len() {
+			p := rows.Index(i)
+			v := reflect.ValueOf((*T)(p)).Elem()
+			writeValue(columns, levels, v)
 		}
 	}
 }
