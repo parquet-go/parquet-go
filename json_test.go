@@ -766,7 +766,7 @@ func BenchmarkJSONTokens(b *testing.B) {
 		b.Run(bm.name, func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(bm.input)))
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				for range jsonTokens(bm.input) {
 				}
 			}
@@ -828,7 +828,7 @@ func BenchmarkJSONTokensCollect(b *testing.B) {
 		b.Run(bm.name, func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(bm.input)))
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_ = slices.Collect(jsonTokens(bm.input))
 			}
 		})
@@ -890,7 +890,7 @@ func BenchmarkJSONParse(b *testing.B) {
 			data := []byte(bm.input)
 			b.ReportAllocs()
 			b.SetBytes(int64(len(data)))
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, err := jsonParse(data)
 				if err != nil {
 					b.Fatal(err)
