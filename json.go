@@ -118,6 +118,38 @@ func (v *jsonValue) lookup(k string) *jsonValue {
 	return nil
 }
 
+func (v *jsonValue) number() jsonNumberType {
+	return jsonNumberTypeOf(v.string())
+}
+
+type jsonNumberType int
+
+const (
+	jsonNumberTypeInt jsonNumberType = iota
+	jsonNumberTypeUint
+	jsonNumberTypeFloat
+)
+
+func jsonNumberTypeOf(s string) jsonNumberType {
+	if len(s) == 0 {
+		return jsonNumberTypeFloat
+	}
+	t := jsonNumberTypeUint
+	if s[0] == '-' {
+		s = s[1:]
+		t = jsonNumberTypeInt
+	}
+	for i := range len(s) {
+		switch s[i] {
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			continue
+		default:
+			return jsonNumberTypeFloat
+		}
+	}
+	return t
+}
+
 func jsonNullValue() jsonValue {
 	return jsonValue{n: uintptr(jsonNull) << jsonKindShift}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"time"
 )
 
@@ -20,12 +21,11 @@ func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonValue, node
 		col.writeBoolean(levels, val.kind() == jsonTrue)
 
 	case jsonNumber:
-		num := val.float()
-
 		if logicalType := typ.LogicalType(); logicalType != nil {
 			switch {
 			case logicalType.Timestamp != nil:
 				// Interpret number as seconds since Unix epoch (with sub-second precision)
+				num := val.float()
 				sec, frac := math.Modf(num)
 				t := time.Unix(int64(sec), int64(frac*1e9)).UTC()
 				writeTime(col, levels, t, node)
@@ -33,12 +33,13 @@ func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonValue, node
 
 			case logicalType.Date != nil:
 				// Interpret number as seconds since Unix epoch
-				t := time.Unix(int64(num), 0).UTC()
+				t := time.Unix(val.int(), 0).UTC()
 				writeTime(col, levels, t, node)
 				return
 
 			case logicalType.Time != nil:
 				// Interpret number as seconds since midnight
+				num := val.float()
 				d := time.Duration(num * float64(time.Second))
 				writeDuration(col, levels, d, node)
 				return
@@ -46,23 +47,21 @@ func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonValue, node
 		}
 
 		switch kind := typ.Kind(); kind {
-		case ByteArray:
-			buf := buffers.get(64)
-			buf.data = jsonFormat(buf.data[:0], val)
-			col.writeByteArray(levels, buf.data)
-			buf.unref()
 		case Boolean:
-			col.writeBoolean(levels, num != 0)
-		case Int32:
-			col.writeInt32(levels, int32(num))
-		case Int64:
-			col.writeInt64(levels, int64(num))
-		case Float:
-			col.writeFloat(levels, float32(num))
-		case Double:
-			col.writeDouble(levels, num)
+			col.writeBoolean(levels, val.float() != 0)
+		case Int32, Int64:
+			switch val.number() {
+			case jsonNumberTypeInt:
+				col.writeInt64(levels, val.int())
+			case jsonNumberTypeUint:
+				col.writeInt64(levels, int64(val.uint()))
+			case jsonNumberTypeFloat:
+				col.writeDouble(levels, val.float())
+			}
+		case Float, Double:
+			col.writeDouble(levels, val.float())
 		default:
-			panic(fmt.Errorf("cannot write JSON number to column with type %v", kind))
+			col.writeByteArray(levels, unsafeByteArrayFromString(val.string()))
 		}
 
 	case jsonString:
@@ -159,45 +158,61 @@ func writeJSONToRepeated(columns []ColumnBuffer, levels columnLevels, val *jsonV
 
 func writeJSONNumber(col ColumnBuffer, levels columnLevels, num json.Number, node Node) {
 	typ := node.Type()
+	str := num.String()
 
 	switch kind := typ.Kind(); kind {
-	case ByteArray:
-		// Default: write as string representation
-		col.writeByteArray(levels, unsafeByteArrayFromString(num.String()))
 	case Boolean:
-		// Try to parse as int64 first, then float64
-		if i, err := num.Int64(); err == nil {
+		switch jsonNumberTypeOf(str) {
+		case jsonNumberTypeInt:
+			i, err := num.Int64()
+			if err != nil {
+				panic(fmt.Errorf("cannot convert json.Number %q to boolean: %w", num, err))
+			}
 			col.writeBoolean(levels, i != 0)
-		} else if f, err := num.Float64(); err == nil {
+		case jsonNumberTypeUint:
+			u, err := strconv.ParseUint(str, 10, 64)
+			if err != nil {
+				panic(fmt.Errorf("cannot convert json.Number %q to boolean: %w", num, err))
+			}
+			col.writeBoolean(levels, u != 0)
+		case jsonNumberTypeFloat:
+			f, err := num.Float64()
+			if err != nil {
+				panic(fmt.Errorf("cannot convert json.Number %q to boolean: %w", num, err))
+			}
 			col.writeBoolean(levels, f != 0)
-		} else {
-			panic(fmt.Errorf("cannot convert json.Number %q to boolean: %w", num, err))
 		}
-	case Int32:
-		i, err := num.Int64()
-		if err != nil {
-			panic(fmt.Errorf("cannot convert json.Number %q to int32: %w", num, err))
+
+	case Int32, Int64:
+		switch jsonNumberTypeOf(str) {
+		case jsonNumberTypeInt:
+			i, err := num.Int64()
+			if err != nil {
+				panic(fmt.Errorf("cannot convert json.Number %q to int: %w", num, err))
+			}
+			col.writeInt64(levels, i)
+		case jsonNumberTypeUint:
+			u, err := strconv.ParseUint(str, 10, 64)
+			if err != nil {
+				panic(fmt.Errorf("cannot convert json.Number %q to int: %w", num, err))
+			}
+			col.writeInt64(levels, int64(u))
+		case jsonNumberTypeFloat:
+			f, err := num.Float64()
+			if err != nil {
+				panic(fmt.Errorf("cannot convert json.Number %q to float: %w", num, err))
+			}
+			col.writeInt64(levels, int64(f))
 		}
-		col.writeInt32(levels, int32(i))
-	case Int64:
-		i, err := num.Int64()
-		if err != nil {
-			panic(fmt.Errorf("cannot convert json.Number %q to int64: %w", num, err))
-		}
-		col.writeInt64(levels, i)
-	case Float:
-		f, err := num.Float64()
-		if err != nil {
-			panic(fmt.Errorf("cannot convert json.Number %q to float32: %w", num, err))
-		}
-		col.writeFloat(levels, float32(f))
-	case Double:
+
+	case Float, Double:
 		f, err := num.Float64()
 		if err != nil {
 			panic(fmt.Errorf("cannot convert json.Number %q to float64: %w", num, err))
 		}
 		col.writeDouble(levels, f)
+
 	default:
-		panic(fmt.Errorf("cannot write json.Number to column with type %v", kind))
+		col.writeByteArray(levels, unsafeByteArrayFromString(str))
 	}
 }
