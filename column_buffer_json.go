@@ -6,8 +6,6 @@ import (
 	"math"
 	"reflect"
 	"time"
-
-	jsoniter "github.com/json-iterator/go"
 )
 
 func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonValue, node Node) {
@@ -49,10 +47,10 @@ func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonValue, node
 
 		switch kind := typ.Kind(); kind {
 		case ByteArray:
-			stream := jsoniter.ConfigFastest.BorrowStream(nil)
-			jsonFormat(stream, val)
-			col.writeByteArray(levels, stream.Buffer())
-			jsoniter.ConfigFastest.ReturnStream(stream)
+			buf := buffers.get(64)
+			buf.data = jsonFormat(buf.data[:0], val)
+			col.writeByteArray(levels, buf.data)
+			buf.unref()
 		case Boolean:
 			col.writeBoolean(levels, num != 0)
 		case Int32:
@@ -107,10 +105,10 @@ func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonValue, node
 	default:
 		// Nested objects/arrays shouldn't appear in leaf nodes, but if they do,
 		// serialize back to JSON bytes for BYTE_ARRAY columns
-		stream := jsoniter.ConfigFastest.BorrowStream(nil)
-		jsonFormat(stream, val)
-		col.writeByteArray(levels, stream.Buffer())
-		jsoniter.ConfigFastest.ReturnStream(stream)
+		buf := buffers.get(256)
+		buf.data = jsonFormat(buf.data[:0], val)
+		col.writeByteArray(levels, buf.data)
+		buf.unref()
 	}
 }
 

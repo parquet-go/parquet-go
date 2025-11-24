@@ -4,6 +4,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -179,44 +180,48 @@ func jsonParseIterator(iter *jsoniter.Iterator) jsonValue {
 	}
 }
 
-func jsonFormat(stream *jsoniter.Stream, val *jsonValue) {
+func jsonFormat(buf []byte, val *jsonValue) []byte {
 	switch val.kind() {
 	case jsonNull:
-		stream.WriteNil()
+		return append(buf, "null"...)
 
 	case jsonTrue:
-		stream.WriteBool(true)
+		return append(buf, "true"...)
 
 	case jsonFalse:
-		stream.WriteBool(false)
+		return append(buf, "false"...)
 
 	case jsonNumber:
-		stream.WriteFloat64(val.float())
+		return strconv.AppendFloat(buf, val.float(), 'g', -1, 64)
 
 	case jsonString:
-		stream.WriteString(val.string())
+		return strconv.AppendQuote(buf, val.string())
 
 	case jsonArray:
-		stream.WriteArrayStart()
+		buf = append(buf, '[')
 		array := val.array()
 		for i := range array {
 			if i > 0 {
-				stream.WriteMore()
+				buf = append(buf, ',')
 			}
-			jsonFormat(stream, &array[i])
+			buf = jsonFormat(buf, &array[i])
 		}
-		stream.WriteArrayEnd()
+		return append(buf, ']')
 
 	case jsonObject:
-		stream.WriteObjectStart()
+		buf = append(buf, '{')
 		fields := val.object()
 		for i := range fields {
 			if i > 0 {
-				stream.WriteMore()
+				buf = append(buf, ',')
 			}
-			stream.WriteObjectField(fields[i].key)
-			jsonFormat(stream, &fields[i].val)
+			buf = strconv.AppendQuote(buf, fields[i].key)
+			buf = append(buf, ':')
+			buf = jsonFormat(buf, &fields[i].val)
 		}
-		stream.WriteObjectEnd()
+		return append(buf, '}')
+
+	default:
+		return buf
 	}
 }

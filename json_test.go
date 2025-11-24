@@ -2,8 +2,6 @@ package parquet
 
 import (
 	"testing"
-
-	jsoniter "github.com/json-iterator/go"
 )
 
 func TestJSONParseNull(t *testing.T) {
@@ -223,10 +221,7 @@ func TestJSONSerializeRoundTrip(t *testing.T) {
 			t.Fatalf("parse %q: %v", input, err)
 		}
 
-		stream := jsoniter.ConfigFastest.BorrowStream(nil)
-		jsonFormat(stream, val)
-		serialized := stream.Buffer()
-		jsoniter.ConfigFastest.ReturnStream(stream)
+		serialized := jsonFormat(nil, val)
 
 		val2, err := jsonParse(serialized)
 		if err != nil {

@@ -68,10 +68,10 @@ func writeProtoDuration(col ColumnBuffer, levels columnLevels, dur *durationpb.D
 }
 
 func writeProtoStruct(col ColumnBuffer, levels columnLevels, s *structpb.Struct, node Node) {
-	var json []byte
-	json = make([]byte, 0, 2*proto.Size(s))
-	json = appendProtoStructJSON(json, s)
-	col.writeByteArray(levels, json)
+	buf := buffers.get(2 * proto.Size(s))
+	buf.data = appendProtoStructJSON(buf.data[:0], s)
+	col.writeByteArray(levels, buf.data)
+	buf.unref()
 }
 
 func appendProtoStructJSON(b []byte, s *structpb.Struct) []byte {
