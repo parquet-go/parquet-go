@@ -8,11 +8,17 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/jsonlite"
 )
 
+var jsonNull jsonlite.Value
+
 func jsonParse(data []byte) (*jsonlite.Value, error) {
-	return jsonlite.Parse(string(data))
+	if len(data) == 0 {
+		return &jsonNull, nil
+	}
+	return jsonlite.Parse(unsafecast.String(data))
 }
 
 func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonlite.Value, node Node) {
@@ -57,8 +63,7 @@ func writeJSONToGroup(columns []ColumnBuffer, levels columnLevels, val *jsonlite
 
 func writeJSONToRepeated(columns []ColumnBuffer, levels columnLevels, val *jsonlite.Value, elementWriter writeValueFunc) {
 	if val.Kind() == jsonlite.Array {
-		array := val.Array()
-		if len(array) == 0 {
+		if val.Len() == 0 {
 			elementWriter(columns, levels, reflect.Value{})
 			return
 		}
@@ -66,8 +71,8 @@ func writeJSONToRepeated(columns []ColumnBuffer, levels columnLevels, val *jsonl
 		levels.repetitionDepth++
 		levels.definitionLevel++
 
-		for i := range array {
-			elementWriter(columns, levels, reflect.ValueOf(&array[i]))
+		for elem := range val.Array() {
+			elementWriter(columns, levels, reflect.ValueOf(elem))
 			levels.repetitionLevel = levels.repetitionDepth
 		}
 		return
