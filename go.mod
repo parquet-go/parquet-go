@@ -13,4 +13,4 @@ require (
 	google.golang.org/protobuf v1.34.2
 )
 
-require github.com/parquet-go/jsonlite v0.1.0
+require github.com/parquet-go/jsonlite v0.2.0
