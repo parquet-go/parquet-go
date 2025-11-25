@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 	"google.golang.org/protobuf/proto"
@@ -319,7 +320,7 @@ func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFu
 		}
 
 		switch msg := value.Interface().(type) {
-		case *jsonValue:
+		case *jsonlite.Value:
 			writeJSONToRepeated(columns, levels, msg, writeValue)
 			return
 
@@ -546,7 +547,7 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 			}
 
 			switch msg := value.Interface().(type) {
-			case *jsonValue:
+			case *jsonlite.Value:
 				writeJSONToGroup(columns, levels, msg, node, writers)
 			case *structpb.Struct:
 				var fields map[string]*structpb.Value
@@ -609,7 +610,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 					return
 				}
 				switch msg := value.Interface().(type) {
-				case *jsonValue:
+				case *jsonlite.Value:
 					writeJSONToLeaf(col, levels, msg, node)
 				case *json.Number:
 					writeJSONNumber(col, levels, *msg, node)

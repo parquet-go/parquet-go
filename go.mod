@@ -12,3 +12,5 @@ require (
 	golang.org/x/sys v0.37.0
 	google.golang.org/protobuf v1.34.2
 )
+
+require github.com/parquet-go/jsonlite v0.1.0

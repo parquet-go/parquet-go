@@ -7,31 +7,36 @@ import (
 	"reflect"
 	"strconv"
 	"time"
+
+	"github.com/parquet-go/jsonlite"
 )
 
-func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonValue, node Node) {
-	switch val.kind() {
-	case jsonNull:
+func jsonParse(data []byte) (*jsonlite.Value, error) {
+	return jsonlite.Parse(string(data))
+}
+
+func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonlite.Value, node Node) {
+	switch val.Kind() {
+	case jsonlite.Null:
 		col.writeNull(levels)
-	case jsonTrue, jsonFalse:
-		col.writeBoolean(levels, val.kind() == jsonTrue)
-	case jsonNumber:
-		writeJSONNumber(col, levels, json.Number(val.string()), node)
-	case jsonString:
-		writeJSONString(col, levels, val.string(), node)
+	case jsonlite.True, jsonlite.False:
+		col.writeBoolean(levels, val.Kind() == jsonlite.True)
+	case jsonlite.Number:
+		writeJSONNumber(col, levels, json.Number(val.String()), node)
+	case jsonlite.String:
+		writeJSONString(col, levels, val.String(), node)
 	default:
 		// Nested objects/arrays shouldn't appear in leaf nodes, but if they do,
 		// serialize back to JSON bytes for BYTE_ARRAY columns
 		buf := buffers.get(256)
-		buf.data = jsonFormat(buf.data[:0], val)
+		buf.data = val.Append(buf.data[:0])
 		col.writeByteArray(levels, buf.data)
 		buf.unref()
 	}
 }
 
-func writeJSONToGroup(columns []ColumnBuffer, levels columnLevels, val *jsonValue, node Node, writers []fieldWriter) {
-
-	if val.kind() != jsonObject {
+func writeJSONToGroup(columns []ColumnBuffer, levels columnLevels, val *jsonlite.Value, node Node, writers []fieldWriter) {
+	if val.Kind() != jsonlite.Object {
 		for i := range writers {
 			w := &writers[i]
 			w.writeValue(columns, levels, reflect.Value{})
@@ -41,7 +46,7 @@ func writeJSONToGroup(columns []ColumnBuffer, levels columnLevels, val *jsonValu
 
 	for i := range writers {
 		w := &writers[i]
-		f := val.lookup(w.fieldName)
+		f := val.Lookup(w.fieldName)
 		if f == nil {
 			w.writeValue(columns, levels, reflect.Value{})
 		} else {
@@ -50,9 +55,9 @@ func writeJSONToGroup(columns []ColumnBuffer, levels columnLevels, val *jsonValu
 	}
 }
 
-func writeJSONToRepeated(columns []ColumnBuffer, levels columnLevels, val *jsonValue, elementWriter writeValueFunc) {
-	if val.kind() == jsonArray {
-		array := val.array()
+func writeJSONToRepeated(columns []ColumnBuffer, levels columnLevels, val *jsonlite.Value, elementWriter writeValueFunc) {
+	if val.Kind() == jsonlite.Array {
+		array := val.Array()
 		if len(array) == 0 {
 			elementWriter(columns, levels, reflect.Value{})
 			return
@@ -160,20 +165,20 @@ func writeJSONNumber(col ColumnBuffer, levels columnLevels, num json.Number, nod
 		col.writeBoolean(levels, f != 0)
 
 	case Int32, Int64:
-		switch jsonNumberTypeOf(str) {
-		case jsonNumberTypeInt:
+		switch jsonlite.NumberTypeOf(str) {
+		case jsonlite.Int:
 			i, err := num.Int64()
 			if err != nil {
 				panic(fmt.Errorf("cannot convert json.Number %q to int: %w", num, err))
 			}
 			col.writeInt64(levels, i)
-		case jsonNumberTypeUint:
+		case jsonlite.Uint:
 			u, err := strconv.ParseUint(str, 10, 64)
 			if err != nil {
 				panic(fmt.Errorf("cannot convert json.Number %q to int: %w", num, err))
 			}
 			col.writeInt64(levels, int64(u))
-		case jsonNumberTypeFloat:
+		case jsonlite.Float:
 			f, err := num.Float64()
 			if err != nil {
 				panic(fmt.Errorf("cannot convert json.Number %q to float: %w", num, err))
