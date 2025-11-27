@@ -16,14 +16,15 @@ const (
 	optional flags = 1 << 3
 	strict   flags = 1 << 4
 
-	featuresBitOffset  = 8
-	useDeltaEncoding   = flags(UseDeltaEncoding) << featuresBitOffset
-	coalesceBoolFields = flags(CoalesceBoolFields) << featuresBitOffset
+	featuresBitOffset       = 8
+	useDeltaEncoding        = flags(UseDeltaEncoding) << featuresBitOffset
+	coalesceBoolFields      = flags(CoalesceBoolFields) << featuresBitOffset
+	writeZeroOptionalFields = flags(WriteZeroOptionalFields) << featuresBitOffset
 
 	structFlags   flags = enum | union | required | optional
 	encodeFlags   flags = strict | protocolFlags
 	decodeFlags   flags = strict | protocolFlags
-	protocolFlags flags = useDeltaEncoding | coalesceBoolFields
+	protocolFlags flags = useDeltaEncoding | coalesceBoolFields | writeZeroOptionalFields
 )
 
 func (f flags) have(x flags) bool {

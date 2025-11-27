@@ -278,7 +278,7 @@ encodeFields:
 			}
 		}
 
-		if !f.flags.have(required) && x.IsZero() {
+		if !f.flags.have(required) && x.IsZero() && !flags.have(writeZeroOptionalFields) {
 			continue encodeFields
 		}
 

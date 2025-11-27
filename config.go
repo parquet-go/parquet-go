@@ -226,25 +226,27 @@ type WriterConfig struct {
 	BloomFilters         []BloomFilterColumn
 	Compression          compress.Codec
 	Sorting              SortingConfig
-	SkipPageBounds       [][]string
-	Encodings            map[Kind]encoding.Encoding
-	DictionaryMaxBytes   int64
-	SchemaConfig         *SchemaConfig
+	SkipPageBounds          [][]string
+	Encodings               map[Kind]encoding.Encoding
+	DictionaryMaxBytes      int64
+	SchemaConfig            *SchemaConfig
+	WriteZeroOptionalFields bool
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
 // default writer configuration.
 func DefaultWriterConfig() *WriterConfig {
 	return &WriterConfig{
-		CreatedBy:            defaultCreatedBy(),
-		ColumnPageBuffers:    &defaultColumnBufferPool,
-		ColumnIndexSizeLimit: DefaultColumnIndexSizeLimit,
-		PageBufferSize:       DefaultPageBufferSize,
-		WriteBufferSize:      DefaultWriteBufferSize,
-		DataPageVersion:      DefaultDataPageVersion,
-		DataPageStatistics:   DefaultDataPageStatistics,
-		MaxRowsPerRowGroup:   DefaultMaxRowsPerRowGroup,
-		SchemaConfig:         DefaultSchemaConfig(),
+		CreatedBy:               defaultCreatedBy(),
+		ColumnPageBuffers:       &defaultColumnBufferPool,
+		ColumnIndexSizeLimit:    DefaultColumnIndexSizeLimit,
+		PageBufferSize:          DefaultPageBufferSize,
+		WriteBufferSize:         DefaultWriteBufferSize,
+		DataPageVersion:         DefaultDataPageVersion,
+		DataPageStatistics:      DefaultDataPageStatistics,
+		MaxRowsPerRowGroup:      DefaultMaxRowsPerRowGroup,
+		SchemaConfig:            DefaultSchemaConfig(),
+		WriteZeroOptionalFields: false,
 		Sorting: SortingConfig{
 			SortingBuffers: &defaultSortingBufferPool,
 		},
@@ -288,22 +290,23 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 	}
 
 	*config = WriterConfig{
-		CreatedBy:            coalesceString(c.CreatedBy, config.CreatedBy),
-		ColumnPageBuffers:    coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
-		ColumnIndexSizeLimit: coalesceInt(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
-		PageBufferSize:       coalesceInt(c.PageBufferSize, config.PageBufferSize),
-		WriteBufferSize:      coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
-		DataPageVersion:      coalesceInt(c.DataPageVersion, config.DataPageVersion),
-		DataPageStatistics:   coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
-		MaxRowsPerRowGroup:   coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
-		KeyValueMetadata:     keyValueMetadata,
-		Schema:               coalesceSchema(c.Schema, config.Schema),
-		BloomFilters:         coalesceBloomFilters(c.BloomFilters, config.BloomFilters),
-		Compression:          coalesceCompression(c.Compression, config.Compression),
-		Sorting:              coalesceSortingConfig(c.Sorting, config.Sorting),
-		SkipPageBounds:       coalesceSkipPageBounds(c.SkipPageBounds, config.SkipPageBounds),
-		Encodings:            encodings,
-		SchemaConfig:         coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
+		CreatedBy:               coalesceString(c.CreatedBy, config.CreatedBy),
+		ColumnPageBuffers:       coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
+		ColumnIndexSizeLimit:    coalesceInt(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
+		PageBufferSize:          coalesceInt(c.PageBufferSize, config.PageBufferSize),
+		WriteBufferSize:         coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
+		DataPageVersion:         coalesceInt(c.DataPageVersion, config.DataPageVersion),
+		DataPageStatistics:      coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
+		MaxRowsPerRowGroup:      coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
+		KeyValueMetadata:        keyValueMetadata,
+		Schema:                  coalesceSchema(c.Schema, config.Schema),
+		BloomFilters:            coalesceBloomFilters(c.BloomFilters, config.BloomFilters),
+		Compression:             coalesceCompression(c.Compression, config.Compression),
+		Sorting:                 coalesceSortingConfig(c.Sorting, config.Sorting),
+		SkipPageBounds:          coalesceSkipPageBounds(c.SkipPageBounds, config.SkipPageBounds),
+		Encodings:               encodings,
+		SchemaConfig:            coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
+		WriteZeroOptionalFields: coalesceBool(c.WriteZeroOptionalFields, config.WriteZeroOptionalFields),
 	}
 }
 
@@ -686,6 +689,18 @@ func SortingWriterConfig(options ...SortingOption) WriterOption {
 // This option is additive, it may be used multiple times to skip multiple columns.
 func SkipPageBounds(path ...string) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.SkipPageBounds = append(config.SkipPageBounds, path) })
+}
+
+// WriteZeroOptionalFields creates a configuration option which forces the writer
+// to always encode optional thrift fields even when they have zero values.
+// This is useful for compatibility with systems like Snowflake that require
+// explicit null counts in statistics even when they are zero.
+//
+// Defaults to false (zero-valued optional fields are omitted).
+func WriteZeroOptionalFields(enabled bool) WriterOption {
+	return writerOption(func(config *WriterConfig) {
+		config.WriteZeroOptionalFields = enabled
+	})
 }
 
 // DefaultEncodingFor creates a configuration option which sets the default encoding
