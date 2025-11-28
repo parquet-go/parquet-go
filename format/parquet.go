@@ -148,7 +148,7 @@ type Statistics struct {
 	Max []byte `thrift:"1"`
 	Min []byte `thrift:"2"`
 	// Count of null value in the column.
-	NullCount int64 `thrift:"3"`
+	NullCount int64 `thrift:"3,required"`
 	// Count of distinct values occurring.
 	DistinctCount int64 `thrift:"4"`
 	// Min and max values for the column, determined by its ColumnOrder.
