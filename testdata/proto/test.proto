@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package testproto;
+
+option go_package = "github.com/parquet-go/parquet-go/testdata/gen/go;testproto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/any.proto";
+
+// ProtoMetadata mirrors a Go struct with time.Time fields
+// Used to test proto.Message interface handling
+message ProtoMetadata {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Timestamp updated_at = 2;
+}
+
+// ProtoEvent mirrors a Go struct with timestamp and duration
+message ProtoEvent {
+  int64 id = 1;
+  string name = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  google.protobuf.Duration duration = 4;
+}
+
+// ProtoNested has nested message field
+message ProtoNested {
+  int64 id = 1;
+  string name = 2;
+  ProtoMetadata metadata = 3;
+}
+
+// ProtoWithWrappers has wrapper type fields
+message ProtoWithWrappers {
+  int64 id = 1;
+  google.protobuf.BoolValue active = 2;
+  google.protobuf.Int64Value count = 3;
+  google.protobuf.StringValue label = 4;
+}
+
+// ProtoWithRepeated has repeated fields
+message ProtoWithRepeated {
+  int64 id = 1;
+  repeated google.protobuf.Timestamp timestamps = 2;
+  repeated google.protobuf.Duration durations = 3;
+}
+
+// ProtoWithMap has map fields
+message ProtoWithMap {
+  int64 id = 1;
+  map<string, google.protobuf.Timestamp> timestamp_map = 2;
+  map<string, string> string_map = 3;
+}
+
+// ProtoPayload is a simple message that can be packed into Any
+message ProtoPayload {
+  int64 id = 1;
+  string message = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+// ProtoWithAny has an Any field that should map to a nested group
+message ProtoWithAny {
+  int64 id = 1;
+  string name = 2;
+  google.protobuf.Any payload = 3;
+}
+
+// ProtoWithOptionalAny has an optional Any field
+message ProtoWithOptionalAny {
+  int64 id = 1;
+  optional google.protobuf.Any data = 2;
+}
+
+// ProtoWithRepeatedAny has repeated Any fields
+message ProtoWithRepeatedAny {
+  int64 id = 1;
+  repeated google.protobuf.Any items = 2;
+}
