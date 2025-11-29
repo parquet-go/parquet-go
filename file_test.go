@@ -510,6 +510,8 @@ func TestReadDictionaryPage(t *testing.T) {
 				}
 				foundRows++
 			}
+
+			parquet.Release(page)
 		}
 
 		pages.Close()
