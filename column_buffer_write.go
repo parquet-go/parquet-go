@@ -29,8 +29,11 @@ type writeRowsFunc func(columns []ColumnBuffer, levels columnLevels, rows sparse
 // parquet schema. The column path indicates the column that the function is
 // being generated for in the parquet schema.
 func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
-	if leaf, exists := schema.Lookup(path...); exists && leaf.Node.Type().LogicalType() != nil && leaf.Node.Type().LogicalType().Json != nil {
-		return writeRowsFuncOfJSON(t, schema, path)
+	if leaf, exists := schema.Lookup(path...); exists {
+		logicalType := leaf.Node.Type().LogicalType()
+		if logicalType != nil && logicalType.Json != nil {
+			return writeRowsFuncOfJSON(t, schema, path)
+		}
 	}
 
 	switch t {
@@ -590,27 +593,27 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 		}
 	}
 
-	// Otherwise handle with a json.Marshal
-	asStrT := reflect.TypeFor[string]()
-	writer := writeRowsFuncOfRequired(asStrT, schema, path)
-
+	columnIndex := findColumnIndex(schema, schema, path)
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
-			writer(columns, levels, rows)
+			columns[columnIndex].writeNull(levels)
 			return
 		}
+
+		buf := buffers.get(8192)
+		defer buf.unref()
+
+		enc := json.NewEncoder(bytesBufferWriter{buf: buf})
+
 		for i := range rows.Len() {
 			val := reflect.NewAt(t, rows.Index(i))
-			asI := val.Interface()
+			buf.reset()
 
-			b, err := json.Marshal(asI)
-			if err != nil {
+			if err := enc.Encode(val.Interface()); err != nil {
 				panic(err)
 			}
 
-			asStr := string(b)
-			a := sparse.MakeStringArray([]string{asStr})
-			writer(columns, levels, a.UnsafeArray())
+			columns[columnIndex].writeByteArray(levels, buf.data)
 		}
 	}
 }

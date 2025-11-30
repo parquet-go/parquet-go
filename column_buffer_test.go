@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -912,4 +913,726 @@ func TestGenericWriterMapMapToNestedGroupSchema(t *testing.T) {
 	if result2.Nested.Group2.X != "" || result2.Nested.Group2.Y != "" {
 		t.Errorf("row 2 Group2 should be empty: %+v", result2.Nested.Group2)
 	}
+}
+
+// TestWriteCompositeTypesToJSONByteArray tests that various composite Go types
+// (maps, structs, slices) are properly JSON serialized when written to a byte array
+// column with JSON logical type.
+func TestWriteCompositeTypesToJSONByteArray(t *testing.T) {
+	t.Run("MapStringAny", func(t *testing.T) {
+		type ReadRecord struct {
+			ID   int64
+			Data []byte `parquet:"data,json"`
+		}
+		schema := SchemaOf(ReadRecord{})
+
+		type WriteRecord struct {
+			ID   int64
+			Data map[string]any `parquet:"data"`
+		}
+
+		data := []WriteRecord{
+			{
+				ID: 1,
+				Data: map[string]any{
+					"name":   "Alice",
+					"age":    30.0,
+					"active": true,
+				},
+			},
+			{
+				ID: 2,
+				Data: map[string]any{
+					"name": "Bob",
+					"age":  25.0,
+				},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[WriteRecord](buf, schema)
+
+		n, err := writer.Write(data)
+		if err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		if n != 2 {
+			t.Fatalf("expected to write 2 rows, wrote %d", n)
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatalf("failed to close writer: %v", err)
+		}
+
+		// Read back as []byte
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var result1 ReadRecord
+		if err := reader.Read(&result1); err != nil {
+			t.Fatalf("failed to read row 1: %v", err)
+		}
+
+		// Verify it's valid JSON
+		var unmarshaled1 map[string]any
+		if err := json.Unmarshal(result1.Data, &unmarshaled1); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if unmarshaled1["name"] != "Alice" || unmarshaled1["age"] != 30.0 || unmarshaled1["active"] != true {
+			t.Errorf("row 1 data incorrect: %+v", unmarshaled1)
+		}
+
+		var result2 ReadRecord
+		if err := reader.Read(&result2); err != nil {
+			t.Fatalf("failed to read row 2: %v", err)
+		}
+
+		var unmarshaled2 map[string]any
+		if err := json.Unmarshal(result2.Data, &unmarshaled2); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if unmarshaled2["name"] != "Bob" || unmarshaled2["age"] != 25.0 {
+			t.Errorf("row 2 data incorrect: %+v", unmarshaled2)
+		}
+	})
+
+	t.Run("MapStringString", func(t *testing.T) {
+		type ReadRecord struct {
+			ID       int64  `parquet:"id"`
+			Metadata []byte `parquet:"metadata,json"`
+		}
+		schema := SchemaOf(ReadRecord{})
+
+		type WriteRecord struct {
+			ID       int64              `parquet:"id"`
+			Metadata map[string]string `parquet:"metadata"`
+		}
+
+		data := []WriteRecord{
+			{
+				ID: 1,
+				Metadata: map[string]string{
+					"env":     "production",
+					"version": "1.2.3",
+				},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[WriteRecord](buf, schema)
+
+		if _, err := writer.Write(data); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		writer.Close()
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var result ReadRecord
+		if err := reader.Read(&result); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		var unmarshaled map[string]string
+		if err := json.Unmarshal(result.Metadata, &unmarshaled); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if unmarshaled["env"] != "production" || unmarshaled["version"] != "1.2.3" {
+			t.Errorf("metadata incorrect: %+v", unmarshaled)
+		}
+	})
+
+	t.Run("Struct", func(t *testing.T) {
+		type Metadata struct {
+			Name string
+			Age  int
+			Tags []string
+		}
+
+		type ReadRecord struct {
+			ID       int64  `parquet:"id"`
+			Metadata []byte `parquet:"metadata,json"`
+		}
+		schema := SchemaOf(ReadRecord{})
+
+		type WriteRecord struct {
+			ID       int64    `parquet:"id"`
+			Metadata Metadata `parquet:"metadata"`
+		}
+
+		data := []WriteRecord{
+			{
+				ID: 1,
+				Metadata: Metadata{
+					Name: "Alice",
+					Age:  30,
+					Tags: []string{"admin", "user"},
+				},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[WriteRecord](buf, schema)
+
+		if _, err := writer.Write(data); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		writer.Close()
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var result ReadRecord
+		if err := reader.Read(&result); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		var unmarshaled Metadata
+		if err := json.Unmarshal(result.Metadata, &unmarshaled); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if unmarshaled.Name != "Alice" || unmarshaled.Age != 30 || len(unmarshaled.Tags) != 2 {
+			t.Errorf("metadata incorrect: %+v", unmarshaled)
+		}
+	})
+
+	t.Run("Slice", func(t *testing.T) {
+		type ReadRecord struct {
+			ID    int64  `parquet:"id"`
+			Items []byte `parquet:"items,json"`
+		}
+		schema := SchemaOf(ReadRecord{})
+
+		type WriteRecord struct {
+			ID    int64 `parquet:"id"`
+			Items []int `parquet:"items"`
+		}
+
+		data := []WriteRecord{
+			{
+				ID:    1,
+				Items: []int{10, 20, 30, 40},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[WriteRecord](buf, schema)
+
+		if _, err := writer.Write(data); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		writer.Close()
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var result ReadRecord
+		if err := reader.Read(&result); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		var unmarshaled []int
+		if err := json.Unmarshal(result.Items, &unmarshaled); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if !reflect.DeepEqual(unmarshaled, []int{10, 20, 30, 40}) {
+			t.Errorf("items incorrect: %+v", unmarshaled)
+		}
+	})
+
+	t.Run("NestedSliceOfMaps", func(t *testing.T) {
+		type ReadRecord struct {
+			ID    int64  `parquet:"id"`
+			Items []byte `parquet:"items,json"`
+		}
+		schema := SchemaOf(ReadRecord{})
+
+		type WriteRecord struct {
+			ID    int64              `parquet:"id"`
+			Items []map[string]any `parquet:"items"`
+		}
+
+		data := []WriteRecord{
+			{
+				ID: 1,
+				Items: []map[string]any{
+					{"name": "item1", "count": 5.0},
+					{"name": "item2", "count": 10.0},
+				},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[WriteRecord](buf, schema)
+
+		if _, err := writer.Write(data); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		writer.Close()
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var result ReadRecord
+		if err := reader.Read(&result); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		var unmarshaled []map[string]any
+		if err := json.Unmarshal(result.Items, &unmarshaled); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if len(unmarshaled) != 2 {
+			t.Errorf("expected 2 items, got %d", len(unmarshaled))
+		}
+		if unmarshaled[0]["name"] != "item1" || unmarshaled[0]["count"] != 5.0 {
+			t.Errorf("item 0 incorrect: %+v", unmarshaled[0])
+		}
+	})
+
+	t.Run("ComplexStruct", func(t *testing.T) {
+		type ComplexData struct {
+			Name   string
+			Values []int
+			Meta   map[string]string
+		}
+
+		type ReadRecord struct {
+			ID   int64
+			Data []byte `parquet:"data,json"`
+		}
+		schema := SchemaOf(ReadRecord{})
+
+		type WriteRecord struct {
+			ID   int64
+			Data ComplexData `parquet:"data"`
+		}
+
+		data := []WriteRecord{
+			{
+				ID: 1,
+				Data: ComplexData{
+					Name:   "complex",
+					Values: []int{1, 2, 3},
+					Meta:   map[string]string{"key": "value"},
+				},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[WriteRecord](buf, schema)
+
+		if _, err := writer.Write(data); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		writer.Close()
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var result ReadRecord
+		if err := reader.Read(&result); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		var unmarshaled ComplexData
+		if err := json.Unmarshal(result.Data, &unmarshaled); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if unmarshaled.Name != "complex" || len(unmarshaled.Values) != 3 || unmarshaled.Meta["key"] != "value" {
+			t.Errorf("complex data incorrect: %+v", unmarshaled)
+		}
+	})
+}
+
+// TestWriteInterfaceTypeToJSONByteArray tests that an `any` (interface{}) field
+// containing various types is properly JSON serialized to a byte array column.
+func TestWriteInterfaceTypeToJSONByteArray(t *testing.T) {
+	type ReadRecord struct {
+		ID   int64
+		Data []byte `parquet:"data,json"`
+	}
+	schema := SchemaOf(ReadRecord{})
+
+	type WriteRecord struct {
+		ID   int64
+		Data any `parquet:"data"`
+	}
+
+	t.Run("InterfaceWithMap", func(t *testing.T) {
+		data := []WriteRecord{
+			{
+				ID:   1,
+				Data: map[string]any{"name": "Alice", "age": 30.0},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[WriteRecord](buf, schema)
+
+		if _, err := writer.Write(data); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		writer.Close()
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var result ReadRecord
+		if err := reader.Read(&result); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		var unmarshaled map[string]any
+		if err := json.Unmarshal(result.Data, &unmarshaled); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if unmarshaled["name"] != "Alice" || unmarshaled["age"] != 30.0 {
+			t.Errorf("data incorrect: %+v", unmarshaled)
+		}
+	})
+
+	t.Run("InterfaceWithSlice", func(t *testing.T) {
+		data := []WriteRecord{
+			{
+				ID:   1,
+				Data: []string{"a", "b", "c"},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[WriteRecord](buf, schema)
+
+		if _, err := writer.Write(data); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		writer.Close()
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var result ReadRecord
+		if err := reader.Read(&result); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		var unmarshaled []string
+		if err := json.Unmarshal(result.Data, &unmarshaled); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if !reflect.DeepEqual(unmarshaled, []string{"a", "b", "c"}) {
+			t.Errorf("data incorrect: %+v", unmarshaled)
+		}
+	})
+
+	t.Run("InterfaceWithPrimitive", func(t *testing.T) {
+		data := []WriteRecord{
+			{
+				ID:   1,
+				Data: 42.0,
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[WriteRecord](buf, schema)
+
+		if _, err := writer.Write(data); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		writer.Close()
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var result ReadRecord
+		if err := reader.Read(&result); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		var unmarshaled float64
+		if err := json.Unmarshal(result.Data, &unmarshaled); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+
+		if unmarshaled != 42.0 {
+			t.Errorf("data incorrect: %v", unmarshaled)
+		}
+	})
+}
+
+// TestWriteSliceOfAnyToJSONByteArray tests that a `[]any` field with mixed types
+// is properly JSON serialized to a byte array column.
+func TestWriteSliceOfAnyToJSONByteArray(t *testing.T) {
+	type ReadRecord struct {
+		ID    int64  `parquet:"id"`
+		Items []byte `parquet:"items,json"`
+	}
+	schema := SchemaOf(ReadRecord{})
+
+	type WriteRecord struct {
+		ID    int64  `parquet:"id"`
+		Items []any `parquet:"items"`
+	}
+
+	data := []WriteRecord{
+		{
+			ID:    1,
+			Items: []any{"string", 42.0, map[string]string{"key": "val"}, true, nil},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[WriteRecord](buf, schema)
+
+	if _, err := writer.Write(data); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	writer.Close()
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var result ReadRecord
+	if err := reader.Read(&result); err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	var unmarshaled []any
+	if err := json.Unmarshal(result.Items, &unmarshaled); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+
+	if len(unmarshaled) != 5 {
+		t.Errorf("expected 5 items, got %d", len(unmarshaled))
+	}
+	if unmarshaled[0] != "string" || unmarshaled[1] != 42.0 || unmarshaled[3] != true || unmarshaled[4] != nil {
+		t.Errorf("items incorrect: %+v", unmarshaled)
+	}
+}
+
+// TestWriteNestedCompositeToJSONByteArray tests deeply nested composite structures.
+func TestWriteNestedCompositeToJSONByteArray(t *testing.T) {
+	type ReadRecord struct {
+		ID      int64  `parquet:"id"`
+		Complex []byte `parquet:"complex,json"`
+	}
+	schema := SchemaOf(ReadRecord{})
+
+	type WriteRecord struct {
+		ID      int64                       `parquet:"id"`
+		Complex map[string][]map[string]any `parquet:"complex"`
+	}
+
+	data := []WriteRecord{
+		{
+			ID: 1,
+			Complex: map[string][]map[string]any{
+				"users": {
+					{"name": "Alice", "age": 30.0},
+					{"name": "Bob", "age": 25.0},
+				},
+				"admins": {
+					{"name": "Charlie", "permissions": []any{"read", "write"}},
+				},
+			},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[WriteRecord](buf, schema)
+
+	if _, err := writer.Write(data); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	writer.Close()
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var result ReadRecord
+	if err := reader.Read(&result); err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	var unmarshaled map[string][]map[string]any
+	if err := json.Unmarshal(result.Complex, &unmarshaled); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+
+	if len(unmarshaled["users"]) != 2 {
+		t.Errorf("expected 2 users, got %d", len(unmarshaled["users"]))
+	}
+	if unmarshaled["users"][0]["name"] != "Alice" {
+		t.Errorf("user 0 name incorrect: %v", unmarshaled["users"][0]["name"])
+	}
+}
+
+// TestRoundTripJSONSerialization tests that data can be written as composite types
+// and read back correctly through JSON serialization/deserialization.
+func TestRoundTripJSONSerialization(t *testing.T) {
+	t.Run("MapRoundTrip", func(t *testing.T) {
+		type Record struct {
+			ID   int64             `parquet:"id"`
+			Data map[string]string `parquet:"data,json"`
+		}
+
+		original := []Record{
+			{
+				ID:   1,
+				Data: map[string]string{"key1": "val1", "key2": "val2"},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		if err := Write(buf, original); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+
+		result, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		if !reflect.DeepEqual(original, result) {
+			t.Errorf("round trip failed:\noriginal: %+v\nresult:   %+v", original, result)
+		}
+	})
+
+	t.Run("StructRoundTrip", func(t *testing.T) {
+		type Inner struct {
+			Name  string
+			Count int
+		}
+
+		type Record struct {
+			ID   int64 `parquet:"id"`
+			Data Inner `parquet:"data,json"`
+		}
+
+		original := []Record{
+			{
+				ID:   1,
+				Data: Inner{Name: "test", Count: 42},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		if err := Write(buf, original); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+
+		result, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		if !reflect.DeepEqual(original, result) {
+			t.Errorf("round trip failed:\noriginal: %+v\nresult:   %+v", original, result)
+		}
+	})
+
+	t.Run("SliceRoundTrip", func(t *testing.T) {
+		type Record struct {
+			ID    int64   `parquet:"id"`
+			Items []int64 `parquet:"items,json"`
+		}
+
+		original := []Record{
+			{
+				ID:    1,
+				Items: []int64{10, 20, 30},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		if err := Write(buf, original); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+
+		result, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		if !reflect.DeepEqual(original, result) {
+			t.Errorf("round trip failed:\noriginal: %+v\nresult:   %+v", original, result)
+		}
+	})
+}
+
+// TestPrimitiveTypesBypassJSON tests that primitive types and []byte are written
+// directly to byte array columns without JSON serialization.
+func TestPrimitiveTypesBypassJSON(t *testing.T) {
+	t.Run("StringDirect", func(t *testing.T) {
+		type Record struct {
+			ID   int64
+			Data string `parquet:"data,json"`
+		}
+
+		original := []Record{
+			{
+				ID:   1,
+				Data: "plain text",
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		if err := Write(buf, original); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+
+		result, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		// String should be written directly, not as JSON-encoded string
+		if result[0].Data != "plain text" {
+			t.Errorf("expected 'plain text', got %q", result[0].Data)
+		}
+
+		// Verify it's not JSON-encoded (would be "\"plain text\"" if it were)
+		if result[0].Data == `"plain text"` {
+			t.Error("string was JSON-encoded when it should have been written directly")
+		}
+	})
+
+	t.Run("ByteSliceDirect", func(t *testing.T) {
+		type Record struct {
+			ID   int64
+			Data []byte `parquet:"data,json"`
+		}
+
+		original := []Record{
+			{
+				ID:   1,
+				Data: []byte("binary data"),
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		if err := Write(buf, original); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+
+		result, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		// []byte should be written directly
+		if !bytes.Equal(result[0].Data, []byte("binary data")) {
+			t.Errorf("expected 'binary data', got %q", result[0].Data)
+		}
+	})
 }
