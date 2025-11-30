@@ -674,6 +674,8 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 					col.writeByteArray(levels, msg.GetValue())
 				case *structpb.Struct:
 					writeProtoStruct(col, levels, msg, node)
+				case *structpb.ListValue:
+					writeProtoList(col, levels, msg, node)
 				case *anypb.Any:
 					writeProtoAny(col, levels, msg, node)
 				default:

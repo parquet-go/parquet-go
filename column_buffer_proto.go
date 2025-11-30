@@ -74,6 +74,13 @@ func writeProtoStruct(col ColumnBuffer, levels columnLevels, s *structpb.Struct,
 	buf.unref()
 }
 
+func writeProtoList(col ColumnBuffer, levels columnLevels, l *structpb.ListValue, node Node) {
+	buf := buffers.get(2 * proto.Size(l))
+	buf.data = appendProtoListValueJSON(buf.data[:0], l)
+	col.writeByteArray(levels, buf.data)
+	buf.unref()
+}
+
 func appendProtoStructJSON(b []byte, s *structpb.Struct) []byte {
 	if s == nil {
 		return append(b, "null"...)
