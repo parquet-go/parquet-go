@@ -492,12 +492,20 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 		}
 	}
 
+	// When the GROUP node itself is optional, we need to handle definition levels:
+	// - When rows.Len() == 0: write with current levels (GROUP absent)
+	// - When rows.Len() > 0: increment definition level to indicate GROUP is present
+	groupOptional := groupNode.Optional()
+
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
 			for _, w := range writers {
 				w.writeRows(columns, levels, sparse.Array{})
 			}
 		} else {
+			if groupOptional {
+				levels.definitionLevel++
+			}
 			writeMaps(columns, levels, rows)
 		}
 	}

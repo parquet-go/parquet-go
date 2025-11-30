@@ -323,6 +323,190 @@ func TestGenericWriterMapToGroupSchema(t *testing.T) {
 	}
 }
 
+// TestGenericWriterMapToOptionalGroupSchema tests that NewGenericWriter supports
+// writing map[string]string fields to an OPTIONAL GROUP schema.
+// This is a regression test for the case where the GROUP itself is optional,
+// which requires incrementing the definition level when the GROUP is present.
+func TestGenericWriterMapToOptionalGroupSchema(t *testing.T) {
+	// The user's Go type
+	type RecordWithMap struct {
+		Nested map[string]string
+	}
+
+	// The desired schema structure (OPTIONAL GROUP with named fields)
+	type RecordWithStruct struct {
+		Nested struct {
+			A string `parquet:",optional"`
+			B string `parquet:",optional"`
+		} `parquet:",optional"` // <-- GROUP itself is optional
+	}
+
+	// Create schema from the struct
+	desiredSchema := SchemaOf(RecordWithStruct{})
+
+	// Verify the schema has optional GROUP
+	nestedField := desiredSchema.Fields()[0]
+	if !nestedField.Optional() {
+		t.Fatalf("expected Nested field to be optional, but it's required")
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithMap](buf, desiredSchema)
+
+	// Write records: one with values, one with nil map (absent GROUP)
+	records := []RecordWithMap{
+		{
+			Nested: map[string]string{
+				"A": "value_a",
+				"B": "value_b",
+			},
+		},
+		{
+			Nested: nil, // GROUP is absent
+		},
+		{
+			Nested: map[string]string{
+				"A": "value_a3",
+				// B is omitted - should be null within present GROUP
+			},
+		},
+	}
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write rows: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("expected to write 3 rows, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back and verify
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	// Row 1: GROUP present, both fields present
+	var result1 RecordWithStruct
+	if err := reader.Read(&result1); err != nil {
+		t.Fatalf("failed to read row 1: %v", err)
+	}
+	if result1.Nested.A != "value_a" {
+		t.Errorf("row 1 A incorrect: got %q, want %q", result1.Nested.A, "value_a")
+	}
+	if result1.Nested.B != "value_b" {
+		t.Errorf("row 1 B incorrect: got %q, want %q", result1.Nested.B, "value_b")
+	}
+
+	// Row 2: GROUP absent (nil map)
+	var result2 RecordWithStruct
+	if err := reader.Read(&result2); err != nil {
+		t.Fatalf("failed to read row 2: %v", err)
+	}
+	// When GROUP is absent, fields should be zero values
+	if result2.Nested.A != "" {
+		t.Errorf("row 2 A incorrect: got %q, want empty", result2.Nested.A)
+	}
+	if result2.Nested.B != "" {
+		t.Errorf("row 2 B incorrect: got %q, want empty", result2.Nested.B)
+	}
+
+	// Row 3: GROUP present, only A present
+	var result3 RecordWithStruct
+	if err := reader.Read(&result3); err != nil {
+		t.Fatalf("failed to read row 3: %v", err)
+	}
+	if result3.Nested.A != "value_a3" {
+		t.Errorf("row 3 A incorrect: got %q, want %q", result3.Nested.A, "value_a3")
+	}
+	if result3.Nested.B != "" {
+		t.Errorf("row 3 B incorrect: got %q, want empty", result3.Nested.B)
+	}
+}
+
+// TestGenericWriterMapToNestedStructWithRequiredGroup tests writing a map
+// inside a nested struct where the inner GROUP is required.
+func TestGenericWriterMapToNestedStructWithRequiredGroup(t *testing.T) {
+	// Go type with nested struct containing map
+	type RecordWithNestedMap struct {
+		Resource struct {
+			Type   string
+			Labels map[string]string
+		}
+	}
+
+	// Schema type with nested struct containing GROUP
+	type RecordWithNestedStruct struct {
+		Resource struct {
+			Type   string
+			Labels struct {
+				ProjectID string `parquet:"project_id,optional"`
+				Zone      string `parquet:"zone,optional"`
+			}
+		}
+	}
+
+	desiredSchema := SchemaOf(RecordWithNestedStruct{})
+
+	// Verify Resource.Labels is required (not optional)
+	resourceField := desiredSchema.Fields()[0]
+	labelsField := resourceField.Fields()[1]
+	if labelsField.Optional() {
+		t.Fatalf("expected Resource.Labels to be required, but it's optional")
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[RecordWithNestedMap](buf, desiredSchema)
+
+	records := []RecordWithNestedMap{
+		{
+			Resource: struct {
+				Type   string
+				Labels map[string]string
+			}{
+				Type: "gce_instance",
+				Labels: map[string]string{
+					"project_id": "test-project",
+					"zone":       "us-central1-a",
+				},
+			},
+		},
+	}
+
+	n, err := writer.Write(records)
+	if err != nil {
+		t.Fatalf("failed to write rows: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected to write 1 row, wrote %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back and verify
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var result RecordWithNestedStruct
+	if err := reader.Read(&result); err != nil {
+		t.Fatalf("failed to read row: %v", err)
+	}
+
+	if result.Resource.Type != "gce_instance" {
+		t.Errorf("Resource.Type incorrect: got %q, want %q", result.Resource.Type, "gce_instance")
+	}
+	if result.Resource.Labels.ProjectID != "test-project" {
+		t.Errorf("Resource.Labels.ProjectID incorrect: got %q, want %q", result.Resource.Labels.ProjectID, "test-project")
+	}
+	if result.Resource.Labels.Zone != "us-central1-a" {
+		t.Errorf("Resource.Labels.Zone incorrect: got %q, want %q", result.Resource.Labels.Zone, "us-central1-a")
+	}
+}
+
 // TestGenericWriterMapAnyToNestedGroupSchema tests that NewGenericWriter supports
 // writing map[string]any fields to a nested GROUP schema with multiple levels.
 // This corresponds to the example:
