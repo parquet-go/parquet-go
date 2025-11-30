@@ -4,9 +4,12 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/bits"
 	"reflect"
 	"sort"
+	"strings"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -486,6 +489,8 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 	}
 }
 
+var structFieldsCache atomic.Value // map[reflect.Type]map[string][]int
+
 func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc) {
 	fields := node.Fields()
 	writers := make([]fieldWriter, len(fields))
@@ -534,9 +539,36 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 			}
 
 		case reflect.Struct:
+			cachedFields, _ := structFieldsCache.Load().(map[reflect.Type]map[string][]int)
+			structFields, ok := cachedFields[t]
+			if !ok {
+				visibleStructFields := reflect.VisibleFields(t)
+				cachedFieldsBefore := cachedFields
+				structFields = make(map[string][]int, len(visibleStructFields))
+				cachedFields = make(map[reflect.Type]map[string][]int, len(cachedFieldsBefore)+1)
+				cachedFields[t] = structFields
+				maps.Copy(cachedFields, cachedFieldsBefore)
+
+				for _, visibleStructField := range visibleStructFields {
+					name := visibleStructField.Name
+					if tag, ok := visibleStructField.Tag.Lookup("parquet"); ok {
+						if tagName, _, _ := strings.Cut(tag, ","); tagName != "" {
+							name = tagName
+						}
+					}
+					structFields[name] = visibleStructField.Index
+				}
+
+				structFieldsCache.Store(cachedFields)
+			}
+
 			for i := range writers {
 				w := &writers[i]
-				fieldValue := value.FieldByName(w.fieldName)
+				fieldValue := reflect.Value{}
+				fieldIndex, ok := structFields[w.fieldName]
+				if ok {
+					fieldValue = value.FieldByIndex(fieldIndex)
+				}
 				w.writeValue(columns, levels, fieldValue)
 			}
 
