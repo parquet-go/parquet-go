@@ -335,6 +335,16 @@ func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFu
 			writeJSONToRepeated(columns, levels, val, writeValue)
 			return
 
+		case *structpb.Struct:
+			if msg == nil {
+				writeValue(columns, levels, reflect.Value{})
+				return
+			}
+			levels.repetitionDepth++
+			levels.definitionLevel++
+			writeValue(columns, levels, value)
+			return
+
 		case *structpb.ListValue:
 			n := len(msg.GetValues())
 			if n == 0 {

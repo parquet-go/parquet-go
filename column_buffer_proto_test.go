@@ -2033,3 +2033,80 @@ func TestProtoListValueNested(t *testing.T) {
 		t.Errorf("records mismatch:\ngot:  %+v\nwant: %+v", result, expected)
 	}
 }
+
+func TestProtoStructValueDereferenced(t *testing.T) {
+	// Test that *structpb.Struct values are handled correctly in
+	// writeValueFuncOfRepeated without being dereferenced. This ensures the
+	// pointer path is taken in writeValueFuncOfLeaf.
+	type StructRecord struct {
+		ID   int64  `parquet:"id"`
+		Data []byte `parquet:"data"`
+	}
+
+	type ProtoStructRecord struct {
+		ID   int64         `parquet:"id"`
+		Data proto.Message `parquet:"data"`
+	}
+
+	schema := SchemaOf(new(StructRecord))
+
+	// Create a structpb.Struct with nested structpb.Struct and ListValue values
+	// to test the dereferencing scenario
+	s, err := structpb.NewStruct(map[string]any{
+		"nested_struct": map[string]any{
+			"inner": "value",
+		},
+		"nested_list": []any{"a", "b", "c"},
+	})
+	if err != nil {
+		t.Fatalf("failed to create struct: %v", err)
+	}
+
+	protoRecords := []ProtoStructRecord{
+		{ID: 1, Data: s},
+		{ID: 2, Data: (*structpb.Struct)(nil)},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[ProtoStructRecord](buf, schema)
+	if _, err := writer.Write(protoRecords); err != nil {
+		t.Fatalf("failed to write proto records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back and verify
+	reader := NewGenericReader[StructRecord](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]StructRecord, 2)
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	for i, r := range readRecords {
+		if r.ID != int64(i+1) {
+			t.Errorf("expected ID %d, got %d", i+1, r.ID)
+		}
+	}
+
+	// Verify the JSON content
+	var result map[string]any
+	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+
+	expected := map[string]any{
+		"nested_list":   []any{"a", "b", "c"},
+		"nested_struct": map[string]any{"inner": "value"},
+	}
+
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("records mismatch:\ngot:  %+v\nwant: %+v", result, expected)
+	}
+
+	if !bytes.Equal(readRecords[1].Data, []byte("null")) {
+		t.Errorf("expected nil data for second record, got: %s", string(readRecords[1].Data))
+	}
+}

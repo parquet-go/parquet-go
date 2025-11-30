@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go/format"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -102,7 +103,7 @@ func appendProtoStructJSON(b []byte, s *structpb.Struct) []byte {
 		if i > 0 {
 			b = append(b, ',')
 		}
-		b = strconv.AppendQuote(b, key)
+		b = jsonlite.AppendQuote(b, key)
 		b = append(b, ':')
 		b = appendProtoValueJSON(b, fields[key])
 	}
@@ -115,7 +116,7 @@ func appendProtoValueJSON(b []byte, v *structpb.Value) []byte {
 	case *structpb.Value_NumberValue:
 		return strconv.AppendFloat(b, k.NumberValue, 'g', -1, 64)
 	case *structpb.Value_StringValue:
-		return strconv.AppendQuote(b, k.StringValue)
+		return jsonlite.AppendQuote(b, k.StringValue)
 	case *structpb.Value_BoolValue:
 		return strconv.AppendBool(b, k.BoolValue)
 	case *structpb.Value_StructValue:
