@@ -1006,7 +1006,7 @@ func TestWriteCompositeTypesToJSONByteArray(t *testing.T) {
 		schema := SchemaOf(ReadRecord{})
 
 		type WriteRecord struct {
-			ID       int64              `parquet:"id"`
+			ID       int64             `parquet:"id"`
 			Metadata map[string]string `parquet:"metadata"`
 		}
 
@@ -1154,7 +1154,7 @@ func TestWriteCompositeTypesToJSONByteArray(t *testing.T) {
 		schema := SchemaOf(ReadRecord{})
 
 		type WriteRecord struct {
-			ID    int64              `parquet:"id"`
+			ID    int64            `parquet:"id"`
 			Items []map[string]any `parquet:"items"`
 		}
 
@@ -1380,7 +1380,7 @@ func TestWriteSliceOfAnyToJSONByteArray(t *testing.T) {
 	schema := SchemaOf(ReadRecord{})
 
 	type WriteRecord struct {
-		ID    int64  `parquet:"id"`
+		ID    int64 `parquet:"id"`
 		Items []any `parquet:"items"`
 	}
 
