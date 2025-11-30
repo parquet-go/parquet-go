@@ -335,6 +335,22 @@ func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFu
 			writeJSONToRepeated(columns, levels, val, writeValue)
 			return
 
+		case *structpb.ListValue:
+			n := len(msg.GetValues())
+			if n == 0 {
+				writeValue(columns, levels, reflect.Value{})
+				return
+			}
+
+			levels.repetitionDepth++
+			levels.definitionLevel++
+
+			for _, v := range msg.GetValues() {
+				writeValue(columns, levels, structpbValueToReflectValue(v))
+				levels.repetitionLevel = levels.repetitionDepth
+			}
+			return
+
 		case protoreflect.List:
 			n := msg.Len()
 			if n == 0 {
