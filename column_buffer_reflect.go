@@ -2,13 +2,18 @@ package parquet
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"math/bits"
 	"reflect"
 	"sort"
+	"strings"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
 	"google.golang.org/protobuf/proto"
@@ -291,6 +296,11 @@ func writeValueFuncOfOptional(columnIndex int16, node Node) (int16, writeValueFu
 		switch value.Kind() {
 		case reflect.Pointer, reflect.Interface:
 			isNull = value.IsNil()
+		case reflect.Slice:
+			isNull = value.IsNil()
+			if !isNull && value.Type() == reflect.TypeFor[json.RawMessage]() {
+				isNull = string(value.Bytes()) == "null"
+			}
 		default:
 			isNull = value.IsZero()
 		}
@@ -312,9 +322,37 @@ func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFu
 			return
 		}
 
-		switch list := value.Interface().(type) {
+		switch msg := value.Interface().(type) {
+		case *jsonlite.Value:
+			writeJSONToRepeated(columns, levels, msg, writeValue)
+			return
+
+		case json.RawMessage:
+			val, err := jsonParse(msg)
+			if err != nil {
+				panic(fmt.Errorf("failed to parse JSON: %w", err))
+			}
+			writeJSONToRepeated(columns, levels, val, writeValue)
+			return
+
+		case *structpb.ListValue:
+			n := len(msg.GetValues())
+			if n == 0 {
+				writeValue(columns, levels, reflect.Value{})
+				return
+			}
+
+			levels.repetitionDepth++
+			levels.definitionLevel++
+
+			for _, v := range msg.GetValues() {
+				writeValue(columns, levels, structpbValueToReflectValue(v))
+				levels.repetitionLevel = levels.repetitionDepth
+			}
+			return
+
 		case protoreflect.List:
-			n := list.Len()
+			n := msg.Len()
 			if n == 0 {
 				writeValue(columns, levels, reflect.Value{})
 				return
@@ -324,7 +362,7 @@ func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFu
 			levels.definitionLevel++
 
 			for i := range n {
-				var e = list.Get(i)
+				var e = msg.Get(i)
 				var v reflect.Value
 				if e.IsValid() {
 					v = reflect.ValueOf(e.Interface())
@@ -467,6 +505,8 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 	}
 }
 
+var structFieldsCache atomic.Value // map[reflect.Type]map[string][]int
+
 func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc) {
 	fields := node.Fields()
 	writers := make([]fieldWriter, len(fields))
@@ -474,10 +514,6 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 		writers[i].fieldName = field.Name()
 		columnIndex, writers[i].writeValue = writeValueFuncOf(columnIndex, field)
 	}
-
-	// Pre-compute type information for common map types
-	mapStringStringType := reflect.TypeOf((map[string]string)(nil))
-	mapStringAnyType := reflect.TypeOf((map[string]any)(nil))
 
 	return columnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 	writeGroupValue:
@@ -492,8 +528,8 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 		switch t := value.Type(); t.Kind() {
 		case reflect.Map:
 			switch {
-			case t.ConvertibleTo(mapStringStringType):
-				m := value.Convert(mapStringStringType).Interface().(map[string]string)
+			case t.ConvertibleTo(reflect.TypeFor[map[string]string]()):
+				m := value.Convert(reflect.TypeFor[map[string]string]()).Interface().(map[string]string)
 				v := new(string)
 				for i := range writers {
 					w := &writers[i]
@@ -501,8 +537,8 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 					w.writeValue(columns, levels, reflect.ValueOf(v).Elem())
 				}
 
-			case t.ConvertibleTo(mapStringAnyType):
-				m := value.Convert(mapStringAnyType).Interface().(map[string]any)
+			case t.ConvertibleTo(reflect.TypeFor[map[string]any]()):
+				m := value.Convert(reflect.TypeFor[map[string]any]()).Interface().(map[string]any)
 				for i := range writers {
 					w := &writers[i]
 					v := m[w.fieldName]
@@ -519,9 +555,36 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 			}
 
 		case reflect.Struct:
+			cachedFields, _ := structFieldsCache.Load().(map[reflect.Type]map[string][]int)
+			structFields, ok := cachedFields[t]
+			if !ok {
+				visibleStructFields := reflect.VisibleFields(t)
+				cachedFieldsBefore := cachedFields
+				structFields = make(map[string][]int, len(visibleStructFields))
+				cachedFields = make(map[reflect.Type]map[string][]int, len(cachedFieldsBefore)+1)
+				cachedFields[t] = structFields
+				maps.Copy(cachedFields, cachedFieldsBefore)
+
+				for _, visibleStructField := range visibleStructFields {
+					name := visibleStructField.Name
+					if tag, ok := visibleStructField.Tag.Lookup("parquet"); ok {
+						if tagName, _, _ := strings.Cut(tag, ","); tagName != "" {
+							name = tagName
+						}
+					}
+					structFields[name] = visibleStructField.Index
+				}
+
+				structFieldsCache.Store(cachedFields)
+			}
+
 			for i := range writers {
 				w := &writers[i]
-				fieldValue := value.FieldByName(w.fieldName)
+				fieldValue := reflect.Value{}
+				fieldIndex, ok := structFields[w.fieldName]
+				if ok {
+					fieldValue = value.FieldByIndex(fieldIndex)
+				}
 				w.writeValue(columns, levels, fieldValue)
 			}
 
@@ -532,6 +595,8 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 			}
 
 			switch msg := value.Interface().(type) {
+			case *jsonlite.Value:
+				writeJSONToGroup(columns, levels, msg, node, writers)
 			case *structpb.Struct:
 				var fields map[string]*structpb.Value
 				if msg != nil {
@@ -554,6 +619,18 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 				goto writeGroupValue
 			}
 
+		case reflect.Slice:
+			if t == reflect.TypeFor[json.RawMessage]() {
+				val, err := jsonParse(value.Bytes())
+				if err != nil {
+					panic(fmt.Errorf("failed to parse JSON: %w", err))
+				}
+				writeJSONToGroup(columns, levels, val, node, writers)
+			} else {
+				value = reflect.Value{}
+				goto writeGroupValue
+			}
+
 		default:
 			value = reflect.Value{}
 			goto writeGroupValue
@@ -573,6 +650,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				col.writeNull(levels)
 				return
 			}
+
 			switch value.Kind() {
 			case reflect.Pointer, reflect.Interface:
 				if value.IsNil() {
@@ -580,6 +658,10 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 					return
 				}
 				switch msg := value.Interface().(type) {
+				case *jsonlite.Value:
+					writeJSONToLeaf(col, levels, msg, node)
+				case *json.Number:
+					writeJSONNumber(col, levels, *msg, node)
 				case *time.Time:
 					writeTime(col, levels, *msg, node)
 				case *time.Duration:
@@ -608,36 +690,66 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 					col.writeByteArray(levels, msg.GetValue())
 				case *structpb.Struct:
 					writeProtoStruct(col, levels, msg, node)
+				case *structpb.ListValue:
+					writeProtoList(col, levels, msg, node)
 				case *anypb.Any:
 					writeProtoAny(col, levels, msg, node)
 				default:
 					value = value.Elem()
 					continue
 				}
+
 			case reflect.Bool:
 				col.writeBoolean(levels, value.Bool())
+
 			case reflect.Int8, reflect.Int16, reflect.Int32:
 				col.writeInt32(levels, int32(value.Int()))
+
 			case reflect.Int:
 				col.writeInt64(levels, value.Int())
+
 			case reflect.Int64:
 				if value.Type() == reflect.TypeFor[time.Duration]() {
 					writeDuration(col, levels, time.Duration(value.Int()), node)
 				} else {
 					col.writeInt64(levels, value.Int())
 				}
+
 			case reflect.Uint8, reflect.Uint16, reflect.Uint32:
 				col.writeInt32(levels, int32(value.Uint()))
+
 			case reflect.Uint, reflect.Uint64:
 				col.writeInt64(levels, int64(value.Uint()))
+
 			case reflect.Float32:
 				col.writeFloat(levels, float32(value.Float()))
+
 			case reflect.Float64:
 				col.writeDouble(levels, value.Float())
+
 			case reflect.String:
-				col.writeByteArray(levels, unsafeByteArrayFromString(value.String()))
-			case reflect.Slice, reflect.Array:
+				switch v := value.String(); value.Type() {
+				case reflect.TypeFor[json.Number]():
+					writeJSONNumber(col, levels, json.Number(v), node)
+				default:
+					col.writeByteArray(levels, unsafeByteArrayFromString(v))
+				}
+
+			case reflect.Slice:
+				switch v := value.Bytes(); value.Type() {
+				case reflect.TypeFor[json.RawMessage]():
+					val, err := jsonParse(v)
+					if err != nil {
+						panic(fmt.Errorf("failed to parse JSON: %w", err))
+					}
+					writeJSONToLeaf(col, levels, val, node)
+				default:
+					col.writeByteArray(levels, v)
+				}
+
+			case reflect.Array:
 				col.writeByteArray(levels, value.Bytes())
+
 			case reflect.Struct:
 				switch v := value.Interface().(type) {
 				case time.Time:

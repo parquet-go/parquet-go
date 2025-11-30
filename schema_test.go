@@ -346,7 +346,7 @@ func TestInvalidSchemaOf(t *testing.T) {
 		// Time tags must be int32 or int64. Additionally:
 		// - int32 must be millisecond
 		// - int64 must be microsecond or nanosecond
-		// - Duration (int64) must be nanosecond
+		// - Duration (int64) can use any valid time unit (millisecond, microsecond, or nanosecond)
 		// - If the unit is the problem, it is part of the message.
 		{
 			value: new(struct {
@@ -377,18 +377,6 @@ func TestInvalidSchemaOf(t *testing.T) {
 				Time int64 `parquet:",time(notasecond)"`
 			}),
 			panic: `time(notasecond) is an invalid parquet tag: Time int64 [time(notasecond)]`,
-		},
-		{
-			value: new(struct {
-				Time time.Duration `parquet:",time(millisecond)"`
-			}),
-			panic: `time(millisecond) is an invalid parquet tag: Time time.Duration [time(millisecond)]`,
-		},
-		{
-			value: new(struct {
-				Time time.Duration `parquet:",time(microsecond)"`
-			}),
-			panic: `time(microsecond) is an invalid parquet tag: Time time.Duration [time(microsecond)]`,
 		},
 		{
 			value: new(struct {
