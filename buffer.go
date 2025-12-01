@@ -682,7 +682,9 @@ func (p *bufferedPage) Release() {
 func (p *bufferedPage) ReleaseAndDetachValues() {
 	// We don't return the values buffer to the pool and allow
 	// standard GC to track it.  Remove debug finalizer.
-	runtime.SetFinalizer(p.values, nil)
+	if debug.TRACEBUF > 0 {
+		runtime.SetFinalizer(p.values, nil)
+	}
 
 	// Return everything else back to pools.
 	Release(p.Page)
