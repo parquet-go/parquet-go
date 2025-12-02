@@ -713,6 +713,8 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 	var pageOffsets []uint32
 	var pageValues []byte
 	switch {
+	// case pageKind == ByteArray || pageKind == FixedLenByteArray:
+	//	pageValues = make([]byte, pageType.EstimateDecodeSize(numValues, data, pageEncoding))
 	case pageEncoding.CanDecodeInPlace():
 		vbuf = page
 		pageValues = data
