@@ -326,20 +326,21 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagR
 	columns := make([]column, len(fields))
 
 	for i, f := range fields {
-		list, optional := false, false
 		columnPath := path.append(f.Name)
+		// Check if the schema node at the field path is optional and/or a list
+		// Use the schema structure, not the Go struct tags
+		node := findByPath(schema, columnPath)
+		list := false
 		forEachStructTagOption(f, func(_ reflect.Type, option, _ string) {
 			switch option {
 			case "list":
 				list = true
 				columnPath = columnPath.append("list", "element")
-			case "optional":
-				optional = true
 			}
 		})
-
 		writeRows := writeRowsFuncOf(f.Type, schema, columnPath, tagReplacements)
-		if optional {
+		// Check if the schema node is optional (from the schema, not the Go struct tag)
+		if node.Optional() {
 			kind := f.Type.Kind()
 			switch {
 			case kind == reflect.Pointer:
@@ -492,20 +493,12 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 		}
 	}
 
-	// When the GROUP node itself is optional, we need to handle definition levels:
-	// - When rows.Len() == 0: write with current levels (GROUP absent)
-	// - When rows.Len() > 0: increment definition level to indicate GROUP is present
-	groupOptional := groupNode.Optional()
-
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
 			for _, w := range writers {
 				w.writeRows(columns, levels, sparse.Array{})
 			}
 		} else {
-			if groupOptional {
-				levels.definitionLevel++
-			}
 			writeMaps(columns, levels, rows)
 		}
 	}
