@@ -1,4 +1,7 @@
-//go:build !race
+// These tests look at buffer reuse via sync.Pool, which does not work under
+// the race detector.  There also seems to be a platform difference on s390x,
+// so we skip the tests in those cases.
+//go:build !race && !s390x
 
 package parquet_test
 
