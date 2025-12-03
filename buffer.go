@@ -747,7 +747,7 @@ func Release(page Page) {
 	}
 }
 
-// ReleaseAndDetachValues is an optional granular memory management method like Release,
+// releaseAndDetachValues is an optional granular memory management method like Release,
 // that releases ownership of the page and potentially allows its underlying buffers
 // to be reused for new pages acquired from ReadPage.  However this method makes the
 // additional guarantee that string and byte array values read from the page will
@@ -759,7 +759,7 @@ func Release(page Page) {
 // Usage of this is optional and follows the guidelines as Release.
 //
 // Calling this function on pages that do not embed a reference counter does nothing.
-func ReleaseAndDetachValues(page Page) {
+func releaseAndDetachValues(page Page) {
 	if p, _ := page.(detachable); p != nil {
 		p.ReleaseAndDetachValues()
 	}

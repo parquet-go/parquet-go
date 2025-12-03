@@ -91,7 +91,7 @@ type columnChunkValueReader struct {
 func (r *columnChunkValueReader) clear() {
 	if r.page != nil {
 		if r.detach {
-			ReleaseAndDetachValues(r.page)
+			releaseAndDetachValues(r.page)
 		} else {
 			Release(r.page)
 		}

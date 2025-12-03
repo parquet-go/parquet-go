@@ -744,7 +744,7 @@ func (p *convertedPage) Release() {
 }
 
 func (p *convertedPage) ReleaseAndDetachValues() {
-	ReleaseAndDetachValues(p.page)
+	releaseAndDetachValues(p.page)
 }
 
 var (
