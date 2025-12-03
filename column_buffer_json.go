@@ -116,6 +116,13 @@ func writeJSONString(col ColumnBuffer, levels columnLevels, str string, node Nod
 				time.Duration(t.Nanosecond())*time.Nanosecond
 			writeDuration(col, levels, d, node)
 			return
+
+		case logicalType.UUID != nil:
+			// Only parse UUID strings when writing to binary UUID columns
+			// (FIXED_LEN_BYTE_ARRAY with 16 bytes). If writing to a STRING
+			// column with UUID logical type, write the string as-is.
+			writeUUID(col, levels, str, typ)
+			return
 		}
 	}
 

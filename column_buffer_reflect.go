@@ -13,6 +13,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/google/uuid"
 	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
@@ -738,10 +739,17 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				col.writeDouble(levels, value.Float())
 
 			case reflect.String:
-				switch v := value.String(); value.Type() {
+				v := value.String()
+				switch value.Type() {
 				case reflect.TypeFor[json.Number]():
 					writeJSONNumber(col, levels, json.Number(v), node)
 				default:
+					typ := node.Type()
+					logicalType := typ.LogicalType()
+					if logicalType != nil && logicalType.UUID != nil {
+						writeUUID(col, levels, v, typ)
+						return
+					}
 					col.writeByteArray(levels, unsafeByteArrayFromString(v))
 				}
 
@@ -802,4 +810,20 @@ func structpbValueToReflectValue(v *structpb.Value) reflect.Value {
 
 func unsafeByteArrayFromString(s string) []byte {
 	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
+func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) bool {
+	if typ.Kind() != FixedLenByteArray || typ.Length() != 16 {
+		panic(fmt.Errorf("cannot write UUID string to non-FIXED_LEN_BYTE_ARRAY(16) column: %q", str))
+	}
+	parsedUUID, err := uuid.Parse(str)
+	if err != nil {
+		panic(fmt.Errorf("cannot parse string %q as UUID: %w", str, err))
+	}
+	bufferUUID := buffers.get(16)
+	bufferUUID.data = bufferUUID.data[:16]
+	copy(bufferUUID.data, parsedUUID[:])
+	col.writeByteArray(levels, bufferUUID.data)
+	buffers.put(bufferUUID)
+	return true
 }
