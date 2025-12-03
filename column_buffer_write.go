@@ -10,8 +10,10 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/sparse"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // writeRowsFunc is the type of functions that apply rows to a set of column
@@ -45,6 +47,10 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplace
 		return writeRowsFuncFor[json.RawMessage](schema, path)
 	case reflect.TypeFor[json.Number]():
 		return writeRowsFuncFor[json.Number](schema, path)
+	case reflect.TypeFor[*structpb.Struct]():
+		return writeRowsFuncFor[*structpb.Struct](schema, path)
+	case reflect.TypeFor[*jsonlite.Value]():
+		return writeRowsFuncFor[*jsonlite.Value](schema, path)
 	}
 
 	switch t.Kind() {

@@ -1356,3 +1356,10 @@ func TestReadFileWithNullColumns(t *testing.T) {
 		t.Errorf("rows mismatch:\nwant: %+v\ngot:  %+v", expected, rows)
 	}
 }
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
