@@ -11,7 +11,13 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// TestStructpbSimple tests writing *structpb.Struct as JSON to byte array columns
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
 func TestStructpbSimple(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64  `parquet:"id"`
@@ -25,11 +31,11 @@ func TestStructpbSimple(t *testing.T) {
 
 	schema := SchemaOf(ReadRecord{})
 
-	testData := mustNewStruct(map[string]any{
+	testData := must(structpb.NewStruct(map[string]any{
 		"name":   "Alice",
 		"age":    float64(30),
 		"active": true,
-	})
+	}))
 
 	records := []WriteRecord{
 		{ID: 1, Data: testData},
@@ -74,7 +80,6 @@ func TestStructpbSimple(t *testing.T) {
 	}
 }
 
-// TestStructpbNested tests nested *structpb.Struct structures
 func TestStructpbNested(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64  `parquet:"id"`
@@ -88,7 +93,7 @@ func TestStructpbNested(t *testing.T) {
 
 	schema := SchemaOf(ReadRecord{})
 
-	testData := mustNewStruct(map[string]any{
+	testData := must(structpb.NewStruct(map[string]any{
 		"user": map[string]any{
 			"name": "Alice",
 			"age":  float64(30),
@@ -97,7 +102,7 @@ func TestStructpbNested(t *testing.T) {
 				"city":   "NYC",
 			},
 		},
-	})
+	}))
 
 	records := []WriteRecord{
 		{ID: 1, Data: testData},
@@ -141,7 +146,6 @@ func TestStructpbNested(t *testing.T) {
 	}
 }
 
-// TestStructpbWithArrays tests *structpb.Struct containing arrays
 func TestStructpbWithArrays(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64  `parquet:"id"`
@@ -155,10 +159,10 @@ func TestStructpbWithArrays(t *testing.T) {
 
 	schema := SchemaOf(ReadRecord{})
 
-	testData := mustNewStruct(map[string]any{
+	testData := must(structpb.NewStruct(map[string]any{
 		"tags":   []any{"admin", "developer", "reviewer"},
 		"scores": []any{float64(95), float64(87), float64(92)},
-	})
+	}))
 
 	records := []WriteRecord{
 		{ID: 1, Data: testData},
@@ -196,7 +200,6 @@ func TestStructpbWithArrays(t *testing.T) {
 	}
 }
 
-// TestStructpbEmptyAndNull tests empty struct and null handling
 func TestStructpbEmptyAndNull(t *testing.T) {
 	type ReadRecord struct {
 		ID    int64  `parquet:"id"`
@@ -212,7 +215,7 @@ func TestStructpbEmptyAndNull(t *testing.T) {
 
 	schema := SchemaOf(ReadRecord{})
 
-	emptyStruct := mustNewStruct(map[string]any{})
+	emptyStruct := must(structpb.NewStruct(map[string]any{}))
 
 	records := []WriteRecord{
 		{ID: 1, Data1: emptyStruct, Data2: nil},
@@ -253,7 +256,6 @@ func TestStructpbEmptyAndNull(t *testing.T) {
 	}
 }
 
-// TestStructpbComplexNesting tests complex nested structures
 func TestStructpbComplexNesting(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64  `parquet:"id"`
@@ -267,7 +269,7 @@ func TestStructpbComplexNesting(t *testing.T) {
 
 	schema := SchemaOf(ReadRecord{})
 
-	testData := mustNewStruct(map[string]any{
+	testData := must(structpb.NewStruct(map[string]any{
 		"items": []any{
 			map[string]any{
 				"name": "item1",
@@ -284,7 +286,7 @@ func TestStructpbComplexNesting(t *testing.T) {
 				},
 			},
 		},
-	})
+	}))
 
 	records := []WriteRecord{
 		{ID: 1, Data: testData},
@@ -336,7 +338,6 @@ func TestStructpbComplexNesting(t *testing.T) {
 	}
 }
 
-// TestStructpbRoundTrip tests writing and reading back as *structpb.Struct
 func TestStructpbRoundTrip(t *testing.T) {
 	type WriteRecord struct {
 		ID   int64            `parquet:"id"`
@@ -350,7 +351,7 @@ func TestStructpbRoundTrip(t *testing.T) {
 
 	schema := SchemaOf(ReadRecord{})
 
-	original := mustNewStruct(map[string]any{
+	original := must(structpb.NewStruct(map[string]any{
 		"string":  "hello",
 		"number":  float64(42),
 		"boolean": true,
@@ -359,7 +360,7 @@ func TestStructpbRoundTrip(t *testing.T) {
 		"object": map[string]any{
 			"nested": "value",
 		},
-	})
+	}))
 
 	records := []WriteRecord{
 		{ID: 1, Data: original},
@@ -403,7 +404,6 @@ func TestStructpbRoundTrip(t *testing.T) {
 	}
 }
 
-// TestJsonliteSimple tests writing *jsonlite.Value as JSON to byte array columns
 func TestJsonliteSimple(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64  `parquet:"id"`
@@ -418,7 +418,7 @@ func TestJsonliteSimple(t *testing.T) {
 	schema := SchemaOf(ReadRecord{})
 
 	records := []WriteRecord{
-		{ID: 1, Data: mustParseJsonlite(`{"name":"Alice","age":30,"active":true}`)},
+		{ID: 1, Data: must(jsonlite.Parse(`{"name":"Alice","age":30,"active":true}`))},
 		{ID: 2, Data: nil},
 	}
 
@@ -460,7 +460,6 @@ func TestJsonliteSimple(t *testing.T) {
 	}
 }
 
-// TestJsonliteNested tests nested *jsonlite.Value structures
 func TestJsonliteNested(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64  `parquet:"id"`
@@ -477,7 +476,7 @@ func TestJsonliteNested(t *testing.T) {
 	records := []WriteRecord{
 		{
 			ID: 1,
-			Data: mustParseJsonlite(`{
+			Data: must(jsonlite.Parse(`{
 				"user": {
 					"name": "Alice",
 					"age": 30,
@@ -486,7 +485,7 @@ func TestJsonliteNested(t *testing.T) {
 						"city": "NYC"
 					}
 				}
-			}`),
+			}`)),
 		},
 	}
 
@@ -528,7 +527,6 @@ func TestJsonliteNested(t *testing.T) {
 	}
 }
 
-// TestJsonliteWithArrays tests *jsonlite.Value containing arrays
 func TestJsonliteWithArrays(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64  `parquet:"id"`
@@ -545,7 +543,7 @@ func TestJsonliteWithArrays(t *testing.T) {
 	records := []WriteRecord{
 		{
 			ID:   1,
-			Data: mustParseJsonlite(`{"tags":["admin","developer","reviewer"],"scores":[95,87,92]}`),
+			Data: must(jsonlite.Parse(`{"tags":["admin","developer","reviewer"],"scores":[95,87,92]}`)),
 		},
 	}
 
@@ -581,7 +579,6 @@ func TestJsonliteWithArrays(t *testing.T) {
 	}
 }
 
-// TestJsonliteEmptyAndNull tests empty object and null handling
 func TestJsonliteEmptyAndNull(t *testing.T) {
 	type ReadRecord struct {
 		ID    int64  `parquet:"id"`
@@ -597,8 +594,8 @@ func TestJsonliteEmptyAndNull(t *testing.T) {
 
 	schema := SchemaOf(ReadRecord{})
 
-	emptyJSON := mustParseJsonlite(`{}`)
-	nullJSON := mustParseJsonlite(`null`)
+	emptyJSON := must(jsonlite.Parse(`{}`))
+	nullJSON := must(jsonlite.Parse(`null`))
 
 	records := []WriteRecord{
 		{ID: 1, Data1: emptyJSON, Data2: nil},
@@ -640,7 +637,6 @@ func TestJsonliteEmptyAndNull(t *testing.T) {
 	}
 }
 
-// TestJsonliteComplexNesting tests complex nested structures
 func TestJsonliteComplexNesting(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64  `parquet:"id"`
@@ -657,7 +653,7 @@ func TestJsonliteComplexNesting(t *testing.T) {
 	records := []WriteRecord{
 		{
 			ID: 1,
-			Data: mustParseJsonlite(`{
+			Data: must(jsonlite.Parse(`{
 				"items": [
 					{
 						"name": "item1",
@@ -674,7 +670,7 @@ func TestJsonliteComplexNesting(t *testing.T) {
 						}
 					}
 				]
-			}`),
+			}`)),
 		},
 	}
 
@@ -724,7 +720,6 @@ func TestJsonliteComplexNesting(t *testing.T) {
 	}
 }
 
-// TestJsonliteRoundTrip tests writing and reading back as *jsonlite.Value
 func TestJsonliteRoundTrip(t *testing.T) {
 	type WriteRecord struct {
 		ID   int64           `parquet:"id"`
@@ -738,7 +733,7 @@ func TestJsonliteRoundTrip(t *testing.T) {
 
 	schema := SchemaOf(ReadRecord{})
 
-	original := mustParseJsonlite(`{
+	original := must(jsonlite.Parse(`{
 		"string": "hello",
 		"number": 42,
 		"boolean": true,
@@ -747,7 +742,7 @@ func TestJsonliteRoundTrip(t *testing.T) {
 		"object": {
 			"nested": "value"
 		}
-	}`)
+	}`))
 
 	records := []WriteRecord{
 		{ID: 1, Data: original},
@@ -791,7 +786,6 @@ func TestJsonliteRoundTrip(t *testing.T) {
 	}
 }
 
-// TestJsonlitePrimitives tests different JSON primitive types
 func TestJsonlitePrimitives(t *testing.T) {
 	type ReadRecord struct {
 		ID      int64  `parquet:"id"`
@@ -814,10 +808,10 @@ func TestJsonlitePrimitives(t *testing.T) {
 	records := []WriteRecord{
 		{
 			ID:      1,
-			String:  mustParseJsonlite(`"hello"`),
-			Number:  mustParseJsonlite(`42.5`),
-			Boolean: mustParseJsonlite(`true`),
-			Null:    mustParseJsonlite(`null`),
+			String:  must(jsonlite.Parse(`"hello"`)),
+			Number:  must(jsonlite.Parse(`42.5`)),
+			Boolean: must(jsonlite.Parse(`true`)),
+			Null:    must(jsonlite.Parse(`null`)),
 		},
 	}
 
@@ -840,20 +834,18 @@ func TestJsonlitePrimitives(t *testing.T) {
 
 	// Verify primitives
 	// Note: jsonlite.Value writes strings without quotes to BYTE_ARRAY
-	if !bytes.Equal(readRecords[0].String, []byte(`hello`)) {
-		t.Errorf("string mismatch: got %s", string(readRecords[0].String))
+	expected := ReadRecord{
+		ID:      1,
+		String:  []byte("hello"),
+		Number:  []byte("42.5"),
+		Boolean: readRecords[0].Boolean, // Boolean is written as boolean value, not byte array
+		Null:    []byte{},               // Null writes no bytes to required fields
 	}
-	if !bytes.Equal(readRecords[0].Number, []byte(`42.5`)) {
-		t.Errorf("number mismatch: got %s", string(readRecords[0].Number))
-	}
-	// Boolean is written as a boolean value (1 or 0), not as true/false byte array
-	// Null writes no bytes to required fields
-	if len(readRecords[0].Null) != 0 {
-		t.Errorf("null mismatch: got %s", string(readRecords[0].Null))
+	if !reflect.DeepEqual(readRecords[0], expected) {
+		t.Errorf("mismatch:\nexpected: %+v\ngot: %+v", expected, readRecords[0])
 	}
 }
 
-// TestJsonliteArrayOfPrimitives tests arrays of primitive types
 func TestJsonliteArrayOfPrimitives(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64  `parquet:"id"`
@@ -868,10 +860,10 @@ func TestJsonliteArrayOfPrimitives(t *testing.T) {
 	schema := SchemaOf(ReadRecord{})
 
 	records := []WriteRecord{
-		{ID: 1, Data: mustParseJsonlite(`[1, 2, 3, 4, 5]`)},
-		{ID: 2, Data: mustParseJsonlite(`["a", "b", "c"]`)},
-		{ID: 3, Data: mustParseJsonlite(`[true, false, true]`)},
-		{ID: 4, Data: mustParseJsonlite(`[]`)},
+		{ID: 1, Data: must(jsonlite.Parse(`[1, 2, 3, 4, 5]`))},
+		{ID: 2, Data: must(jsonlite.Parse(`["a", "b", "c"]`))},
+		{ID: 3, Data: must(jsonlite.Parse(`[true, false, true]`))},
+		{ID: 4, Data: must(jsonlite.Parse(`[]`))},
 	}
 
 	buf := new(bytes.Buffer)
@@ -908,22 +900,4 @@ func TestJsonliteArrayOfPrimitives(t *testing.T) {
 			t.Errorf("record %d: failed to unmarshal: %v", tt.index, err)
 		}
 	}
-}
-
-// Helper function to create structpb.Struct or panic
-func mustNewStruct(m map[string]any) *structpb.Struct {
-	s, err := structpb.NewStruct(m)
-	if err != nil {
-		panic(err)
-	}
-	return s
-}
-
-// Helper function to parse jsonlite.Value or panic
-func mustParseJsonlite(s string) *jsonlite.Value {
-	v, err := jsonlite.Parse(s)
-	if err != nil {
-		panic(err)
-	}
-	return v
 }
