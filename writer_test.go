@@ -784,25 +784,25 @@ message firstAndLastName {
 }
 
 
-Row group 0:  count: 3  107.67 B records  start: 4  total(compressed): 323 B total(uncompressed):299 B
+Row group 0:  count: 3  109.67 B records  start: 4  total(compressed): 329 B total(uncompressed):305 B
 --------------------------------------------------------------------------------
             type      encodings count     avg size   nulls   min / max
-first_name  BINARY    Z _ R     3         38.00 B            "Han" / "Luke"
-last_name   BINARY    Z   D     3         69.67 B            "Skywalker" / "Solo"
+first_name  BINARY    Z _ R     3         38.67 B    0       "Han" / "Luke"
+last_name   BINARY    Z   D     3         71.00 B    0       "Skywalker" / "Solo"
 
 
 Column: first_name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
   0-D    dict  Z _  3       7.67 B     23 B
-  0-1    data  Z R  3       2.33 B     7 B                         "Han" / "Luke"
+  0-1    data  Z R  3       2.33 B     7 B                 0       "Han" / "Luke"
 
 
 Column: last_name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       28.00 B    56 B                        "Skywalker" / "Solo"
-  0-1    data  Z D  1       19.00 B    19 B                        "Skywalker" / "Skywalker"
+  0-0    data  Z D  2       28.00 B    56 B                0       "Skywalker" / "Solo"
+  0-1    data  Z D  1       19.00 B    19 B                0       "Skywalker" / "Skywalker"
 
 `,
 	},
@@ -826,11 +826,11 @@ message firstAndLastName {
 }
 
 
-Row group 0:  count: 3  109.67 B records  start: 4  total(compressed): 329 B total(uncompressed):314 B
+Row group 0:  count: 3  111.67 B records  start: 4  total(compressed): 335 B total(uncompressed):320 B
 --------------------------------------------------------------------------------
             type      encodings count     avg size   nulls   min / max
-first_name  BINARY    Z _ R     3         36.67 B            "Han" / "Luke"
-last_name   BINARY    Z   D     3         73.00 B            "Skywalker" / "Solo"
+first_name  BINARY    Z _ R     3         37.33 B    0       "Han" / "Luke"
+last_name   BINARY    Z   D     3         74.33 B    0       "Skywalker" / "Solo"
 
 
 Column: first_name
@@ -877,12 +877,12 @@ message timeseries {
 }
 
 
-Row group 0:  count: 10  121.70 B records  start: 4  total(compressed): 1.188 kB total(uncompressed):1.312 kB
+Row group 0:  count: 10  123.70 B records  start: 4  total(compressed): 1.208 kB total(uncompressed):1.331 kB
 --------------------------------------------------------------------------------
            type      encodings count     avg size   nulls   min / max
-name       BINARY    G _ R     10        29.00 B            "http_request_total" / "http_request_total"
-timestamp  INT64     G   D     10        46.70 B            "1639444033" / "1639444144"
-value      DOUBLE    G   _     10        46.00 B            "-0.0" / "100.0"
+name       BINARY    G _ R     10        29.40 B    0       "http_request_total" / "http_request_total"
+timestamp  INT64     G   D     10        47.50 B    0       "1639444033" / "1639444144"
+value      DOUBLE    G   _     10        46.80 B    0       "-0.0" / "100.0"
 
 
 Column: name
@@ -953,32 +953,32 @@ message AddressBook {
 }
 
 
-Row group 0:  count: 2  384.00 B records  start: 4  total(compressed): 768 B total(uncompressed):691 B
+Row group 0:  count: 2  387.00 B records  start: 4  total(compressed): 774 B total(uncompressed):697 B
 --------------------------------------------------------------------------------
                       type      encodings count     avg size   nulls   min / max
-owner                 BINARY    Z         2         70.00 B            "A. Nonymous" / "Julien Le Dem"
-ownerPhoneNumbers     BINARY    G         3         80.33 B    1       "555 123 4567" / "555 666 1337"
-contacts.name         BINARY    _         3         70.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+owner                 BINARY    Z         2         71.00 B    0       "A. Nonymous" / "Julien Le Dem"
+ownerPhoneNumbers     BINARY    G         3         81.00 B    1       "555 123 4567" / "555 666 1337"
+contacts.name         BINARY    _         3         70.67 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
 contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
 
 
 Column: owner
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       25.00 B    50 B                        "A. Nonymous" / "Julien Le Dem"
+  0-0    data  Z D  2       25.00 B    50 B                0       "A. Nonymous" / "Julien Le Dem"
 
 
 Column: ownerPhoneNumbers
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       32.00 B    64 B                        "555 123 4567" / "555 666 1337"
+  0-0    data  Z D  2       32.00 B    64 B                0       "555 123 4567" / "555 666 1337"
   0-1    data  Z D  1       17.00 B    17 B                1
 
 
 Column: contacts.name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       36.50 B    73 B                        "Chris Aniszczyk" / "Dmitriy Ryaboy"
+  0-0    data  Z D  2       36.50 B    73 B                0       "Chris Aniszczyk" / "Dmitriy Ryaboy"
   0-1    data  Z D  1       17.00 B    17 B                1
 
 
@@ -1032,12 +1032,12 @@ message AddressBook {
 }
 
 
-Row group 0:  count: 2  377.50 B records  start: 4  total(compressed): 755 B total(uncompressed):678 B
+Row group 0:  count: 2  380.50 B records  start: 4  total(compressed): 761 B total(uncompressed):684 B
 --------------------------------------------------------------------------------
                       type      encodings count     avg size   nulls   min / max
-owner                 BINARY    Z         2         72.50 B            "A. Nonymous" / "Julien Le Dem"
-ownerPhoneNumbers     BINARY    G         3         78.00 B    1       "555 123 4567" / "555 666 1337"
-contacts.name         BINARY    _         3         68.00 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
+owner                 BINARY    Z         2         73.50 B    0       "A. Nonymous" / "Julien Le Dem"
+ownerPhoneNumbers     BINARY    G         3         78.67 B    1       "555 123 4567" / "555 666 1337"
+contacts.name         BINARY    _         3         68.67 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
 contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
 
 
@@ -1087,24 +1087,24 @@ message event {
 }
 
 
-Row group 0:  count: 2  100.00 B records  start: 4  total(compressed): 200 B total(uncompressed):200 B
+Row group 0:  count: 2  102.00 B records  start: 4  total(compressed): 204 B total(uncompressed):204 B
 --------------------------------------------------------------------------------
        type      encodings count     avg size   nulls   min / max
-name   BINARY    _ _ R     2         59.50 B            "customer1" / "customer2"
-value  DOUBLE    _   _     2         40.50 B            "1.0" / "42.0"
+name   BINARY    _ _ R     2         60.50 B    0       "customer1" / "customer2"
+value  DOUBLE    _   _     2         41.50 B    0       "1.0" / "42.0"
 
 
 Column: name
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
   0-D    dict  _ _  2       13.00 B    26 B
-  0-1    data  _ R  2       2.50 B     5 B                         "customer1" / "customer2"
+  0-1    data  _ R  2       2.50 B     5 B                 0       "customer1" / "customer2"
 
 
 Column: value
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ _  2       8.00 B     16 B                        "1.0" / "42.0"
+  0-0    data  _ _  2       8.00 B     16 B                0       "1.0" / "42.0"
 
 `,
 	},
@@ -1127,12 +1127,12 @@ message timeseriesNoEncoding {
 }
 
 
-Row group 0:  count: 1  289.00 B records  start: 4  total(compressed): 289 B total(uncompressed):289 B
+Row group 0:  count: 1  295.00 B records  start: 4  total(compressed): 295 B total(uncompressed):295 B
 --------------------------------------------------------------------------------
            type      encodings count     avg size   nulls   min / max
-name       BINARY    _         1         133.00 B           "http_request_total" / "http_request_total"
-timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
-value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+name       BINARY    _         1         135.00 B   0       "http_request_total" / "http_request_total"
+timestamp  INT64     _   _     1         80.00 B    0       "1639444033" / "1639444033"
+value      DOUBLE    _   _     1         80.00 B    0       "100.0" / "100.0"
 
 
 Column: name
@@ -1174,12 +1174,12 @@ message timeseriesNoEncoding {
 }
 
 
-Row group 0:  count: 1  288.00 B records  start: 4  total(compressed): 288 B total(uncompressed):288 B
+Row group 0:  count: 1  294.00 B records  start: 4  total(compressed): 294 B total(uncompressed):294 B
 --------------------------------------------------------------------------------
            type      encodings count     avg size   nulls   min / max
-name       BINARY    _   _     1         132.00 B           "http_request_total" / "http_request_total"
-timestamp  INT64     _   _     1         78.00 B            "1639444033" / "1639444033"
-value      DOUBLE    _   _     1         78.00 B            "100.0" / "100.0"
+name       BINARY    _   _     1         134.00 B   0       "http_request_total" / "http_request_total"
+timestamp  INT64     _   _     1         80.00 B    0       "1639444033" / "1639444033"
+value      DOUBLE    _   _     1         80.00 B    0       "100.0" / "100.0"
 
 
 Column: name
@@ -1225,12 +1225,12 @@ message timeseriesNoEncoding {
 }
 
 
-Row group 0:  count: 1  316.00 B records  start: 4  total(compressed): 316 B total(uncompressed):316 B
+Row group 0:  count: 1  322.00 B records  start: 4  total(compressed): 322 B total(uncompressed):322 B
 --------------------------------------------------------------------------------
            type      encodings count     avg size   nulls   min / max
-name       BINARY    _   D     1         138.00 B           "http_request_total" / "http_request_total"
-timestamp  INT64     _   D     1         79.00 B            "1639444033" / "1639444033"
-value      DOUBLE    _ _ R     1         99.00 B            "100.0" / "100.0"
+name       BINARY    _   D     1         140.00 B   0       "http_request_total" / "http_request_total"
+timestamp  INT64     _   D     1         81.00 B    0       "1639444033" / "1639444033"
+value      DOUBLE    _ _ R     1         101.00 B   0       "100.0" / "100.0"
 
 
 Column: name
