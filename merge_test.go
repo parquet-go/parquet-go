@@ -679,11 +679,13 @@ func TestMergeRowGroups(t *testing.T) {
 						{scenario: "copy", rowGroup: mergedCopy},
 					} {
 						t.Run(merge.scenario, func(t *testing.T) {
-							var expectedRows = test.output.Rows()
-							var mergedRows = merge.rowGroup.Rows()
-							var row1 = make([]parquet.Row, 1)
-							var row2 = make([]parquet.Row, 1)
-							var numRows int64
+							var (
+								expectedRows = test.output.Rows()
+								mergedRows   = merge.rowGroup.Rows()
+								row1         = make([]parquet.Row, 1)
+								row2         = make([]parquet.Row, 1)
+								numRows      int64
+							)
 
 							defer expectedRows.Close()
 							defer mergedRows.Close()
@@ -722,7 +724,6 @@ func TestMergeRowGroups(t *testing.T) {
 							}
 						})
 					}
-
 				})
 			}
 		})
@@ -801,8 +802,8 @@ func TestMergeRowGroups(t *testing.T) {
 					}
 
 					// Verify we can read all rows without error
-					var mergedRows = merged.Rows()
-					var rowBuf = make([]parquet.Row, 1)
+					mergedRows := merged.Rows()
+					rowBuf := make([]parquet.Row, 1)
 					var readRows int64
 
 					defer mergedRows.Close()
@@ -2267,6 +2268,7 @@ func TestMergeRowGroupsRetainsDictionaryEncoding(t *testing.T) {
 				}
 				// Check if page has a dictionary
 				dict := page.Dictionary()
+				parquet.Release(page)
 				if dict != nil {
 					hasDictionary = true
 					t.Logf("Column %s has dictionary with %d entries", colName, dict.Len())

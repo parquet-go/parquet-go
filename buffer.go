@@ -703,6 +703,23 @@ func (p *bufferedPage) Release() {
 	bufferUnref(p.repetitionLevels)
 }
 
+// ReleaseAndDetachValues releases all underlying buffers except the one backing byte-array contents. This
+// allows row and values read from the buffer to continue to be valid, instead relying
+// on the garbage collector after it is no longer needed.
+func (p *bufferedPage) ReleaseAndDetachValues() {
+	// We don't return the values buffer to the pool and allow
+	// standard GC to track it.  Remove debug finalizer.
+	if debug.TRACEBUF > 0 {
+		runtime.SetFinalizer(p.values, nil)
+	}
+
+	// Return everything else back to pools.
+	Release(p.Page)
+	bufferUnref(p.offsets)
+	bufferUnref(p.definitionLevels)
+	bufferUnref(p.repetitionLevels)
+}
+
 func bufferRef[T bufferedType](buf *buffer[T]) {
 	if buf != nil {
 		buf.ref()
@@ -757,6 +774,24 @@ func Release(page Page) {
 	}
 }
 
+// releaseAndDetachValues is an optional granular memory management method like Release,
+// that releases ownership of the page and potentially allows its underlying buffers
+// to be reused for new pages acquired from ReadPage.  However this method makes the
+// additional guarantee that string and byte array values read from the page will
+// continue to be valid past the page lifetime.  Page-specific implementations do this
+// by reusing what buffers they can, while not invaliding the string and byte array values.
+// Those are relinquished to the garbage collector and cleaned up when no longer referenced
+// by the calling application.
+//
+// Usage of this is optional and follows the guidelines as Release.
+//
+// Calling this function on pages that do not embed a reference counter does nothing.
+func releaseAndDetachValues(page Page) {
+	if p, _ := page.(detachable); p != nil {
+		p.ReleaseAndDetachValues()
+	}
+}
+
 type retainable interface {
 	Retain()
 }
@@ -765,7 +800,12 @@ type releasable interface {
 	Release()
 }
 
+type detachable interface {
+	ReleaseAndDetachValues()
+}
+
 var (
 	_ retainable = (*bufferedPage)(nil)
 	_ releasable = (*bufferedPage)(nil)
+	_ detachable = (*bufferedPage)(nil)
 )

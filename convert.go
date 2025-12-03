@@ -746,9 +746,14 @@ func (p *convertedPage) Release() {
 	Release(p.page)
 }
 
+func (p *convertedPage) ReleaseAndDetachValues() {
+	releaseAndDetachValues(p.page)
+}
+
 var (
 	_ retainable = (*convertedPage)(nil)
 	_ releasable = (*convertedPage)(nil)
+	_ detachable = (*convertedPage)(nil)
 )
 
 // convertedValueReader wraps a ValueReader to rewrite columnIndex in values.
