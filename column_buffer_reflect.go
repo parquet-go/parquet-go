@@ -824,6 +824,6 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) bool
 	bufferUUID.data = bufferUUID.data[:16]
 	copy(bufferUUID.data, parsedUUID[:])
 	col.writeByteArray(levels, bufferUUID.data)
-	buffers.put(bufferUUID)
+	bufferUUID.unref()
 	return true
 }
