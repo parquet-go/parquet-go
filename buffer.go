@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"io"
 	"log"
 	"reflect"
 	"runtime"
@@ -490,6 +491,10 @@ func newBuffer[T bufferedType](data []T) *buffer[T] {
 	return b
 }
 
+func (b *buffer[T]) reset() {
+	b.data = b.data[:0]
+}
+
 func (b *buffer[T]) ref() {
 	if b.refc.Add(1) <= 1 {
 		panic("BUG: buffer reference count overflow")
@@ -510,6 +515,31 @@ func monitorBufferRelease[T bufferedType](b *buffer[T]) {
 		log.Printf("PARQUETGODEBUG: buffer[%d] garbage collected with non-zero reference count (rc=%d)\n%s", b.id, rc, string(b.stack))
 	}
 }
+
+type bytesBufferWriter struct {
+	buf *buffer[byte]
+}
+
+func (w bytesBufferWriter) Write(p []byte) (int, error) {
+	w.buf.data = append(w.buf.data, p...)
+	return len(p), nil
+}
+
+func (w bytesBufferWriter) WriteByte(b byte) error {
+	w.buf.data = append(w.buf.data, b)
+	return nil
+}
+
+func (w bytesBufferWriter) WriteString(s string) (int, error) {
+	w.buf.data = append(w.buf.data, s...)
+	return len(s), nil
+}
+
+var (
+	_ io.ByteWriter   = bytesBufferWriter{}
+	_ io.StringWriter = bytesBufferWriter{}
+	_ io.Writer       = bytesBufferWriter{}
+)
 
 type bufferPool[T bufferedType] struct {
 	// Buckets are split in two groups for short and large buffers. In the short

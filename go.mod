@@ -8,6 +8,7 @@ require (
 	github.com/hexops/gotextdiff v1.0.3
 	github.com/klauspost/compress v1.17.9
 	github.com/parquet-go/bitpack v0.2.0
+	github.com/parquet-go/jsonlite v0.8.1
 	github.com/pierrec/lz4/v4 v4.1.21
 	golang.org/x/sys v0.38.0
 	google.golang.org/protobuf v1.34.2

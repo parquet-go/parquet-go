@@ -10,6 +10,10 @@ github.com/klauspost/compress v1.17.9 h1:6KIumPrER1LHsvBVuDa0r5xaG0Es51mhhB9BQB2
 github.com/klauspost/compress v1.17.9/go.mod h1:Di0epgTjJY877eYKx5yC51cX2A2Vl2ibi7bDH9ttBbw=
 github.com/parquet-go/bitpack v0.1.0 h1:zOo3XUOvwkWFmzG0pCbTCyZcO/BDXZDQCZ458pQOnH0=
 github.com/parquet-go/bitpack v0.1.0/go.mod h1:XnVk9TH+O40eOOmvpAVZ7K2ocQFrQwysLMnc6M/8lgs=
+github.com/parquet-go/jsonlite v0.8.1 h1:TdvfyPaVLTlz/Zsl+amWO4h0tpEwXwRkd7xa4iPhL5E=
+github.com/parquet-go/jsonlite v0.8.1/go.mod h1:nDjpkpL4EOtqs6NQugUsi0Rleq9sW/OtC1NnZEnxzF0=
+github.com/parquet-go/jsonlite v0.6.1 h1:OvIwJwfzMKd7vcy/7gvPPao5DlCCfnNatp8UFev47kU=
+github.com/parquet-go/jsonlite v0.6.1/go.mod h1:nDjpkpL4EOtqs6NQugUsi0Rleq9sW/OtC1NnZEnxzF0=
 github.com/parquet-go/bitpack v0.2.0 h1:1qA39QcA+HeExChZOATm78XMs5W2NY/Y2l17M5kDUuE=
 github.com/parquet-go/bitpack v0.2.0/go.mod h1:XnVk9TH+O40eOOmvpAVZ7K2ocQFrQwysLMnc6M/8lgs=
 github.com/pierrec/lz4/v4 v4.1.21 h1:yOVMLb6qSIDP67pl/5F7RepeKYu/VmTyEXvuMI5d9mQ=

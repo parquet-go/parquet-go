@@ -1358,6 +1358,48 @@ func TestMergeNodes(t *testing.T) {
 				20,
 			),
 		},
+		{
+			name: "preserve JSON logical type from first node when second has none",
+			nodes: []parquet.Node{
+				parquet.Group{
+					"data": parquet.JSON(), // Has JSON logical type
+				},
+				parquet.Group{
+					"data": parquet.Leaf(parquet.ByteArrayType), // Plain binary, no logical type
+				},
+			},
+			expected: parquet.Required(parquet.Group{
+				"data": parquet.Required(parquet.JSON()), // JSON logical type preserved
+			}),
+		},
+		{
+			name: "preserve JSON logical type from second node",
+			nodes: []parquet.Node{
+				parquet.Group{
+					"data": parquet.Leaf(parquet.ByteArrayType), // Plain binary, no logical type
+				},
+				parquet.Group{
+					"data": parquet.JSON(), // Has JSON logical type
+				},
+			},
+			expected: parquet.Required(parquet.Group{
+				"data": parquet.Required(parquet.JSON()), // JSON logical type preserved
+			}),
+		},
+		{
+			name: "preserve STRING logical type when merging with plain binary",
+			nodes: []parquet.Node{
+				parquet.Group{
+					"name": parquet.String(), // Has STRING logical type
+				},
+				parquet.Group{
+					"name": parquet.Leaf(parquet.ByteArrayType), // Plain binary
+				},
+			},
+			expected: parquet.Required(parquet.Group{
+				"name": parquet.Required(parquet.String()), // STRING preserved
+			}),
+		},
 	}
 
 	for _, test := range tests {

@@ -1887,3 +1887,226 @@ func TestProtoAnyOptional(t *testing.T) {
 		t.Errorf("expected second record to have nil data, got: %+v", readRecords[1].Data)
 	}
 }
+
+func TestProtoListValue(t *testing.T) {
+	// Test that structpb.ListValue can be written as JSON to byte array columns
+	type StructRecord struct {
+		ID   int64  `parquet:"id"`
+		Data []byte `parquet:"data"`
+	}
+
+	type ProtoListRecord struct {
+		ID   int64         `parquet:"id"`
+		Data proto.Message `parquet:"data"`
+	}
+
+	schema := SchemaOf(new(StructRecord))
+
+	// Create a structpb.ListValue
+	listValue := &structpb.ListValue{
+		Values: []*structpb.Value{
+			structpb.NewStringValue("item1"),
+			structpb.NewNumberValue(42),
+			structpb.NewBoolValue(true),
+			structpb.NewNullValue(),
+		},
+	}
+
+	// Write using proto.Message interface
+	protoRecords := []ProtoListRecord{
+		{ID: 1, Data: listValue},
+		{ID: 2, Data: nil},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[ProtoListRecord](buf, schema)
+	if _, err := writer.Write(protoRecords); err != nil {
+		t.Fatalf("failed to write proto records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back as Go struct
+	reader := NewGenericReader[StructRecord](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]StructRecord, len(protoRecords))
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	// Build expected records
+	expectedData, err := json.Marshal([]any{
+		"item1",
+		float64(42),
+		true,
+		nil,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal expected JSON: %v", err)
+	}
+
+	expected := []StructRecord{
+		{ID: 1, Data: expectedData},
+		{ID: 2, Data: []byte{}},
+	}
+
+	if !reflect.DeepEqual(readRecords, expected) {
+		t.Errorf("records mismatch:\ngot:  %+v\nwant: %+v", readRecords, expected)
+	}
+}
+
+func TestProtoListValueNested(t *testing.T) {
+	// Test ListValue with nested structures
+	type StructRecord struct {
+		ID   int64  `parquet:"id"`
+		Data []byte `parquet:"data"`
+	}
+
+	type ProtoListRecord struct {
+		ID   int64         `parquet:"id"`
+		Data proto.Message `parquet:"data"`
+	}
+
+	schema := SchemaOf(new(StructRecord))
+
+	// Create a nested ListValue
+	listValue := &structpb.ListValue{
+		Values: []*structpb.Value{
+			structpb.NewStringValue("hello"),
+			structpb.NewStructValue(&structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"active": structpb.NewBoolValue(true),
+					"nested": structpb.NewNumberValue(123),
+				},
+			}),
+			structpb.NewListValue(&structpb.ListValue{
+				Values: []*structpb.Value{
+					structpb.NewNumberValue(1),
+					structpb.NewNumberValue(2),
+					structpb.NewNumberValue(3),
+				},
+			}),
+		},
+	}
+
+	protoRecords := []ProtoListRecord{
+		{ID: 1, Data: listValue},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[ProtoListRecord](buf, schema)
+	if _, err := writer.Write(protoRecords); err != nil {
+		t.Fatalf("failed to write proto records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back as Go struct
+	reader := NewGenericReader[StructRecord](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]StructRecord, 1)
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	// Unmarshal the JSON to verify structure
+	var result []any
+	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+
+	// Build expected structure
+	expected := []any{
+		"hello",
+		map[string]any{
+			"active": true,
+			"nested": float64(123),
+		},
+		[]any{float64(1), float64(2), float64(3)},
+	}
+
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("records mismatch:\ngot:  %+v\nwant: %+v", result, expected)
+	}
+}
+
+func TestProtoStructValueDereferenced(t *testing.T) {
+	// Test that *structpb.Struct values are handled correctly in
+	// writeValueFuncOfRepeated without being dereferenced. This ensures the
+	// pointer path is taken in writeValueFuncOfLeaf.
+	type StructRecord struct {
+		ID   int64  `parquet:"id"`
+		Data []byte `parquet:"data"`
+	}
+
+	type ProtoStructRecord struct {
+		ID   int64         `parquet:"id"`
+		Data proto.Message `parquet:"data"`
+	}
+
+	schema := SchemaOf(new(StructRecord))
+
+	// Create a structpb.Struct with nested structpb.Struct and ListValue values
+	// to test the dereferencing scenario
+	s, err := structpb.NewStruct(map[string]any{
+		"nested_struct": map[string]any{
+			"inner": "value",
+		},
+		"nested_list": []any{"a", "b", "c"},
+	})
+	if err != nil {
+		t.Fatalf("failed to create struct: %v", err)
+	}
+
+	protoRecords := []ProtoStructRecord{
+		{ID: 1, Data: s},
+		{ID: 2, Data: (*structpb.Struct)(nil)},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[ProtoStructRecord](buf, schema)
+	if _, err := writer.Write(protoRecords); err != nil {
+		t.Fatalf("failed to write proto records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back and verify
+	reader := NewGenericReader[StructRecord](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]StructRecord, 2)
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	for i, r := range readRecords {
+		if r.ID != int64(i+1) {
+			t.Errorf("expected ID %d, got %d", i+1, r.ID)
+		}
+	}
+
+	// Verify the JSON content
+	var result map[string]any
+	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+
+	expected := map[string]any{
+		"nested_list":   []any{"a", "b", "c"},
+		"nested_struct": map[string]any{"inner": "value"},
+	}
+
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("records mismatch:\ngot:  %+v\nwant: %+v", result, expected)
+	}
+
+	if !bytes.Equal(readRecords[1].Data, []byte("null")) {
+		t.Errorf("expected nil data for second record, got: %s", string(readRecords[1].Data))
+	}
+}
