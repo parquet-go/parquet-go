@@ -40,33 +40,16 @@ func BenchmarkColumnChunkScan(b *testing.B) {
 func benchmarkColumnChunkScan[Row generator[Row]](b *testing.B) {
 	var model Row
 	b.Run(reflect.TypeOf(model).Name(), func(b *testing.B) {
-		prng := rand.New(rand.NewSource(0))
-		rows := make([]Row, benchmarkNumRows)
-		for i := range rows {
-			rows[i] = rows[i].generate(prng)
-		}
+		var (
+			f     = fileWithRows[Row](benchmarkNumRows)
+			cc    = f.RowGroups()[0].ColumnChunks()[0]
+			vbuf  = make([]parquet.Value, 1024)
+			count = 0
+		)
 
-		buf := bytes.Buffer{}
-		writer := parquet.NewGenericWriter[Row](&buf)
-		_, err := writer.Write(rows)
-		if err != nil {
-			panic(err)
-		}
-		err = writer.Close()
-		if err != nil {
-			panic(err)
-		}
-
-		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-		if err != nil {
-			panic(err)
-		}
-
-		cc := f.RowGroups()[0].ColumnChunks()[0]
-		vbuf := make([]parquet.Value, 1024)
-		count := 0
 		b.ResetTimer()
 		for b.Loop() {
+			// Read all values in all pages.
 			pages := cc.Pages()
 			for {
 				page, err := pages.ReadPage()
@@ -117,34 +100,14 @@ func TestColumnChunkAllocs(t *testing.T) {
 func testColumnChunkScan[Row generator[Row]](t *testing.T) {
 	var (
 		model   Row
-		numRows = benchmarkNumRows * 5
+		numRows = benchmarkNumRows * 5 // This is enough to get several pages of each type.
 		runs    = 10
 	)
 
 	t.Run(reflect.TypeOf(model).Name(), func(t *testing.T) {
-		prng := rand.New(rand.NewSource(0))
-		rows := make([]Row, numRows)
-		for i := range rows {
-			rows[i] = rows[i].generate(prng)
-		}
-
-		buf := bytes.Buffer{}
-		writer := parquet.NewGenericWriter[Row](&buf)
-		_, err := writer.Write(rows)
-		if err != nil {
-			panic(err)
-		}
-		err = writer.Close()
-		if err != nil {
-			panic(err)
-		}
-
-		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-		if err != nil {
-			panic(err)
-		}
-
+		f := fileWithRows[Row](numRows)
 		cc := f.RowGroups()[0].ColumnChunks()[0]
+
 		offsetIndex, err := cc.OffsetIndex()
 		if err != nil {
 			panic(err)
@@ -154,6 +117,8 @@ func testColumnChunkScan[Row generator[Row]](t *testing.T) {
 		dictSize := 0
 
 		allocPerRun := allocBytesPerRun(runs, func() {
+			// Iterate through all pages and return them to the pool.
+			// Value/offsetbuffers should be reused each run.
 			pages := cc.Pages()
 			defer pages.Close()
 			for {
@@ -164,6 +129,8 @@ func testColumnChunkScan[Row generator[Row]](t *testing.T) {
 				if err != nil {
 					panic(err)
 				}
+				// This isn't accessible earlier through public interfaces,
+				// so for now we remember the last dictionary size here.
 				if dict := page.Dictionary(); dict != nil {
 					dictSize = int(dict.Size())
 				}
@@ -183,6 +150,34 @@ func testColumnChunkScan[Row generator[Row]](t *testing.T) {
 	})
 }
 
+func fileWithRows[Row generator[Row]](numRows int) *parquet.File {
+	prng := rand.New(rand.NewSource(0))
+	rows := make([]Row, numRows)
+	for i := range rows {
+		rows[i] = rows[i].generate(prng)
+	}
+
+	buf := bytes.Buffer{}
+	writer := parquet.NewGenericWriter[Row](&buf)
+	_, err := writer.Write(rows)
+	if err != nil {
+		panic(err)
+	}
+	err = writer.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		panic(err)
+	}
+
+	return f
+}
+
+// allocBytesPerRun is like testing.AllocsPerRun but finds the average
+// number of bytes allocated instead of the number of allocations.
 func allocBytesPerRun(runs int, f func()) (avg uint64) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 
@@ -203,8 +198,5 @@ func allocBytesPerRun(runs int, f func()) (avg uint64) {
 	runtime.ReadMemStats(&memstats)
 
 	// Average the mallocs over the runs (not counting the warm-up).
-	// We are forced to return a float64 because the API is silly, but do
-	// the division as integers so we can ask if AllocsPerRun()==1
-	// instead of AllocsPerRun()<2.
 	return (memstats.TotalAlloc - start) / uint64(runs)
 }
