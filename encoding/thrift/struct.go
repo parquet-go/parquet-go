@@ -91,7 +91,7 @@ func forEachStructField(t reflect.Type, index []int, do func(structField)) {
 				flags = flags.with(required)
 			case "optional":
 				flags = flags.with(optional)
-			case "write_zero":
+			case "writezero":
 				flags = flags.with(writeZero)
 			default:
 				panic(fmt.Errorf("thrift struct field contains an unknown tag option %q in `thrift:\"%s\"`", opt, tag))

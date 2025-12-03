@@ -150,7 +150,7 @@ type Statistics struct {
 	// Count of null value in the column.
 	// Always written (even when zero) to conform to the Parquet spec at
 	// https://github.com/apache/parquet-format/blob/apache-parquet-format-2.12.0/src/main/thrift/parquet.thrift#L283-L291
-	NullCount int64 `thrift:"3,write_zero"`
+	NullCount int64 `thrift:"3,writezero"`
 	// Count of distinct values occurring.
 	DistinctCount int64 `thrift:"4"`
 	// Min and max values for the column, determined by its ColumnOrder.
