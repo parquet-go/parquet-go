@@ -259,7 +259,7 @@ func testColumnPageIndexWithFile(t *testing.T, rows rows) bool {
 		r := rand.New(rand.NewSource(5))
 		f, err := createParquetFile(rows,
 			parquet.PageBufferSize(r.Intn(49)+1),
-			parquet.ColumnIndexSizeLimit(4096),
+			parquet.ColumnIndexSizeLimit(func(path []string) int { return 4096 }),
 		)
 		if err != nil {
 			t.Error(err)
