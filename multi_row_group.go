@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"errors"
 	"io"
 	"slices"
 )
@@ -104,7 +105,75 @@ func (m *multiRowGroup) SortingColumns() []SortingColumn { return m.sorting }
 
 func (m *multiRowGroup) Schema() *Schema { return m.schema }
 
-func (m *multiRowGroup) Rows() Rows { return NewRowGroupRowReader(m) }
+func (m *multiRowGroup) Rows() Rows {
+	rows := make([]Rows, len(m.rowGroups))
+	counts := make([]int64, len(m.rowGroups))
+	rowCount := int64(0)
+	for i, rg := range m.rowGroups {
+		rows[i] = rg.Rows()
+		rowCount += rg.NumRows()
+		counts[i] = rowCount
+	}
+
+	return newMultiRows(m.schema, rows, counts)
+}
+
+type multiRows struct {
+	schema    *Schema
+	readers   []Rows
+	rowCounts []int64
+
+	curr int
+}
+
+func newMultiRows(schema *Schema, readers []Rows, rowCounts []int64) *multiRows {
+	return &multiRows{
+		schema:    schema,
+		readers:   readers,
+		rowCounts: rowCounts,
+	}
+}
+
+func (m *multiRows) ReadRows(rows []Row) (int, error) {
+	if m.curr == len(m.readers) {
+		return 0, io.EOF
+	}
+
+	n, err := m.readers[m.curr].ReadRows(rows)
+	switch err {
+	case io.EOF:
+		m.curr++
+		err = nil
+	default:
+		return n, err
+	}
+	if m.curr == len(m.readers) {
+		err = io.EOF
+	}
+	return n, err
+}
+
+func (m *multiRows) SeekToRow(row int64) error {
+	prevCount := int64(0)
+	for i, count := range m.rowCounts {
+		if row < count {
+			m.curr = i
+			return m.readers[i].SeekToRow(row - prevCount)
+		}
+		prevCount = count
+	}
+	return io.EOF
+}
+
+func (m *multiRows) Close() error {
+	errs := make([]error, len(m.readers))
+	for i, r := range m.readers {
+		errs[i] = r.Close()
+	}
+	return errors.Join(errs...)
+}
+
+func (m *multiRows) Schema() *Schema { return m.schema }
 
 type multiColumnChunk struct {
 	rowGroup *multiRowGroup
