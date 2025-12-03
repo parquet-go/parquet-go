@@ -59,7 +59,6 @@ func TestStructpbSimple(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify first record has valid JSON
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -74,7 +73,6 @@ func TestStructpbSimple(t *testing.T) {
 		t.Errorf("mismatch:\nexpected: %+v\ngot: %+v", expected, result)
 	}
 
-	// Verify second record is empty (nil *structpb.Struct writes empty byte array for required fields)
 	if len(readRecords[1].Data) != 0 {
 		t.Errorf("expected empty for second record, got: %s", string(readRecords[1].Data))
 	}
@@ -125,7 +123,6 @@ func TestStructpbNested(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify nested structure
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -185,7 +182,6 @@ func TestStructpbWithArrays(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify arrays
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -239,20 +235,12 @@ func TestStructpbEmptyAndNull(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// First record: empty struct and null
-	if !bytes.Equal(readRecords[0].Data1, []byte("{}")) {
-		t.Errorf("expected empty object {}, got: %s", string(readRecords[0].Data1))
+	expected := []ReadRecord{
+		{ID: 1, Data1: []byte("{}"), Data2: nil},
+		{ID: 2, Data1: []byte{}, Data2: []byte("{}")},
 	}
-	if len(readRecords[0].Data2) != 0 {
-		t.Errorf("expected empty byte array for nil optional, got: %s", string(readRecords[0].Data2))
-	}
-
-	// Second record: empty and empty struct
-	if len(readRecords[1].Data1) != 0 {
-		t.Errorf("expected empty, got: %s", string(readRecords[1].Data1))
-	}
-	if !bytes.Equal(readRecords[1].Data2, []byte("{}")) {
-		t.Errorf("expected empty object {}, got: %s", string(readRecords[1].Data2))
+	if !reflect.DeepEqual(readRecords, expected) {
+		t.Errorf("mismatch:\nexpected: %+v\ngot: %+v", expected, readRecords)
 	}
 }
 
@@ -309,7 +297,6 @@ func TestStructpbComplexNesting(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify complex structure
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -383,7 +370,6 @@ func TestStructpbRoundTrip(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Parse back to map and compare
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -439,7 +425,6 @@ func TestJsonliteSimple(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify first record has valid JSON
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -454,7 +439,6 @@ func TestJsonliteSimple(t *testing.T) {
 		t.Errorf("mismatch:\nexpected: %+v\ngot: %+v", expected, result)
 	}
 
-	// Verify second record is empty (nil *jsonlite.Value writes empty byte array for required fields)
 	if len(readRecords[1].Data) != 0 {
 		t.Errorf("expected empty for second record, got: %s", string(readRecords[1].Data))
 	}
@@ -506,7 +490,6 @@ func TestJsonliteNested(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify nested structure
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -564,7 +547,6 @@ func TestJsonliteWithArrays(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify arrays
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -619,21 +601,12 @@ func TestJsonliteEmptyAndNull(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// First record: empty object and nil
-	if !bytes.Equal(readRecords[0].Data1, []byte("{}")) {
-		t.Errorf("expected empty object {}, got: %s", string(readRecords[0].Data1))
+	expected := []ReadRecord{
+		{ID: 1, Data1: []byte("{}"), Data2: nil},
+		{ID: 2, Data1: []byte{}, Data2: []byte("{}")},
 	}
-	if len(readRecords[0].Data2) != 0 {
-		t.Errorf("expected empty byte array for nil optional, got: %s", string(readRecords[0].Data2))
-	}
-
-	// Second record: explicit null JSON value and empty object
-	// jsonlite writes `null` as a JSON value when parsed from "null" string
-	if len(readRecords[1].Data1) != 0 {
-		t.Errorf("expected empty (null value writes no bytes to required field), got: %s", string(readRecords[1].Data1))
-	}
-	if !bytes.Equal(readRecords[1].Data2, []byte("{}")) {
-		t.Errorf("expected empty object {}, got: %s", string(readRecords[1].Data2))
+	if !reflect.DeepEqual(readRecords, expected) {
+		t.Errorf("mismatch:\nexpected: %+v\ngot: %+v", expected, readRecords)
 	}
 }
 
@@ -691,7 +664,6 @@ func TestJsonliteComplexNesting(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify complex structure
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -765,7 +737,6 @@ func TestJsonliteRoundTrip(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Parse back to map and compare
 	var result map[string]any
 	if err := json.Unmarshal(readRecords[0].Data, &result); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -832,14 +803,12 @@ func TestJsonlitePrimitives(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify primitives
-	// Note: jsonlite.Value writes strings without quotes to BYTE_ARRAY
 	expected := ReadRecord{
 		ID:      1,
 		String:  []byte("hello"),
 		Number:  []byte("42.5"),
-		Boolean: readRecords[0].Boolean, // Boolean is written as boolean value, not byte array
-		Null:    []byte{},               // Null writes no bytes to required fields
+		Boolean: readRecords[0].Boolean,
+		Null:    []byte{},
 	}
 	if !reflect.DeepEqual(readRecords[0], expected) {
 		t.Errorf("mismatch:\nexpected: %+v\ngot: %+v", expected, readRecords[0])
@@ -883,7 +852,6 @@ func TestJsonliteArrayOfPrimitives(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify arrays
 	tests := []struct {
 		index    int
 		expected string
