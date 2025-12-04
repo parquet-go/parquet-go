@@ -1,7 +1,6 @@
 package parquet
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -22,7 +21,7 @@ func jsonParse(data []byte) (*jsonlite.Value, error) {
 	return jsonlite.Parse(unsafecast.String(data))
 }
 
-func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonlite.Value, buf *bytes.Buffer, node Node) {
+func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonlite.Value, node Node) {
 	switch val.Kind() {
 	case jsonlite.Null:
 		col.writeNull(levels)
@@ -31,13 +30,14 @@ func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonlite.Value,
 	case jsonlite.Number:
 		writeJSONNumber(col, levels, json.Number(val.String()), node)
 	case jsonlite.String:
-		writeJSONString(col, levels, val.String(), buf, node)
+		writeJSONString(col, levels, val.String(), node)
 	default:
 		// Nested objects/arrays shouldn't appear in leaf nodes, but if they do,
 		// serialize back to JSON bytes for BYTE_ARRAY columns
-		buf.Reset()
+		buf := getColumnWriteBuffer()
 		buf.Write(val.Append(buf.AvailableBuffer()))
 		col.writeByteArray(levels, buf.Bytes())
+		putColumnWriteBuffer(buf)
 	}
 }
 
@@ -84,7 +84,7 @@ func writeJSONToRepeated(columns []ColumnBuffer, levels columnLevels, val *jsonl
 	elementWriter(columns, levels, reflect.ValueOf(val))
 }
 
-func writeJSONString(col ColumnBuffer, levels columnLevels, str string, buf *bytes.Buffer, node Node) {
+func writeJSONString(col ColumnBuffer, levels columnLevels, str string, node Node) {
 	typ := node.Type()
 
 	if logicalType := typ.LogicalType(); logicalType != nil {
@@ -121,7 +121,7 @@ func writeJSONString(col ColumnBuffer, levels columnLevels, str string, buf *byt
 			// Only parse UUID strings when writing to binary UUID columns
 			// (FIXED_LEN_BYTE_ARRAY with 16 bytes). If writing to a STRING
 			// column with UUID logical type, write the string as-is.
-			writeUUID(col, levels, str, buf, typ)
+			writeUUID(col, levels, str, typ)
 			return
 		}
 	}

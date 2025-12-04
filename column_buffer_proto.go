@@ -69,18 +69,20 @@ func writeProtoDuration(col ColumnBuffer, levels columnLevels, dur *durationpb.D
 	}
 }
 
-func writeProtoStruct(col ColumnBuffer, levels columnLevels, s *structpb.Struct, b *bytes.Buffer, node Node) {
-	b.Reset()
+func writeProtoStruct(col ColumnBuffer, levels columnLevels, s *structpb.Struct, node Node) {
+	b := getColumnWriteBuffer()
 	b.Grow(2 * proto.Size(s))
 	writeProtoStructJSON(b, s)
 	col.writeByteArray(levels, b.Bytes())
+	putColumnWriteBuffer(b)
 }
 
-func writeProtoList(col ColumnBuffer, levels columnLevels, l *structpb.ListValue, b *bytes.Buffer, node Node) {
-	b.Reset()
+func writeProtoList(col ColumnBuffer, levels columnLevels, l *structpb.ListValue, node Node) {
+	b := getColumnWriteBuffer()
 	b.Grow(2 * proto.Size(l))
 	writeProtoListValueJSON(b, l)
 	col.writeByteArray(levels, b.Bytes())
+	putColumnWriteBuffer(b)
 }
 
 func writeProtoStructJSON(b *bytes.Buffer, s *structpb.Struct) {
