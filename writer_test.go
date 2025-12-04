@@ -2036,7 +2036,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 		writer := parquet.NewGenericWriter[Row](buf, parquet.MaxRowsPerRowGroup(10))
 
 		const numGroups = 5
-		rgs := make([]parquet.ConcurrentRowGroupWriter, numGroups)
+		rgs := make([]*parquet.ConcurrentRowGroupWriter, numGroups)
 
 		// Create row groups sequentially
 		for i := range rgs {
@@ -2097,7 +2097,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 		writer := parquet.NewGenericWriter[Row](buf, parquet.MaxRowsPerRowGroup(10))
 
 		const numGroups = 5
-		rgs := make([]parquet.ConcurrentRowGroupWriter, numGroups)
+		rgs := make([]*parquet.ConcurrentRowGroupWriter, numGroups)
 
 		// Create all row groups
 		for i := range rgs {
@@ -2110,7 +2110,7 @@ func TestConcurrentRowGroupWriter(t *testing.T) {
 		errs := make([]error, numGroups)
 		for i := range rgs {
 			wg.Add(1)
-			go func(index int, rg parquet.ConcurrentRowGroupWriter) {
+			go func(index int, rg *parquet.ConcurrentRowGroupWriter) {
 				defer wg.Done()
 				for j := range 10 {
 					rows := []parquet.Row{
@@ -2294,7 +2294,7 @@ func TestConcurrentRowGroupWriterWithColumnWriters(t *testing.T) {
 		writer := parquet.NewGenericWriter[Row](buf)
 
 		const numGroups = 3
-		rgs := make([]parquet.ConcurrentRowGroupWriter, numGroups)
+		rgs := make([]*parquet.ConcurrentRowGroupWriter, numGroups)
 
 		// Create row groups
 		for i := range rgs {
@@ -2305,7 +2305,7 @@ func TestConcurrentRowGroupWriterWithColumnWriters(t *testing.T) {
 		var wg sync.WaitGroup
 		for i := range rgs {
 			wg.Add(1)
-			go func(index int, rg parquet.ConcurrentRowGroupWriter) {
+			go func(index int, rg *parquet.ConcurrentRowGroupWriter) {
 				defer wg.Done()
 
 				cols := rg.ColumnWriters()
