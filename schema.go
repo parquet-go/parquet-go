@@ -732,6 +732,9 @@ func nodeOf(path []string, t reflect.Type, tags parquetTags, tagReplacements []S
 
 	case reflect.Struct:
 		return structNodeOf(path, t, tagReplacements)
+
+	case reflect.Interface:
+		return (Group)(nil)
 	}
 
 	if n == nil {
