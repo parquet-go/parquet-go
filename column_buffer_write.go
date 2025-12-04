@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/bits"
@@ -601,26 +602,23 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 	}
 
 	columnIndex := findColumnIndex(schema, schema, path)
+	buf := new(bytes.Buffer)
+	enc := json.NewEncoder(buf)
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
 			columns[columnIndex].writeNull(levels)
 			return
 		}
 
-		buf := buffers.get(8192)
-		defer buf.unref()
-
-		enc := json.NewEncoder(bytesBufferWriter{buf: buf})
-
 		for i := range rows.Len() {
 			val := reflect.NewAt(t, rows.Index(i))
-			buf.reset()
+			buf.Reset()
 
 			if err := enc.Encode(val.Interface()); err != nil {
 				panic(err)
 			}
 
-			columns[columnIndex].writeByteArray(levels, buf.data)
+			columns[columnIndex].writeByteArray(levels, buf.Bytes())
 		}
 	}
 }

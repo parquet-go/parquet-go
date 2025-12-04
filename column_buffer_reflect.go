@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
@@ -653,6 +654,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 	if columnIndex > MaxColumnIndex {
 		panic("row cannot be written because it has more than 127 columns")
 	}
+	var buf bytes.Buffer
 	return columnIndex + 1, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 		col := columns[columnIndex]
 
@@ -670,7 +672,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				}
 				switch msg := value.Interface().(type) {
 				case *jsonlite.Value:
-					writeJSONToLeaf(col, levels, msg, node)
+					writeJSONToLeaf(col, levels, msg, &buf, node)
 				case *json.Number:
 					writeJSONNumber(col, levels, *msg, node)
 				case *time.Time:
@@ -700,9 +702,9 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				case *wrapperspb.BytesValue:
 					col.writeByteArray(levels, msg.GetValue())
 				case *structpb.Struct:
-					writeProtoStruct(col, levels, msg, node)
+					writeProtoStruct(col, levels, msg, &buf, node)
 				case *structpb.ListValue:
-					writeProtoList(col, levels, msg, node)
+					writeProtoList(col, levels, msg, &buf, node)
 				case *anypb.Any:
 					writeProtoAny(col, levels, msg, node)
 				default:
@@ -747,7 +749,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 					typ := node.Type()
 					logicalType := typ.LogicalType()
 					if logicalType != nil && logicalType.UUID != nil {
-						writeUUID(col, levels, v, typ)
+						writeUUID(col, levels, v, &buf, typ)
 						return
 					}
 					col.writeByteArray(levels, unsafeByteArrayFromString(v))
@@ -760,7 +762,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 					if err != nil {
 						panic(fmt.Errorf("failed to parse JSON: %w", err))
 					}
-					writeJSONToLeaf(col, levels, val, node)
+					writeJSONToLeaf(col, levels, val, &buf, node)
 				default:
 					col.writeByteArray(levels, v)
 				}
@@ -812,7 +814,7 @@ func unsafeByteArrayFromString(s string) []byte {
 	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
 
-func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) bool {
+func writeUUID(col ColumnBuffer, levels columnLevels, str string, buf *bytes.Buffer, typ Type) {
 	if typ.Kind() != FixedLenByteArray || typ.Length() != 16 {
 		panic(fmt.Errorf("cannot write UUID string to non-FIXED_LEN_BYTE_ARRAY(16) column: %q", str))
 	}
@@ -820,10 +822,7 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) bool
 	if err != nil {
 		panic(fmt.Errorf("cannot parse string %q as UUID: %w", str, err))
 	}
-	bufferUUID := buffers.get(16)
-	bufferUUID.data = bufferUUID.data[:16]
-	copy(bufferUUID.data, parsedUUID[:])
-	col.writeByteArray(levels, bufferUUID.data)
-	bufferUUID.unref()
-	return true
+	buf.Reset()
+	buf.Write(parsedUUID[:])
+	col.writeByteArray(levels, buf.Bytes())
 }
