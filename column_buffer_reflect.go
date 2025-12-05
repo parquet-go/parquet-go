@@ -26,6 +26,50 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+// isNullValue determines if a reflect.Value represents a null value for parquet encoding.
+// This handles various types that can represent null including:
+// - Invalid reflect values
+// - Nil pointers/interfaces/slices/maps
+// - json.RawMessage containing "null"
+// - *jsonlite.Value with Kind == jsonlite.Null
+// - nil *structpb.Struct, *structpb.ListValue, *structpb.Value
+// - Zero values for value types
+func isNullValue(value reflect.Value) bool {
+	if !value.IsValid() {
+		return true
+	}
+
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if value.IsNil() {
+			return true
+		}
+		switch v := value.Interface().(type) {
+		case *jsonlite.Value:
+			return v.Kind() == jsonlite.Null
+		case *structpb.Value:
+			_, isNull := v.GetKind().(*structpb.Value_NullValue)
+			return isNull
+		}
+		return false
+
+	case reflect.Slice:
+		if value.IsNil() {
+			return true
+		}
+		if value.Type() == reflect.TypeFor[json.RawMessage]() {
+			return string(value.Bytes()) == "null"
+		}
+		return false
+
+	case reflect.Map:
+		return value.IsNil()
+
+	default:
+		return value.IsZero()
+	}
+}
+
 type anymap interface {
 	entries() (keys, values sparse.Array)
 }
@@ -289,23 +333,7 @@ func writeValueFuncOf(columnIndex int16, node Node) (int16, writeValueFunc) {
 func writeValueFuncOfOptional(columnIndex int16, node Node) (int16, writeValueFunc) {
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
-		if !value.IsValid() {
-			writeValue(columns, levels, value)
-			return
-		}
-		var isNull bool
-		switch value.Kind() {
-		case reflect.Pointer, reflect.Interface:
-			isNull = value.IsNil()
-		case reflect.Slice:
-			isNull = value.IsNil()
-			if !isNull && value.Type() == reflect.TypeFor[json.RawMessage]() {
-				isNull = string(value.Bytes()) == "null"
-			}
-		default:
-			isNull = value.IsZero()
-		}
-		if isNull {
+		if isNullValue(value) {
 			writeValue(columns, levels, value)
 		} else {
 			levels.definitionLevel++

@@ -217,6 +217,7 @@ func (col *optionalColumnBuffer) writeValues(levels columnLevels, rows sparse.Ar
 		return
 	}
 
+	baseLen := col.base.Len()
 	col.definitionLevels = appendLevel(col.definitionLevels, levels.definitionLevel, rows.Len())
 
 	i := len(col.rows)
@@ -233,7 +234,7 @@ func (col *optionalColumnBuffer) writeValues(levels columnLevels, rows sparse.Ar
 	if levels.definitionLevel != col.maxDefinitionLevel {
 		broadcastValueInt32(col.rows[i:], -1)
 	} else {
-		broadcastRangeInt32(col.rows[i:], int32(col.base.Len()))
+		broadcastRangeInt32(col.rows[i:], int32(baseLen))
 		col.base.writeValues(levels, rows)
 	}
 }
