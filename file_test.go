@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parquet-go/bitpack/unsafecast"
+	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go"
 )
 
@@ -139,6 +141,14 @@ func printColumns(t *testing.T, col *parquet.Column, indent string) {
 	}
 	indent += ". "
 
+	// Check if this is a JSON column
+	isJSONColumn := false
+	if col.Leaf() {
+		if logicalType := col.Type().LogicalType(); logicalType != nil && logicalType.Json != nil {
+			isJSONColumn = true
+		}
+	}
+
 	buffer := make([]parquet.Value, 42)
 	pages := col.Pages()
 	defer pages.Close()
@@ -164,6 +174,12 @@ func printColumns(t *testing.T, col *parquet.Column, indent string) {
 				}
 				if v.IsNull() {
 					nullCount++
+				} else if isJSONColumn {
+					// Validate that the value is valid JSON
+					data := v.ByteArray()
+					if !jsonlite.Valid(unsafecast.String(data)) {
+						t.Errorf("invalid JSON in column %d at path %s: %q", col.Index(), path, data)
+					}
 				}
 			}
 			numValues += int64(n)
