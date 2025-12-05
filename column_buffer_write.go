@@ -607,20 +607,20 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 			return
 		}
 
-		buf := buffers.get(8192)
-		defer buf.unref()
-
-		enc := json.NewEncoder(bytesBufferWriter{buf: buf})
+		buf := getColumnWriteBuffer()
+		defer putColumnWriteBuffer(buf)
 
 		for i := range rows.Len() {
 			val := reflect.NewAt(t, rows.Index(i))
-			buf.reset()
+			buf.Reset()
 
-			if err := enc.Encode(val.Interface()); err != nil {
+			enc := json.NewEncoder(buf)
+			err := enc.Encode(val.Interface())
+			if err != nil {
 				panic(err)
 			}
 
-			columns[columnIndex].writeByteArray(levels, buf.data)
+			columns[columnIndex].writeByteArray(levels, buf.Bytes())
 		}
 	}
 }

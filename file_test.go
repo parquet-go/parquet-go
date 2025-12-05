@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parquet-go/bitpack/unsafecast"
+	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go"
 )
 
@@ -139,6 +141,25 @@ func printColumns(t *testing.T, col *parquet.Column, indent string) {
 	}
 	indent += ". "
 
+	// Check column logical types and validate constraints
+	isJSONColumn := false
+	if col.Leaf() {
+		colType := col.Type()
+		if logicalType := colType.LogicalType(); logicalType != nil {
+			if logicalType.Json != nil {
+				isJSONColumn = true
+			}
+			// Validate UUID logical type is only applied to FIXED_LEN_BYTE_ARRAY(16)
+			if logicalType.UUID != nil {
+				if colType.Kind() != parquet.FixedLenByteArray {
+					t.Errorf("UUID logical type at path %s must be applied to FIXED_LEN_BYTE_ARRAY, got %v", path, colType.Kind())
+				} else if colType.Length() != 16 {
+					t.Errorf("UUID logical type at path %s must be applied to FIXED_LEN_BYTE_ARRAY(16), got length %d", path, colType.Length())
+				}
+			}
+		}
+	}
+
 	buffer := make([]parquet.Value, 42)
 	pages := col.Pages()
 	defer pages.Close()
@@ -164,6 +185,12 @@ func printColumns(t *testing.T, col *parquet.Column, indent string) {
 				}
 				if v.IsNull() {
 					nullCount++
+				} else if isJSONColumn {
+					// Validate that the value is valid JSON
+					data := v.ByteArray()
+					if !jsonlite.Valid(unsafecast.String(data)) {
+						t.Errorf("invalid JSON in column %d at path %s: %q", col.Index(), path, data)
+					}
 				}
 			}
 			numValues += int64(n)
