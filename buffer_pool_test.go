@@ -20,18 +20,18 @@ func TestBufferPool(t *testing.T) {
 func TestChunkBufferPool(t *testing.T) {
 	// Test various chunk sizes to exercise different code paths
 	chunkSizes := []int{
-		1,        // Tiny chunks - extreme edge case
-		2,        // Very small chunks
-		3,        // Odd size
-		10,       // Small chunks
-		64,       // Cache line size
-		100,      // Medium small
-		256,      // Common small buffer
-		1024,     // 1KB
-		4096,     // Page size
-		8192,     // Common buffer size
-		65536,    // 64KB
-		256 * 1024, // 256KB (default)
+		1,           // Tiny chunks - extreme edge case
+		2,           // Very small chunks
+		3,           // Odd size
+		10,          // Small chunks
+		64,          // Cache line size
+		100,         // Medium small
+		256,         // Common small buffer
+		1024,        // 1KB
+		4096,        // Page size
+		8192,        // Common buffer size
+		65536,       // 64KB
+		256 * 1024,  // 256KB (default)
 		1024 * 1024, // 1MB
 	}
 
@@ -165,12 +165,12 @@ func TestBufferPoolStress(t *testing.T) {
 func TestChunkBufferPoolStress(t *testing.T) {
 	// Test stress scenarios with various chunk sizes
 	chunkSizes := []int{
-		1,        // Extreme: 1 byte chunks
-		10,       // Very small chunks
-		100,      // Small chunks
-		1024,     // 1KB chunks
-		4096,     // 4KB chunks
-		65536,    // 64KB chunks
+		1,          // Extreme: 1 byte chunks
+		10,         // Very small chunks
+		100,        // Small chunks
+		1024,       // 1KB chunks
+		4096,       // 4KB chunks
+		65536,      // 64KB chunks
 		256 * 1024, // 256KB chunks (default)
 	}
 
@@ -250,7 +250,7 @@ func testBufferPoolLargeSequentialWrites(t *testing.T, pool parquet.BufferPool) 
 	const numChunks = 10
 	expected := make([]byte, 0, chunkSize*numChunks)
 
-	for i := 0; i < numChunks; i++ {
+	for i := range numChunks {
 		chunk := make([]byte, chunkSize)
 		for j := range chunk {
 			chunk[j] = byte((i*chunkSize + j) % 256)
@@ -331,7 +331,7 @@ func testBufferPoolManySmallWrites(t *testing.T, pool parquet.BufferPool) {
 	const numWrites = 10000
 	var expected bytes.Buffer
 
-	for i := 0; i < numWrites; i++ {
+	for i := range numWrites {
 		size := (i % 100) + 1 // 1 to 100 bytes
 		chunk := make([]byte, size)
 		for j := range chunk {
@@ -626,7 +626,7 @@ func testBufferPoolConcurrentAccess(t *testing.T, pool parquet.BufferPool) {
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		go func(id int) {
 			defer wg.Done()
 
@@ -634,8 +634,8 @@ func testBufferPoolConcurrentAccess(t *testing.T, pool parquet.BufferPool) {
 			defer pool.PutBuffer(buffer)
 
 			// Each goroutine writes its own data
-			for i := 0; i < writesPerGoroutine; i++ {
-				data := []byte(fmt.Sprintf("goroutine-%d-write-%d\n", id, i))
+			for i := range writesPerGoroutine {
+				data := fmt.Appendf(nil, "goroutine-%d-write-%d\n", id, i)
 				if _, err := buffer.Write(data); err != nil {
 					t.Errorf("goroutine %d write %d failed: %v", id, i, err)
 					return
@@ -648,8 +648,8 @@ func testBufferPoolConcurrentAccess(t *testing.T, pool parquet.BufferPool) {
 				return
 			}
 
-			for i := 0; i < writesPerGoroutine; i++ {
-				expected := []byte(fmt.Sprintf("goroutine-%d-write-%d\n", id, i))
+			for i := range writesPerGoroutine {
+				expected := fmt.Appendf(nil, "goroutine-%d-write-%d\n", id, i)
 				actual := make([]byte, len(expected))
 				if _, err := io.ReadFull(buffer, actual); err != nil {
 					t.Errorf("goroutine %d read %d failed: %v", id, i, err)
@@ -720,7 +720,7 @@ func testBufferPoolMultiMegabyteWrites(t *testing.T, pool parquet.BufferPool) {
 		}
 
 		// Verify pattern
-		for i := 0; i < n; i++ {
+		for i := range n {
 			expected := byte((checkPos + int64(i)) % 256)
 			if readBuf[i] != expected {
 				t.Fatalf("data mismatch at position %d+%d: expected %d, got %d",
