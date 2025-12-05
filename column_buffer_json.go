@@ -22,9 +22,12 @@ func jsonParse(data []byte) (*jsonlite.Value, error) {
 }
 
 func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonlite.Value, node Node) {
-	if node.Type().Kind() == ByteArray {
-		writeJSONToByteArray(col, levels, val, node)
-		return
+	typ := node.Type()
+	if typ.Kind() == ByteArray {
+		if logicalType := typ.LogicalType(); logicalType != nil && logicalType.Json != nil {
+			writeJSONToByteArray(col, levels, val, node)
+			return
+		}
 	}
 	switch val.Kind() {
 	case jsonlite.Null:
