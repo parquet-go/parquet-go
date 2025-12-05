@@ -141,11 +141,22 @@ func printColumns(t *testing.T, col *parquet.Column, indent string) {
 	}
 	indent += ". "
 
-	// Check if this is a JSON column
+	// Check column logical types and validate constraints
 	isJSONColumn := false
 	if col.Leaf() {
-		if logicalType := col.Type().LogicalType(); logicalType != nil && logicalType.Json != nil {
-			isJSONColumn = true
+		colType := col.Type()
+		if logicalType := colType.LogicalType(); logicalType != nil {
+			if logicalType.Json != nil {
+				isJSONColumn = true
+			}
+			// Validate UUID logical type is only applied to FIXED_LEN_BYTE_ARRAY(16)
+			if logicalType.UUID != nil {
+				if colType.Kind() != parquet.FixedLenByteArray {
+					t.Errorf("UUID logical type at path %s must be applied to FIXED_LEN_BYTE_ARRAY, got %v", path, colType.Kind())
+				} else if colType.Length() != 16 {
+					t.Errorf("UUID logical type at path %s must be applied to FIXED_LEN_BYTE_ARRAY(16), got length %d", path, colType.Length())
+				}
+			}
 		}
 	}
 
