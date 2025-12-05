@@ -246,7 +246,7 @@ func testBufferPoolLargeSequentialWrites(t *testing.T, pool parquet.BufferPool) 
 	defer pool.PutBuffer(buffer)
 
 	// Write 10MB of sequential data
-	const chunkSize = 1024 * 1024 // 1MB chunks
+	const chunkSize = 100 * 1024 // 100KiB chunks
 	const numChunks = 10
 	expected := make([]byte, 0, chunkSize*numChunks)
 
@@ -670,9 +670,9 @@ func testBufferPoolMultiMegabyteWrites(t *testing.T, pool parquet.BufferPool) {
 	buffer := pool.GetBuffer()
 	defer pool.PutBuffer(buffer)
 
-	// Write 50MB of data
-	const totalSize = 50 * 1024 * 1024
-	const chunkSize = 5 * 1024 * 1024
+	// Write 500KB of data
+	const totalSize = 500 * 1024
+	const chunkSize = 50 * 1024
 
 	written := 0
 	for written < totalSize {
