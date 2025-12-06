@@ -376,7 +376,7 @@ var (
 // Use NewGenericWriter instead. To maintain dynamic behavior (schema unknown at compile time),
 // use "any" as the type parameter:
 //
-//	// This gives you the same behavior as the old Writer
+//	This gives you the same behavior as the old Writer
 //	w := parquet.NewGenericWriter[any](output, schema)
 //
 // This example showcases a typical use of parquet writers:
