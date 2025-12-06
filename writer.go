@@ -373,6 +373,12 @@ var (
 // Deprecated: A Writer uses a parquet schema and sequence of Go values to
 // produce a parquet file to an io.Writer.
 //
+// Use NewGenericWriter instead. To maintain dynamic behavior (schema unknown at compile time),
+// use "any" as the type parameter:
+//
+//	This gives you the same behavior as the old Writer
+//	w := parquet.NewGenericWriter[any](output, schema)
+//
 // This example showcases a typical use of parquet writers:
 //
 //	writer := parquet.NewWriter(output)
