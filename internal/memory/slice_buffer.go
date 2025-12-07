@@ -95,9 +95,7 @@ func (b *SliceBuffer[T]) Slice() []T {
 
 // Swap swaps the elements at indices i and j.
 func (b *SliceBuffer[T]) Swap(i, j int) {
-	if len(b.data) > 0 {
-		b.data[i], b.data[j] = b.data[j], b.data[i]
-	}
+	b.data[i], b.data[j] = b.data[j], b.data[i]
 }
 
 // Grow ensures the buffer has capacity for at least n more elements.

@@ -373,14 +373,6 @@ func TestSliceBufferSwap(t *testing.T) {
 	}
 }
 
-func TestSliceBufferSwapEmpty(t *testing.T) {
-	buf := new(SliceBuffer[int32])
-	buf.Swap(0, 1)
-	if buf.Len() != 0 {
-		t.Errorf("swap on empty buffer changed length")
-	}
-}
-
 func TestSliceBufferGrow(t *testing.T) {
 	buf := new(SliceBuffer[int32])
 	buf.Grow(100)
