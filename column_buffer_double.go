@@ -3,7 +3,6 @@ package parquet
 import (
 	"fmt"
 	"io"
-	"slices"
 	"strconv"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -17,20 +16,20 @@ func newDoubleColumnBuffer(typ Type, columnIndex int16, numValues int32) *double
 	return &doubleColumnBuffer{
 		doublePage: doublePage{
 			typ:         typ,
-			values:      make([]float64, 0, numValues),
 			columnIndex: ^columnIndex,
 		},
 	}
 }
 
 func (col *doubleColumnBuffer) Clone() ColumnBuffer {
-	return &doubleColumnBuffer{
+	cloned := &doubleColumnBuffer{
 		doublePage: doublePage{
 			typ:         col.typ,
-			values:      slices.Clone(col.values),
 			columnIndex: col.columnIndex,
 		},
 	}
+	cloned.values.Append(col.values.Slice()...)
+	return cloned
 }
 
 func (col *doubleColumnBuffer) ColumnIndex() (ColumnIndex, error) {
@@ -49,28 +48,31 @@ func (col *doubleColumnBuffer) Pages() Pages { return onePage(col.Page()) }
 
 func (col *doubleColumnBuffer) Page() Page { return &col.doublePage }
 
-func (col *doubleColumnBuffer) Reset() { col.values = col.values[:0] }
+func (col *doubleColumnBuffer) Reset() { col.values.Reset() }
 
-func (col *doubleColumnBuffer) Cap() int { return cap(col.values) }
+func (col *doubleColumnBuffer) Cap() int { return col.values.Cap() }
 
-func (col *doubleColumnBuffer) Len() int { return len(col.values) }
+func (col *doubleColumnBuffer) Len() int { return col.values.Len() }
 
-func (col *doubleColumnBuffer) Less(i, j int) bool { return col.values[i] < col.values[j] }
+func (col *doubleColumnBuffer) Less(i, j int) bool {
+	values := col.values.Slice()
+	return values[i] < values[j]
+}
 
 func (col *doubleColumnBuffer) Swap(i, j int) {
-	col.values[i], col.values[j] = col.values[j], col.values[i]
+	col.values.Swap(i, j)
 }
 
 func (col *doubleColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 8) != 0 {
 		return 0, fmt.Errorf("cannot write DOUBLE values from input of size %d", len(b))
 	}
-	col.values = append(col.values, unsafecast.Slice[float64](b)...)
+	col.values.Append(unsafecast.Slice[float64](b)...)
 	return len(b), nil
 }
 
 func (col *doubleColumnBuffer) WriteDoubles(values []float64) (int, error) {
-	col.values = append(col.values, values...)
+	col.values.Append(values...)
 	return len(values), nil
 }
 
@@ -80,41 +82,37 @@ func (col *doubleColumnBuffer) WriteValues(values []Value) (int, error) {
 }
 
 func (col *doubleColumnBuffer) writeValues(levels columnLevels, rows sparse.Array) {
-	if n := len(col.values) + rows.Len(); n > cap(col.values) {
-		col.values = append(make([]float64, 0, max(n, 2*cap(col.values))), col.values...)
-	}
-	n := len(col.values)
-	col.values = col.values[:n+rows.Len()]
-	sparse.GatherFloat64(col.values[n:], rows.Float64Array())
+	newValues := make([]float64, rows.Len())
+	sparse.GatherFloat64(newValues, rows.Float64Array())
+	col.values.Append(newValues...)
 }
 
 func (col *doubleColumnBuffer) writeBoolean(levels columnLevels, value bool) {
-	var floatValue float64
+	var uintValue float64
 	if value {
-		floatValue = 1
+		uintValue = 1
 	}
-	col.values = append(col.values, floatValue)
+	col.values.Append(uintValue)
 }
 
 func (col *doubleColumnBuffer) writeInt32(levels columnLevels, value int32) {
-	col.values = append(col.values, float64(value))
+	col.values.Append(float64(value))
 }
 
 func (col *doubleColumnBuffer) writeInt64(levels columnLevels, value int64) {
-	col.values = append(col.values, float64(value))
+	col.values.Append(float64(value))
 }
 
 func (col *doubleColumnBuffer) writeInt96(levels columnLevels, value deprecated.Int96) {
-	floatValue, _ := value.Int().Float64()
-	col.values = append(col.values, floatValue)
+	col.values.Append(float64(value.Int32()))
 }
 
 func (col *doubleColumnBuffer) writeFloat(levels columnLevels, value float32) {
-	col.values = append(col.values, float64(value))
+	col.values.Append(float64(value))
 }
 
 func (col *doubleColumnBuffer) writeDouble(levels columnLevels, value float64) {
-	col.values = append(col.values, value)
+	col.values.Append(float64(value))
 }
 
 func (col *doubleColumnBuffer) writeByteArray(levels columnLevels, value []byte) {
@@ -122,23 +120,24 @@ func (col *doubleColumnBuffer) writeByteArray(levels columnLevels, value []byte)
 	if err != nil {
 		panic("cannot write byte array to double column: " + err.Error())
 	}
-	col.values = append(col.values, floatValue)
+	col.values.Append(floatValue)
 }
 
 func (col *doubleColumnBuffer) writeNull(levels columnLevels) {
-	col.values = append(col.values, 0)
+	col.values.Append(0)
 }
 
 func (col *doubleColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
 	i := int(offset)
+	colValues := col.values.Slice()
 	switch {
 	case i < 0:
-		return 0, errRowIndexOutOfBounds(offset, int64(len(col.values)))
-	case i >= len(col.values):
+		return 0, errRowIndexOutOfBounds(offset, int64(len(colValues)))
+	case i >= len(colValues):
 		return 0, io.EOF
 	default:
-		for n < len(values) && i < len(col.values) {
-			values[n] = col.makeValue(col.values[i])
+		for n < len(values) && i < len(colValues) {
+			values[n] = col.makeValue(colValues[i])
 			n++
 			i++
 		}
