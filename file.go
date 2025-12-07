@@ -14,6 +14,7 @@ import (
 
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
+	"github.com/parquet-go/parquet-go/internal/memory"
 )
 
 const (
@@ -728,7 +729,7 @@ func (c *FileColumnChunk) readBloomFilter(reader io.ReaderAt) (*FileBloomFilter,
 type FilePages struct {
 	chunk    *FileColumnChunk
 	rbuf     *bufio.Reader
-	rbufpool *sync.Pool
+	rbufpool *memory.Pool[bufio.Reader]
 	section  io.SectionReader
 
 	protocol thrift.CompactProtocol
@@ -1113,28 +1114,26 @@ type putBufioReaderFunc func()
 
 var (
 	bufioReaderPoolLock sync.Mutex
-	bufioReaderPool     = map[int]*sync.Pool{}
+	bufioReaderPool     = map[int]*memory.Pool[bufio.Reader]{}
 )
 
-func getBufioReader(r io.Reader, bufferSize int) (*bufio.Reader, *sync.Pool) {
+func getBufioReader(r io.Reader, bufferSize int) (*bufio.Reader, *memory.Pool[bufio.Reader]) {
 	pool := getBufioReaderPool(bufferSize)
-	rbuf, _ := pool.Get().(*bufio.Reader)
-	if rbuf == nil {
-		rbuf = bufio.NewReaderSize(r, bufferSize)
-	} else {
-		rbuf.Reset(r)
-	}
+	rbuf := pool.Get(
+		func() *bufio.Reader { return bufio.NewReaderSize(r, bufferSize) },
+		func(rbuf *bufio.Reader) { rbuf.Reset(r) },
+	)
 	return rbuf, pool
 }
 
-func putBufioReader(rbuf *bufio.Reader, pool *sync.Pool) {
-	if rbuf != nil && pool != nil {
+func putBufioReader(rbuf *bufio.Reader, pool *memory.Pool[bufio.Reader]) {
+	if pool != nil {
 		rbuf.Reset(nil)
 		pool.Put(rbuf)
 	}
 }
 
-func getBufioReaderPool(size int) *sync.Pool {
+func getBufioReaderPool(size int) *memory.Pool[bufio.Reader] {
 	bufioReaderPoolLock.Lock()
 	defer bufioReaderPoolLock.Unlock()
 
@@ -1142,7 +1141,7 @@ func getBufioReaderPool(size int) *sync.Pool {
 		return pool
 	}
 
-	pool := &sync.Pool{}
+	pool := &memory.Pool[bufio.Reader]{}
 	bufioReaderPool[size] = pool
 	return pool
 }
