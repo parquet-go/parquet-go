@@ -6,12 +6,12 @@ import (
 	"math/bits"
 	"reflect"
 	"slices"
-	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -487,12 +487,12 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 	switch {
 	case t.ConvertibleTo(reflect.TypeFor[map[string]string]()):
 		writeMaps = func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
-			buffer, _ := stringArrayPool.Get().(*stringArray)
-			if buffer == nil {
-				buffer = new(stringArray)
-			}
 			numRows := rows.Len()
 			numValues := len(writers) * numRows
+			buffer := stringArrayPool.Get(
+				func() *stringArray { return new(stringArray) },
+				func(b *stringArray) { b.values = b.values[:0] },
+			)
 			buffer.values = slices.Grow(buffer.values, numValues)[:numValues]
 			defer stringArrayPool.Put(buffer)
 			defer clear(buffer.values)
@@ -551,7 +551,7 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 
 type stringArray struct{ values []string }
 
-var stringArrayPool sync.Pool // *stringArray
+var stringArrayPool memory.Pool[stringArray]
 
 // findColumnIndex finds the column index for a given node and path.
 // For leaf nodes, returns the column index directly.

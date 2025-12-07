@@ -8,9 +8,9 @@ import (
 	"math"
 	"math/big"
 	"strconv"
-	"sync"
 	"time"
 
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"golang.org/x/sys/cpu"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -63,8 +63,8 @@ type Conversion interface {
 type conversion struct {
 	columns []conversionColumn
 	schema  *Schema
-	buffers sync.Pool
-	// This field is used to size the column buffers held in the sync.Pool since
+	buffers memory.Pool[conversionBuffer]
+	// This field is used to size the column buffers held in the memory.Pool since
 	// they are intended to store the source rows being converted from.
 	numberOfSourceColumns int
 }
@@ -215,17 +215,19 @@ func multiConversionFunc(conversions []conversionFunc) conversionFunc {
 }
 
 func (c *conversion) getBuffer() *conversionBuffer {
-	b, _ := c.buffers.Get().(*conversionBuffer)
-	if b == nil {
-		b = &conversionBuffer{
-			columns: make([][]Value, c.numberOfSourceColumns),
-		}
-		values := make([]Value, c.numberOfSourceColumns)
-		for i := range b.columns {
-			b.columns[i] = values[i : i : i+1]
-		}
-	}
-	return b
+	return c.buffers.Get(
+		func() *conversionBuffer {
+			b := &conversionBuffer{
+				columns: make([][]Value, c.numberOfSourceColumns),
+			}
+			values := make([]Value, c.numberOfSourceColumns)
+			for i := range b.columns {
+				b.columns[i] = values[i : i : i+1]
+			}
+			return b
+		},
+		func(b *conversionBuffer) {},
+	)
 }
 
 func (c *conversion) putBuffer(b *conversionBuffer) {
