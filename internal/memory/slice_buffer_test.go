@@ -355,3 +355,74 @@ func BenchmarkSliceBufferSlice(b *testing.B) {
 		_ = buf.Slice()
 	}
 }
+
+func TestSliceBufferSwap(t *testing.T) {
+	buf := new(SliceBuffer[int32])
+	buf.Append(1, 2, 3, 4, 5)
+
+	buf.Swap(0, 4)
+	slice := buf.Slice()
+	if slice[0] != 5 || slice[4] != 1 {
+		t.Errorf("swap failed: got [%d, _, _, _, %d], want [5, _, _, _, 1]", slice[0], slice[4])
+	}
+
+	buf.Swap(1, 3)
+	slice = buf.Slice()
+	if slice[1] != 4 || slice[3] != 2 {
+		t.Errorf("swap failed: got [_, %d, _, %d, _], want [_, 4, _, 2, _]", slice[1], slice[3])
+	}
+}
+
+func TestSliceBufferSwapEmpty(t *testing.T) {
+	buf := new(SliceBuffer[int32])
+	buf.Swap(0, 1)
+	if buf.Len() != 0 {
+		t.Errorf("swap on empty buffer changed length")
+	}
+}
+
+func TestSliceBufferGrow(t *testing.T) {
+	buf := new(SliceBuffer[int32])
+	buf.Grow(100)
+
+	if buf.Cap() < 100 {
+		t.Errorf("after Grow(100), expected capacity >= 100, got %d", buf.Cap())
+	}
+
+	buf.Append(1, 2, 3)
+	oldCap := buf.Cap()
+
+	buf.Grow(10)
+	if buf.Cap() < oldCap {
+		t.Errorf("Grow should not reduce capacity")
+	}
+
+	buf.Grow(10000)
+	if buf.Cap() < 10003 {
+		t.Errorf("after Grow(10000) with 3 elements, expected capacity >= 10003, got %d", buf.Cap())
+	}
+}
+
+func TestSliceBufferCap(t *testing.T) {
+	buf := new(SliceBuffer[int32])
+	if buf.Cap() != 0 {
+		t.Errorf("empty buffer should have capacity 0, got %d", buf.Cap())
+	}
+
+	buf.Append(1, 2, 3)
+	if buf.Cap() == 0 {
+		t.Errorf("buffer with elements should have non-zero capacity")
+	}
+
+	cap1 := buf.Cap()
+	buf.Reset()
+	if buf.Cap() != 0 {
+		t.Errorf("reset buffer should have capacity 0, got %d", buf.Cap())
+	}
+
+	buf.Append(1, 2, 3)
+	cap2 := buf.Cap()
+	if cap2 < cap1 {
+		t.Errorf("after reset and append, capacity should be similar, got %d < %d", cap2, cap1)
+	}
+}

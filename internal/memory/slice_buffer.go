@@ -16,7 +16,8 @@ type slice[T Datum] struct {
 // The slice grows by moving to larger size buckets from pools as needed.
 // This design provides efficient sequential access and minimal overhead for small datasets.
 type SliceBuffer[T Datum] struct {
-	slice *slice[T]
+	slice *slice[T] // non-nil if data came from pool (used to return to pool on Reset)
+	data  []T       // the active slice (always used for access)
 }
 
 const (
@@ -27,6 +28,12 @@ const (
 
 var slicePools [numBuckets]Pool[slice[byte]]
 
+// SliceBufferFrom creates a SliceBuffer that wraps an existing slice without copying.
+// The buffer takes ownership of the slice and will not return it to any pool.
+func SliceBufferFrom[T Datum](data []T) SliceBuffer[T] {
+	return SliceBuffer[T]{data: data}
+}
+
 // Append adds data to the buffer, growing the slice as needed by promoting to larger pool buckets.
 func (b *SliceBuffer[T]) Append(data ...T) {
 	if len(data) == 0 {
@@ -34,22 +41,35 @@ func (b *SliceBuffer[T]) Append(data ...T) {
 	}
 
 	elemSize := int(unsafe.Sizeof(*new(T)))
-	requiredBytes := (b.Len() + len(data)) * elemSize
+	requiredBytes := (len(b.data) + len(data)) * elemSize
+
+	// If using external data, need to move to pooled storage
+	if b.slice == nil && b.data != nil {
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.slice.data = append(b.slice.data, b.data...)
+		b.data = b.slice.data
+	}
 
 	if b.slice == nil {
 		bucketIndex := findBucket(requiredBytes)
 		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.data = b.slice.data
 	}
 
-	if requiredBytes > cap(b.slice.data)*elemSize {
+	if requiredBytes > cap(b.data)*elemSize {
 		oldSlice := b.slice
 		bucketIndex := findBucket(requiredBytes)
 		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.slice.data = append(b.slice.data, oldSlice.data...)
+		b.slice.data = append(b.slice.data, b.data...)
 		putSliceToPool(oldSlice, elemSize)
+		b.data = b.slice.data
 	}
 
-	b.slice.data = append(b.slice.data, data...)
+	b.data = append(b.data, data...)
+	if b.slice != nil {
+		b.slice.data = b.data
+	}
 }
 
 // Reset returns the slice to its pool and resets the buffer to empty.
@@ -59,23 +79,66 @@ func (b *SliceBuffer[T]) Reset() {
 		putSliceToPool(b.slice, elemSize)
 		b.slice = nil
 	}
+	b.data = nil
 }
 
 // Len returns the number of elements currently in the buffer.
 func (b *SliceBuffer[T]) Len() int {
-	if b.slice == nil {
-		return 0
-	}
-	return len(b.slice.data)
+	return len(b.data)
 }
 
 // Slice returns a view of the current data.
 // The returned slice is only valid until the next call to Append or Reset.
 func (b *SliceBuffer[T]) Slice() []T {
-	if b.slice == nil {
-		return nil
+	return b.data
+}
+
+// Swap swaps the elements at indices i and j.
+func (b *SliceBuffer[T]) Swap(i, j int) {
+	if len(b.data) > 0 {
+		b.data[i], b.data[j] = b.data[j], b.data[i]
 	}
-	return b.slice.data
+}
+
+// Grow ensures the buffer has capacity for at least n more elements.
+func (b *SliceBuffer[T]) Grow(n int) {
+	if n <= 0 {
+		return
+	}
+
+	elemSize := int(unsafe.Sizeof(*new(T)))
+	requiredBytes := (len(b.data) + n) * elemSize
+
+	// If using external data, need to move to pooled storage
+	if b.slice == nil && b.data != nil {
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.slice.data = append(b.slice.data, b.data...)
+		b.data = b.slice.data
+		return
+	}
+
+	if b.slice == nil {
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.data = b.slice.data
+		return
+	}
+
+	currentCapBytes := cap(b.data) * elemSize
+	if requiredBytes > currentCapBytes {
+		bucketIndex := findBucket(requiredBytes)
+		oldSlice := b.slice
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.slice.data = append(b.slice.data, b.data...)
+		putSliceToPool(oldSlice, elemSize)
+		b.data = b.slice.data
+	}
+}
+
+// Cap returns the current capacity.
+func (b *SliceBuffer[T]) Cap() int {
+	return cap(b.data)
 }
 
 func findBucket(requiredBytes int) int {
