@@ -85,21 +85,23 @@ func (r *int32PageValues) Read(b []byte) (n int, err error) {
 }
 
 func (r *int32PageValues) ReadInt32s(values []int32) (n int, err error) {
-	n = copy(values, r.page.values[r.offset:])
+	pageValues := r.page.values.Slice()
+	n = copy(values, pageValues[r.offset:])
 	r.offset += n
-	if r.offset == len(r.page.values) {
+	if r.offset == len(pageValues) {
 		err = io.EOF
 	}
 	return n, err
 }
 
 func (r *int32PageValues) ReadValues(values []Value) (n int, err error) {
-	for n < len(values) && r.offset < len(r.page.values) {
-		values[n] = r.page.makeValue(r.page.values[r.offset])
+	pageValues := r.page.values.Slice()
+	for n < len(values) && r.offset < len(pageValues) {
+		values[n] = r.page.makeValue(pageValues[r.offset])
 		r.offset++
 		n++
 	}
-	if r.offset == len(r.page.values) {
+	if r.offset == len(pageValues) {
 		err = io.EOF
 	}
 	return n, err
