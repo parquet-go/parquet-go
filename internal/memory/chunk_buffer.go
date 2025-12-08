@@ -106,12 +106,6 @@ func (b *ChunkBuffer[T]) ChunkCap(idx int) []T {
 	return unsafe.Slice(chunkData, capacity)
 }
 
-// SetLen sets the length of the buffer to the given value.
-// This is used by ByteBuffer after writing to chunks directly.
-func (b *ChunkBuffer[T]) SetLen(length int) {
-	b.length = length
-}
-
 // Chunks returns an iterator over the chunks in the buffer.
 // Each chunk is yielded as a slice containing the valid data.
 func (b *ChunkBuffer[T]) Chunks(yield func([]T) bool) {

@@ -139,9 +139,9 @@ func newChunkMemoryBufferPool(chunkSize int) *chunkMemoryBufferPool {
 	}
 }
 
-// chunkMemoryBuffer implements an io.ReadWriteSeeker by delegating to memory.ByteBuffer.
+// chunkMemoryBuffer implements an io.ReadWriteSeeker by delegating to memory.Buffer.
 type chunkMemoryBuffer struct {
-	*memory.ByteBuffer
+	*memory.Buffer
 }
 
 type chunkMemoryBufferPool struct {
@@ -153,7 +153,7 @@ func (pool *chunkMemoryBufferPool) GetBuffer() io.ReadWriteSeeker {
 	b, _ := pool.Get().(*chunkMemoryBuffer)
 	if b == nil {
 		b = &chunkMemoryBuffer{
-			ByteBuffer: memory.NewByteBuffer(pool.chunkSize),
+			Buffer: memory.NewBuffer(pool.chunkSize),
 		}
 	} else {
 		b.Reset()
