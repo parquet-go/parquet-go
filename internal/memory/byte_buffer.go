@@ -6,30 +6,23 @@ import (
 )
 
 // ByteBuffer is a buffer that stores bytes in fixed-size chunks and implements io.ReadWriteSeeker.
-// Chunks are allocated lazily on demand and reused via a pool.
+// It uses ChunkBuffer[byte] internally for chunk management.
 type ByteBuffer struct {
-	pool      *Pool[[]byte]
-	chunks    []*[]byte
-	chunkSize int
-	idx       int // current chunk index for read/write operations
-	off       int // offset within current chunk
+	chunks ChunkBuffer[byte]
+	idx    int // current chunk index for read/write operations
+	off    int // offset within current chunk
 }
 
-// NewByteBuffer creates a new ByteBuffer with the given chunk size and pool.
-func NewByteBuffer(chunkSize int, pool *Pool[[]byte]) *ByteBuffer {
+// NewByteBuffer creates a new ByteBuffer with the given chunk size.
+func NewByteBuffer(chunkSize int) *ByteBuffer {
 	return &ByteBuffer{
-		pool:      pool,
-		chunkSize: chunkSize,
+		chunks: ChunkBufferFor[byte](chunkSize),
 	}
 }
 
 // Reset returns all chunks to the pool and resets the buffer to empty.
 func (b *ByteBuffer) Reset() {
-	for i := range b.chunks {
-		b.pool.Put(b.chunks[i])
-		b.chunks[i] = nil
-	}
-	b.chunks = b.chunks[:0]
+	b.chunks.Reset()
 	b.idx = 0
 	b.off = 0
 }
@@ -40,20 +33,20 @@ func (b *ByteBuffer) Read(p []byte) (n int, err error) {
 		return 0, nil
 	}
 
-	if b.idx >= len(b.chunks) {
+	if b.idx >= b.chunks.NumChunks() {
 		return 0, io.EOF
 	}
 
-	curData := *b.chunks[b.idx]
+	curData := b.chunks.Chunk(b.idx)
 
-	if b.idx == len(b.chunks)-1 && b.off == len(curData) {
+	if b.idx == b.chunks.NumChunks()-1 && b.off == len(curData) {
 		return 0, io.EOF
 	}
 
 	n = copy(p, curData[b.off:])
 	b.off += n
 
-	if b.off == cap(curData) {
+	if b.off == len(curData) && b.idx < b.chunks.NumChunks()-1 {
 		b.idx++
 		b.off = 0
 	}
@@ -69,31 +62,26 @@ func (b *ByteBuffer) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
+	chunkCap := b.chunks.chunkSize
 	for len(p) > 0 {
-		if b.idx == len(b.chunks) {
-			chunk := b.pool.Get(
-				func() *[]byte {
-					c := make([]byte, 0, b.chunkSize)
-					return &c
-				},
-				func(c *[]byte) {
-					*c = (*c)[:0]
-				},
-			)
-			b.chunks = append(b.chunks, chunk)
+		// Allocate new chunk if needed
+		if b.idx == b.chunks.NumChunks() {
+			// Append dummy byte to allocate chunk, we'll overwrite it
+			b.chunks.Append(0)
 		}
-		curData := *b.chunks[b.idx]
-		n := copy(curData[b.off:cap(curData)], p)
 
-		// Only extend the slice if writing beyond current length
-		newLen := b.off + n
-		if newLen > len(curData) {
-			*b.chunks[b.idx] = curData[:newLen]
+		curData := b.chunks.ChunkCap(b.idx)
+		n := copy(curData[b.off:], p)
+
+		// Update buffer length if we extended it
+		currentPos := b.idx*chunkCap + b.off + n
+		if currentPos > b.chunks.Len() {
+			b.chunks.SetLen(currentPos)
 		}
 
 		b.off += n
 		p = p[n:]
-		if b.off >= cap(curData) {
+		if b.off >= chunkCap {
 			b.idx++
 			b.off = 0
 		}
@@ -106,13 +94,13 @@ func (b *ByteBuffer) Write(p []byte) (int, error) {
 func (b *ByteBuffer) WriteTo(w io.Writer) (int64, error) {
 	var numWritten int64
 	var err error
-	for err == nil && b.idx < len(b.chunks) {
-		curData := *b.chunks[b.idx]
+	for err == nil && b.idx < b.chunks.NumChunks() {
+		curData := b.chunks.Chunk(b.idx)
 		n, e := w.Write(curData[b.off:])
 		numWritten += int64(n)
 		b.off += n
 		err = e
-		if b.idx == len(b.chunks)-1 {
+		if b.idx == b.chunks.NumChunks()-1 {
 			break
 		}
 		b.idx++
@@ -149,8 +137,8 @@ func (b *ByteBuffer) Seek(offset int64, whence int) (int64, error) {
 	if offset == 0 {
 		b.idx = 0
 		b.off = 0
-	} else if len(b.chunks) > 0 {
-		stride := cap(*b.chunks[0])
+	} else if b.chunks.NumChunks() > 0 {
+		stride := b.chunks.chunkSize
 		b.idx = int(offset) / stride
 		b.off = int(offset) % stride
 	}
@@ -161,14 +149,9 @@ func (b *ByteBuffer) currentOff() int64 {
 	if b.idx == 0 {
 		return int64(b.off)
 	}
-	return int64(b.idx*cap(*b.chunks[0]) + b.off)
+	return int64(b.idx*b.chunks.chunkSize + b.off)
 }
 
 func (b *ByteBuffer) endOff() int64 {
-	if len(b.chunks) == 0 {
-		return 0
-	}
-	l := len(b.chunks)
-	last := *b.chunks[l-1]
-	return int64(cap(last)*(l-1) + len(last))
+	return int64(b.chunks.Len())
 }

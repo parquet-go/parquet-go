@@ -4,8 +4,10 @@ import (
 	"testing"
 )
 
+const testChunkSize = 64 * 1024 // 64 KiB for tests
+
 func TestChunkBufferEmpty(t *testing.T) {
-	buf := new(ChunkBuffer[byte])
+	buf := ChunkBufferFor[byte](testChunkSize)
 	if buf.Len() != 0 {
 		t.Errorf("expected length 0, got %d", buf.Len())
 	}
@@ -20,7 +22,7 @@ func TestChunkBufferEmpty(t *testing.T) {
 }
 
 func TestChunkBufferAppendSingle(t *testing.T) {
-	buf := new(ChunkBuffer[byte])
+	buf := ChunkBufferFor[byte](testChunkSize)
 	buf.Append(42)
 
 	if buf.Len() != 1 {
@@ -43,7 +45,7 @@ func TestChunkBufferAppendSingle(t *testing.T) {
 }
 
 func TestChunkBufferAppendMultiple(t *testing.T) {
-	buf := new(ChunkBuffer[int32])
+	buf := ChunkBufferFor[int32](testChunkSize)
 	data := []int32{1, 2, 3, 4, 5}
 	buf.Append(data...)
 
@@ -67,9 +69,9 @@ func TestChunkBufferAppendMultiple(t *testing.T) {
 }
 
 func TestChunkBufferAcrossChunkBoundary(t *testing.T) {
-	buf := new(ChunkBuffer[byte])
+	buf := ChunkBufferFor[byte](testChunkSize)
 
-	chunkCap := chunkSize
+	chunkCap := testChunkSize
 	firstChunk := make([]byte, chunkCap)
 	for i := range firstChunk {
 		firstChunk[i] = byte(i % 256)
@@ -98,9 +100,9 @@ func TestChunkBufferAcrossChunkBoundary(t *testing.T) {
 }
 
 func TestChunkBufferMultipleChunks(t *testing.T) {
-	buf := new(ChunkBuffer[int64])
+	buf := ChunkBufferFor[int64](testChunkSize)
 
-	chunkCap := chunkSize / 8
+	chunkCap := testChunkSize / 8
 	totalElements := chunkCap*2 + chunkCap/2
 	for i := range totalElements {
 		buf.Append(int64(i))
@@ -131,7 +133,7 @@ func TestChunkBufferMultipleChunks(t *testing.T) {
 }
 
 func TestChunkBufferReset(t *testing.T) {
-	buf := new(ChunkBuffer[uint32])
+	buf := ChunkBufferFor[uint32](testChunkSize)
 
 	buf.Append(1, 2, 3, 4, 5)
 	if buf.Len() != 5 {
@@ -159,7 +161,7 @@ func TestChunkBufferReset(t *testing.T) {
 }
 
 func TestChunkBufferEmptyAppend(t *testing.T) {
-	buf := new(ChunkBuffer[float32])
+	buf := ChunkBufferFor[float32](testChunkSize)
 	buf.Append()
 
 	if buf.Len() != 0 {
@@ -188,7 +190,7 @@ func TestChunkBufferDifferentTypes(t *testing.T) {
 
 func testChunkBufferType[T Datum](t *testing.T, data []T) {
 	t.Helper()
-	buf := new(ChunkBuffer[T])
+	buf := ChunkBufferFor[T](testChunkSize)
 	buf.Append(data...)
 
 	if buf.Len() != len(data) {
@@ -212,9 +214,9 @@ func testChunkBufferType[T Datum](t *testing.T, data []T) {
 }
 
 func TestChunkBufferLargeAppend(t *testing.T) {
-	buf := new(ChunkBuffer[byte])
+	buf := ChunkBufferFor[byte](testChunkSize)
 
-	largeData := make([]byte, chunkSize*5+100)
+	largeData := make([]byte, testChunkSize*5+100)
 	for i := range largeData {
 		largeData[i] = byte(i % 256)
 	}
@@ -241,19 +243,19 @@ func TestChunkBufferLargeAppend(t *testing.T) {
 }
 
 func TestChunkBufferPoolReuse(t *testing.T) {
-	buffers := make([]*ChunkBuffer[int32], 10)
+	buffers := make([]ChunkBuffer[int32], 10)
 	for i := range buffers {
-		buffers[i] = new(ChunkBuffer[int32])
-		data := make([]int32, chunkSize/4+100)
+		buffers[i] = ChunkBufferFor[int32](testChunkSize)
+		data := make([]int32, testChunkSize/4+100)
 		buffers[i].Append(data...)
 	}
 
-	for _, buf := range buffers {
-		buf.Reset()
+	for i := range buffers {
+		buffers[i].Reset()
 	}
 
-	newBuf := new(ChunkBuffer[int32])
-	data := make([]int32, chunkSize/4+100)
+	newBuf := ChunkBufferFor[int32](testChunkSize)
+	data := make([]int32, testChunkSize/4+100)
 	for i := range data {
 		data[i] = int32(i)
 	}
@@ -275,7 +277,7 @@ func TestChunkBufferPoolReuse(t *testing.T) {
 }
 
 func BenchmarkChunkBufferAppendSmall(b *testing.B) {
-	var buf ChunkBuffer[byte]
+	buf := ChunkBufferFor[byte](testChunkSize)
 	data := []byte{1, 2, 3, 4, 5}
 	for i := range b.N {
 		buf.Append(data...)
@@ -286,7 +288,7 @@ func BenchmarkChunkBufferAppendSmall(b *testing.B) {
 }
 
 func BenchmarkChunkBufferAppendLarge(b *testing.B) {
-	var buf ChunkBuffer[int64]
+	buf := ChunkBufferFor[int64](testChunkSize)
 	data := make([]int64, 10000)
 	for i := range b.N {
 		buf.Append(data...)
@@ -297,8 +299,8 @@ func BenchmarkChunkBufferAppendLarge(b *testing.B) {
 }
 
 func BenchmarkChunkBufferChunks(b *testing.B) {
-	var buf ChunkBuffer[byte]
-	data := make([]byte, chunkSize*10)
+	buf := ChunkBufferFor[byte](testChunkSize)
+	data := make([]byte, testChunkSize*10)
 	buf.Append(data...)
 
 	for b.Loop() {
@@ -308,8 +310,8 @@ func BenchmarkChunkBufferChunks(b *testing.B) {
 }
 
 func BenchmarkChunkBufferReset(b *testing.B) {
-	var buf ChunkBuffer[int32]
-	data := make([]int32, chunkSize)
+	buf := ChunkBufferFor[int32](testChunkSize)
+	data := make([]int32, testChunkSize)
 	buf.Append(data...)
 
 	for b.Loop() {
