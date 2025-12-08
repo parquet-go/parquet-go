@@ -138,12 +138,41 @@ func (col *byteArrayColumnBuffer) WriteValues(values []Value) (int, error) {
 }
 
 func (col *byteArrayColumnBuffer) writeValues(levels columnLevels, rows sparse.Array) {
+	n := rows.Len()
+	if n == 0 {
+		return
+	}
+
 	stringArray := rows.StringArray()
-	for i := range rows.Len() {
+
+	// Calculate total bytes needed
+	totalBytes := 0
+	for i := range n {
+		totalBytes += len(stringArray.Index(i))
+	}
+
+	// Resize buffers upfront
+	offsetsStart := col.offsets.Len()
+	lengthsStart := col.lengths.Len()
+	valuesStart := col.values.Len()
+
+	col.offsets.Resize(offsetsStart + n)
+	col.lengths.Resize(lengthsStart + n)
+	col.values.Resize(valuesStart + totalBytes)
+
+	// Get internal slices
+	offsets := col.offsets.Slice()
+	lengths := col.lengths.Slice()
+	values := col.values.Slice()
+
+	// Fill in the data
+	valueOffset := valuesStart
+	for i := range n {
 		s := stringArray.Index(i)
-		col.offsets.AppendValue(uint32(col.values.Len()))
-		col.lengths.AppendValue(uint32(len(s)))
-		col.values.Append([]byte(s)...)
+		offsets[offsetsStart+i] = uint32(valueOffset)
+		lengths[lengthsStart+i] = uint32(len(s))
+		copy(values[valueOffset:], s)
+		valueOffset += len(s)
 	}
 }
 
