@@ -144,14 +144,11 @@ func (col *byteArrayColumnBuffer) writeValues(levels columnLevels, rows sparse.A
 	}
 
 	stringArray := rows.StringArray()
-
-	// Calculate total bytes needed
 	totalBytes := 0
 	for i := range n {
 		totalBytes += len(stringArray.Index(i))
 	}
 
-	// Resize buffers upfront
 	offsetsStart := col.offsets.Len()
 	lengthsStart := col.lengths.Len()
 	valuesStart := col.values.Len()
@@ -160,12 +157,10 @@ func (col *byteArrayColumnBuffer) writeValues(levels columnLevels, rows sparse.A
 	col.lengths.Resize(lengthsStart + n)
 	col.values.Resize(valuesStart + totalBytes)
 
-	// Get internal slices
-	offsets := col.offsets.Slice()
-	lengths := col.lengths.Slice()
-	values := col.values.Slice()
+	offsets := col.offsets.Slice()[:offsetsStart+n]
+	lengths := col.lengths.Slice()[:lengthsStart+n]
+	values := col.values.Slice()[:valuesStart+totalBytes]
 
-	// Fill in the data
 	valueOffset := valuesStart
 	for i := range n {
 		s := stringArray.Index(i)
