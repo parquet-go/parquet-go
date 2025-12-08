@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -848,5 +849,9 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) {
 	if err != nil {
 		panic(fmt.Errorf("cannot parse string %q as UUID: %w", str, err))
 	}
-	col.writeByteArray(levels, parsedUUID[:])
+	buf := memory.SliceBuffer[byte]{}
+	buf.Grow(16)
+	buf.Append(parsedUUID[:]...)
+	col.writeByteArray(levels, buf.Slice())
+	buf.Reset()
 }
