@@ -37,11 +37,13 @@ type BufferPool interface {
 	PutBuffer(io.ReadWriteSeeker)
 }
 
+const defaultChunkSize = 32 * 1024 // 32 KiB
+
 // NewBufferPool creates a new in-memory page buffer pool.
 //
 // The implementation is backed by sync.Pool and allocates memory buffers on the
 // Go heap.
-func NewBufferPool() BufferPool { return new(memoryBufferPool) }
+func NewBufferPool() BufferPool { return NewChunkBufferPool(defaultChunkSize) }
 
 type memoryBuffer struct {
 	data []byte
@@ -211,7 +213,7 @@ func (buf *errorBuffer) WriteTo(io.Writer) (int64, error)  { return 0, buf.err }
 func (buf *errorBuffer) Seek(int64, int) (int64, error)    { return 0, buf.err }
 
 var (
-	defaultColumnBufferPool  = *newChunkMemoryBufferPool(256 * 1024)
+	defaultColumnBufferPool  = *newChunkMemoryBufferPool(defaultChunkSize)
 	defaultSortingBufferPool memoryBufferPool
 
 	_ io.ReaderFrom      = (*errorBuffer)(nil)
