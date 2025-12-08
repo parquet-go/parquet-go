@@ -20,8 +20,8 @@ type ChunkBuffer[T Datum] struct {
 func ChunkBufferFor[T Datum](chunkSize int) ChunkBuffer[T] {
 	size := nextPowerOfTwo(uint(chunkSize))
 	// Clamp to bucket system range
-	minSize := uint(1 << minBucketBits)
-	maxSize := uint(1 << maxBucketBits)
+	minSize := uint(minBucketSize)
+	maxSize := uint(bucketSize(numBuckets - 1))
 	size = max(minSize, min(size, maxSize))
 	return ChunkBuffer[T]{chunkSize: int(size)}
 }
@@ -41,7 +41,7 @@ func (b *ChunkBuffer[T]) Append(data ...T) {
 
 	for len(data) > 0 {
 		if len(b.chunks) == 0 || (b.length&(capacity-1)) == 0 {
-			bucketIndex := bucketIndexOf(b.chunkSize)
+			bucketIndex := bucketIndexOfGet(b.chunkSize)
 			chunk := slicePools[bucketIndex].Get(
 				func() *slice[byte] {
 					return newSlice[byte](b.chunkSize)
@@ -66,7 +66,7 @@ func (b *ChunkBuffer[T]) Append(data ...T) {
 
 // Reset returns all chunks to the pool and resets the buffer to empty.
 func (b *ChunkBuffer[T]) Reset() {
-	bucketIndex := bucketIndexOf(b.chunkSize)
+	bucketIndex := bucketIndexOfGet(b.chunkSize)
 	for i := range b.chunks {
 		slicePools[bucketIndex].Put(b.chunks[i])
 		b.chunks[i] = nil

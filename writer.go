@@ -1634,7 +1634,7 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 			pbuf.unref()
 		}
 		pbuf = buffers.get(int(header.CompressedPageSize))
-		if _, err := io.ReadFull(pageReader, pbuf.data); err != nil {
+		if _, err := io.ReadFull(pageReader, pbuf.data.Slice()); err != nil {
 			return err
 		}
 

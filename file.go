@@ -936,7 +936,7 @@ func (f *FilePages) readDictionary() error {
 	page := buffers.get(int(header.CompressedPageSize))
 	defer page.unref()
 
-	if _, err := io.ReadFull(rbuf, page.data); err != nil {
+	if _, err := io.ReadFull(rbuf, page.data.Slice()); err != nil {
 		return err
 	}
 
@@ -986,13 +986,13 @@ func (f *FilePages) readPage(header *format.PageHeader, reader *bufio.Reader) (*
 	page := buffers.get(int(header.CompressedPageSize))
 	defer page.unref()
 
-	if _, err := io.ReadFull(reader, page.data); err != nil {
+	if _, err := io.ReadFull(reader, page.data.Slice()); err != nil {
 		return nil, err
 	}
 
 	if header.CRC != 0 {
 		headerChecksum := uint32(header.CRC)
-		bufferChecksum := crc32.ChecksumIEEE(page.data)
+		bufferChecksum := crc32.ChecksumIEEE(page.data.Slice())
 
 		if headerChecksum != bufferChecksum {
 			// The parquet specs indicate that corruption errors could be
