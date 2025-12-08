@@ -9,13 +9,12 @@ import (
 	"unsafe"
 
 	"github.com/parquet-go/parquet-go/deprecated"
-	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
 type fixedLenByteArrayColumnBuffer struct {
 	fixedLenByteArrayPage
-	tmp memory.SliceBuffer[byte]
+	tmp []byte
 }
 
 func newFixedLenByteArrayColumnBuffer(typ Type, columnIndex int16, numValues int32) *fixedLenByteArrayColumnBuffer {
@@ -26,7 +25,7 @@ func newFixedLenByteArrayColumnBuffer(typ Type, columnIndex int16, numValues int
 			size:        size,
 			columnIndex: ^columnIndex,
 		},
-		tmp: memory.SliceBufferFrom(make([]byte, size)),
+		tmp: make([]byte, size),
 	}
 }
 
@@ -38,7 +37,7 @@ func (col *fixedLenByteArrayColumnBuffer) Clone() ColumnBuffer {
 			data:        col.data.Clone(),
 			columnIndex: col.columnIndex,
 		},
-		tmp: memory.SliceBufferFrom(make([]byte, col.size)),
+		tmp: make([]byte, col.size),
 	}
 }
 
@@ -69,8 +68,7 @@ func (col *fixedLenByteArrayColumnBuffer) Less(i, j int) bool {
 }
 
 func (col *fixedLenByteArrayColumnBuffer) Swap(i, j int) {
-	tmp := col.tmp.Slice()
-	t, u, v := tmp[:col.size], col.index(i), col.index(j)
+	t, u, v := col.tmp[:col.size], col.index(i), col.index(j)
 	copy(t, u)
 	copy(u, v)
 	copy(v, t)
@@ -177,15 +175,17 @@ func (col *fixedLenByteArrayColumnBuffer) writeByteArray(levels columnLevels, va
 }
 
 func (col *fixedLenByteArrayColumnBuffer) writeNull(levels columnLevels) {
-	col.data.Append(make([]byte, col.size)...)
+	clear(col.tmp)
+	col.data.Append(col.tmp...)
 }
 
 func (col *fixedLenByteArrayColumnBuffer) writeBigEndian(value []byte) {
 	if col.size < len(value) {
 		panic(fmt.Sprintf("cannot write byte array of length %d to fixed length byte array column of size %d", len(value), col.size))
 	}
-	col.data.Append(make([]byte, col.size-len(value))...)
-	col.data.Append(value...)
+	clear(col.tmp)
+	copy(col.tmp[col.size-len(value):], value)
+	col.data.Append(col.tmp...)
 }
 
 func (col *fixedLenByteArrayColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
