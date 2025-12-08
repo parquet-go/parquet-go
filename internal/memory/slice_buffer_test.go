@@ -640,3 +640,683 @@ func TestSliceBufferResizePattern(t *testing.T) {
 		}
 	}
 }
+
+func TestSliceBufferFrom(t *testing.T) {
+	// Test with nil slice
+	buf := SliceBufferFrom[int32](nil)
+	if buf.Len() != 0 {
+		t.Errorf("SliceBufferFrom(nil) should have length 0, got %d", buf.Len())
+	}
+
+	// Test with existing data
+	data := []int32{1, 2, 3, 4, 5}
+	buf = SliceBufferFrom(data)
+
+	if buf.Len() != len(data) {
+		t.Errorf("expected length %d, got %d", len(data), buf.Len())
+	}
+
+	slice := buf.Slice()
+	for i, v := range data {
+		if slice[i] != v {
+			t.Errorf("index %d: expected %d, got %d", i, v, slice[i])
+		}
+	}
+
+	// Verify it wraps without copying (modifying original affects buffer)
+	data[0] = 100
+	if slice[0] != 100 {
+		t.Errorf("SliceBufferFrom should wrap without copying")
+	}
+
+	// Test that appending transitions to pooled storage
+	buf.Append(6, 7, 8)
+	if buf.Len() != 8 {
+		t.Errorf("after append, expected length 8, got %d", buf.Len())
+	}
+}
+
+func TestSliceBufferFor(t *testing.T) {
+	// Test with zero capacity
+	buf := SliceBufferFor[int32](0)
+	if buf.Cap() != 0 {
+		t.Errorf("SliceBufferFor(0) should have capacity 0, got %d", buf.Cap())
+	}
+	if buf.Len() != 0 {
+		t.Errorf("SliceBufferFor(0) should have length 0, got %d", buf.Len())
+	}
+
+	// Test with small capacity
+	buf = SliceBufferFor[int32](100)
+	if buf.Cap() < 100 {
+		t.Errorf("SliceBufferFor(100) should have capacity >= 100, got %d", buf.Cap())
+	}
+	if buf.Len() != 0 {
+		t.Errorf("SliceBufferFor should create empty buffer with pre-allocated capacity")
+	}
+
+	// Verify we can append without reallocation
+	buf.Append(1, 2, 3, 4, 5)
+	if buf.Len() != 5 {
+		t.Errorf("after append, expected length 5, got %d", buf.Len())
+	}
+
+	// Test with large capacity
+	largeBuf := SliceBufferFor[byte](10000)
+	if largeBuf.Cap() < 10000 {
+		t.Errorf("SliceBufferFor(10000) should have capacity >= 10000, got %d", largeBuf.Cap())
+	}
+
+	// Test with capacity larger than largest bucket
+	hugeBuf := SliceBufferFor[byte](20 * 1024 * 1024) // 20 MiB
+	if hugeBuf.Cap() < 20*1024*1024 {
+		t.Errorf("SliceBufferFor(20MB) should have capacity >= 20MB, got %d", hugeBuf.Cap())
+	}
+}
+
+func TestSliceBufferExternalDataTransition(t *testing.T) {
+	// Create buffer from external data
+	externalData := []int32{1, 2, 3}
+	buf := SliceBufferFrom(externalData)
+
+	// Verify it starts with external data
+	if buf.Len() != 3 {
+		t.Errorf("expected length 3, got %d", buf.Len())
+	}
+
+	// Append enough to trigger transition to pooled storage
+	for i := range 5000 {
+		buf.Append(int32(i))
+	}
+
+	// Verify data is intact
+	if buf.Len() != 5003 {
+		t.Errorf("expected length 5003, got %d", buf.Len())
+	}
+
+	slice := buf.Slice()
+	if slice[0] != 1 || slice[1] != 2 || slice[2] != 3 {
+		t.Errorf("original data should be preserved after transition")
+	}
+}
+
+func TestSliceBufferOversizedAllocation(t *testing.T) {
+	// Test allocation that exceeds largest bucket
+	buf := new(SliceBuffer[byte])
+
+	// Append data larger than largest bucket (should allocate directly)
+	hugeData := make([]byte, 50*1024*1024) // 50 MiB
+	for i := range hugeData {
+		hugeData[i] = byte(i % 256)
+	}
+	buf.Append(hugeData...)
+
+	if buf.Len() != len(hugeData) {
+		t.Errorf("expected length %d, got %d", len(hugeData), buf.Len())
+	}
+
+	// Verify data is correct
+	slice := buf.Slice()
+	for i := range min(1000, len(hugeData)) {
+		if slice[i] != byte(i%256) {
+			t.Errorf("index %d: data mismatch", i)
+			break
+		}
+	}
+
+	// Test clone of oversized buffer
+	cloned := buf.Clone()
+	if cloned.Len() != buf.Len() {
+		t.Errorf("cloned oversized buffer should have same length")
+	}
+
+	// Reset should work
+	buf.Reset()
+	if buf.Len() != 0 {
+		t.Errorf("reset should empty the buffer")
+	}
+}
+
+func TestSliceBufferBucketEdgeCases(t *testing.T) {
+	// Test bucketIndexOfGet edge cases
+	tests := []struct {
+		name     string
+		setup    func() SliceBuffer[byte]
+		validate func(*testing.T, SliceBuffer[byte])
+	}{
+		{
+			name: "zero sized bucket",
+			setup: func() SliceBuffer[byte] {
+				return SliceBufferFor[byte](0)
+			},
+			validate: func(t *testing.T, buf SliceBuffer[byte]) {
+				if buf.Len() != 0 {
+					t.Errorf("expected length 0")
+				}
+			},
+		},
+		{
+			name: "smallest bucket boundary",
+			setup: func() SliceBuffer[byte] {
+				buf := SliceBufferFor[byte](minBucketSize)
+				return buf
+			},
+			validate: func(t *testing.T, buf SliceBuffer[byte]) {
+				if buf.Cap() < minBucketSize {
+					t.Errorf("expected capacity >= %d", minBucketSize)
+				}
+			},
+		},
+		{
+			name: "transition point bucket",
+			setup: func() SliceBuffer[byte] {
+				buf := SliceBufferFor[byte](lastShortBucketSize)
+				return buf
+			},
+			validate: func(t *testing.T, buf SliceBuffer[byte]) {
+				if buf.Cap() < lastShortBucketSize {
+					t.Errorf("expected capacity >= %d", lastShortBucketSize)
+				}
+			},
+		},
+		{
+			name: "just after transition",
+			setup: func() SliceBuffer[byte] {
+				buf := SliceBufferFor[byte](lastShortBucketSize + 1)
+				return buf
+			},
+			validate: func(t *testing.T, buf SliceBuffer[byte]) {
+				if buf.Cap() < lastShortBucketSize {
+					t.Errorf("expected capacity >= %d", lastShortBucketSize)
+				}
+			},
+		},
+		{
+			name: "pooled buffer with external data appending",
+			setup: func() SliceBuffer[byte] {
+				external := make([]byte, 100)
+				for i := range external {
+					external[i] = byte(i)
+				}
+				buf := SliceBufferFrom(external)
+				// Append more to trigger reallocation
+				buf.Append(make([]byte, 10000)...)
+				return buf
+			},
+			validate: func(t *testing.T, buf SliceBuffer[byte]) {
+				if buf.Len() != 10100 {
+					t.Errorf("expected length 10100, got %d", buf.Len())
+				}
+				// Verify original data preserved
+				slice := buf.Slice()
+				for i := range 100 {
+					if slice[i] != byte(i) {
+						t.Errorf("original data not preserved at index %d", i)
+						break
+					}
+				}
+			},
+		},
+		{
+			name: "growing from pooled to larger pooled",
+			setup: func() SliceBuffer[byte] {
+				buf := new(SliceBuffer[byte])
+				buf.Append(make([]byte, 1000)...)
+				buf.Append(make([]byte, 10000)...)
+				return *buf
+			},
+			validate: func(t *testing.T, buf SliceBuffer[byte]) {
+				if buf.Len() != 11000 {
+					t.Errorf("expected length 11000, got %d", buf.Len())
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := tt.setup()
+			tt.validate(t, buf)
+			buf.Reset() // Ensure reset works for all cases
+		})
+	}
+}
+
+func TestSliceBufferResizeEdgeCases(t *testing.T) {
+	// Test Resize triggering reserve with oversized allocation
+	buf := new(SliceBuffer[byte])
+	buf.Resize(100 * 1024 * 1024) // 100 MiB
+	if buf.Len() != 100*1024*1024 {
+		t.Errorf("expected length %d, got %d", 100*1024*1024, buf.Len())
+	}
+
+	// Test Resize on buffer with external data
+	external := []byte{1, 2, 3}
+	buf2 := SliceBufferFrom(external)
+	buf2.Resize(10000)
+	if buf2.Len() != 10000 {
+		t.Errorf("expected length 10000, got %d", buf2.Len())
+	}
+	// Original data should still be there
+	slice := buf2.Slice()
+	if slice[0] != 1 || slice[1] != 2 || slice[2] != 3 {
+		t.Errorf("original data not preserved after resize")
+	}
+}
+
+func TestBucketIndexOfGetEdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		test func(*testing.T)
+	}{
+		{
+			name: "zero returns first bucket",
+			test: func(t *testing.T) {
+				buf := SliceBufferFor[byte](0)
+				// Should succeed without panic
+				buf.Append(1, 2, 3)
+			},
+		},
+		{
+			name: "negative value handled",
+			test: func(t *testing.T) {
+				// This tests internal behavior via Grow with negative
+				// In practice this shouldn't happen, but the code handles it
+				buf := new(SliceBuffer[byte])
+				buf.Append(1, 2, 3)
+				// Grow(0) or Grow(-1) should be no-op
+				buf.Grow(0)
+				buf.Grow(-1)
+				if buf.Len() != 3 {
+					t.Errorf("expected length unchanged")
+				}
+			},
+		},
+		{
+			name: "exact bucket boundaries",
+			test: func(t *testing.T) {
+				// Test exact bucket size boundaries
+				bucketSizes := []int{
+					minBucketSize,                 // 4096
+					minBucketSize * 2,             // 8192
+					minBucketSize * 4,             // 16384
+					lastShortBucketSize,           // 262144
+					lastShortBucketSize * 3 / 2,   // 393216 (first large bucket)
+				}
+				for _, size := range bucketSizes {
+					buf := SliceBufferFor[byte](size)
+					if buf.Cap() < size {
+						t.Errorf("bucket size %d: expected capacity >= %d, got %d", size, size, buf.Cap())
+					}
+				}
+			},
+		},
+		{
+			name: "all buckets reachable",
+			test: func(t *testing.T) {
+				// Ensure we can reach all 32 buckets by growing
+				buf := new(SliceBuffer[byte])
+				size := minBucketSize
+				for i := 0; i < numBuckets; i++ {
+					buf.Grow(size - buf.Len())
+					if buf.Cap() < size {
+						t.Errorf("bucket %d: expected capacity >= %d, got %d", i, size, buf.Cap())
+					}
+					if size < lastShortBucketSize {
+						size = size * 2
+					} else {
+						size = size + (size / 2)
+					}
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.test)
+	}
+}
+
+func TestBucketIndexOfPutEdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		test func(*testing.T)
+	}{
+		{
+			name: "buffer smaller than min bucket not pooled",
+			test: func(t *testing.T) {
+				// Create a tiny buffer and ensure it still works
+				tiny := make([]byte, 10)
+				buf := SliceBufferFrom(tiny)
+				buf.Reset() // Should not panic even though too small to pool
+				if buf.Len() != 0 {
+					t.Errorf("expected empty after reset")
+				}
+			},
+		},
+		{
+			name: "non-standard capacity from append",
+			test: func(t *testing.T) {
+				// This tests the putSliceToPool behavior when capacity
+				// doesn't match bucket sizes exactly (from append)
+				buf := new(SliceBuffer[byte])
+				buf.Append(make([]byte, 5000)...)
+				// Internal capacity might not match bucket size exactly
+				// Reset should still work
+				buf.Reset()
+				if buf.Len() != 0 {
+					t.Errorf("expected empty after reset")
+				}
+			},
+		},
+		{
+			name: "boundary between buckets",
+			test: func(t *testing.T) {
+				// Test sizes at boundaries
+				boundaries := []int{
+					minBucketSize - 1,
+					minBucketSize,
+					minBucketSize + 1,
+					lastShortBucketSize - 1,
+					lastShortBucketSize,
+					lastShortBucketSize + 1,
+				}
+				for _, size := range boundaries {
+					buf := SliceBufferFor[byte](size)
+					buf.Append(make([]byte, size)...)
+					buf.Reset() // Should handle all boundary cases
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.test)
+	}
+}
+
+func TestBucketSizeEdgeCases(t *testing.T) {
+	// bucketSize is internal, but we can test it via SliceBufferFor
+	tests := []struct {
+		name        string
+		bucketIndex int
+		test        func(*testing.T)
+	}{
+		{
+			name:        "negative bucket index",
+			bucketIndex: -1,
+			test: func(t *testing.T) {
+				// Can't directly test bucketSize(-1), but we can test
+				// that oversized allocations work
+				buf := new(SliceBuffer[byte])
+				huge := make([]byte, 200*1024*1024) // 200 MiB
+				buf.Append(huge...)
+				if buf.Len() != len(huge) {
+					t.Errorf("oversized buffer should work")
+				}
+			},
+		},
+		{
+			name:        "first bucket (index 0)",
+			bucketIndex: 0,
+			test: func(t *testing.T) {
+				buf := SliceBufferFor[byte](minBucketSize)
+				if buf.Cap() < minBucketSize {
+					t.Errorf("first bucket should have min size")
+				}
+			},
+		},
+		{
+			name:        "last bucket (index 31)",
+			bucketIndex: numBuckets - 1,
+			test: func(t *testing.T) {
+				// Calculate last bucket size
+				size := minBucketSize
+				for i := 0; i < numBuckets-1; i++ {
+					if size < lastShortBucketSize {
+						size = size * 2
+					} else {
+						size = size + (size / 2)
+					}
+				}
+				buf := SliceBufferFor[byte](size)
+				if buf.Cap() < size {
+					t.Errorf("last bucket should accommodate its size")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.test)
+	}
+}
+
+func TestReserveComplexPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		test func(*testing.T)
+	}{
+		{
+			name: "empty to pooled",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+				buf.Append(make([]byte, 5000)...)
+				if buf.Len() != 5000 {
+					t.Errorf("empty to pooled transition failed")
+				}
+			},
+		},
+		{
+			name: "external to pooled",
+			test: func(t *testing.T) {
+				external := make([]byte, 100)
+				for i := range external {
+					external[i] = byte(i)
+				}
+				buf := SliceBufferFrom(external)
+				buf.Append(make([]byte, 10000)...)
+				if buf.Len() != 10100 {
+					t.Errorf("external to pooled transition failed")
+				}
+				// Verify original data preserved
+				slice := buf.Slice()
+				for i := 0; i < 100; i++ {
+					if slice[i] != byte(i) {
+						t.Errorf("data not preserved")
+						break
+					}
+				}
+			},
+		},
+		{
+			name: "pooled to larger pooled",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+				buf.Append(make([]byte, 5000)...)
+				buf.Append(make([]byte, 50000)...)
+				if buf.Len() != 55000 {
+					t.Errorf("pooled to larger pooled failed")
+				}
+			},
+		},
+		{
+			name: "pooled to oversized",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+				buf.Append(make([]byte, 5000)...)
+				// Now append huge amount to exceed all buckets
+				buf.Append(make([]byte, 100*1024*1024)...)
+				if buf.Len() != 5000+100*1024*1024 {
+					t.Errorf("pooled to oversized failed")
+				}
+			},
+		},
+		{
+			name: "external to oversized",
+			test: func(t *testing.T) {
+				external := []byte{1, 2, 3}
+				buf := SliceBufferFrom(external)
+				buf.Append(make([]byte, 100*1024*1024)...)
+				if buf.Len() != 3+100*1024*1024 {
+					t.Errorf("external to oversized failed")
+				}
+				// Verify original data
+				slice := buf.Slice()
+				if slice[0] != 1 || slice[1] != 2 || slice[2] != 3 {
+					t.Errorf("data not preserved")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.test)
+	}
+}
+
+func TestCloneEdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		test func(*testing.T)
+	}{
+		{
+			name: "clone empty buffer",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[int32])
+				cloned := buf.Clone()
+				if cloned.Len() != 0 {
+					t.Errorf("cloned empty should be empty")
+				}
+				if cloned.Slice() != nil {
+					t.Errorf("cloned empty should have nil slice")
+				}
+			},
+		},
+		{
+			name: "clone small buffer",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+				buf.Append(1, 2, 3)
+				cloned := buf.Clone()
+				if cloned.Len() != 3 {
+					t.Errorf("clone should preserve length")
+				}
+			},
+		},
+		{
+			name: "clone large buffer",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[int64])
+				buf.Append(make([]int64, 50000)...)
+				cloned := buf.Clone()
+				if cloned.Len() != 50000 {
+					t.Errorf("clone should preserve length")
+				}
+			},
+		},
+		{
+			name: "clone oversized buffer",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+				buf.Append(make([]byte, 100*1024*1024)...)
+				cloned := buf.Clone()
+				if cloned.Len() != 100*1024*1024 {
+					t.Errorf("oversized clone should preserve length")
+				}
+			},
+		},
+		{
+			name: "clone with external data",
+			test: func(t *testing.T) {
+				external := []byte{1, 2, 3, 4, 5}
+				buf := SliceBufferFrom(external)
+				cloned := buf.Clone()
+				if cloned.Len() != 5 {
+					t.Errorf("clone should preserve length")
+				}
+				// Modify original
+				external[0] = 99
+				// Clone should be independent
+				if cloned.Slice()[0] != 1 {
+					t.Errorf("clone should be independent copy")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.test)
+	}
+}
+
+func TestPutSliceToPoolEdgeCases(t *testing.T) {
+	// These edge cases are tested indirectly via Reset
+	tests := []struct {
+		name string
+		test func(*testing.T)
+	}{
+		{
+			name: "reset nil buffer",
+			test: func(t *testing.T) {
+				var buf SliceBuffer[byte]
+				buf.Reset() // Should not panic
+				if buf.Len() != 0 {
+					t.Errorf("nil buffer reset should be no-op")
+				}
+			},
+		},
+		{
+			name: "reset external data buffer",
+			test: func(t *testing.T) {
+				external := []byte{1, 2, 3}
+				buf := SliceBufferFrom(external)
+				buf.Reset()
+				if buf.Len() != 0 {
+					t.Errorf("reset should clear buffer")
+				}
+			},
+		},
+		{
+			name: "reset tiny buffer (below min bucket)",
+			test: func(t *testing.T) {
+				tiny := make([]byte, 10)
+				buf := SliceBufferFrom(tiny)
+				buf.Reset() // Should not panic even though too small to pool
+				if buf.Len() != 0 {
+					t.Errorf("tiny buffer reset should work")
+				}
+			},
+		},
+		{
+			name: "reset oversized buffer",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+				buf.Append(make([]byte, 100*1024*1024)...)
+				buf.Reset() // Should handle non-pooled allocation
+				if buf.Len() != 0 {
+					t.Errorf("oversized buffer reset should work")
+				}
+			},
+		},
+		{
+			name: "multiple resets",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+				buf.Append(make([]byte, 5000)...)
+				buf.Reset()
+				buf.Append(make([]byte, 5000)...)
+				buf.Reset()
+				buf.Append(make([]byte, 5000)...)
+				buf.Reset()
+				if buf.Len() != 0 {
+					t.Errorf("multiple resets should work")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.test)
+	}
+}

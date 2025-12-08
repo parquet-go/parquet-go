@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"math/bits"
 	"unsafe"
 
 	"github.com/parquet-go/parquet-go/internal/unsafecast"
@@ -23,12 +22,23 @@ type SliceBuffer[T Datum] struct {
 }
 
 const (
-	minBucketBits = 10 // 1024 bytes
-	maxBucketBits = 23 // 8 MiB
-	numBuckets    = maxBucketBits - minBucketBits + 1
+	numBuckets          = 32
+	minBucketSize       = 4096   // 4 KiB (smallest bucket)
+	lastShortBucketSize = 262144 // 256 KiB (transition point for growth strategy)
 )
 
 var slicePools [numBuckets]Pool[slice[byte]]
+
+// nextBucketSize computes the next bucket size using the hybrid growth strategy:
+// - Below 256KB: grow by 2x (4K, 8K, 16K, 32K, 64K, 128K, 256K)
+// - Above 256KB: grow by 1.5x (384K, 576K, 864K, ...)
+func nextBucketSize(size int) int {
+	if size < lastShortBucketSize {
+		return size * 2
+	} else {
+		return size + (size / 2)
+	}
+}
 
 // SliceBufferFrom creates a SliceBuffer that wraps an existing slice without copying.
 // The buffer takes ownership of the slice and will not return it to any pool.
@@ -58,9 +68,23 @@ func (b *SliceBuffer[T]) reserveMore() { b.reserve(1) }
 func (b *SliceBuffer[T]) reserve(count int) {
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := (len(b.data) + count) * elemSize
+	bucketIndex := bucketIndexOfGet(requiredBytes)
+
+	if bucketIndex < 0 {
+		// Size exceeds all buckets, allocate directly without pooling
+		newCap := len(b.data) + count
+		newData := make([]T, len(b.data), newCap)
+		copy(newData, b.data)
+		if b.slice != nil {
+			putSliceToPool(b.slice, elemSize)
+			b.slice = nil
+		}
+		b.data = newData
+		return
+	}
+
 	if b.slice == nil {
 		// Either empty or using external data
-		bucketIndex := bucketIndexOf(requiredBytes)
 		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
 		if b.data != nil {
 			// Transition from external data to pooled storage
@@ -70,7 +94,6 @@ func (b *SliceBuffer[T]) reserve(count int) {
 	} else {
 		// Already using pooled storage, grow to new bucket
 		oldSlice := b.slice
-		bucketIndex := bucketIndexOf(requiredBytes)
 		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
 		b.slice.data = append(b.slice.data, b.data...)
 		oldSlice.data = b.data // Sync before returning to pool
@@ -144,7 +167,14 @@ func (b *SliceBuffer[T]) Clone() SliceBuffer[T] {
 
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := len(b.data) * elemSize
-	bucketIndex := bucketIndexOf(requiredBytes)
+	bucketIndex := bucketIndexOfGet(requiredBytes)
+
+	if bucketIndex < 0 {
+		// Size exceeds all buckets, allocate directly without pooling
+		newData := make([]T, len(b.data))
+		copy(newData, b.data)
+		return SliceBuffer[T]{data: newData}
+	}
 
 	cloned := SliceBuffer[T]{
 		slice: getSliceFromPool[T](bucketIndex, elemSize),
@@ -168,17 +198,57 @@ func (b *SliceBuffer[T]) Resize(size int) {
 	}
 }
 
-func bucketIndexOf(requiredBytes int) int {
+func bucketIndexOfGet(requiredBytes int) int {
 	if requiredBytes <= 0 {
 		return 0
 	}
-	bitLen := bits.Len(uint(requiredBytes - 1))
-	bucketIndex := bitLen - minBucketBits
-	return max(0, min(bucketIndex, numBuckets-1))
+
+	// Find the smallest bucket that can hold requiredBytes
+	size := minBucketSize
+	for i := range numBuckets {
+		if requiredBytes <= size {
+			return i
+		}
+		size = nextBucketSize(size)
+	}
+
+	// If requiredBytes exceeds all buckets, return -1 to indicate
+	// the allocation should not use pooling
+	return -1
+}
+
+func bucketIndexOfPut(capacityBytes int) int {
+	// When releasing buffers, some may have a capacity that is not one of the
+	// bucket sizes (due to the use of append for example). In this case, we
+	// return the buffer to the highest bucket with a size less or equal
+	// to the buffer capacity.
+	if capacityBytes < minBucketSize {
+		return -1
+	}
+
+	size := minBucketSize
+	for i := range numBuckets {
+		nextSize := nextBucketSize(size)
+		if capacityBytes < nextSize {
+			return i
+		}
+		size = nextSize
+	}
+
+	// If we've gone through all buckets, return the last bucket
+	return numBuckets - 1
 }
 
 func bucketSize(bucketIndex int) int {
-	return 1 << (minBucketBits + bucketIndex)
+	if bucketIndex < 0 || bucketIndex >= numBuckets {
+		return 0
+	}
+
+	size := minBucketSize
+	for range bucketIndex {
+		size = nextBucketSize(size)
+	}
+	return size
 }
 
 func getSliceFromPool[T Datum](bucketIndex int, elemSize int) *slice[T] {
@@ -202,10 +272,10 @@ func putSliceToPool[T Datum](s *slice[T], elemSize int) {
 	}
 
 	byteLen := cap(s.data) * elemSize
-	bucketIndex := bucketIndexOf(byteLen)
+	bucketIndex := bucketIndexOfPut(byteLen)
 
-	// Verify the bucket size matches exactly (safety check)
-	if bucketSize(bucketIndex) != byteLen {
+	// If bucket index is -1, the buffer is too small to pool
+	if bucketIndex < 0 {
 		return
 	}
 
