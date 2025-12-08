@@ -1,0 +1,129 @@
+package memory
+
+import (
+	"fmt"
+	"io"
+)
+
+// Buffer is a buffer that stores bytes in fixed-size chunks and implements io.ReadWriteSeeker.
+// It uses ChunkBuffer[byte] internally for chunk management.
+type Buffer struct {
+	data ChunkBuffer[byte]
+	seek int64 // absolute offset for read/write operations
+}
+
+// NewBuffer creates a new Buffer with the given chunk size.
+func NewBuffer(chunkSize int) *Buffer {
+	return &Buffer{
+		data: ChunkBufferFor[byte](chunkSize),
+	}
+}
+
+// Reset returns all chunks to the pool and resets the buffer to empty.
+func (b *Buffer) Reset() {
+	b.data.Reset()
+	b.seek = 0
+}
+
+// Read implements io.Reader.
+func (b *Buffer) Read(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	if b.seek >= int64(b.data.Len()) {
+		return 0, io.EOF
+	}
+
+	chunkSize := b.data.chunkSize
+	i := int(b.seek) / chunkSize
+	offset := int(b.seek) % chunkSize
+
+	chunk := b.data.Chunk(i)
+	n = copy(p, chunk[offset:])
+	b.seek += int64(n)
+
+	return n, nil
+}
+
+// Write implements io.Writer.
+func (b *Buffer) Write(p []byte) (int, error) {
+	n := len(p)
+
+	if n == 0 {
+		return 0, nil
+	}
+
+	chunkSize := b.data.chunkSize
+	for len(p) > 0 {
+		i := int(b.seek) / chunkSize
+		offset := int(b.seek) % chunkSize
+
+		// Allocate new chunk if needed
+		if i == b.data.NumChunks() {
+			// Append dummy byte to allocate chunk, we'll overwrite it
+			b.data.Append(0)
+		}
+
+		chunk := b.data.ChunkCap(i)
+		written := copy(chunk[offset:], p)
+
+		// Update buffer length if we extended it
+		newSeek := b.seek + int64(written)
+		if int(newSeek) > b.data.length {
+			b.data.length = int(newSeek)
+		}
+
+		b.seek = newSeek
+		p = p[written:]
+	}
+
+	return n, nil
+}
+
+// WriteTo implements io.WriterTo.
+func (b *Buffer) WriteTo(w io.Writer) (int64, error) {
+	var written int64
+	var err error
+	chunkSize := b.data.chunkSize
+
+	for err == nil && b.seek < int64(b.data.Len()) {
+		i := int(b.seek) / chunkSize
+		offset := int(b.seek) % chunkSize
+
+		chunk := b.data.Chunk(i)
+		n, e := w.Write(chunk[offset:])
+		written += int64(n)
+		b.seek += int64(n)
+		err = e
+	}
+	return written, err
+}
+
+// Seek implements io.Seeker.
+func (b *Buffer) Seek(offset int64, whence int) (int64, error) {
+	var position int64
+
+	switch whence {
+	case io.SeekStart:
+		position = offset
+	case io.SeekCurrent:
+		position = b.seek + offset
+	case io.SeekEnd:
+		position = int64(b.data.Len()) + offset
+	default:
+		return 0, fmt.Errorf("seek: invalid whence: %d", whence)
+	}
+
+	if position < 0 {
+		return 0, fmt.Errorf("seek: negative offset: %d<0", position)
+	}
+
+	end := int64(b.data.Len())
+	if position > end {
+		position = end
+	}
+
+	b.seek = position
+	return position, nil
+}
