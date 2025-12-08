@@ -87,13 +87,13 @@ func writeProtoList(col ColumnBuffer, levels columnLevels, l *structpb.ListValue
 
 func writeProtoStructJSON(b *memory.SliceBuffer[byte], s *structpb.Struct) {
 	if s == nil {
-		b.AppendFunc(func(buf []byte) []byte { return append(buf, "null"...) })
+		b.Append('n', 'u', 'l', 'l')
 		return
 	}
 
 	fields := s.GetFields()
 	if len(fields) == 0 {
-		b.AppendFunc(func(buf []byte) []byte { return append(buf, "{}"...) })
+		b.Append('{', '}')
 		return
 	}
 
@@ -136,13 +136,13 @@ func writeProtoValueJSON(b *memory.SliceBuffer[byte], v *structpb.Value) {
 	case *structpb.Value_ListValue:
 		writeProtoListValueJSON(b, k.ListValue)
 	default:
-		b.AppendFunc(func(buf []byte) []byte { return append(buf, "null"...) })
+		b.Append('n', 'u', 'l', 'l')
 	}
 }
 
 func writeProtoListValueJSON(b *memory.SliceBuffer[byte], l *structpb.ListValue) {
 	if l == nil {
-		b.AppendFunc(func(buf []byte) []byte { return append(buf, "null"...) })
+		b.Append('n', 'u', 'l', 'l')
 		return
 	}
 	values := l.GetValues()

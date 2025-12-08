@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"strconv"
 	"testing"
 )
 
@@ -1311,6 +1312,179 @@ func TestPutSliceToPoolEdgeCases(t *testing.T) {
 				buf.Reset()
 				if buf.Len() != 0 {
 					t.Errorf("multiple resets should work")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.test)
+	}
+}
+
+func TestAppendFunc(t *testing.T) {
+	tests := []struct {
+		name string
+		test func(*testing.T)
+	}{
+		{
+			name: "no_reallocation",
+			test: func(t *testing.T) {
+				buf := SliceBufferFor[byte](100)
+				initialCap := buf.Cap()
+
+				buf.AppendFunc(func(b []byte) []byte {
+					return append(b, []byte("hello")...)
+				})
+
+				if buf.Len() != 5 {
+					t.Errorf("expected len 5, got %d", buf.Len())
+				}
+				if string(buf.Slice()) != "hello" {
+					t.Errorf("expected 'hello', got %q", string(buf.Slice()))
+				}
+				if buf.Cap() != initialCap {
+					t.Errorf("expected cap %d, got %d", initialCap, buf.Cap())
+				}
+			},
+		},
+		{
+			name: "with_reallocation",
+			test: func(t *testing.T) {
+				buf := SliceBufferFor[byte](10)
+
+				buf.AppendFunc(func(b []byte) []byte {
+					large := make([]byte, 100)
+					for i := range large {
+						large[i] = byte(i)
+					}
+					return append(b, large...)
+				})
+
+				if buf.Len() != 100 {
+					t.Errorf("expected len 100, got %d", buf.Len())
+				}
+				for i := 0; i < 100; i++ {
+					if buf.Slice()[i] != byte(i) {
+						t.Errorf("data mismatch at index %d", i)
+						break
+					}
+				}
+			},
+		},
+		{
+			name: "pooled_to_external_on_reallocation",
+			test: func(t *testing.T) {
+				buf := SliceBufferFor[byte](10)
+
+				buf.AppendFunc(func(b []byte) []byte {
+					newSlice := make([]byte, 50)
+					copy(newSlice, b)
+					newSlice = append(newSlice, []byte("new data")...)
+					return newSlice
+				})
+
+				if buf.Len() != 58 {
+					t.Errorf("expected len 58, got %d", buf.Len())
+				}
+				if string(buf.Slice()[50:]) != "new data" {
+					t.Errorf("expected 'new data', got %q", string(buf.Slice()[50:]))
+				}
+			},
+		},
+		{
+			name: "external_data_reallocation",
+			test: func(t *testing.T) {
+				external := []byte("start")
+				buf := SliceBufferFrom(external)
+
+				buf.AppendFunc(func(b []byte) []byte {
+					return append(b, []byte(" appended")...)
+				})
+
+				if string(buf.Slice()) != "start appended" {
+					t.Errorf("expected 'start appended', got %q", string(buf.Slice()))
+				}
+				if string(external) != "start" {
+					t.Errorf("external data was modified")
+				}
+			},
+		},
+		{
+			name: "strconv_functions",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+
+				buf.AppendFunc(func(b []byte) []byte {
+					return strconv.AppendInt(b, 42, 10)
+				})
+				buf.AppendValue(',')
+				buf.AppendFunc(func(b []byte) []byte {
+					return strconv.AppendBool(b, true)
+				})
+				buf.AppendValue(',')
+				buf.AppendFunc(func(b []byte) []byte {
+					return strconv.AppendFloat(b, 3.14, 'f', 2, 64)
+				})
+
+				expected := "42,true,3.14"
+				if string(buf.Slice()) != expected {
+					t.Errorf("expected %q, got %q", expected, string(buf.Slice()))
+				}
+			},
+		},
+		{
+			name: "multiple_appendfunc_calls",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+
+				for i := 0; i < 10; i++ {
+					buf.AppendFunc(func(b []byte) []byte {
+						return append(b, byte('A'+i))
+					})
+				}
+
+				expected := "ABCDEFGHIJ"
+				if string(buf.Slice()) != expected {
+					t.Errorf("expected %q, got %q", expected, string(buf.Slice()))
+				}
+			},
+		},
+		{
+			name: "appendfunc_with_capacity_growth",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+
+				for i := 0; i < 100; i++ {
+					buf.AppendFunc(func(b []byte) []byte {
+						return append(b, byte(i))
+					})
+				}
+
+				if buf.Len() != 100 {
+					t.Errorf("expected len 100, got %d", buf.Len())
+				}
+				for i := 0; i < 100; i++ {
+					if buf.Slice()[i] != byte(i) {
+						t.Errorf("value mismatch at index %d: got %d, want %d", i, buf.Slice()[i], byte(i))
+						break
+					}
+				}
+			},
+		},
+		{
+			name: "appendfunc_preserves_existing_data",
+			test: func(t *testing.T) {
+				buf := new(SliceBuffer[byte])
+				buf.Append([]byte("prefix:")...)
+
+				buf.AppendFunc(func(b []byte) []byte {
+					return append(b, []byte("suffix")...)
+				})
+
+				expected := "prefix:suffix"
+				if string(buf.Slice()) != expected {
+					t.Errorf("expected %q, got %q", expected, string(buf.Slice()))
 				}
 			},
 		},
