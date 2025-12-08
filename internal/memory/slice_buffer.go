@@ -119,6 +119,39 @@ func (b *SliceBuffer[T]) AppendValue(value T) {
 	b.data = append(b.data, value)
 }
 
+// SliceWriter wraps a SliceBuffer[byte] to provide io.Writer and other
+// byte-specific write methods without generics type parameter shadowing issues.
+type SliceWriter struct {
+	Buffer *SliceBuffer[byte]
+}
+
+// Write appends data to the buffer and returns the number of bytes written.
+// Implements io.Writer.
+func (w SliceWriter) Write(p []byte) (n int, err error) {
+	w.Buffer.Append(p...)
+	return len(p), nil
+}
+
+// WriteString appends a string to the buffer by copying its bytes.
+func (w SliceWriter) WriteString(s string) (n int, err error) {
+	if len(s) == 0 {
+		return 0, nil
+	}
+	oldLen := len(w.Buffer.data)
+	if oldLen+len(s) > cap(w.Buffer.data) {
+		w.Buffer.reserve(len(s))
+	}
+	w.Buffer.data = w.Buffer.data[:oldLen+len(s)]
+	copy(w.Buffer.data[oldLen:], s)
+	return len(s), nil
+}
+
+// WriteByte appends a single byte to the buffer.
+func (w SliceWriter) WriteByte(c byte) error {
+	w.Buffer.AppendValue(c)
+	return nil
+}
+
 // Reset returns the slice to its pool and resets the buffer to empty.
 func (b *SliceBuffer[T]) Reset() {
 	if b.slice != nil {
