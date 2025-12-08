@@ -54,8 +54,7 @@ func (col *floatColumnBuffer) Cap() int { return col.values.Cap() }
 func (col *floatColumnBuffer) Len() int { return col.values.Len() }
 
 func (col *floatColumnBuffer) Less(i, j int) bool {
-	values := col.values.Slice()
-	return values[i] < values[j]
+	return col.values.Less(i, j)
 }
 
 func (col *floatColumnBuffer) Swap(i, j int) {
