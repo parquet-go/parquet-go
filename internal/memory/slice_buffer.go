@@ -42,10 +42,12 @@ func SliceBufferFor[T Datum](cap int) SliceBuffer[T] {
 	return buf
 }
 
-// reserve ensures the buffer has at least the required capacity in bytes.
+// reserve ensures the buffer has capacity for at least count more elements.
 // It handles transitioning from external data to pooled storage and growing when needed.
-func (b *SliceBuffer[T]) reserve(requiredBytes int) {
+// Caller must check that len(b.data)+count > cap(b.data) before calling.
+func (b *SliceBuffer[T]) reserve(count int) {
 	elemSize := int(unsafe.Sizeof(*new(T)))
+	requiredBytes := (len(b.data) + count) * elemSize
 
 	if b.slice == nil {
 		// Either empty or using external data
@@ -59,53 +61,37 @@ func (b *SliceBuffer[T]) reserve(requiredBytes int) {
 		return
 	}
 
-	// Already using pooled storage, check if we need to grow
-	if requiredBytes > cap(b.data)*elemSize {
-		oldSlice := b.slice
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.slice.data = append(b.slice.data, b.data...)
-		putSliceToPool(oldSlice, elemSize)
-		b.data = b.slice.data
-	}
+	// Already using pooled storage, grow to new bucket
+	oldSlice := b.slice
+	bucketIndex := findBucket(requiredBytes)
+	b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+	b.slice.data = append(b.slice.data, b.data...)
+	oldSlice.data = b.data // Sync before returning to pool
+	putSliceToPool(oldSlice, elemSize)
+	b.data = b.slice.data
 }
 
 // Append adds data to the buffer, growing the slice as needed by promoting to larger pool buckets.
 func (b *SliceBuffer[T]) Append(data ...T) {
-	if len(data) == 0 {
-		return
+	if len(b.data)+len(data) > cap(b.data) {
+		b.reserve(len(data))
 	}
-
-	elemSize := int(unsafe.Sizeof(*new(T)))
-	requiredBytes := (len(b.data) + len(data)) * elemSize
-	if requiredBytes > cap(b.data)*elemSize {
-		b.reserve(requiredBytes)
-	}
-
 	b.data = append(b.data, data...)
-	if b.slice != nil {
-		b.slice.data = b.data
-	}
 }
 
 // AppendValue appends a single value to the buffer.
 // This is more efficient than Append for single values as it avoids slice conversion overhead.
 func (b *SliceBuffer[T]) AppendValue(value T) {
-	elemSize := int(unsafe.Sizeof(*new(T)))
-	requiredBytes := (len(b.data) + 1) * elemSize
-	if requiredBytes > cap(b.data)*elemSize {
-		b.reserve(requiredBytes)
+	if len(b.data)+1 > cap(b.data) {
+		b.reserve(1)
 	}
-
 	b.data = append(b.data, value)
-	if b.slice != nil {
-		b.slice.data = b.data
-	}
 }
 
 // Reset returns the slice to its pool and resets the buffer to empty.
 func (b *SliceBuffer[T]) Reset() {
 	if b.slice != nil {
+		b.slice.data = b.data // Sync before returning to pool
 		elemSize := int(unsafe.Sizeof(*new(T)))
 		putSliceToPool(b.slice, elemSize)
 		b.slice = nil
@@ -141,10 +127,8 @@ func (b *SliceBuffer[T]) Grow(n int) {
 		return
 	}
 
-	elemSize := int(unsafe.Sizeof(*new(T)))
-	requiredBytes := (len(b.data) + n) * elemSize
-	if requiredBytes > cap(b.data)*elemSize {
-		b.reserve(requiredBytes)
+	if len(b.data)+n > cap(b.data) {
+		b.reserve(n)
 	}
 }
 
@@ -189,17 +173,12 @@ func (b *SliceBuffer[T]) Resize(size int) {
 	if size < currentLen {
 		// Truncate
 		b.data = b.data[:size]
-		if b.slice != nil {
-			b.slice.data = b.data
-		}
 		return
 	}
 
 	// Need to grow
-	elemSize := int(unsafe.Sizeof(*new(T)))
-	requiredBytes := size * elemSize
-	if requiredBytes > cap(b.data)*elemSize {
-		b.reserve(requiredBytes)
+	if size > cap(b.data) {
+		b.reserve(size - len(b.data))
 	}
 
 	// Extend the slice to the new size and zero-initialize new elements
@@ -208,9 +187,6 @@ func (b *SliceBuffer[T]) Resize(size int) {
 	// Zero-initialize the new elements
 	for i := oldLen; i < size; i++ {
 		b.data[i] = *new(T)
-	}
-	if b.slice != nil {
-		b.slice.data = b.data
 	}
 }
 
