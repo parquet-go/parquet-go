@@ -42,9 +42,9 @@ func SliceBufferFor[T Datum](cap int) SliceBuffer[T] {
 	return buf
 }
 
-// ensureCapacity ensures the buffer has at least the required capacity in bytes.
+// reserve ensures the buffer has at least the required capacity in bytes.
 // It handles transitioning from external data to pooled storage and growing when needed.
-func (b *SliceBuffer[T]) ensureCapacity(requiredBytes int) {
+func (b *SliceBuffer[T]) reserve(requiredBytes int) {
 	elemSize := int(unsafe.Sizeof(*new(T)))
 
 	if b.slice == nil {
@@ -78,7 +78,9 @@ func (b *SliceBuffer[T]) Append(data ...T) {
 
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := (len(b.data) + len(data)) * elemSize
-	b.ensureCapacity(requiredBytes)
+	if requiredBytes > cap(b.data)*elemSize {
+		b.reserve(requiredBytes)
+	}
 
 	b.data = append(b.data, data...)
 	if b.slice != nil {
@@ -91,7 +93,9 @@ func (b *SliceBuffer[T]) Append(data ...T) {
 func (b *SliceBuffer[T]) AppendValue(value T) {
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := (len(b.data) + 1) * elemSize
-	b.ensureCapacity(requiredBytes)
+	if requiredBytes > cap(b.data)*elemSize {
+		b.reserve(requiredBytes)
+	}
 
 	b.data = append(b.data, value)
 	if b.slice != nil {
@@ -139,7 +143,9 @@ func (b *SliceBuffer[T]) Grow(n int) {
 
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := (len(b.data) + n) * elemSize
-	b.ensureCapacity(requiredBytes)
+	if requiredBytes > cap(b.data)*elemSize {
+		b.reserve(requiredBytes)
+	}
 }
 
 // Cap returns the current capacity.
@@ -192,7 +198,9 @@ func (b *SliceBuffer[T]) Resize(size int) {
 	// Need to grow
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := size * elemSize
-	b.ensureCapacity(requiredBytes)
+	if requiredBytes > cap(b.data)*elemSize {
+		b.reserve(requiredBytes)
+	}
 
 	// Extend the slice to the new size and zero-initialize new elements
 	oldLen := len(b.data)
@@ -260,3 +268,5 @@ func putSliceToPool[T Datum](s *slice[T], elemSize int) {
 	byteSlice.data = unsafecast.Slice[byte](s.data)
 	slicePools[bucketIndex].Put(byteSlice)
 }
+
+var _ SliceBuffer[byte]
