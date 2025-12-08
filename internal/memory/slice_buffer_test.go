@@ -614,12 +614,6 @@ func TestSliceBufferResize(t *testing.T) {
 	if buf.Len() != 0 {
 		t.Errorf("after Resize(0), expected length 0, got %d", buf.Len())
 	}
-
-	// Test resize negative (should become 0)
-	buf.Resize(-5)
-	if buf.Len() != 0 {
-		t.Errorf("after Resize(-5), expected length 0, got %d", buf.Len())
-	}
 }
 
 func TestSliceBufferResizePattern(t *testing.T) {

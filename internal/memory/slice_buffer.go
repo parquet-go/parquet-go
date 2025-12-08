@@ -156,21 +156,14 @@ func (b *SliceBuffer[T]) Clone() SliceBuffer[T] {
 // If size is larger than the current length, the new elements contain uninitialized data.
 // If size is smaller, the buffer is truncated.
 func (b *SliceBuffer[T]) Resize(size int) {
-	if size < 0 {
-		size = 0
-	}
-	currentLen := len(b.data)
-	if size == currentLen {
-		return
-	}
-	if size < currentLen {
+	if size <= len(b.data) {
 		b.data = b.data[:size]
-		return
+	} else {
+		if size > cap(b.data) {
+			b.reserve(size - len(b.data))
+		}
+		b.data = b.data[:size]
 	}
-	if size > cap(b.data) {
-		b.reserve(size - len(b.data))
-	}
-	b.data = b.data[:size]
 }
 
 func findBucket(requiredBytes int) int {
