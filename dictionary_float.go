@@ -6,6 +6,7 @@ import (
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -15,14 +16,13 @@ type floatDictionary struct {
 }
 
 func newFloatDictionary(typ Type, columnIndex int16, numValues int32, data encoding.Values) *floatDictionary {
-	d := &floatDictionary{
+	return &floatDictionary{
 		floatPage: floatPage{
 			typ:         typ,
+			values:      memory.SliceBufferFrom(data.Float()[:numValues]),
 			columnIndex: ^columnIndex,
 		},
 	}
-	d.values.Append(data.Float()[:numValues]...)
-	return d
 }
 
 func (d *floatDictionary) Type() Type { return newIndexedType(d.typ, d) }
@@ -101,29 +101,31 @@ func (d *floatDictionary) Page() Page {
 
 func (d *floatDictionary) insertBoolean(value bool) int32 {
 	if value {
-		return d.insertFloat32(1)
+		return d.insertFloat(1)
 	}
-	return d.insertFloat32(0)
+	return d.insertFloat(0)
 }
 
 func (d *floatDictionary) insertInt32(value int32) int32 {
-	return d.insertFloat32(float32(value))
+	return d.insertFloat(float32(value))
 }
 
 func (d *floatDictionary) insertInt64(value int64) int32 {
-	return d.insertFloat32(float32(value))
+	return d.insertFloat(float32(value))
 }
 
 func (d *floatDictionary) insertInt96(value deprecated.Int96) int32 {
-	return d.insertFloat32(float32(value.Int32()))
+	return d.insertFloat(float32(value.Int32()))
 }
 
 func (d *floatDictionary) insertFloat(value float32) int32 {
-	return d.insertFloat32(float32(value))
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&value))
+	return indexes[0]
 }
 
 func (d *floatDictionary) insertDouble(value float64) int32 {
-	return d.insertFloat32(float32(value))
+	return d.insertFloat(float32(value))
 }
 
 func (d *floatDictionary) insertByteArray(value []byte) int32 {
@@ -131,11 +133,5 @@ func (d *floatDictionary) insertByteArray(value []byte) int32 {
 	if err != nil {
 		panic(err)
 	}
-	return d.insertFloat32(float32(v))
-}
-
-func (d *floatDictionary) insertFloat32(value float32) int32 {
-	var indexes [1]int32
-	d.insert(indexes[:], makeArrayFromPointer(&value))
-	return indexes[0]
+	return d.insertFloat(float32(v))
 }

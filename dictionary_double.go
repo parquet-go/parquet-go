@@ -6,6 +6,7 @@ import (
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -15,14 +16,13 @@ type doubleDictionary struct {
 }
 
 func newDoubleDictionary(typ Type, columnIndex int16, numValues int32, data encoding.Values) *doubleDictionary {
-	d := &doubleDictionary{
+	return &doubleDictionary{
 		doublePage: doublePage{
 			typ:         typ,
+			values:      memory.SliceBufferFrom(data.Double()[:numValues]),
 			columnIndex: ^columnIndex,
 		},
 	}
-	d.values.Append(data.Double()[:numValues]...)
-	return d
 }
 
 func (d *doubleDictionary) Type() Type { return newIndexedType(d.typ, d) }
@@ -101,29 +101,31 @@ func (d *doubleDictionary) Page() Page {
 
 func (d *doubleDictionary) insertBoolean(value bool) int32 {
 	if value {
-		return d.insertFloat64(1)
+		return d.insertDouble(1)
 	}
-	return d.insertFloat64(0)
+	return d.insertDouble(0)
 }
 
 func (d *doubleDictionary) insertInt32(value int32) int32 {
-	return d.insertFloat64(float64(value))
+	return d.insertDouble(float64(value))
 }
 
 func (d *doubleDictionary) insertInt64(value int64) int32 {
-	return d.insertFloat64(float64(value))
+	return d.insertDouble(float64(value))
 }
 
 func (d *doubleDictionary) insertInt96(value deprecated.Int96) int32 {
-	return d.insertFloat64(float64(value.Int64()))
+	return d.insertDouble(float64(value.Int64()))
 }
 
 func (d *doubleDictionary) insertFloat(value float32) int32 {
-	return d.insertFloat64(float64(value))
+	return d.insertDouble(float64(value))
 }
 
 func (d *doubleDictionary) insertDouble(value float64) int32 {
-	return d.insertFloat64(float64(value))
+	var indexes [1]int32
+	d.insert(indexes[:], makeArrayFromPointer(&value))
+	return indexes[0]
 }
 
 func (d *doubleDictionary) insertByteArray(value []byte) int32 {
@@ -131,11 +133,5 @@ func (d *doubleDictionary) insertByteArray(value []byte) int32 {
 	if err != nil {
 		panic(err)
 	}
-	return d.insertFloat64(float64(v))
-}
-
-func (d *doubleDictionary) insertFloat64(value float64) int32 {
-	var indexes [1]int32
-	d.insert(indexes[:], makeArrayFromPointer(&value))
-	return indexes[0]
+	return d.insertDouble(float64(v))
 }
