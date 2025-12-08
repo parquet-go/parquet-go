@@ -4,7 +4,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/parquet-go/parquet-go/internal/memory"
 )
@@ -49,41 +48,25 @@ func NewBufferPool() BufferPool { return NewChunkBufferPool(defaultChunkSize) }
 // The implementation is backed by sync.Pool and allocates memory buffers on the
 // Go heap in fixed-size chunks.
 func NewChunkBufferPool(chunkSize int) BufferPool {
-	return newChunkMemoryBufferPool(chunkSize)
+	return &memoryBufferPool{size: chunkSize}
 }
 
-func newChunkMemoryBufferPool(chunkSize int) *chunkMemoryBufferPool {
-	return &chunkMemoryBufferPool{
-		chunkSize: chunkSize,
-	}
+type memoryBufferPool struct {
+	pool memory.Pool[memory.Buffer]
+	size int
 }
 
-// chunkMemoryBuffer implements an io.ReadWriteSeeker by delegating to memory.Buffer.
-type chunkMemoryBuffer struct {
-	*memory.Buffer
+func (m *memoryBufferPool) GetBuffer() io.ReadWriteSeeker {
+	return m.pool.Get(
+		func() *memory.Buffer { return memory.NewBuffer(m.size) },
+		(*memory.Buffer).Reset,
+	)
 }
 
-type chunkMemoryBufferPool struct {
-	sync.Pool
-	chunkSize int
-}
-
-func (pool *chunkMemoryBufferPool) GetBuffer() io.ReadWriteSeeker {
-	b, _ := pool.Get().(*chunkMemoryBuffer)
-	if b == nil {
-		b = &chunkMemoryBuffer{
-			Buffer: memory.NewBuffer(pool.chunkSize),
-		}
-	} else {
-		b.Reset()
-	}
-	return b
-}
-
-func (pool *chunkMemoryBufferPool) PutBuffer(buf io.ReadWriteSeeker) {
-	if b, _ := buf.(*chunkMemoryBuffer); b != nil {
-		b.Reset()
-		pool.Put(b)
+func (m *memoryBufferPool) PutBuffer(buf io.ReadWriteSeeker) {
+	if b, _ := buf.(*memory.Buffer); b != nil {
+		b.Reset() // release internal buffers
+		m.pool.Put(b)
 	}
 }
 
@@ -130,13 +113,11 @@ func (buf *errorBuffer) WriteTo(io.Writer) (int64, error)  { return 0, buf.err }
 func (buf *errorBuffer) Seek(int64, int) (int64, error)    { return 0, buf.err }
 
 var (
-	defaultColumnBufferPool  = *newChunkMemoryBufferPool(defaultChunkSize)
-	defaultSortingBufferPool = *newChunkMemoryBufferPool(defaultChunkSize)
+	defaultColumnBufferPool  = memoryBufferPool{size: defaultChunkSize}
+	defaultSortingBufferPool = memoryBufferPool{size: defaultChunkSize}
 
-	_ io.ReaderFrom      = (*errorBuffer)(nil)
-	_ io.WriterTo        = (*errorBuffer)(nil)
-	_ io.ReadWriteSeeker = (*chunkMemoryBuffer)(nil)
-	_ io.WriterTo        = (*chunkMemoryBuffer)(nil)
+	_ io.ReaderFrom = (*errorBuffer)(nil)
+	_ io.WriterTo   = (*errorBuffer)(nil)
 )
 
 type readerAt struct {

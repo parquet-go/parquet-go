@@ -34,18 +34,15 @@ func ChunkBufferFor[T Datum](chunkSize int) ChunkBuffer[T] {
 func (b *ChunkBuffer[T]) Append(data ...T) {
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	capacity := b.chunkSize / elemSize
+
 	for len(data) > 0 {
 		if len(b.chunks) == 0 || (b.length&(capacity-1)) == 0 {
 			bucketIndex := findBucket(b.chunkSize)
 			chunk := slicePools[bucketIndex].Get(
 				func() *slice[byte] {
-					return &slice[byte]{
-						data: make([]byte, 0, b.chunkSize),
-					}
+					return &slice[byte]{data: make([]byte, 0, b.chunkSize)}
 				},
-				func(s *slice[byte]) {
-					s.data = s.data[:0]
-				},
+				func(s *slice[byte]) { s.data = s.data[:0] },
 			)
 			b.chunks = append(b.chunks, chunk)
 		}
@@ -65,14 +62,12 @@ func (b *ChunkBuffer[T]) Append(data ...T) {
 
 // Reset returns all chunks to the pool and resets the buffer to empty.
 func (b *ChunkBuffer[T]) Reset() {
-	if len(b.chunks) > 0 {
-		bucketIndex := findBucket(b.chunkSize)
-		for i := range b.chunks {
-			slicePools[bucketIndex].Put(b.chunks[i])
-			b.chunks[i] = nil
-		}
-		b.chunks = b.chunks[:0]
+	bucketIndex := findBucket(b.chunkSize)
+	for i := range b.chunks {
+		slicePools[bucketIndex].Put(b.chunks[i])
+		b.chunks[i] = nil
 	}
+	b.chunks = b.chunks[:0]
 	b.length = 0
 }
 
