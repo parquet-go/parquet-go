@@ -306,8 +306,7 @@ func BenchmarkBufferWrite(b *testing.B) {
 	buf := NewBuffer(testBufferChunkSize)
 	data := make([]byte, 1024)
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		buf.Write(data)
 		if b.N%100 == 99 {
 			buf.Reset()
@@ -321,8 +320,8 @@ func BenchmarkBufferRead(b *testing.B) {
 	buf.Write(data)
 
 	readBuf := make([]byte, 1024)
-	b.ResetTimer()
-	for range b.N {
+
+	for b.Loop() {
 		buf.Seek(0, io.SeekStart)
 		for {
 			_, err := buf.Read(readBuf)
