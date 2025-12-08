@@ -70,21 +70,21 @@ func writeProtoDuration(col ColumnBuffer, levels columnLevels, dur *durationpb.D
 }
 
 func writeProtoStruct(col ColumnBuffer, levels columnLevels, s *structpb.Struct, node Node) {
-	var buf memory.SliceBuffer[byte]
-	buf.Grow(2 * proto.Size(s))
-	w := memory.SliceWriter{Buffer: &buf}
+	b := memory.SliceBuffer[byte]{}
+	w := memory.SliceWriter{Buffer: &b}
+	b.Grow(2 * proto.Size(s))
 	writeProtoStructJSON(w, s)
-	col.writeByteArray(levels, buf.Slice())
-	buf.Reset()
+	col.writeByteArray(levels, b.Slice())
+	b.Reset()
 }
 
 func writeProtoList(col ColumnBuffer, levels columnLevels, l *structpb.ListValue, node Node) {
-	var buf memory.SliceBuffer[byte]
-	buf.Grow(2 * proto.Size(l))
-	w := memory.SliceWriter{Buffer: &buf}
+	b := memory.SliceBuffer[byte]{}
+	w := memory.SliceWriter{Buffer: &b}
+	b.Grow(2 * proto.Size(l))
 	writeProtoListValueJSON(w, l)
-	col.writeByteArray(levels, buf.Slice())
-	buf.Reset()
+	col.writeByteArray(levels, b.Slice())
+	b.Reset()
 }
 
 func writeProtoStructJSON(w memory.SliceWriter, s *structpb.Struct) {
@@ -110,8 +110,9 @@ func writeProtoStructJSON(w memory.SliceWriter, s *structpb.Struct) {
 		if i > 0 {
 			w.WriteByte(',')
 		}
-		quoted := jsonlite.AppendQuote(nil, key)
-		w.Buffer.Append(quoted...)
+		w.Buffer.AppendFunc(func(b []byte) []byte {
+			return jsonlite.AppendQuote(b, key)
+		})
 		w.WriteByte(':')
 		writeProtoValueJSON(w, fields[key])
 	}
@@ -121,14 +122,17 @@ func writeProtoStructJSON(w memory.SliceWriter, s *structpb.Struct) {
 func writeProtoValueJSON(w memory.SliceWriter, v *structpb.Value) {
 	switch k := v.GetKind().(type) {
 	case *structpb.Value_StringValue:
-		quoted := jsonlite.AppendQuote(nil, k.StringValue)
-		w.Buffer.Append(quoted...)
+		w.Buffer.AppendFunc(func(b []byte) []byte {
+			return jsonlite.AppendQuote(b, k.StringValue)
+		})
 	case *structpb.Value_BoolValue:
-		formatted := strconv.AppendBool(nil, k.BoolValue)
-		w.Buffer.Append(formatted...)
+		w.Buffer.AppendFunc(func(b []byte) []byte {
+			return strconv.AppendBool(b, k.BoolValue)
+		})
 	case *structpb.Value_NumberValue:
-		formatted := strconv.AppendFloat(nil, k.NumberValue, 'g', -1, 64)
-		w.Buffer.Append(formatted...)
+		w.Buffer.AppendFunc(func(b []byte) []byte {
+			return strconv.AppendFloat(b, k.NumberValue, 'g', -1, 64)
+		})
 	case *structpb.Value_StructValue:
 		writeProtoStructJSON(w, k.StructValue)
 	case *structpb.Value_ListValue:
