@@ -72,6 +72,41 @@ func (b *SliceBuffer[T]) Append(data ...T) {
 	}
 }
 
+// AppendValue appends a single value to the buffer.
+// This is more efficient than Append for single values as it avoids slice conversion overhead.
+func (b *SliceBuffer[T]) AppendValue(value T) {
+	elemSize := int(unsafe.Sizeof(*new(T)))
+	requiredBytes := (len(b.data) + 1) * elemSize
+
+	// If using external data, need to move to pooled storage
+	if b.slice == nil && b.data != nil {
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.slice.data = append(b.slice.data, b.data...)
+		b.data = b.slice.data
+	}
+
+	if b.slice == nil {
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.data = b.slice.data
+	}
+
+	if requiredBytes > cap(b.data)*elemSize {
+		oldSlice := b.slice
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.slice.data = append(b.slice.data, b.data...)
+		putSliceToPool(oldSlice, elemSize)
+		b.data = b.slice.data
+	}
+
+	b.data = append(b.data, value)
+	if b.slice != nil {
+		b.slice.data = b.data
+	}
+}
+
 // Reset returns the slice to its pool and resets the buffer to empty.
 func (b *SliceBuffer[T]) Reset() {
 	if b.slice != nil {

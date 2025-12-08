@@ -86,27 +86,27 @@ func (col *floatColumnBuffer) writeBoolean(levels columnLevels, value bool) {
 	if value {
 		uintValue = 1
 	}
-	col.values.Append(uintValue)
+	col.values.AppendValue(uintValue)
 }
 
 func (col *floatColumnBuffer) writeInt32(levels columnLevels, value int32) {
-	col.values.Append(float32(value))
+	col.values.AppendValue(float32(value))
 }
 
 func (col *floatColumnBuffer) writeInt64(levels columnLevels, value int64) {
-	col.values.Append(float32(value))
+	col.values.AppendValue(float32(value))
 }
 
 func (col *floatColumnBuffer) writeInt96(levels columnLevels, value deprecated.Int96) {
-	col.values.Append(float32(value.Int32()))
+	col.values.AppendValue(float32(value.Int32()))
 }
 
 func (col *floatColumnBuffer) writeFloat(levels columnLevels, value float32) {
-	col.values.Append(float32(value))
+	col.values.AppendValue(float32(value))
 }
 
 func (col *floatColumnBuffer) writeDouble(levels columnLevels, value float64) {
-	col.values.Append(float32(value))
+	col.values.AppendValue(float32(value))
 }
 
 func (col *floatColumnBuffer) writeByteArray(levels columnLevels, value []byte) {
@@ -114,11 +114,11 @@ func (col *floatColumnBuffer) writeByteArray(levels columnLevels, value []byte) 
 	if err != nil {
 		panic("cannot write byte array to float column: " + err.Error())
 	}
-	col.values.Append(float32(floatValue))
+	col.values.AppendValue(float32(floatValue))
 }
 
 func (col *floatColumnBuffer) writeNull(levels columnLevels) {
-	col.values.Append(0)
+	col.values.AppendValue(0)
 }
 
 func (col *floatColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
