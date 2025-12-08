@@ -61,7 +61,8 @@ func (b *Buffer) Write(p []byte) (int, error) {
 			b.data.Append(0)
 		}
 
-		chunk := b.data.ChunkCap(i)
+		chunk := b.data.Chunk(i)
+		chunk = chunk[:cap(chunk)] // Extend to full capacity for writing
 		written := copy(chunk[offset:], p)
 
 		// Update buffer length if we extended it
