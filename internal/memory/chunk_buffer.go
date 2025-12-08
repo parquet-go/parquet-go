@@ -23,11 +23,7 @@ func ChunkBufferFor[T Datum](chunkSize int) ChunkBuffer[T] {
 	// Clamp to bucket system range
 	minSize := uint(1 << minBucketBits)
 	maxSize := uint(1 << maxBucketBits)
-	if size < minSize {
-		size = minSize
-	} else if size > maxSize {
-		size = maxSize
-	}
+	size = max(minSize, min(size, maxSize))
 
 	return ChunkBuffer[T]{chunkSize: int(size)}
 }
