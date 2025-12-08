@@ -42,13 +42,20 @@ func SliceBufferFor[T Datum](cap int) SliceBuffer[T] {
 	return buf
 }
 
+// reserveMore ensures the buffer has capacity for at least one more element.
+//
+// This is moved to a separate function to keep the complexity cost of AppendValue
+// within the inlining budget.
+//
+//go:noinline
+func (b *SliceBuffer[T]) reserveMore() { b.reserve(1) }
+
 // reserve ensures the buffer has capacity for at least count more elements.
 // It handles transitioning from external data to pooled storage and growing when needed.
 // Caller must check that len(b.data)+count > cap(b.data) before calling.
 func (b *SliceBuffer[T]) reserve(count int) {
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := (len(b.data) + count) * elemSize
-
 	if b.slice == nil {
 		// Either empty or using external data
 		bucketIndex := findBucket(requiredBytes)
@@ -58,20 +65,20 @@ func (b *SliceBuffer[T]) reserve(count int) {
 			b.slice.data = append(b.slice.data, b.data...)
 		}
 		b.data = b.slice.data
-		return
+	} else {
+		// Already using pooled storage, grow to new bucket
+		oldSlice := b.slice
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.slice.data = append(b.slice.data, b.data...)
+		oldSlice.data = b.data // Sync before returning to pool
+		putSliceToPool(oldSlice, elemSize)
+		b.data = b.slice.data
 	}
-
-	// Already using pooled storage, grow to new bucket
-	oldSlice := b.slice
-	bucketIndex := findBucket(requiredBytes)
-	b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-	b.slice.data = append(b.slice.data, b.data...)
-	oldSlice.data = b.data // Sync before returning to pool
-	putSliceToPool(oldSlice, elemSize)
-	b.data = b.slice.data
 }
 
-// Append adds data to the buffer, growing the slice as needed by promoting to larger pool buckets.
+// Append adds data to the buffer, growing the slice as needed by promoting to
+// larger pool buckets.
 func (b *SliceBuffer[T]) Append(data ...T) {
 	if len(b.data)+len(data) > cap(b.data) {
 		b.reserve(len(data))
@@ -80,10 +87,9 @@ func (b *SliceBuffer[T]) Append(data ...T) {
 }
 
 // AppendValue appends a single value to the buffer.
-// This is more efficient than Append for single values as it avoids slice conversion overhead.
 func (b *SliceBuffer[T]) AppendValue(value T) {
-	if len(b.data)+1 > cap(b.data) {
-		b.reserve(1)
+	if len(b.data) == cap(b.data)-1 {
+		b.reserveMore()
 	}
 	b.data = append(b.data, value)
 }
@@ -99,16 +105,15 @@ func (b *SliceBuffer[T]) Reset() {
 	b.data = nil
 }
 
+// Cap returns the current capacity.
+func (b *SliceBuffer[T]) Cap() int { return cap(b.data) }
+
 // Len returns the number of elements currently in the buffer.
-func (b *SliceBuffer[T]) Len() int {
-	return len(b.data)
-}
+func (b *SliceBuffer[T]) Len() int { return len(b.data) }
 
 // Slice returns a view of the current data.
 // The returned slice is only valid until the next call to Append or Reset.
-func (b *SliceBuffer[T]) Slice() []T {
-	return b.data
-}
+func (b *SliceBuffer[T]) Slice() []T { return b.data }
 
 // Swap swaps the elements at indices i and j.
 func (b *SliceBuffer[T]) Swap(i, j int) {
@@ -123,18 +128,9 @@ func (b *SliceBuffer[T]) Less(i, j int) bool {
 
 // Grow ensures the buffer has capacity for at least n more elements.
 func (b *SliceBuffer[T]) Grow(n int) {
-	if n <= 0 {
-		return
-	}
-
-	if len(b.data)+n > cap(b.data) {
+	if n > 0 && len(b.data)+n > cap(b.data) {
 		b.reserve(n)
 	}
-}
-
-// Cap returns the current capacity.
-func (b *SliceBuffer[T]) Cap() int {
-	return cap(b.data)
 }
 
 // Clone creates a copy of the buffer with its own pooled allocation.
@@ -153,41 +149,28 @@ func (b *SliceBuffer[T]) Clone() SliceBuffer[T] {
 	}
 	cloned.slice.data = append(cloned.slice.data, b.data...)
 	cloned.data = cloned.slice.data
-
 	return cloned
 }
 
 // Resize changes the length of the buffer to size, growing capacity if needed.
-// If size is larger than the current length, the new elements are zero-initialized.
+// If size is larger than the current length, the new elements contain uninitialized data.
 // If size is smaller, the buffer is truncated.
 func (b *SliceBuffer[T]) Resize(size int) {
 	if size < 0 {
 		size = 0
 	}
-
 	currentLen := len(b.data)
 	if size == currentLen {
 		return
 	}
-
 	if size < currentLen {
-		// Truncate
 		b.data = b.data[:size]
 		return
 	}
-
-	// Need to grow
 	if size > cap(b.data) {
 		b.reserve(size - len(b.data))
 	}
-
-	// Extend the slice to the new size and zero-initialize new elements
-	oldLen := len(b.data)
 	b.data = b.data[:size]
-	// Zero-initialize the new elements
-	for i := oldLen; i < size; i++ {
-		b.data[i] = *new(T)
-	}
 }
 
 func findBucket(requiredBytes int) int {

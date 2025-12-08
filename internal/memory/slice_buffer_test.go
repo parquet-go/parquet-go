@@ -580,12 +580,6 @@ func TestSliceBufferResize(t *testing.T) {
 	if buf.Len() != 10 {
 		t.Errorf("after Resize(10), expected length 10, got %d", buf.Len())
 	}
-	slice := buf.Slice()
-	for i := range slice {
-		if slice[i] != 0 {
-			t.Errorf("index %d: expected zero-initialized value, got %d", i, slice[i])
-		}
-	}
 
 	// Test growing with existing data
 	buf.Resize(5)
@@ -596,15 +590,10 @@ func TestSliceBufferResize(t *testing.T) {
 	if buf.Len() != 10 {
 		t.Errorf("after Resize(10), expected length 10, got %d", buf.Len())
 	}
-	slice = buf.Slice()
+	slice := buf.Slice()
 	for i := range 5 {
 		if slice[i] != int32(i+1) {
 			t.Errorf("index %d: expected %d, got %d", i, i+1, slice[i])
-		}
-	}
-	for i := 5; i < 10; i++ {
-		if slice[i] != 0 {
-			t.Errorf("index %d: expected zero-initialized value, got %d", i, slice[i])
 		}
 	}
 
