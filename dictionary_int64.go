@@ -6,6 +6,7 @@ import (
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/hashprobe"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -15,14 +16,13 @@ type int64Dictionary struct {
 }
 
 func newInt64Dictionary(typ Type, columnIndex int16, numValues int32, data encoding.Values) *int64Dictionary {
-	d := &int64Dictionary{
+	return &int64Dictionary{
 		int64Page: int64Page{
 			typ:         typ,
+			values:      memory.SliceBufferFrom(data.Int64()[:numValues]),
 			columnIndex: ^columnIndex,
 		},
 	}
-	d.values.Append(data.Int64()[:numValues]...)
-	return d
 }
 
 func (d *int64Dictionary) Type() Type { return newIndexedType(d.typ, d) }
