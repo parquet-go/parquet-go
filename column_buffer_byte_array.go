@@ -175,48 +175,55 @@ func (col *byteArrayColumnBuffer) writeValues(levels columnLevels, rows sparse.A
 
 func (col *byteArrayColumnBuffer) writeBoolean(levels columnLevels, value bool) {
 	offset := col.values.Len()
-	values := strconv.AppendBool(col.values.Slice(), value)
-	col.values = memory.SliceBufferFrom(values)
+	col.values.AppendFunc(func(b []byte) []byte {
+		return strconv.AppendBool(b, value)
+	})
 	col.offsets.AppendValue(uint32(offset))
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
 func (col *byteArrayColumnBuffer) writeInt32(levels columnLevels, value int32) {
 	offset := col.values.Len()
-	values := strconv.AppendInt(col.values.Slice(), int64(value), 10)
-	col.values = memory.SliceBufferFrom(values)
+	col.values.AppendFunc(func(b []byte) []byte {
+		return strconv.AppendInt(b, int64(value), 10)
+	})
 	col.offsets.AppendValue(uint32(offset))
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
 func (col *byteArrayColumnBuffer) writeInt64(levels columnLevels, value int64) {
 	offset := col.values.Len()
-	values := strconv.AppendInt(col.values.Slice(), value, 10)
-	col.values = memory.SliceBufferFrom(values)
+	col.values.AppendFunc(func(b []byte) []byte {
+		return strconv.AppendInt(b, value, 10)
+	})
 	col.offsets.AppendValue(uint32(offset))
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
 func (col *byteArrayColumnBuffer) writeInt96(levels columnLevels, value deprecated.Int96) {
 	offset := col.values.Len()
-	values, _ := value.Int().AppendText(col.values.Slice())
-	col.values = memory.SliceBufferFrom(values)
+	col.values.AppendFunc(func(b []byte) []byte {
+		result, _ := value.Int().AppendText(b)
+		return result
+	})
 	col.offsets.AppendValue(uint32(offset))
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
 func (col *byteArrayColumnBuffer) writeFloat(levels columnLevels, value float32) {
 	offset := col.values.Len()
-	values := strconv.AppendFloat(col.values.Slice(), float64(value), 'g', -1, 32)
-	col.values = memory.SliceBufferFrom(values)
+	col.values.AppendFunc(func(b []byte) []byte {
+		return strconv.AppendFloat(b, float64(value), 'g', -1, 32)
+	})
 	col.offsets.AppendValue(uint32(offset))
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
 func (col *byteArrayColumnBuffer) writeDouble(levels columnLevels, value float64) {
 	offset := col.values.Len()
-	values := strconv.AppendFloat(col.values.Slice(), value, 'g', -1, 64)
-	col.values = memory.SliceBufferFrom(values)
+	col.values.AppendFunc(func(b []byte) []byte {
+		return strconv.AppendFloat(b, value, 'g', -1, 64)
+	})
 	col.offsets.AppendValue(uint32(offset))
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }

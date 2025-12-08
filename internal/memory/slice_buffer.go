@@ -119,6 +119,14 @@ func (b *SliceBuffer[T]) Append(data ...T) {
 // If fn reallocates the slice (returns a different backing array), the buffer
 // transitions to using external data and releases any pooled storage.
 func (b *SliceBuffer[T]) AppendFunc(fn func([]T) []T) {
+	const reserveSize = 1024
+
+	if (cap(b.data) - len(b.data)) < reserveSize {
+		// Ensure there's some extra capacity to reduce reallocations
+		// when fn appends small amounts of data.
+		b.reserve(reserveSize)
+	}
+
 	oldData := b.data
 	newData := fn(b.data)
 
