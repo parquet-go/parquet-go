@@ -34,29 +34,24 @@ func SliceBufferFrom[T Datum](data []T) SliceBuffer[T] {
 	return SliceBuffer[T]{data: data}
 }
 
-// Append adds data to the buffer, growing the slice as needed by promoting to larger pool buckets.
-func (b *SliceBuffer[T]) Append(data ...T) {
-	if len(data) == 0 {
+// ensureCapacity ensures the buffer has at least the required capacity in bytes.
+// It handles transitioning from external data to pooled storage and growing when needed.
+func (b *SliceBuffer[T]) ensureCapacity(requiredBytes int) {
+	elemSize := int(unsafe.Sizeof(*new(T)))
+
+	if b.slice == nil {
+		// Either empty or using external data
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		if b.data != nil {
+			// Transition from external data to pooled storage
+			b.slice.data = append(b.slice.data, b.data...)
+		}
+		b.data = b.slice.data
 		return
 	}
 
-	elemSize := int(unsafe.Sizeof(*new(T)))
-	requiredBytes := (len(b.data) + len(data)) * elemSize
-
-	// If using external data, need to move to pooled storage
-	if b.slice == nil && b.data != nil {
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.slice.data = append(b.slice.data, b.data...)
-		b.data = b.slice.data
-	}
-
-	if b.slice == nil {
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.data = b.slice.data
-	}
-
+	// Already using pooled storage, check if we need to grow
 	if requiredBytes > cap(b.data)*elemSize {
 		oldSlice := b.slice
 		bucketIndex := findBucket(requiredBytes)
@@ -65,6 +60,17 @@ func (b *SliceBuffer[T]) Append(data ...T) {
 		putSliceToPool(oldSlice, elemSize)
 		b.data = b.slice.data
 	}
+}
+
+// Append adds data to the buffer, growing the slice as needed by promoting to larger pool buckets.
+func (b *SliceBuffer[T]) Append(data ...T) {
+	if len(data) == 0 {
+		return
+	}
+
+	elemSize := int(unsafe.Sizeof(*new(T)))
+	requiredBytes := (len(b.data) + len(data)) * elemSize
+	b.ensureCapacity(requiredBytes)
 
 	b.data = append(b.data, data...)
 	if b.slice != nil {
@@ -77,29 +83,7 @@ func (b *SliceBuffer[T]) Append(data ...T) {
 func (b *SliceBuffer[T]) AppendValue(value T) {
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := (len(b.data) + 1) * elemSize
-
-	// If using external data, need to move to pooled storage
-	if b.slice == nil && b.data != nil {
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.slice.data = append(b.slice.data, b.data...)
-		b.data = b.slice.data
-	}
-
-	if b.slice == nil {
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.data = b.slice.data
-	}
-
-	if requiredBytes > cap(b.data)*elemSize {
-		oldSlice := b.slice
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.slice.data = append(b.slice.data, b.data...)
-		putSliceToPool(oldSlice, elemSize)
-		b.data = b.slice.data
-	}
+	b.ensureCapacity(requiredBytes)
 
 	b.data = append(b.data, value)
 	if b.slice != nil {
@@ -147,32 +131,7 @@ func (b *SliceBuffer[T]) Grow(n int) {
 
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := (len(b.data) + n) * elemSize
-
-	// If using external data, need to move to pooled storage
-	if b.slice == nil && b.data != nil {
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.slice.data = append(b.slice.data, b.data...)
-		b.data = b.slice.data
-		return
-	}
-
-	if b.slice == nil {
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.data = b.slice.data
-		return
-	}
-
-	currentCapBytes := cap(b.data) * elemSize
-	if requiredBytes > currentCapBytes {
-		bucketIndex := findBucket(requiredBytes)
-		oldSlice := b.slice
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.slice.data = append(b.slice.data, b.data...)
-		putSliceToPool(oldSlice, elemSize)
-		b.data = b.slice.data
-	}
+	b.ensureCapacity(requiredBytes)
 }
 
 // Cap returns the current capacity.
@@ -225,33 +184,15 @@ func (b *SliceBuffer[T]) Resize(size int) {
 	// Need to grow
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := size * elemSize
+	b.ensureCapacity(requiredBytes)
 
-	// If using external data, need to move to pooled storage
-	if b.slice == nil && b.data != nil {
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.slice.data = append(b.slice.data, b.data...)
-		b.data = b.slice.data
-	}
-
-	if b.slice == nil {
-		bucketIndex := findBucket(requiredBytes)
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.data = b.slice.data
-	}
-
-	currentCapBytes := cap(b.data) * elemSize
-	if requiredBytes > currentCapBytes {
-		bucketIndex := findBucket(requiredBytes)
-		oldSlice := b.slice
-		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
-		b.slice.data = append(b.slice.data, b.data...)
-		putSliceToPool(oldSlice, elemSize)
-		b.data = b.slice.data
-	}
-
-	// Extend the slice to the new size
+	// Extend the slice to the new size and zero-initialize new elements
+	oldLen := len(b.data)
 	b.data = b.data[:size]
+	// Zero-initialize the new elements
+	for i := oldLen; i < size; i++ {
+		b.data[i] = *new(T)
+	}
 	if b.slice != nil {
 		b.slice.data = b.data
 	}
