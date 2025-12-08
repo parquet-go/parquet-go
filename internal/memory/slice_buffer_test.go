@@ -937,11 +937,11 @@ func TestBucketIndexOfGetEdgeCases(t *testing.T) {
 			test: func(t *testing.T) {
 				// Test exact bucket size boundaries
 				bucketSizes := []int{
-					minBucketSize,                 // 4096
-					minBucketSize * 2,             // 8192
-					minBucketSize * 4,             // 16384
-					lastShortBucketSize,           // 262144
-					lastShortBucketSize * 3 / 2,   // 393216 (first large bucket)
+					minBucketSize,               // 4096
+					minBucketSize * 2,           // 8192
+					minBucketSize * 4,           // 16384
+					lastShortBucketSize,         // 262144
+					lastShortBucketSize * 3 / 2, // 393216 (first large bucket)
 				}
 				for _, size := range bucketSizes {
 					buf := SliceBufferFor[byte](size)
@@ -957,7 +957,7 @@ func TestBucketIndexOfGetEdgeCases(t *testing.T) {
 				// Ensure we can reach all 32 buckets by growing
 				buf := new(SliceBuffer[byte])
 				size := minBucketSize
-				for i := 0; i < numBuckets; i++ {
+				for i := range numBuckets {
 					buf.Grow(size - buf.Len())
 					if buf.Cap() < size {
 						t.Errorf("bucket %d: expected capacity >= %d, got %d", i, size, buf.Cap())
@@ -1072,7 +1072,7 @@ func TestBucketSizeEdgeCases(t *testing.T) {
 			test: func(t *testing.T) {
 				// Calculate last bucket size
 				size := minBucketSize
-				for i := 0; i < numBuckets-1; i++ {
+				for range numBuckets - 1 {
 					if size < lastShortBucketSize {
 						size = size * 2
 					} else {
@@ -1121,7 +1121,7 @@ func TestReserveComplexPaths(t *testing.T) {
 				}
 				// Verify original data preserved
 				slice := buf.Slice()
-				for i := 0; i < 100; i++ {
+				for i := range 100 {
 					if slice[i] != byte(i) {
 						t.Errorf("data not preserved")
 						break
