@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"slices"
 	"unsafe"
 
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
 type fixedLenByteArrayColumnBuffer struct {
 	fixedLenByteArrayPage
-	tmp []byte
+	tmp memory.SliceBuffer[byte]
 }
 
 func newFixedLenByteArrayColumnBuffer(typ Type, columnIndex int16, numValues int32) *fixedLenByteArrayColumnBuffer {
@@ -24,10 +24,9 @@ func newFixedLenByteArrayColumnBuffer(typ Type, columnIndex int16, numValues int
 		fixedLenByteArrayPage: fixedLenByteArrayPage{
 			typ:         typ,
 			size:        size,
-			data:        make([]byte, 0, typ.EstimateSize(int(numValues))),
 			columnIndex: ^columnIndex,
 		},
-		tmp: make([]byte, size),
+		tmp: memory.SliceBufferFrom(make([]byte, size)),
 	}
 }
 
@@ -36,10 +35,10 @@ func (col *fixedLenByteArrayColumnBuffer) Clone() ColumnBuffer {
 		fixedLenByteArrayPage: fixedLenByteArrayPage{
 			typ:         col.typ,
 			size:        col.size,
-			data:        slices.Clone(col.data),
+			data:        col.data.Clone(),
 			columnIndex: col.columnIndex,
 		},
-		tmp: make([]byte, col.size),
+		tmp: memory.SliceBufferFrom(make([]byte, col.size)),
 	}
 }
 
@@ -59,27 +58,29 @@ func (col *fixedLenByteArrayColumnBuffer) Pages() Pages { return onePage(col.Pag
 
 func (col *fixedLenByteArrayColumnBuffer) Page() Page { return &col.fixedLenByteArrayPage }
 
-func (col *fixedLenByteArrayColumnBuffer) Reset() { col.data = col.data[:0] }
+func (col *fixedLenByteArrayColumnBuffer) Reset() { col.data.Reset() }
 
-func (col *fixedLenByteArrayColumnBuffer) Cap() int { return cap(col.data) / col.size }
+func (col *fixedLenByteArrayColumnBuffer) Cap() int { return col.data.Cap() / col.size }
 
-func (col *fixedLenByteArrayColumnBuffer) Len() int { return len(col.data) / col.size }
+func (col *fixedLenByteArrayColumnBuffer) Len() int { return col.data.Len() / col.size }
 
 func (col *fixedLenByteArrayColumnBuffer) Less(i, j int) bool {
 	return bytes.Compare(col.index(i), col.index(j)) < 0
 }
 
 func (col *fixedLenByteArrayColumnBuffer) Swap(i, j int) {
-	t, u, v := col.tmp[:col.size], col.index(i), col.index(j)
+	tmp := col.tmp.Slice()
+	t, u, v := tmp[:col.size], col.index(i), col.index(j)
 	copy(t, u)
 	copy(u, v)
 	copy(v, t)
 }
 
 func (col *fixedLenByteArrayColumnBuffer) index(i int) []byte {
+	data := col.data.Slice()
 	j := (i + 0) * col.size
 	k := (i + 1) * col.size
-	return col.data[j:k:k]
+	return data[j:k:k]
 }
 
 func (col *fixedLenByteArrayColumnBuffer) Write(b []byte) (int, error) {
@@ -95,7 +96,7 @@ func (col *fixedLenByteArrayColumnBuffer) WriteFixedLenByteArrays(values []byte)
 	if d == 0 || m != 0 {
 		return 0, fmt.Errorf("cannot write FIXED_LEN_BYTE_ARRAY values of size %d from input of size %d", col.size, len(values))
 	}
-	col.data = append(col.data, values...)
+	col.data.Append(values...)
 	return d, nil
 }
 
@@ -104,22 +105,23 @@ func (col *fixedLenByteArrayColumnBuffer) WriteValues(values []Value) (int, erro
 		if n := len(v.byteArray()); n != col.size {
 			return i, fmt.Errorf("cannot write FIXED_LEN_BYTE_ARRAY values of size %d from input of size %d", col.size, n)
 		}
-		col.data = append(col.data, v.byteArray()...)
+		col.data.Append(v.byteArray()...)
 	}
 	return len(values), nil
 }
 
 func (col *fixedLenByteArrayColumnBuffer) writeValues(_ columnLevels, rows sparse.Array) {
 	n := col.size * rows.Len()
-	i := len(col.data)
-	j := len(col.data) + n
+	i := col.data.Len()
+	j := col.data.Len() + n
 
-	if cap(col.data) < j {
-		col.data = append(make([]byte, 0, max(i+n, 2*cap(col.data))), col.data...)
+	if col.data.Cap() < j {
+		col.data.Grow(j - col.data.Len())
 	}
 
-	col.data = col.data[:j]
-	newData := col.data[i:]
+	col.data.Resize(j)
+	data := col.data.Slice()
+	newData := data[i:]
 
 	for i := range rows.Len() {
 		p := rows.Index(i)
@@ -171,31 +173,32 @@ func (col *fixedLenByteArrayColumnBuffer) writeByteArray(levels columnLevels, va
 	if col.size != len(value) {
 		panic(fmt.Sprintf("cannot write byte array of length %d to fixed length byte array column of size %d", len(value), col.size))
 	}
-	col.data = append(col.data, value...)
+	col.data.Append(value...)
 }
 
 func (col *fixedLenByteArrayColumnBuffer) writeNull(levels columnLevels) {
-	col.data = append(col.data, make([]byte, col.size)...)
+	col.data.Append(make([]byte, col.size)...)
 }
 
 func (col *fixedLenByteArrayColumnBuffer) writeBigEndian(value []byte) {
 	if col.size < len(value) {
 		panic(fmt.Sprintf("cannot write byte array of length %d to fixed length byte array column of size %d", len(value), col.size))
 	}
-	col.data = append(col.data, make([]byte, col.size-len(value))...)
-	col.data = append(col.data, value...)
+	col.data.Append(make([]byte, col.size-len(value))...)
+	col.data.Append(value...)
 }
 
 func (col *fixedLenByteArrayColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
+	data := col.data.Slice()
 	i := int(offset) * col.size
 	switch {
 	case i < 0:
-		return 0, errRowIndexOutOfBounds(offset, int64(len(col.data)/col.size))
-	case i >= len(col.data):
+		return 0, errRowIndexOutOfBounds(offset, int64(len(data)/col.size))
+	case i >= len(data):
 		return 0, io.EOF
 	default:
-		for n < len(values) && i < len(col.data) {
-			values[n] = col.makeValueBytes(col.data[i : i+col.size])
+		for n < len(values) && i < len(data) {
+			values[n] = col.makeValueBytes(data[i : i+col.size])
 			n++
 			i += col.size
 		}
