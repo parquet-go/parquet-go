@@ -887,8 +887,5 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) {
 	if err != nil {
 		panic(fmt.Errorf("cannot parse string %q as UUID: %w", str, err))
 	}
-	buf := getColumnWriteBuffer()
-	buf.Write(parsedUUID[:])
-	col.writeByteArray(levels, buf.Bytes())
-	putColumnWriteBuffer(buf)
+	col.writeByteArray(levels, parsedUUID[:])
 }

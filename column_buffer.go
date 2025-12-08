@@ -1,10 +1,7 @@
 package parquet
 
 import (
-	"bytes"
-
 	"github.com/parquet-go/parquet-go/deprecated"
-	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -152,15 +149,3 @@ var (
 	_ ColumnBuffer = (*be128ColumnBuffer)(nil)
 )
 
-var columnWriteBuffers memory.Pool[bytes.Buffer]
-
-func getColumnWriteBuffer() *bytes.Buffer {
-	return columnWriteBuffers.Get(
-		func() *bytes.Buffer { return new(bytes.Buffer) },
-		func(buf *bytes.Buffer) { buf.Reset() },
-	)
-}
-
-func putColumnWriteBuffer(buf *bytes.Buffer) {
-	columnWriteBuffers.Put(buf)
-}

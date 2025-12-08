@@ -662,12 +662,13 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 			return
 		}
 
-		buf := getColumnWriteBuffer()
-		defer putColumnWriteBuffer(buf)
+		var buf memory.SliceBuffer[byte]
+		defer buf.Reset()
+		w := memory.SliceWriter{Buffer: &buf}
 
 		for i := range rows.Len() {
 			val := reflect.NewAt(t, rows.Index(i))
-			buf.Reset()
+			buf.Resize(0)
 
 			enc := json.NewEncoder(buf)
 			enc.SetEscapeHTML(false)
@@ -676,7 +677,7 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 				panic(err)
 			}
 
-			data := buf.Bytes()
+			data := buf.Slice()
 			columns[columnIndex].writeByteArray(levels, data[:len(data)-1])
 		}
 	}
