@@ -49,18 +49,7 @@ func NewBufferPool() BufferPool { return NewChunkBufferPool(defaultChunkSize) }
 // The implementation is backed by sync.Pool and allocates memory buffers on the
 // Go heap in fixed-size chunks.
 func NewChunkBufferPool(chunkSize int) BufferPool {
-	return newChunkMemoryBufferPool(chunkSize)
-}
-
-func newChunkMemoryBufferPool(chunkSize int) *chunkMemoryBufferPool {
-	return &chunkMemoryBufferPool{
-		chunkSize: chunkSize,
-	}
-}
-
-// chunkMemoryBuffer implements an io.ReadWriteSeeker by delegating to memory.Buffer.
-type chunkMemoryBuffer struct {
-	*memory.Buffer
+	return &chunkMemoryBufferPool{		chunkSize: chunkSize,	}
 }
 
 type chunkMemoryBufferPool struct {
