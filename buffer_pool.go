@@ -146,7 +146,6 @@ type chunkMemoryBuffer struct {
 
 type chunkMemoryBufferPool struct {
 	sync.Pool
-	bytesPool memory.Pool[[]byte]
 	chunkSize int
 }
 
@@ -154,7 +153,7 @@ func (pool *chunkMemoryBufferPool) GetBuffer() io.ReadWriteSeeker {
 	b, _ := pool.Get().(*chunkMemoryBuffer)
 	if b == nil {
 		b = &chunkMemoryBuffer{
-			ByteBuffer: memory.NewByteBuffer(pool.chunkSize, &pool.bytesPool),
+			ByteBuffer: memory.NewByteBuffer(pool.chunkSize),
 		}
 	} else {
 		b.Reset()
