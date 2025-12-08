@@ -98,6 +98,12 @@ func (b *SliceBuffer[T]) Swap(i, j int) {
 	b.data[i], b.data[j] = b.data[j], b.data[i]
 }
 
+// Less reports whether the element at index i is less than the element at index j.
+func (b *SliceBuffer[T]) Less(i, j int) bool {
+	s := b.data
+	return s[i] < s[j]
+}
+
 // Grow ensures the buffer has capacity for at least n more elements.
 func (b *SliceBuffer[T]) Grow(n int) {
 	if n <= 0 {

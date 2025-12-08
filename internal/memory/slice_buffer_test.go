@@ -373,6 +373,47 @@ func TestSliceBufferSwap(t *testing.T) {
 	}
 }
 
+func TestSliceBufferLess(t *testing.T) {
+	buf := new(SliceBuffer[int32])
+	buf.Append(5, 2, 8, 1, 9, 3)
+
+	tests := []struct {
+		i, j int
+		want bool
+	}{
+		{0, 1, false}, // 5 < 2 = false
+		{1, 0, true},  // 2 < 5 = true
+		{1, 3, false}, // 2 < 1 = false
+		{3, 2, true},  // 1 < 8 = true
+		{4, 0, false}, // 9 < 5 = false
+		{5, 4, true},  // 3 < 9 = true
+	}
+
+	for _, tt := range tests {
+		got := buf.Less(tt.i, tt.j)
+		if got != tt.want {
+			slice := buf.Slice()
+			t.Errorf("Less(%d, %d): got %v, want %v (values: %d < %d)",
+				tt.i, tt.j, got, tt.want, slice[tt.i], slice[tt.j])
+		}
+	}
+}
+
+func TestSliceBufferLessFloat(t *testing.T) {
+	buf := new(SliceBuffer[float64])
+	buf.Append(3.14, -2.5, 0.0, 1.5)
+
+	if !buf.Less(1, 2) { // -2.5 < 0.0
+		t.Errorf("Less(1, 2): expected true for -2.5 < 0.0")
+	}
+	if buf.Less(0, 3) { // 3.14 < 1.5
+		t.Errorf("Less(0, 3): expected false for 3.14 < 1.5")
+	}
+	if !buf.Less(2, 0) { // 0.0 < 3.14
+		t.Errorf("Less(2, 0): expected true for 0.0 < 3.14")
+	}
+}
+
 func TestSliceBufferGrow(t *testing.T) {
 	buf := new(SliceBuffer[int32])
 	buf.Grow(100)
