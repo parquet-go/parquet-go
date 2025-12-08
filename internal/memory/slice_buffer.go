@@ -120,12 +120,11 @@ func (b *SliceBuffer[T]) Append(data ...T) {
 // transitions to using external data and releases any pooled storage.
 func (b *SliceBuffer[T]) AppendFunc(fn func([]T) []T) {
 	oldData := b.data
-	oldPtr := unsafe.Pointer(unsafe.SliceData(oldData))
+	oldPtr := unsafe.SliceData(oldData)
 
 	newData := fn(b.data)
-	newPtr := unsafe.Pointer(unsafe.SliceData(newData))
+	newPtr := unsafe.SliceData(newData)
 
-	// If the slice was reallocated by fn, transition to external data
 	if oldPtr != newPtr {
 		if b.slice != nil {
 			// Release pooled storage since fn allocated new memory
@@ -133,6 +132,7 @@ func (b *SliceBuffer[T]) AppendFunc(fn func([]T) []T) {
 			putSliceToPool(b.slice, int(unsafe.Sizeof(*new(T))))
 			b.slice = nil
 		}
+		b.slice = &slice[T]{data: newData}
 	}
 
 	b.data = newData
