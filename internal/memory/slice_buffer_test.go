@@ -31,6 +31,47 @@ func TestSliceBufferAppendSingle(t *testing.T) {
 	}
 }
 
+func TestSliceBufferAppendValue(t *testing.T) {
+	buf := new(SliceBuffer[int32])
+
+	// Append multiple single values
+	for i := range 10 {
+		buf.AppendValue(int32(i * 10))
+	}
+
+	if buf.Len() != 10 {
+		t.Errorf("expected length 10, got %d", buf.Len())
+	}
+
+	slice := buf.Slice()
+	for i := range 10 {
+		expected := int32(i * 10)
+		if slice[i] != expected {
+			t.Errorf("index %d: expected %d, got %d", i, expected, slice[i])
+		}
+	}
+}
+
+func TestSliceBufferAppendValueGrowth(t *testing.T) {
+	buf := new(SliceBuffer[float64])
+
+	// Append enough to trigger bucket growth
+	for i := range 5000 {
+		buf.AppendValue(float64(i))
+	}
+
+	if buf.Len() != 5000 {
+		t.Errorf("expected length 5000, got %d", buf.Len())
+	}
+
+	slice := buf.Slice()
+	for i := range 5000 {
+		if slice[i] != float64(i) {
+			t.Errorf("index %d: expected %f, got %f", i, float64(i), slice[i])
+		}
+	}
+}
+
 func TestSliceBufferAppendMultiple(t *testing.T) {
 	buf := new(SliceBuffer[int32])
 	data := []int32{1, 2, 3, 4, 5}
