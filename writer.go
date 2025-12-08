@@ -638,7 +638,7 @@ func (w *Writer) File() FileView {
 }
 
 func (w *writerFileView) Metadata() *format.FileMetaData {
-	return w.writer.fileMetaData
+	return &w.writer.fileMetaData
 }
 
 func (w *writerFileView) Schema() *Schema {
@@ -646,17 +646,11 @@ func (w *writerFileView) Schema() *Schema {
 }
 
 func (w *writerFileView) NumRows() int64 {
-	if w.writer.fileMetaData != nil {
-		return w.writer.fileMetaData.NumRows
-	}
-	return 0
+	return w.writer.fileMetaData.NumRows
 }
 
 func (w *writerFileView) Lookup(key string) (string, bool) {
-	if w.writer.fileMetaData != nil {
-		return lookupKeyValueMetadata(w.writer.fileMetaData.KeyValueMetadata, key)
-	}
-	return "", false
+	return lookupKeyValueMetadata(w.writer.fileMetaData.KeyValueMetadata, key)
 }
 
 func (w *writerFileView) Size() int64 {
@@ -672,21 +666,15 @@ func (w *writerFileView) OffsetIndexes() []format.OffsetIndex {
 }
 
 func (w *writerFileView) Root() *Column {
-	if w.writer.fileMetaData != nil {
-		root, _ := openColumns(nil, w.writer.fileMetaData, w.writer.currentRowGroup.columnIndex, w.writer.currentRowGroup.offsetIndex)
-		return root
-	}
-	return nil
+	root, _ := openColumns(nil, &w.writer.fileMetaData, w.writer.currentRowGroup.columnIndex, w.writer.currentRowGroup.offsetIndex)
+	return root
 }
 
 func (w *writerFileView) RowGroups() []RowGroup {
-	if w.writer.fileMetaData != nil {
-		columns := makeLeafColumns(w.Root())
-		file := &File{metadata: *w.writer.fileMetaData, schema: w.schema}
-		fileRowGroups := makeFileRowGroups(file, columns)
-		return makeRowGroups(fileRowGroups)
-	}
-	return nil
+	columns := makeLeafColumns(w.Root())
+	file := &File{metadata: w.writer.fileMetaData, schema: w.schema}
+	fileRowGroups := makeFileRowGroups(file, columns)
+	return makeRowGroups(fileRowGroups)
 }
 
 type writerRowGroup struct {
@@ -748,7 +736,6 @@ func newWriterRowGroup(w *writer, config *WriterConfig) *writerRowGroup {
 			columnFilter:       searchBloomFilterColumn(config.BloomFilters, leaf.path),
 			compression:        compression,
 			dictionary:         dictionary,
-			dataPageType:       dataPageType,
 			maxRepetitionLevel: leaf.maxRepetitionLevel,
 			maxDefinitionLevel: leaf.maxDefinitionLevel,
 			bufferIndex:        int32(leaf.columnIndex),
@@ -765,6 +752,14 @@ func newWriterRowGroup(w *writer, config *WriterConfig) *writerRowGroup {
 			// compression layer.
 			isCompressed:       isCompressed(compression) && (dataPageType != format.DataPageV2 || dictionary == nil),
 			dictionaryMaxBytes: config.DictionaryMaxBytes,
+		}
+
+		c.pageHeader.Type = dataPageType
+		switch dataPageType {
+		case format.DataPage:
+			c.pageHeader.DataPageHeader = new(format.DataPageHeader)
+		case format.DataPageV2:
+			c.pageHeader.DataPageHeaderV2 = new(format.DataPageHeaderV2)
 		}
 
 		c.header.encoder.Reset(c.header.protocol.NewWriter(&c.buffers.header))
@@ -943,7 +938,7 @@ type writer struct {
 	offsetIndexes  [][]format.OffsetIndex
 	sortingColumns []format.SortingColumn
 
-	fileMetaData *format.FileMetaData
+	fileMetaData format.FileMetaData
 }
 
 func newWriter(output io.Writer, config *WriterConfig) *writer {
@@ -1046,7 +1041,7 @@ func (w *writer) reset(writer io.Writer) {
 	w.rowGroups = w.rowGroups[:0]
 	w.columnIndexes = w.columnIndexes[:0]
 	w.offsetIndexes = w.offsetIndexes[:0]
-	w.fileMetaData = nil
+	w.fileMetaData = format.FileMetaData{}
 }
 
 func (w *writer) close() error {
@@ -1133,7 +1128,7 @@ func (w *writer) writeFileFooter() error {
 	// https://github.com/apache/arrow/blob/70b9ef5/go/parquet/metadata/file.go#L122-L127
 	const parquetFileFormatVersion = 2
 
-	w.fileMetaData = &format.FileMetaData{
+	w.fileMetaData = format.FileMetaData{
 		Version:          parquetFileFormatVersion,
 		Schema:           w.schemaElements,
 		NumRows:          numRows,
@@ -1142,7 +1137,7 @@ func (w *writer) writeFileFooter() error {
 		CreatedBy:        w.createdBy,
 		ColumnOrders:     w.columnOrders,
 	}
-	footer, err := thrift.Marshal(new(thrift.CompactProtocol), w.fileMetaData)
+	footer, err := thrift.Marshal(new(thrift.CompactProtocol), &w.fileMetaData)
 	if err != nil {
 		return err
 	}
@@ -1428,7 +1423,7 @@ type ColumnWriter struct {
 	compression          compress.Codec
 	dictionary           Dictionary
 
-	dataPageType       format.PageType
+	pageHeader         format.PageHeader
 	maxRepetitionLevel byte
 	maxDefinitionLevel byte
 
@@ -1764,7 +1759,8 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 	if err := buf.encode(page, c.encoding); err != nil {
 		return 0, fmt.Errorf("encoding parquet data page: %w", err)
 	}
-	if c.dataPageType == format.DataPage {
+
+	if c.pageHeader.Type == format.DataPage {
 		buf.prependLevelsToDataPageV1(c.maxRepetitionLevel, c.maxDefinitionLevel)
 	}
 
@@ -1794,26 +1790,24 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 		statistics = c.makePageStatistics(page)
 	}
 
-	pageHeader := &format.PageHeader{
-		Type:                 c.dataPageType,
-		UncompressedPageSize: int32(uncompressedPageSize),
-		CompressedPageSize:   int32(buf.size()),
-		CRC:                  int32(buf.crc32()),
-	}
+	pageHeader := &c.pageHeader
+	pageHeader.UncompressedPageSize = int32(uncompressedPageSize)
+	pageHeader.CompressedPageSize = int32(buf.size())
+	pageHeader.CRC = int32(buf.crc32())
 
 	numRows := page.NumRows()
 	numNulls := page.NumNulls()
-	switch c.dataPageType {
-	case format.DataPage:
-		pageHeader.DataPageHeader = &format.DataPageHeader{
+	switch {
+	case pageHeader.DataPageHeader != nil:
+		*pageHeader.DataPageHeader = format.DataPageHeader{
 			NumValues:               int32(numValues),
 			Encoding:                c.encoding.Encoding(),
 			DefinitionLevelEncoding: format.RLE,
 			RepetitionLevelEncoding: format.RLE,
 			Statistics:              statistics,
 		}
-	case format.DataPageV2:
-		pageHeader.DataPageHeaderV2 = &format.DataPageHeaderV2{
+	case pageHeader.DataPageHeaderV2 != nil:
+		*pageHeader.DataPageHeaderV2 = format.DataPageHeaderV2{
 			NumValues:                  int32(numValues),
 			NumNulls:                   int32(numNulls),
 			NumRows:                    int32(numRows),
