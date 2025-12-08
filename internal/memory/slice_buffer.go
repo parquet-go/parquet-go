@@ -139,6 +139,83 @@ func (b *SliceBuffer[T]) Cap() int {
 	return cap(b.data)
 }
 
+// Clone creates a copy of the buffer with its own pooled allocation.
+// The cloned buffer is allocated from the pool with exactly the right size.
+func (b *SliceBuffer[T]) Clone() SliceBuffer[T] {
+	if len(b.data) == 0 {
+		return SliceBuffer[T]{}
+	}
+
+	elemSize := int(unsafe.Sizeof(*new(T)))
+	requiredBytes := len(b.data) * elemSize
+	bucketIndex := findBucket(requiredBytes)
+
+	cloned := SliceBuffer[T]{
+		slice: getSliceFromPool[T](bucketIndex, elemSize),
+	}
+	cloned.slice.data = append(cloned.slice.data, b.data...)
+	cloned.data = cloned.slice.data
+
+	return cloned
+}
+
+// Resize changes the length of the buffer to size, growing capacity if needed.
+// If size is larger than the current length, the new elements are zero-initialized.
+// If size is smaller, the buffer is truncated.
+func (b *SliceBuffer[T]) Resize(size int) {
+	if size < 0 {
+		size = 0
+	}
+
+	currentLen := len(b.data)
+	if size == currentLen {
+		return
+	}
+
+	if size < currentLen {
+		// Truncate
+		b.data = b.data[:size]
+		if b.slice != nil {
+			b.slice.data = b.data
+		}
+		return
+	}
+
+	// Need to grow
+	elemSize := int(unsafe.Sizeof(*new(T)))
+	requiredBytes := size * elemSize
+
+	// If using external data, need to move to pooled storage
+	if b.slice == nil && b.data != nil {
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.slice.data = append(b.slice.data, b.data...)
+		b.data = b.slice.data
+	}
+
+	if b.slice == nil {
+		bucketIndex := findBucket(requiredBytes)
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.data = b.slice.data
+	}
+
+	currentCapBytes := cap(b.data) * elemSize
+	if requiredBytes > currentCapBytes {
+		bucketIndex := findBucket(requiredBytes)
+		oldSlice := b.slice
+		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
+		b.slice.data = append(b.slice.data, b.data...)
+		putSliceToPool(oldSlice, elemSize)
+		b.data = b.slice.data
+	}
+
+	// Extend the slice to the new size
+	b.data = b.data[:size]
+	if b.slice != nil {
+		b.slice.data = b.data
+	}
+}
+
 func findBucket(requiredBytes int) int {
 	if requiredBytes <= 0 {
 		return 0

@@ -418,3 +418,160 @@ func TestSliceBufferCap(t *testing.T) {
 		t.Errorf("after reset and append, capacity should be similar, got %d < %d", cap2, cap1)
 	}
 }
+
+func TestSliceBufferClone(t *testing.T) {
+	// Test cloning empty buffer
+	buf := new(SliceBuffer[int32])
+	cloned := buf.Clone()
+	if cloned.Len() != 0 {
+		t.Errorf("cloned empty buffer should have length 0, got %d", cloned.Len())
+	}
+	if cloned.Slice() != nil {
+		t.Errorf("cloned empty buffer should have nil slice")
+	}
+
+	// Test cloning buffer with data
+	buf.Append(1, 2, 3, 4, 5)
+	cloned = buf.Clone()
+
+	if cloned.Len() != buf.Len() {
+		t.Errorf("cloned buffer should have same length as original: want %d, got %d", buf.Len(), cloned.Len())
+	}
+
+	originalSlice := buf.Slice()
+	clonedSlice := cloned.Slice()
+
+	// Verify data is identical
+	for i := range originalSlice {
+		if clonedSlice[i] != originalSlice[i] {
+			t.Errorf("index %d: cloned data mismatch: want %d, got %d", i, originalSlice[i], clonedSlice[i])
+		}
+	}
+
+	// Verify they are independent - modifying one shouldn't affect the other
+	cloned.Append(6, 7, 8)
+	if buf.Len() == cloned.Len() {
+		t.Errorf("modifying clone should not affect original")
+	}
+
+	buf.Append(9, 10)
+	if cloned.Len() != 8 {
+		t.Errorf("modifying original should not affect clone: want 8, got %d", cloned.Len())
+	}
+
+	// Verify clone can be reset independently
+	cloned.Reset()
+	if cloned.Len() != 0 {
+		t.Errorf("cloned buffer should be empty after reset")
+	}
+	if buf.Len() == 0 {
+		t.Errorf("original buffer should not be affected by clone reset")
+	}
+}
+
+func TestSliceBufferCloneLarge(t *testing.T) {
+	buf := new(SliceBuffer[int64])
+	data := make([]int64, 10000)
+	for i := range data {
+		data[i] = int64(i)
+	}
+	buf.Append(data...)
+
+	cloned := buf.Clone()
+
+	if cloned.Len() != len(data) {
+		t.Errorf("cloned buffer should have %d elements, got %d", len(data), cloned.Len())
+	}
+
+	clonedSlice := cloned.Slice()
+	for i := range data {
+		if clonedSlice[i] != data[i] {
+			t.Errorf("index %d: expected %d, got %d", i, data[i], clonedSlice[i])
+		}
+	}
+}
+
+func TestSliceBufferResize(t *testing.T) {
+	// Test growing from empty
+	buf := new(SliceBuffer[int32])
+	buf.Resize(10)
+	if buf.Len() != 10 {
+		t.Errorf("after Resize(10), expected length 10, got %d", buf.Len())
+	}
+	slice := buf.Slice()
+	for i := range slice {
+		if slice[i] != 0 {
+			t.Errorf("index %d: expected zero-initialized value, got %d", i, slice[i])
+		}
+	}
+
+	// Test growing with existing data
+	buf.Resize(5)
+	for i := range 5 {
+		buf.Slice()[i] = int32(i + 1)
+	}
+	buf.Resize(10)
+	if buf.Len() != 10 {
+		t.Errorf("after Resize(10), expected length 10, got %d", buf.Len())
+	}
+	slice = buf.Slice()
+	for i := range 5 {
+		if slice[i] != int32(i+1) {
+			t.Errorf("index %d: expected %d, got %d", i, i+1, slice[i])
+		}
+	}
+	for i := 5; i < 10; i++ {
+		if slice[i] != 0 {
+			t.Errorf("index %d: expected zero-initialized value, got %d", i, slice[i])
+		}
+	}
+
+	// Test shrinking
+	buf.Resize(3)
+	if buf.Len() != 3 {
+		t.Errorf("after Resize(3), expected length 3, got %d", buf.Len())
+	}
+	slice = buf.Slice()
+	for i := range 3 {
+		if slice[i] != int32(i+1) {
+			t.Errorf("index %d: expected %d, got %d", i, i+1, slice[i])
+		}
+	}
+
+	// Test resize to 0
+	buf.Resize(0)
+	if buf.Len() != 0 {
+		t.Errorf("after Resize(0), expected length 0, got %d", buf.Len())
+	}
+
+	// Test resize negative (should become 0)
+	buf.Resize(-5)
+	if buf.Len() != 0 {
+		t.Errorf("after Resize(-5), expected length 0, got %d", buf.Len())
+	}
+}
+
+func TestSliceBufferResizePattern(t *testing.T) {
+	// Test the pattern: offset := buf.Len(); buf.Resize(offset + n); slice[offset:]
+	buf := new(SliceBuffer[float32])
+	buf.Append(1.0, 2.0, 3.0)
+
+	offset := buf.Len()
+	buf.Resize(offset + 5)
+
+	slice := buf.Slice()
+	for i := offset; i < offset+5; i++ {
+		slice[i] = float32(i + 1)
+	}
+
+	expected := []float32{1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0}
+	if buf.Len() != len(expected) {
+		t.Fatalf("expected length %d, got %d", len(expected), buf.Len())
+	}
+
+	for i, v := range expected {
+		if slice[i] != v {
+			t.Errorf("index %d: expected %f, got %f", i, v, slice[i])
+		}
+	}
+}
