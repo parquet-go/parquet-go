@@ -14,9 +14,7 @@ type Buffer struct {
 
 // NewBuffer creates a new Buffer with the given chunk size.
 func NewBuffer(chunkSize int) *Buffer {
-	return &Buffer{
-		data: ChunkBufferFor[byte](chunkSize),
-	}
+	return &Buffer{data: ChunkBufferFor[byte](chunkSize)}
 }
 
 // Reset returns all chunks to the pool and resets the buffer to empty.
@@ -25,7 +23,6 @@ func (b *Buffer) Reset() {
 	b.seek = 0
 }
 
-// Read implements io.Reader.
 func (b *Buffer) Read(p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -46,7 +43,6 @@ func (b *Buffer) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
-// Write implements io.Writer.
 func (b *Buffer) Write(p []byte) (int, error) {
 	n := len(p)
 
@@ -81,7 +77,6 @@ func (b *Buffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// WriteTo implements io.WriterTo.
 func (b *Buffer) WriteTo(w io.Writer) (int64, error) {
 	var written int64
 	var err error
@@ -100,7 +95,6 @@ func (b *Buffer) WriteTo(w io.Writer) (int64, error) {
 	return written, err
 }
 
-// Seek implements io.Seeker.
 func (b *Buffer) Seek(offset int64, whence int) (int64, error) {
 	var position int64
 
@@ -127,3 +121,10 @@ func (b *Buffer) Seek(offset int64, whence int) (int64, error) {
 	b.seek = position
 	return position, nil
 }
+
+var (
+	_ io.Writer   = (*Buffer)(nil)
+	_ io.Reader   = (*Buffer)(nil)
+	_ io.Seeker   = (*Buffer)(nil)
+	_ io.WriterTo = (*Buffer)(nil)
+)
