@@ -148,4 +148,3 @@ var (
 	_ ColumnBuffer = (*uint64ColumnBuffer)(nil)
 	_ ColumnBuffer = (*be128ColumnBuffer)(nil)
 )
-

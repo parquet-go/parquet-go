@@ -1364,7 +1364,7 @@ func TestAppendFunc(t *testing.T) {
 				if buf.Len() != 100 {
 					t.Errorf("expected len 100, got %d", buf.Len())
 				}
-				for i := 0; i < 100; i++ {
+				for i := range 100 {
 					if buf.Slice()[i] != byte(i) {
 						t.Errorf("data mismatch at index %d", i)
 						break
@@ -1438,7 +1438,7 @@ func TestAppendFunc(t *testing.T) {
 			test: func(t *testing.T) {
 				buf := new(SliceBuffer[byte])
 
-				for i := 0; i < 10; i++ {
+				for i := range 10 {
 					buf.AppendFunc(func(b []byte) []byte {
 						return append(b, byte('A'+i))
 					})
@@ -1455,7 +1455,7 @@ func TestAppendFunc(t *testing.T) {
 			test: func(t *testing.T) {
 				buf := new(SliceBuffer[byte])
 
-				for i := 0; i < 100; i++ {
+				for i := range 100 {
 					buf.AppendFunc(func(b []byte) []byte {
 						return append(b, byte(i))
 					})
@@ -1464,7 +1464,7 @@ func TestAppendFunc(t *testing.T) {
 				if buf.Len() != 100 {
 					t.Errorf("expected len 100, got %d", buf.Len())
 				}
-				for i := 0; i < 100; i++ {
+				for i := range 100 {
 					if buf.Slice()[i] != byte(i) {
 						t.Errorf("value mismatch at index %d: got %d, want %d", i, buf.Slice()[i], byte(i))
 						break
