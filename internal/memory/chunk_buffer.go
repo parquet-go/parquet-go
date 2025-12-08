@@ -18,24 +18,26 @@ type ChunkBuffer[T Datum] struct {
 // ChunkBufferFor creates a new ChunkBuffer with the given chunk size (in bytes).
 // The chunk size will be rounded up to the nearest power of two.
 func ChunkBufferFor[T Datum](chunkSize int) ChunkBuffer[T] {
-	// Round up to nearest power of 2
-	if chunkSize <= 0 {
-		chunkSize = 1 << minBucketBits // 1 KB minimum
-	} else if chunkSize&(chunkSize-1) != 0 {
-		// Not a power of 2, round up
-		chunkSize = 1 << bits.Len(uint(chunkSize))
-	}
+	size := nextPowerOfTwo(uint(chunkSize))
 
 	// Clamp to bucket system range
-	minSize := 1 << minBucketBits
-	maxSize := 1 << maxBucketBits
-	if chunkSize < minSize {
-		chunkSize = minSize
-	} else if chunkSize > maxSize {
-		chunkSize = maxSize
+	minSize := uint(1 << minBucketBits)
+	maxSize := uint(1 << maxBucketBits)
+	if size < minSize {
+		size = minSize
+	} else if size > maxSize {
+		size = maxSize
 	}
 
-	return ChunkBuffer[T]{chunkSize: chunkSize}
+	return ChunkBuffer[T]{chunkSize: int(size)}
+}
+
+func nextPowerOfTwo(n uint) uint {
+	if n == 0 {
+		return 1
+	}
+	// bits.Len(x) returns the minimum number of bits required to represent x
+	return 1 << bits.Len(n-1)
 }
 
 // Append adds data to the buffer, allocating new chunks as needed.

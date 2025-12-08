@@ -5,19 +5,19 @@ import (
 	"io"
 )
 
-// Buffer is a buffer that stores bytes in fixed-size chunks and implements io.ReadWriteSeeker.
+// Buffer is a buffer that stores bytes in fixed-size chunks and implements
+// io.ReadWriteSeeker.
+//
 // It uses ChunkBuffer[byte] internally for chunk management.
 type Buffer struct {
 	data ChunkBuffer[byte]
 	seek int64 // absolute offset for read/write operations
 }
 
-// NewBuffer creates a new Buffer with the given chunk size.
 func NewBuffer(chunkSize int) *Buffer {
 	return &Buffer{data: ChunkBufferFor[byte](chunkSize)}
 }
 
-// Reset returns all chunks to the pool and resets the buffer to empty.
 func (b *Buffer) Reset() {
 	b.data.Reset()
 	b.seek = 0
@@ -45,7 +45,6 @@ func (b *Buffer) Read(p []byte) (n int, err error) {
 
 func (b *Buffer) Write(p []byte) (int, error) {
 	n := len(p)
-
 	if n == 0 {
 		return 0, nil
 	}
@@ -55,17 +54,15 @@ func (b *Buffer) Write(p []byte) (int, error) {
 		i := int(b.seek) / chunkSize
 		offset := int(b.seek) % chunkSize
 
-		// Allocate new chunk if needed
 		if i == b.data.NumChunks() {
 			// Append dummy byte to allocate chunk, we'll overwrite it
 			b.data.Append(0)
 		}
 
 		chunk := b.data.Chunk(i)
-		chunk = chunk[:cap(chunk)] // Extend to full capacity for writing
+		chunk = chunk[:cap(chunk)]
 		written := copy(chunk[offset:], p)
 
-		// Update buffer length if we extended it
 		newSeek := b.seek + int64(written)
 		if int(newSeek) > b.data.length {
 			b.data.length = int(newSeek)
