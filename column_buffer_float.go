@@ -22,14 +22,13 @@ func newFloatColumnBuffer(typ Type, columnIndex int16, numValues int32) *floatCo
 }
 
 func (col *floatColumnBuffer) Clone() ColumnBuffer {
-	cloned := &floatColumnBuffer{
+	return &floatColumnBuffer{
 		floatPage: floatPage{
 			typ:         col.typ,
+			values:      col.values.Clone(),
 			columnIndex: col.columnIndex,
 		},
 	}
-	cloned.values.Append(col.values.Slice()...)
-	return cloned
 }
 
 func (col *floatColumnBuffer) ColumnIndex() (ColumnIndex, error) {
@@ -82,9 +81,9 @@ func (col *floatColumnBuffer) WriteValues(values []Value) (int, error) {
 }
 
 func (col *floatColumnBuffer) writeValues(levels columnLevels, rows sparse.Array) {
-	newValues := make([]float32, rows.Len())
-	sparse.GatherFloat32(newValues, rows.Float32Array())
-	col.values.Append(newValues...)
+	offset := col.values.Len()
+	col.values.Resize(offset + rows.Len())
+	sparse.GatherFloat32(col.values.Slice()[offset:], rows.Float32Array())
 }
 
 func (col *floatColumnBuffer) writeBoolean(levels columnLevels, value bool) {

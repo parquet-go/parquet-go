@@ -82,9 +82,9 @@ func (col *int64ColumnBuffer) WriteValues(values []Value) (int, error) {
 }
 
 func (col *int64ColumnBuffer) writeValues(levels columnLevels, rows sparse.Array) {
-	newValues := make([]int64, rows.Len())
-	sparse.GatherInt64(newValues, rows.Int64Array())
-	col.values.Append(newValues...)
+	offset := col.values.Len()
+	col.values.Resize(offset + rows.Len())
+	sparse.GatherInt64(col.values.Slice()[offset:], rows.Int64Array())
 }
 
 func (col *int64ColumnBuffer) writeBoolean(levels columnLevels, value bool) {
