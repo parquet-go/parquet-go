@@ -60,7 +60,7 @@ func (b *SliceBuffer[T]) reserve(count int) {
 	requiredBytes := (len(b.data) + count) * elemSize
 	if b.slice == nil {
 		// Either empty or using external data
-		bucketIndex := findBucket(requiredBytes)
+		bucketIndex := bucketIndexOf(requiredBytes)
 		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
 		if b.data != nil {
 			// Transition from external data to pooled storage
@@ -70,7 +70,7 @@ func (b *SliceBuffer[T]) reserve(count int) {
 	} else {
 		// Already using pooled storage, grow to new bucket
 		oldSlice := b.slice
-		bucketIndex := findBucket(requiredBytes)
+		bucketIndex := bucketIndexOf(requiredBytes)
 		b.slice = getSliceFromPool[T](bucketIndex, elemSize)
 		b.slice.data = append(b.slice.data, b.data...)
 		oldSlice.data = b.data // Sync before returning to pool
@@ -144,7 +144,7 @@ func (b *SliceBuffer[T]) Clone() SliceBuffer[T] {
 
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	requiredBytes := len(b.data) * elemSize
-	bucketIndex := findBucket(requiredBytes)
+	bucketIndex := bucketIndexOf(requiredBytes)
 
 	cloned := SliceBuffer[T]{
 		slice: getSliceFromPool[T](bucketIndex, elemSize),
@@ -168,19 +168,13 @@ func (b *SliceBuffer[T]) Resize(size int) {
 	}
 }
 
-func findBucket(requiredBytes int) int {
+func bucketIndexOf(requiredBytes int) int {
 	if requiredBytes <= 0 {
 		return 0
 	}
 	bitLen := bits.Len(uint(requiredBytes - 1))
-	if bitLen < minBucketBits {
-		return 0
-	}
 	bucketIndex := bitLen - minBucketBits
-	if bucketIndex >= numBuckets {
-		return numBuckets - 1
-	}
-	return bucketIndex
+	return max(0, min(bucketIndex, numBuckets-1))
 }
 
 func bucketSize(bucketIndex int) int {
@@ -208,7 +202,7 @@ func putSliceToPool[T Datum](s *slice[T], elemSize int) {
 	}
 
 	byteLen := cap(s.data) * elemSize
-	bucketIndex := findBucket(byteLen)
+	bucketIndex := bucketIndexOf(byteLen)
 
 	// Verify the bucket size matches exactly (safety check)
 	if bucketSize(bucketIndex) != byteLen {
