@@ -8,8 +8,10 @@ import (
 )
 
 // slice is a wrapper around a slice to enable pooling.
-type slice[T Datum] struct {
-	data []T
+type slice[T Datum] struct{ data []T }
+
+func newSlice[T Datum](cap int) *slice[T] {
+	return &slice[T]{data: make([]T, 0, cap)}
 }
 
 // SliceBuffer is a buffer that stores data in a single contiguous slice.
@@ -188,10 +190,7 @@ func bucketSize(bucketIndex int) int {
 func getSliceFromPool[T Datum](bucketIndex int, elemSize int) *slice[T] {
 	byteSlice := slicePools[bucketIndex].Get(
 		func() *slice[byte] {
-			size := bucketSize(bucketIndex)
-			return &slice[byte]{
-				data: make([]byte, 0, size),
-			}
+			return newSlice[byte](bucketSize(bucketIndex))
 		},
 		func(s *slice[byte]) {
 			s.data = s.data[:0]

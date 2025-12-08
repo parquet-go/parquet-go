@@ -1,14 +1,9 @@
 package memory
 
 import (
+	"math/bits"
 	"unsafe"
 )
-
-// Datum is a constraint for types that can be stored in chunk and slice buffers.
-// It includes the common numeric types used in parquet files.
-type Datum interface {
-	~byte | ~int32 | ~int64 | ~uint32 | ~uint64 | ~float32 | ~float64
-}
 
 // ChunkBuffer is a buffer that stores data in fixed-size chunks.
 // Chunks are allocated lazily on demand and reused via slice pools.
@@ -23,11 +18,24 @@ type ChunkBuffer[T Datum] struct {
 // ChunkBufferFor creates a new ChunkBuffer with the given chunk size (in bytes).
 // The chunk size will be rounded up to the nearest power of two.
 func ChunkBufferFor[T Datum](chunkSize int) ChunkBuffer[T] {
-	// Round up to nearest power of 2 that fits in our bucket system
-	bucketIndex := findBucket(chunkSize)
-	return ChunkBuffer[T]{
-		chunkSize: bucketSize(bucketIndex),
+	// Round up to nearest power of 2
+	if chunkSize <= 0 {
+		chunkSize = 1 << minBucketBits // 1 KB minimum
+	} else if chunkSize&(chunkSize-1) != 0 {
+		// Not a power of 2, round up
+		chunkSize = 1 << bits.Len(uint(chunkSize))
 	}
+
+	// Clamp to bucket system range
+	minSize := 1 << minBucketBits
+	maxSize := 1 << maxBucketBits
+	if chunkSize < minSize {
+		chunkSize = minSize
+	} else if chunkSize > maxSize {
+		chunkSize = maxSize
+	}
+
+	return ChunkBuffer[T]{chunkSize: chunkSize}
 }
 
 // Append adds data to the buffer, allocating new chunks as needed.
@@ -40,7 +48,7 @@ func (b *ChunkBuffer[T]) Append(data ...T) {
 			bucketIndex := findBucket(b.chunkSize)
 			chunk := slicePools[bucketIndex].Get(
 				func() *slice[byte] {
-					return &slice[byte]{data: make([]byte, 0, b.chunkSize)}
+					return newSlice[byte](b.chunkSize)
 				},
 				func(s *slice[byte]) { s.data = s.data[:0] },
 			)
@@ -78,27 +86,17 @@ func (b *ChunkBuffer[T]) Len() int { return b.length }
 func (b *ChunkBuffer[T]) NumChunks() int { return len(b.chunks) }
 
 // Chunk returns the data for the chunk at the given index.
-// The caller must ensure idx < NumChunks().
-func (b *ChunkBuffer[T]) Chunk(idx int) []T {
+// The caller must ensure i < NumChunks().
+func (b *ChunkBuffer[T]) Chunk(i int) []T {
 	elemSize := int(unsafe.Sizeof(*new(T)))
 	capacity := b.chunkSize / elemSize
-	chunk := b.chunks[idx]
+	chunk := b.chunks[i]
 	chunkData := (*T)(unsafe.Pointer(unsafe.SliceData(chunk.data)))
-	// For the last chunk, only return valid elements
-	remaining := b.length - idx*capacity
-	chunkSize := min(remaining, capacity)
-	return unsafe.Slice(chunkData, chunkSize)
-}
-
-// ChunkCap returns the full capacity view of a chunk at the given index.
-// This allows writing beyond the current valid length.
-// The caller must ensure idx < NumChunks().
-func (b *ChunkBuffer[T]) ChunkCap(idx int) []T {
-	elemSize := int(unsafe.Sizeof(*new(T)))
-	capacity := b.chunkSize / elemSize
-	chunk := b.chunks[idx]
-	chunkData := (*T)(unsafe.Pointer(unsafe.SliceData(chunk.data)))
-	return unsafe.Slice(chunkData, capacity)
+	// Return slice with valid length but full capacity
+	remaining := b.length - i*capacity
+	length := min(remaining, capacity)
+	s := unsafe.Slice(chunkData, capacity)
+	return s[:length]
 }
 
 // Chunks returns an iterator over the chunks in the buffer.
