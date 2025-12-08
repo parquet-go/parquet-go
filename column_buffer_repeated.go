@@ -143,8 +143,8 @@ func (col *repeatedColumnBuffer) Page() Page {
 				baseOffset: uint32(baseOffset),
 			})
 
-			column.repetitionLevels.Append(repetitionLevels[rowOffset:rowOffset+rowLength]...)
-			column.definitionLevels.Append(definitionLevels[rowOffset:rowOffset+rowLength]...)
+			column.repetitionLevels.Append(repetitionLevels[rowOffset : rowOffset+rowLength]...)
+			column.definitionLevels.Append(definitionLevels[rowOffset : rowOffset+rowLength]...)
 			baseOffset += numValues
 		}
 

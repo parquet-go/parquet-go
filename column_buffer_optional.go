@@ -197,7 +197,7 @@ func (col *optionalColumnBuffer) WriteValues(values []Value) (n int, err error) 
 		if i < n {
 			count, err := col.base.WriteValues(values[i:n])
 
-			for c := 0; c < count; c++ {
+			for range count {
 				col.definitionLevels.AppendValue(col.maxDefinitionLevel)
 			}
 
@@ -226,7 +226,7 @@ func (col *optionalColumnBuffer) writeValues(levels columnLevels, rows sparse.Ar
 	}
 
 	baseLen := col.base.Len()
-	for c := 0; c < rows.Len(); c++ {
+	for range rows.Len() {
 		col.definitionLevels.AppendValue(levels.definitionLevel)
 	}
 
