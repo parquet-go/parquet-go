@@ -54,13 +54,9 @@ func (col *int64ColumnBuffer) Cap() int { return col.values.Cap() }
 
 func (col *int64ColumnBuffer) Len() int { return col.values.Len() }
 
-func (col *int64ColumnBuffer) Less(i, j int) bool {
-	return col.values.Less(i, j)
-}
+func (col *int64ColumnBuffer) Less(i, j int) bool { return col.values.Less(i, j) }
 
-func (col *int64ColumnBuffer) Swap(i, j int) {
-	col.values.Swap(i, j)
-}
+func (col *int64ColumnBuffer) Swap(i, j int) { col.values.Swap(i, j) }
 
 func (col *int64ColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 8) != 0 {

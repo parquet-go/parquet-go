@@ -53,13 +53,9 @@ func (col *floatColumnBuffer) Cap() int { return col.values.Cap() }
 
 func (col *floatColumnBuffer) Len() int { return col.values.Len() }
 
-func (col *floatColumnBuffer) Less(i, j int) bool {
-	return col.values.Less(i, j)
-}
+func (col *floatColumnBuffer) Less(i, j int) bool { return col.values.Less(i, j) }
 
-func (col *floatColumnBuffer) Swap(i, j int) {
-	col.values.Swap(i, j)
-}
+func (col *floatColumnBuffer) Swap(i, j int) { col.values.Swap(i, j) }
 
 func (col *floatColumnBuffer) Write(b []byte) (int, error) {
 	if (len(b) % 4) != 0 {
