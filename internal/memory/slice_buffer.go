@@ -34,6 +34,14 @@ func SliceBufferFrom[T Datum](data []T) SliceBuffer[T] {
 	return SliceBuffer[T]{data: data}
 }
 
+// SliceBufferFor creates a SliceBuffer with pre-allocated capacity for the given number of elements.
+// The buffer will be backed by a pooled slice large enough to hold cap elements.
+func SliceBufferFor[T Datum](cap int) SliceBuffer[T] {
+	var buf SliceBuffer[T]
+	buf.Grow(cap)
+	return buf
+}
+
 // ensureCapacity ensures the buffer has at least the required capacity in bytes.
 // It handles transitioning from external data to pooled storage and growing when needed.
 func (b *SliceBuffer[T]) ensureCapacity(requiredBytes int) {

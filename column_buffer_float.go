@@ -7,6 +7,7 @@ import (
 
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -16,6 +17,7 @@ func newFloatColumnBuffer(typ Type, columnIndex int16, numValues int32) *floatCo
 	return &floatColumnBuffer{
 		floatPage: floatPage{
 			typ:         typ,
+			values:      memory.SliceBufferFor[float32](int(numValues)),
 			columnIndex: ^columnIndex,
 		},
 	}

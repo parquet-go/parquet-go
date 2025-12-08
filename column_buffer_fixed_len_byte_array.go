@@ -9,24 +9,32 @@ import (
 	"unsafe"
 
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
 type fixedLenByteArrayColumnBuffer struct {
 	fixedLenByteArrayPage
 	tmp []byte
+	buf [32]byte
 }
 
 func newFixedLenByteArrayColumnBuffer(typ Type, columnIndex int16, numValues int32) *fixedLenByteArrayColumnBuffer {
 	size := typ.Length()
-	return &fixedLenByteArrayColumnBuffer{
+	col := &fixedLenByteArrayColumnBuffer{
 		fixedLenByteArrayPage: fixedLenByteArrayPage{
 			typ:         typ,
 			size:        size,
+			data:        memory.SliceBufferFor[byte](int(numValues) * size),
 			columnIndex: ^columnIndex,
 		},
-		tmp: make([]byte, size),
 	}
+	if size <= len(col.buf) {
+		col.tmp = col.buf[:size]
+	} else {
+		col.tmp = make([]byte, size)
+	}
+	return col
 }
 
 func (col *fixedLenByteArrayColumnBuffer) Clone() ColumnBuffer {
