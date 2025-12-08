@@ -21,8 +21,10 @@ func newByteArrayColumnBuffer(typ Type, columnIndex int16, numValues int32) *byt
 	return &byteArrayColumnBuffer{
 		byteArrayPage: byteArrayPage{
 			typ:         typ,
+			offsets:     memory.SliceBufferFor[uint32](int(numValues)),
 			columnIndex: ^columnIndex,
 		},
+		lengths: memory.SliceBufferFor[uint32](int(numValues)),
 	}
 }
 

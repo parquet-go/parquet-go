@@ -1421,12 +1421,6 @@ type ColumnWriter struct {
 	offsetIndex        *format.OffsetIndex
 	hasSwitchedToPlain bool  // Tracks if dictionary encoding was switched to PLAIN
 	dictionaryMaxBytes int64 // Per-column dictionary size limit
-
-	// Pooled buffers used by optional and repeated column buffers that need
-	// to be released when the writer is closed.
-	rowsBuffer             *buffer[int32]
-	repetitionLevelsBuffer *buffer[byte]
-	definitionLevelsBuffer *buffer[byte]
 }
 
 func (c *ColumnWriter) reset() {
@@ -1630,24 +1624,18 @@ func (c *ColumnWriter) resizeBloomFilter(numValues int64) {
 }
 
 func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
-	column := c.columnType.NewColumnBuffer(int(c.bufferIndex), c.columnType.EstimateNumValues(int(c.bufferSize)))
+	columnIndex := int(c.bufferIndex)
 	switch {
 	case c.maxRepetitionLevel > 0:
-		// Since these buffers are pooled, we can afford to allocate a bit more memory in
-		// order to reduce the risk of needing to resize the buffer.
-		size := int(float64(column.Cap()) * 1.5)
-		c.repetitionLevelsBuffer = buffers.get(size)
-		c.definitionLevelsBuffer = buffers.get(size)
-		column = newRepeatedColumnBuffer(column, c.repetitionLevelsBuffer.data[:0], c.definitionLevelsBuffer.data[:0], c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
+		column := c.columnType.NewColumnBuffer(columnIndex, 0)
+		return newRepeatedColumnBuffer(column, c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
 	case c.maxDefinitionLevel > 0:
-		// Since these buffers are pooled, we can afford to allocate a bit more memory in
-		// order to reduce the risk of needing to resize the buffer.
-		size := int(float64(column.Cap()) * 1.5)
-		c.rowsBuffer = indexes.get(size)
-		c.definitionLevelsBuffer = buffers.get(size)
-		column = newOptionalColumnBuffer(column, c.rowsBuffer.data[:0], c.definitionLevelsBuffer.data[:0], c.maxDefinitionLevel, nullsGoLast)
+		column := c.columnType.NewColumnBuffer(columnIndex, 0)
+		return newOptionalColumnBuffer(column, c.maxDefinitionLevel, nullsGoLast)
+	default:
+		numValues := c.columnType.EstimateNumValues(int(c.bufferSize))
+		return c.columnType.NewColumnBuffer(columnIndex, numValues)
 	}
-	return column
 }
 
 // WriteRowValues writes entire rows to the column. On success, this returns the
@@ -1687,12 +1675,7 @@ func (c *ColumnWriter) Close() (err error) {
 	if err := c.Flush(); err != nil {
 		return err
 	}
-	bufferUnref(c.rowsBuffer)
-	bufferUnref(c.repetitionLevelsBuffer)
-	bufferUnref(c.definitionLevelsBuffer)
-	c.rowsBuffer = nil
-	c.repetitionLevelsBuffer = nil
-	c.definitionLevelsBuffer = nil
+	c.columnBuffer.Reset()
 	c.columnBuffer = nil
 	return nil
 }

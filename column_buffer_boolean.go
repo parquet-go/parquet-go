@@ -5,15 +5,19 @@ import (
 
 	"github.com/parquet-go/bitpack"
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
 type booleanColumnBuffer struct{ booleanPage }
 
 func newBooleanColumnBuffer(typ Type, columnIndex int16, numValues int32) *booleanColumnBuffer {
+	// Boolean values are bit-packed, we can fit up to 8 values per byte.
+	bufferSize := (numValues + 7) / 8
 	return &booleanColumnBuffer{
 		booleanPage: booleanPage{
 			typ:         typ,
+			bits:        memory.SliceBufferFor[byte](int(bufferSize)),
 			columnIndex: ^columnIndex,
 		},
 	}

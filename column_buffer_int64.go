@@ -7,6 +7,7 @@ import (
 
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -16,6 +17,7 @@ func newInt64ColumnBuffer(typ Type, columnIndex int16, numValues int32) *int64Co
 	return &int64ColumnBuffer{
 		int64Page: int64Page{
 			typ:         typ,
+			values:      memory.SliceBufferFor[int64](int(numValues)),
 			columnIndex: ^columnIndex,
 		},
 	}

@@ -261,19 +261,9 @@ func (buf *Buffer) configure(schema *Schema) {
 		column := columnType.NewColumnBuffer(columnIndex, bufferCap)
 		switch {
 		case leaf.maxRepetitionLevel > 0:
-			// The Buffer implementation does not have a Close method, so we should do direct
-			// allocation to avoid breaking existing users.
-			n := column.Cap()
-			repetitionLevels := make([]byte, 0, n)
-			definitionLevels := make([]byte, 0, n)
-			column = newRepeatedColumnBuffer(column, repetitionLevels, definitionLevels, leaf.maxRepetitionLevel, leaf.maxDefinitionLevel, nullOrdering)
+			column = newRepeatedColumnBuffer(column, leaf.maxRepetitionLevel, leaf.maxDefinitionLevel, nullOrdering)
 		case leaf.maxDefinitionLevel > 0:
-			// The Buffer implementation does not have a Close method, so we should do direct
-			// allocation to avoid breaking existing users.
-			n := column.Cap()
-			rows := make([]int32, 0, n)
-			definitionLevels := make([]byte, 0, n)
-			column = newOptionalColumnBuffer(column, rows, definitionLevels, leaf.maxDefinitionLevel, nullOrdering)
+			column = newOptionalColumnBuffer(column, leaf.maxDefinitionLevel, nullOrdering)
 		}
 		buf.columns = append(buf.columns, column)
 
