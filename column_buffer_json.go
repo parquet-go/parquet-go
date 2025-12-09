@@ -86,7 +86,7 @@ func writeJSONToRepeated(columns []ColumnBuffer, levels columnLevels, val *jsonl
 		levels.repetitionDepth++
 		levels.definitionLevel++
 
-		for elem := range val.Array() {
+		for elem := range val.Array {
 			elementWriter(columns, levels, reflect.ValueOf(elem))
 			levels.repetitionLevel = levels.repetitionDepth
 		}
