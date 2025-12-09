@@ -370,7 +370,7 @@ func (col *repeatedColumnBuffer) writeNull(levels columnLevels) {
 }
 
 func (col *repeatedColumnBuffer) ReadValuesAt(values []Value, offset int64) (int, error) {
-	length := int64(len(col.definitionLevels))
+	length := int64(col.definitionLevels.Len())
 	if offset < 0 {
 		return 0, errRowIndexOutOfBounds(offset, length)
 	}
@@ -381,8 +381,11 @@ func (col *repeatedColumnBuffer) ReadValuesAt(values []Value, offset int64) (int
 		values = values[:length]
 	}
 
-	numNulls1 := int64(countLevelsNotEqual(col.definitionLevels[:offset], col.maxDefinitionLevel))
-	numNulls2 := int64(countLevelsNotEqual(col.definitionLevels[offset:offset+length], col.maxDefinitionLevel))
+	definitionLevelsSlice := col.definitionLevels.Slice()
+	repetitionLevelsSlice := col.repetitionLevels.Slice()
+
+	numNulls1 := int64(countLevelsNotEqual(definitionLevelsSlice[:offset], col.maxDefinitionLevel))
+	numNulls2 := int64(countLevelsNotEqual(definitionLevelsSlice[offset:offset+length], col.maxDefinitionLevel))
 
 	if numNulls2 < length {
 		n, err := col.base.ReadValuesAt(values[:length-numNulls2], offset-numNulls1)
@@ -391,8 +394,8 @@ func (col *repeatedColumnBuffer) ReadValuesAt(values []Value, offset int64) (int
 		}
 	}
 
-	definitionLevels := col.definitionLevels[offset : offset+length]
-	repetitionLevels := col.repetitionLevels[offset : offset+length]
+	definitionLevels := definitionLevelsSlice[offset : offset+length]
+	repetitionLevels := repetitionLevelsSlice[offset : offset+length]
 
 	if numNulls2 > 0 {
 		columnIndex := ^int16(col.Column())
