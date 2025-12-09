@@ -51,9 +51,6 @@ func testGenericBuffer[Row any](t *testing.T) {
 	var model Row
 	t.Run(reflect.TypeOf(model).Name(), func(t *testing.T) {
 		err := quickCheck(func(rows []Row) bool {
-			if len(rows) == 0 {
-				return true // TODO: fix support for parquet files with zero rows
-			}
 			if err := testGenericBufferRows(rows); err != nil {
 				t.Error(err)
 				return false
@@ -618,22 +615,16 @@ func TestBufferGenerateBloomFilters(t *testing.T) {
 	}
 
 	f := func(rows []Point3D) bool {
-		if len(rows) == 0 { // TODO: support writing files with no rows
-			return true
-		}
-
 		output := new(bytes.Buffer)
-		buffer := parquet.NewBuffer()
-		writer := parquet.NewWriter(output,
+		buffer := parquet.NewGenericBuffer[Point3D]()
+		writer := parquet.NewGenericWriter[Point3D](output,
 			parquet.BloomFilters(
 				parquet.SplitBlockFilter(10, "X"),
 				parquet.SplitBlockFilter(10, "Y"),
 				parquet.SplitBlockFilter(10, "Z"),
 			),
 		)
-		for i := range rows {
-			buffer.Write(&rows[i])
-		}
+		buffer.Write(rows)
 		_, err := copyRowsAndClose(writer, buffer.Rows())
 		if err != nil {
 			t.Error(err)
@@ -650,6 +641,16 @@ func TestBufferGenerateBloomFilters(t *testing.T) {
 			t.Error(err)
 			return false
 		}
+
+		// Handle empty file case
+		if len(rows) == 0 {
+			if len(f.RowGroups()) != 0 {
+				t.Error("expected empty file to have no row groups")
+				return false
+			}
+			return true
+		}
+
 		rowGroup := f.RowGroups()[0]
 		columns := rowGroup.ColumnChunks()
 		x := columns[0]

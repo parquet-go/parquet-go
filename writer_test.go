@@ -1361,21 +1361,15 @@ func TestWriterGenerateBloomFilters(t *testing.T) {
 	}
 
 	err := quickCheck(func(rows []Person) bool {
-		if len(rows) == 0 { // TODO: support writing files with no rows
-			return true
-		}
-
 		buffer := new(bytes.Buffer)
-		writer := parquet.NewWriter(buffer,
+		writer := parquet.NewGenericWriter[Person](buffer,
 			parquet.BloomFilters(
 				parquet.SplitBlockFilter(10, "last_name"),
 			),
 		)
-		for i := range rows {
-			if err := writer.Write(&rows[i]); err != nil {
-				t.Error(err)
-				return false
-			}
+		if _, err := writer.Write(rows); err != nil {
+			t.Error(err)
+			return false
 		}
 		if err := writer.Close(); err != nil {
 			t.Error(err)
@@ -1388,6 +1382,16 @@ func TestWriterGenerateBloomFilters(t *testing.T) {
 			t.Error(err)
 			return false
 		}
+
+		// Handle empty file case
+		if len(rows) == 0 {
+			if len(f.RowGroups()) != 0 {
+				t.Error("expected empty file to have no row groups")
+				return false
+			}
+			return true
+		}
+
 		rowGroup := f.RowGroups()[0]
 		columns := rowGroup.ColumnChunks()
 		firstName := columns[0]

@@ -52,9 +52,6 @@ func testGenericReader[Row any](t *testing.T) {
 	var model Row
 	t.Run(reflect.TypeOf(model).Name(), func(t *testing.T) {
 		err := quickCheck(func(rows []Row) bool {
-			if len(rows) == 0 {
-				return true // TODO: fix support for parquet files with zero rows
-			}
 			if err := testGenericReaderRows(rows); err != nil {
 				t.Error(err)
 				return false
