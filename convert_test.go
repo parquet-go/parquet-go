@@ -1,6 +1,7 @@
 package parquet_test
 
 import (
+	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -1429,5 +1430,636 @@ func TestConvertRowGroupWithMissingColumns(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestConvertMissingRequiredColumnDirect tests direct page reading
+func TestConvertMissingRequiredColumnDirect(t *testing.T) {
+	type SourceSchema struct {
+		ID int64 `parquet:"id"`
+	}
+
+	type TargetSchema struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"`
+	}
+
+	sourceSchema := parquet.SchemaOf(&SourceSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
+	if _, err := buffer.Write([]SourceSchema{{ID: 1}, {ID: 2}}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, sourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	chunks := convertedRowGroup.ColumnChunks()
+
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+
+	// Log all chunks
+	for i, chunk := range chunks {
+		t.Logf("Chunk %d: column=%d, type=%v", i, chunk.Column(), chunk.Type())
+	}
+
+	// Read from the Name column directly (index 1)
+	nameChunk := chunks[1]
+	t.Logf("Name chunk type: %v, kind: %v", nameChunk.Type(), nameChunk.Type().Kind())
+
+	pages := nameChunk.Pages()
+	defer pages.Close()
+
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal("error reading page:", err)
+	}
+
+	reader := page.Values()
+	values := make([]parquet.Value, 10)
+	n, err := reader.ReadValues(values)
+	t.Logf("Read %d values from missing column, err=%v", n, err)
+	for i := 0; i < n; i++ {
+		t.Logf("  value[%d]: col=%d, isNull=%v, kind=%v, bytes=%q", i, values[i].Column(), values[i].IsNull(), values[i].Kind(), values[i].ByteArray())
+	}
+}
+
+// TestConvertMissingRequiredColumn tests that missing required columns produce zero/default values
+func TestConvertMissingRequiredColumn(t *testing.T) {
+	type SourceSchema struct {
+		ID int64 `parquet:"id"`
+	}
+
+	type TargetSchema struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"` // Missing required column should get empty string
+	}
+
+	sourceSchema := parquet.SchemaOf(&SourceSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
+	if _, err := buffer.Write([]SourceSchema{
+		{ID: 1},
+		{ID: 2},
+		{ID: 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, sourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	rows := convertedRowGroup.Rows()
+	defer rows.Close()
+
+	rowBuf := make([]parquet.Row, 1)
+	expectedNames := []string{"", "", ""} // Empty strings for missing required column
+	expectedIDs := []int64{1, 2, 3}
+
+	for i := 0; i < 3; i++ {
+		n, err := rows.ReadRows(rowBuf)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("expected 1 row, got %d", n)
+		}
+
+		row := rowBuf[0]
+		var result TargetSchema
+		if err := targetSchema.Reconstruct(&result, row); err != nil {
+			t.Fatal(err)
+		}
+
+		expected := TargetSchema{ID: expectedIDs[i], Name: expectedNames[i]}
+		if !reflect.DeepEqual(result, expected) {
+			t.Errorf("row %d: expected %+v, got %+v", i, expected, result)
+		}
+
+		// Check values directly for levels
+		nameColumnIndex := 1 // "name" is second column
+		var foundNameValue bool
+		for _, val := range row {
+			if val.Column() == nameColumnIndex {
+				foundNameValue = true
+				// Required field should have definitionLevel == maxDefinitionLevel
+				// For a required field at root, maxDefinitionLevel should be 0
+				// But if it's part of the schema, check it produces a zero value
+				if val.IsNull() {
+					t.Errorf("row %d: missing required field should not be null", i)
+				}
+				// Value should be empty string (zero value for string)
+				if val.String() != "" {
+					t.Errorf("row %d: expected empty string, got %q", i, val.String())
+				}
+			}
+		}
+		if !foundNameValue {
+			t.Errorf("row %d: did not find value for name column", i)
+		}
+	}
+}
+
+// TestConvertMissingOptionalColumn tests that missing optional columns produce nulls
+func TestConvertMissingOptionalColumn(t *testing.T) {
+	type SourceSchema struct {
+		ID int64 `parquet:"id"`
+	}
+
+	type TargetSchema struct {
+		ID      int64   `parquet:"id"`
+		Comment *string `parquet:"comment,optional"` // Missing optional column should be null
+	}
+
+	sourceSchema := parquet.SchemaOf(&SourceSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
+	if _, err := buffer.Write([]SourceSchema{
+		{ID: 1},
+		{ID: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, sourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	rows := convertedRowGroup.Rows()
+	defer rows.Close()
+
+	rowBuf := make([]parquet.Row, 1)
+
+	for i := 0; i < 2; i++ {
+		n, err := rows.ReadRows(rowBuf)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("expected 1 row, got %d", n)
+		}
+
+		row := rowBuf[0]
+		var result TargetSchema
+		if err := targetSchema.Reconstruct(&result, row); err != nil {
+			t.Fatal(err)
+		}
+
+		expected := TargetSchema{ID: int64(i + 1), Comment: nil}
+		if !reflect.DeepEqual(result, expected) {
+			t.Errorf("row %d: expected %+v, got %+v", i, expected, result)
+		}
+
+		// Check values directly for levels
+		commentColumnIndex := 1 // "comment" is second column
+		for _, val := range row {
+			if val.Column() == commentColumnIndex {
+				// Optional field should have null value
+				// definitionLevel < maxDefinitionLevel indicates null
+				if !val.IsNull() {
+					t.Errorf("row %d: missing optional field should be null", i)
+				}
+			}
+		}
+	}
+}
+
+// TestConvertMissingRequiredInRepeatedGroup tests missing required column in a repeated group
+func TestConvertMissingRequiredInRepeatedGroup(t *testing.T) {
+	type Item struct {
+		X int32 `parquet:"x"`
+	}
+
+	type ItemWithY struct {
+		X int32 `parquet:"x"`
+		Y int32 `parquet:"y"` // Missing required field should get zero value
+	}
+
+	type SourceSchema struct {
+		Items []Item `parquet:"items"`
+	}
+
+	type TargetSchema struct {
+		Items []ItemWithY `parquet:"items"`
+	}
+
+	sourceSchema := parquet.SchemaOf(&SourceSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
+	if _, err := buffer.Write([]SourceSchema{
+		{Items: []Item{{X: 1}, {X: 2}, {X: 3}}}, // 3 items in first row
+		{Items: []Item{{X: 4}}},                  // 1 item in second row
+		{Items: []Item{}},                        // 0 items in third row
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, sourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	rows := convertedRowGroup.Rows()
+	defer rows.Close()
+
+	rowBuf := make([]parquet.Row, 1)
+
+	// Row 0: 3 items
+	n, err := rows.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 row, got %d", n)
+	}
+	var result TargetSchema
+	if err := targetSchema.Reconstruct(&result, rowBuf[0]); err != nil {
+		t.Fatal(err)
+	}
+	expectedRow0 := TargetSchema{
+		Items: []ItemWithY{{X: 1, Y: 0}, {X: 2, Y: 0}, {X: 3, Y: 0}},
+	}
+	if !reflect.DeepEqual(result, expectedRow0) {
+		t.Errorf("row 0: expected %+v, got %+v", expectedRow0, result)
+	}
+
+	// Verify repetition and definition levels match between X and Y columns
+	row := rowBuf[0]
+	xValues := []parquet.Value{}
+	yValues := []parquet.Value{}
+	for _, val := range row {
+		if val.Column() == 0 { // X column
+			xValues = append(xValues, val)
+		} else if val.Column() == 1 { // Y column
+			yValues = append(yValues, val)
+		}
+	}
+	if len(xValues) != len(yValues) {
+		t.Errorf("row 0: X column has %d values, Y column has %d values", len(xValues), len(yValues))
+	}
+	for i := range xValues {
+		if xValues[i].RepetitionLevel() != yValues[i].RepetitionLevel() {
+			t.Errorf("row 0, value %d: X repLevel=%d, Y repLevel=%d (should match)",
+				i, xValues[i].RepetitionLevel(), yValues[i].RepetitionLevel())
+		}
+		if xValues[i].DefinitionLevel() != yValues[i].DefinitionLevel() {
+			t.Errorf("row 0, value %d: X defLevel=%d, Y defLevel=%d (should match for required fields)",
+				i, xValues[i].DefinitionLevel(), yValues[i].DefinitionLevel())
+		}
+	}
+
+	// Row 1: 1 item
+	n, err = rows.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if err := targetSchema.Reconstruct(&result, rowBuf[0]); err != nil {
+		t.Fatal(err)
+	}
+	expectedRow1 := TargetSchema{
+		Items: []ItemWithY{{X: 4, Y: 0}},
+	}
+	if !reflect.DeepEqual(result, expectedRow1) {
+		t.Errorf("row 1: expected %+v, got %+v", expectedRow1, result)
+	}
+
+	// Row 2: 0 items
+	n, err = rows.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if err := targetSchema.Reconstruct(&result, rowBuf[0]); err != nil {
+		t.Fatal(err)
+	}
+	expectedRow2 := TargetSchema{
+		Items: []ItemWithY{},
+	}
+	if !reflect.DeepEqual(result, expectedRow2) {
+		t.Errorf("row 2: expected %+v, got %+v", expectedRow2, result)
+	}
+}
+
+// TestConvertMissingOptionalInRepeatedGroup tests missing optional column in a repeated group
+func TestConvertMissingOptionalInRepeatedGroup(t *testing.T) {
+	type Item struct {
+		X int32 `parquet:"x"`
+	}
+
+	type ItemWithY struct {
+		X int32  `parquet:"x"`
+		Y *int32 `parquet:"y,optional"` // Missing optional field should be null
+	}
+
+	type SourceSchema struct {
+		Items []Item `parquet:"items"`
+	}
+
+	type TargetSchema struct {
+		Items []ItemWithY `parquet:"items"`
+	}
+
+	sourceSchema := parquet.SchemaOf(&SourceSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
+	if _, err := buffer.Write([]SourceSchema{
+		{Items: []Item{{X: 1}, {X: 2}}},
+		{Items: []Item{{X: 3}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, sourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	rows := convertedRowGroup.Rows()
+	defer rows.Close()
+
+	rowBuf := make([]parquet.Row, 1)
+
+	// Row 0: 2 items
+	n, err := rows.ReadRows(rowBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 row, got %d", n)
+	}
+	var result TargetSchema
+	if err := targetSchema.Reconstruct(&result, rowBuf[0]); err != nil {
+		t.Fatal(err)
+	}
+	expectedRow0 := TargetSchema{
+		Items: []ItemWithY{{X: 1, Y: nil}, {X: 2, Y: nil}},
+	}
+	if !reflect.DeepEqual(result, expectedRow0) {
+		t.Errorf("row 0: expected %+v, got %+v", expectedRow0, result)
+	}
+
+	// Verify repetition levels match, but definition levels indicate NULL
+	row := rowBuf[0]
+	xValues := []parquet.Value{}
+	yValues := []parquet.Value{}
+	for _, val := range row {
+		if val.Column() == 0 { // X column
+			xValues = append(xValues, val)
+		} else if val.Column() == 1 { // Y column
+			yValues = append(yValues, val)
+		}
+	}
+	if len(xValues) != len(yValues) {
+		t.Errorf("row 0: X column has %d values, Y column has %d values", len(xValues), len(yValues))
+	}
+	for i := range xValues {
+		if xValues[i].RepetitionLevel() != yValues[i].RepetitionLevel() {
+			t.Errorf("row 0, value %d: X repLevel=%d, Y repLevel=%d (should match)",
+				i, xValues[i].RepetitionLevel(), yValues[i].RepetitionLevel())
+		}
+		// For optional fields, Y should be NULL (isNull=true)
+		if !yValues[i].IsNull() {
+			t.Errorf("row 0, value %d: Y value should be NULL", i)
+		}
+	}
+}
+
+// TestConvertMissingOptionalInRepeatedGroupWithOptionalAdjacent tests missing optional column
+// where the adjacent column is also optional
+func TestConvertMissingOptionalInRepeatedGroupWithOptionalAdjacent(t *testing.T) {
+	type Item struct {
+		X *int32 `parquet:"x,optional"`
+	}
+
+	type ItemWithY struct {
+		X *int32 `parquet:"x,optional"`
+		Y *int32 `parquet:"y,optional"` // Missing optional field should be null
+	}
+
+	type SourceSchema struct {
+		Items []Item `parquet:"items"`
+	}
+
+	type TargetSchema struct {
+		Items []ItemWithY `parquet:"items"`
+	}
+
+	sourceSchema := parquet.SchemaOf(&SourceSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	// Create test data with a mix of present and null values for X
+	x1 := int32(1)
+	x3 := int32(3)
+	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
+	if _, err := buffer.Write([]SourceSchema{
+		{Items: []Item{{X: &x1}, {X: nil}, {X: &x3}}}, // Row 0: 3 items (some with null X)
+		{Items: []Item{{X: nil}}},                      // Row 1: 1 item with null X
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, sourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	rows := convertedRowGroup.Rows()
+	defer rows.Close()
+
+	rowBuf := make([]parquet.Row, 1)
+
+	// Row 0: 3 items
+	n, err := rows.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 row, got %d", n)
+	}
+	var result TargetSchema
+	if err := targetSchema.Reconstruct(&result, rowBuf[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	expectedRow0 := TargetSchema{
+		Items: []ItemWithY{{X: &x1, Y: nil}, {X: nil, Y: nil}, {X: &x3, Y: nil}},
+	}
+	if !reflect.DeepEqual(result, expectedRow0) {
+		t.Errorf("row 0: expected %+v, got %+v", expectedRow0, result)
+	}
+
+	// Verify repetition levels match between X and Y
+	row := rowBuf[0]
+	xValues := []parquet.Value{}
+	yValues := []parquet.Value{}
+	for _, val := range row {
+		if val.Column() == 0 { // X column
+			xValues = append(xValues, val)
+		} else if val.Column() == 1 { // Y column
+			yValues = append(yValues, val)
+		}
+	}
+	if len(xValues) != len(yValues) {
+		t.Errorf("row 0: X column has %d values, Y column has %d values", len(xValues), len(yValues))
+	}
+	for i := range xValues {
+		if xValues[i].RepetitionLevel() != yValues[i].RepetitionLevel() {
+			t.Errorf("row 0, value %d: X repLevel=%d, Y repLevel=%d (should match)",
+				i, xValues[i].RepetitionLevel(), yValues[i].RepetitionLevel())
+		}
+		// Y should always be NULL
+		if !yValues[i].IsNull() {
+			t.Errorf("row 0, value %d: Y value should be NULL", i)
+		}
+		// When X is null, Y should also be null at the same level
+		// When X is present, Y should be null at the leaf level
+		if xValues[i].IsNull() {
+			// Both should be null, definition levels should match
+			if xValues[i].DefinitionLevel() != yValues[i].DefinitionLevel() {
+				t.Errorf("row 0, value %d: when X is null, defLevels should match: X=%d, Y=%d",
+					i, xValues[i].DefinitionLevel(), yValues[i].DefinitionLevel())
+			}
+		}
+	}
+
+	// Row 1: 1 item with null X
+	n, err = rows.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if err := targetSchema.Reconstruct(&result, rowBuf[0]); err != nil {
+		t.Fatal(err)
+	}
+	expectedRow1 := TargetSchema{
+		Items: []ItemWithY{{X: nil, Y: nil}},
+	}
+	if !reflect.DeepEqual(result, expectedRow1) {
+		t.Errorf("row 1: expected %+v, got %+v", expectedRow1, result)
+	}
+}
+
+// TestConvertMissingRequiredInRepeatedGroupWithOptionalAdjacent tests missing required column
+// where the adjacent column is optional
+func TestConvertMissingRequiredInRepeatedGroupWithOptionalAdjacent(t *testing.T) {
+	type Item struct {
+		X *int32 `parquet:"x,optional"`
+	}
+
+	type ItemWithY struct {
+		X *int32 `parquet:"x,optional"`
+		Y int32  `parquet:"y"` // Missing required field should get zero value
+	}
+
+	type SourceSchema struct {
+		Items []Item `parquet:"items"`
+	}
+
+	type TargetSchema struct {
+		Items []ItemWithY `parquet:"items"`
+	}
+
+	sourceSchema := parquet.SchemaOf(&SourceSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	// Create test data with a mix of present and null values for X
+	x1 := int32(1)
+	x3 := int32(3)
+	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
+	if _, err := buffer.Write([]SourceSchema{
+		{Items: []Item{{X: &x1}, {X: nil}, {X: &x3}}}, // Row 0: 3 items (some with null X)
+		{Items: []Item{{X: nil}}},                      // Row 1: 1 item with null X
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, sourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	rows := convertedRowGroup.Rows()
+	defer rows.Close()
+
+	rowBuf := make([]parquet.Row, 1)
+
+	// Row 0: 3 items
+	n, err := rows.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 row, got %d", n)
+	}
+	var result TargetSchema
+	if err := targetSchema.Reconstruct(&result, rowBuf[0]); err != nil {
+		t.Fatal(err)
+	}
+	expectedRow0 := TargetSchema{
+		Items: []ItemWithY{{X: &x1, Y: 0}, {X: nil, Y: 0}, {X: &x3, Y: 0}},
+	}
+	if !reflect.DeepEqual(result, expectedRow0) {
+		t.Errorf("row 0: expected %+v, got %+v", expectedRow0, result)
+	}
+
+	// Verify repetition levels match between X and Y
+	row := rowBuf[0]
+	xValues := []parquet.Value{}
+	yValues := []parquet.Value{}
+	for _, val := range row {
+		if val.Column() == 0 { // X column
+			xValues = append(xValues, val)
+		} else if val.Column() == 1 { // Y column
+			yValues = append(yValues, val)
+		}
+	}
+	if len(xValues) != len(yValues) {
+		t.Errorf("row 0: X column has %d values, Y column has %d values", len(xValues), len(yValues))
+	}
+	for i := range xValues {
+		if xValues[i].RepetitionLevel() != yValues[i].RepetitionLevel() {
+			t.Errorf("row 0, value %d: X repLevel=%d, Y repLevel=%d (should match)",
+				i, xValues[i].RepetitionLevel(), yValues[i].RepetitionLevel())
+		}
+		// Y is required, so should always be non-null
+		if yValues[i].IsNull() {
+			t.Errorf("row 0, value %d: Y should not be NULL (required field)", i)
+		}
+		// Y should have value 0
+		if yValues[i].Int32() != 0 {
+			t.Errorf("row 0, value %d: expected Y=0, got %d", i, yValues[i].Int32())
+		}
+	}
+
+	// Row 1: 1 item with null X
+	n, err = rows.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if err := targetSchema.Reconstruct(&result, rowBuf[0]); err != nil {
+		t.Fatal(err)
+	}
+	expectedRow1 := TargetSchema{
+		Items: []ItemWithY{{X: nil, Y: 0}},
+	}
+	if !reflect.DeepEqual(result, expectedRow1) {
+		t.Errorf("row 1: expected %+v, got %+v", expectedRow1, result)
 	}
 }
