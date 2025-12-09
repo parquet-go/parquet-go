@@ -66,7 +66,7 @@ func binarySearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 
 	// After the loop, currentIndex == topIndex points to the candidate page.
 	// Verify the value is actually within the page bounds.
-	if currentIndex < n {
+	if currentIndex < numPages {
 		minValue := index.MinValue(currentIndex)
 		maxValue := index.MaxValue(currentIndex)
 
