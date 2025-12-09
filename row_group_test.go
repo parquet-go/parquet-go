@@ -42,17 +42,19 @@ func newPeopleBuffer(people []Person) parquet.RowGroup {
 
 func newPeopleFile(people []Person) parquet.RowGroup {
 	buffer := new(bytes.Buffer)
-	writer := parquet.NewWriter(buffer)
-	for i := range people {
-		writer.Write(&people[i])
-	}
+	writer := parquet.NewGenericWriter[Person](buffer)
+	writer.Write(people)
 	writer.Close()
 	reader := bytes.NewReader(buffer.Bytes())
 	f, err := parquet.OpenFile(reader, reader.Size())
 	if err != nil {
 		panic(err)
 	}
-	return f.RowGroups()[0]
+	rowGroups := f.RowGroups()
+	if len(rowGroups) == 0 {
+		return parquet.NewBuffer()
+	}
+	return rowGroups[0]
 }
 
 func TestSeekToRow(t *testing.T) {
@@ -69,9 +71,6 @@ func TestSeekToRow(t *testing.T) {
 
 func testSeekToRow(t *testing.T, newRowGroup func([]Person) parquet.RowGroup) {
 	err := quickCheck(func(people []Person) bool {
-		if len(people) == 0 { // TODO: fix creation of empty parquet files
-			return true
-		}
 		rowGroup := newRowGroup(people)
 		rows := rowGroup.Rows()
 		rbuf := make([]parquet.Row, 1)
