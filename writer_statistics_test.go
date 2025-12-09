@@ -72,19 +72,19 @@ func TestWriterStatistics(t *testing.T) {
 			bloomFilterLength: 47,
 		},
 		"email": {
-			unencodedBytes:        32, // "alice@example.com"(17) + "bob@example.com"(15)
+			unencodedBytes:        32,            // "alice@example.com"(17) + "bob@example.com"(15)
 			defLevelHistogram:     []int64{2, 2}, // 2 nulls, 2 values
 			colIndexDefLevelCount: 2,             // 1 page * (maxDefinitionLevel + 1)
 		},
 		"tags list element": {
-			unencodedBytes:        24, // "tag1"(4) + "tag2"(4) + "tag3"(4) + "tag4"(4) + "tag5"(4) + "tag6"(4)
+			unencodedBytes:        24,            // "tag1"(4) + "tag2"(4) + "tag3"(4) + "tag4"(4) + "tag5"(4) + "tag6"(4)
 			defLevelHistogram:     []int64{1, 6}, // 1 null list, 6 elements
 			repLevelHistogram:     []int64{4, 3}, // 4 first elements, 3 repeated elements
 			colIndexDefLevelCount: 2,             // 1 page * (maxDefinitionLevel + 1)
 			colIndexRepLevelCount: 2,             // 1 page * (maxRepetitionLevel + 1)
 		},
 		"metadata": {
-			unencodedBytes:        5, // "meta1"(5)
+			unencodedBytes:        5,             // "meta1"(5)
 			defLevelHistogram:     []int64{3, 1}, // 3 nulls, 1 value
 			colIndexDefLevelCount: 2,             // 1 page * (maxDefinitionLevel + 1)
 		},
