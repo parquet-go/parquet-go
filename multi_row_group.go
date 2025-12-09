@@ -287,7 +287,7 @@ func (m *multiColumnIndex) NumPages() int {
 	return m.numPages
 }
 
-func (m *multiColumnIndex) mapPageIndex(pageIndex int) (chunkIdx int, localIdx int) {
+func (m *multiColumnIndex) mapPageIndex(pageIndex int) (chunkIndex, localIndex int) {
 	for i := range len(m.offsets) - 1 {
 		if pageIndex >= m.offsets[i] && pageIndex < m.offsets[i+1] {
 			return i, pageIndex - m.offsets[i]
@@ -295,33 +295,33 @@ func (m *multiColumnIndex) mapPageIndex(pageIndex int) (chunkIdx int, localIdx i
 	}
 	// Out of bounds - return last valid position
 	if len(m.indexes) > 0 {
-		lastIdx := len(m.indexes) - 1
-		lastNumPages := m.indexes[lastIdx].NumPages()
+		lastIndex := len(m.indexes) - 1
+		lastNumPages := m.indexes[lastIndex].NumPages()
 		if lastNumPages > 0 {
-			return lastIdx, lastNumPages - 1
+			return lastIndex, lastNumPages - 1
 		}
 	}
 	return 0, 0
 }
 
 func (m *multiColumnIndex) NullCount(pageIndex int) int64 {
-	chunkIdx, localIdx := m.mapPageIndex(pageIndex)
-	return m.indexes[chunkIdx].NullCount(localIdx)
+	chunkIndex, localIndex := m.mapPageIndex(pageIndex)
+	return m.indexes[chunkIndex].NullCount(localIndex)
 }
 
 func (m *multiColumnIndex) NullPage(pageIndex int) bool {
-	chunkIdx, localIdx := m.mapPageIndex(pageIndex)
-	return m.indexes[chunkIdx].NullPage(localIdx)
+	chunkIndex, localIndex := m.mapPageIndex(pageIndex)
+	return m.indexes[chunkIndex].NullPage(localIndex)
 }
 
 func (m *multiColumnIndex) MinValue(pageIndex int) Value {
-	chunkIdx, localIdx := m.mapPageIndex(pageIndex)
-	return m.indexes[chunkIdx].MinValue(localIdx)
+	chunkIndex, localIndex := m.mapPageIndex(pageIndex)
+	return m.indexes[chunkIndex].MinValue(localIndex)
 }
 
 func (m *multiColumnIndex) MaxValue(pageIndex int) Value {
-	chunkIdx, localIdx := m.mapPageIndex(pageIndex)
-	return m.indexes[chunkIdx].MaxValue(localIdx)
+	chunkIndex, localIndex := m.mapPageIndex(pageIndex)
+	return m.indexes[chunkIndex].MaxValue(localIndex)
 }
 
 func (m *multiColumnIndex) IsAscending() bool {
@@ -432,7 +432,7 @@ func (m *multiOffsetIndex) NumPages() int {
 	return m.numPages
 }
 
-func (m *multiOffsetIndex) mapPageIndex(pageIndex int) (chunkIdx int, localIdx int) {
+func (m *multiOffsetIndex) mapPageIndex(pageIndex int) (chunkIndex int, localIndex int) {
 	for i := range len(m.offsets) - 1 {
 		if pageIndex >= m.offsets[i] && pageIndex < m.offsets[i+1] {
 			return i, pageIndex - m.offsets[i]
@@ -440,29 +440,29 @@ func (m *multiOffsetIndex) mapPageIndex(pageIndex int) (chunkIdx int, localIdx i
 	}
 	// Out of bounds - return last valid position
 	if len(m.indexes) > 0 {
-		lastIdx := len(m.indexes) - 1
-		lastNumPages := m.indexes[lastIdx].NumPages()
+		lastIndex := len(m.indexes) - 1
+		lastNumPages := m.indexes[lastIndex].NumPages()
 		if lastNumPages > 0 {
-			return lastIdx, lastNumPages - 1
+			return lastIndex, lastNumPages - 1
 		}
 	}
 	return 0, 0
 }
 
 func (m *multiOffsetIndex) Offset(pageIndex int) int64 {
-	chunkIdx, localIdx := m.mapPageIndex(pageIndex)
-	return m.indexes[chunkIdx].Offset(localIdx)
+	chunkIndex, localIndex := m.mapPageIndex(pageIndex)
+	return m.indexes[chunkIndex].Offset(localIndex)
 }
 
 func (m *multiOffsetIndex) CompressedPageSize(pageIndex int) int64 {
-	chunkIdx, localIdx := m.mapPageIndex(pageIndex)
-	return m.indexes[chunkIdx].CompressedPageSize(localIdx)
+	chunkIndex, localIndex := m.mapPageIndex(pageIndex)
+	return m.indexes[chunkIndex].CompressedPageSize(localIndex)
 }
 
 func (m *multiOffsetIndex) FirstRowIndex(pageIndex int) int64 {
-	chunkIdx, localIdx := m.mapPageIndex(pageIndex)
-	localRowIndex := m.indexes[chunkIdx].FirstRowIndex(localIdx)
-	return m.rowOffsets[chunkIdx] + localRowIndex
+	chunkIndex, localIndex := m.mapPageIndex(pageIndex)
+	localRowIndex := m.indexes[chunkIndex].FirstRowIndex(localIndex)
+	return m.rowOffsets[chunkIndex] + localRowIndex
 }
 
 type multiPages struct {
