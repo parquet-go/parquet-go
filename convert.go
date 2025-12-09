@@ -795,7 +795,7 @@ func (r *missingPageValues) readWithAdjacent(values []Value, typ Type, columnInd
 	// Determine if this missing column is required or optional
 	isRequired := r.page.maxDefinitionLevel == 0
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		repLevel := r.adjacentBuffer[i].repetitionLevel
 		adjacentDefLevel := r.adjacentBuffer[i].definitionLevel
 

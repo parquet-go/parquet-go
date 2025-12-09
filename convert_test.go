@@ -1485,7 +1485,7 @@ func TestConvertMissingRequiredColumnDirect(t *testing.T) {
 	values := make([]parquet.Value, 10)
 	n, err := reader.ReadValues(values)
 	t.Logf("Read %d values from missing column, err=%v", n, err)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		t.Logf("  value[%d]: col=%d, isNull=%v, kind=%v, bytes=%q", i, values[i].Column(), values[i].IsNull(), values[i].Kind(), values[i].ByteArray())
 	}
 }
@@ -1526,7 +1526,7 @@ func TestConvertMissingRequiredColumn(t *testing.T) {
 	expectedNames := []string{"", "", ""} // Empty strings for missing required column
 	expectedIDs := []int64{1, 2, 3}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		n, err := rows.ReadRows(rowBuf)
 		if err != nil && err != io.EOF {
 			t.Fatal(err)
@@ -1603,7 +1603,7 @@ func TestConvertMissingOptionalColumn(t *testing.T) {
 
 	rowBuf := make([]parquet.Row, 1)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		n, err := rows.ReadRows(rowBuf)
 		if err != nil && err != io.EOF {
 			t.Fatal(err)
@@ -1662,8 +1662,8 @@ func TestConvertMissingRequiredInRepeatedGroup(t *testing.T) {
 	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
 	if _, err := buffer.Write([]SourceSchema{
 		{Items: []Item{{X: 1}, {X: 2}, {X: 3}}}, // 3 items in first row
-		{Items: []Item{{X: 4}}},                  // 1 item in second row
-		{Items: []Item{}},                        // 0 items in third row
+		{Items: []Item{{X: 4}}},                 // 1 item in second row
+		{Items: []Item{}},                       // 0 items in third row
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1869,7 +1869,7 @@ func TestConvertMissingOptionalInRepeatedGroupWithOptionalAdjacent(t *testing.T)
 	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
 	if _, err := buffer.Write([]SourceSchema{
 		{Items: []Item{{X: &x1}, {X: nil}, {X: &x3}}}, // Row 0: 3 items (some with null X)
-		{Items: []Item{{X: nil}}},                      // Row 1: 1 item with null X
+		{Items: []Item{{X: nil}}},                     // Row 1: 1 item with null X
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1984,7 +1984,7 @@ func TestConvertMissingRequiredInRepeatedGroupWithOptionalAdjacent(t *testing.T)
 	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
 	if _, err := buffer.Write([]SourceSchema{
 		{Items: []Item{{X: &x1}, {X: nil}, {X: &x3}}}, // Row 0: 3 items (some with null X)
-		{Items: []Item{{X: nil}}},                      // Row 1: 1 item with null X
+		{Items: []Item{{X: nil}}},                     // Row 1: 1 item with null X
 	}); err != nil {
 		t.Fatal(err)
 	}
