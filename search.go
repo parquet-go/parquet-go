@@ -38,46 +38,45 @@ func Find(index ColumnIndex, value Value, cmp func(Value, Value) int) int {
 }
 
 func binarySearch(index ColumnIndex, value Value, cmp func(Value, Value) int) int {
-	n := index.NumPages()
-	curIdx := 0
-	topIdx := n
+	numPages := index.NumPages()
+	topIndex := numPages
+	currentIndex := 0
 
 	// while there's at least one more page to check
-	for curIdx < topIdx {
-
-		// nextIdx is set to halfway between curIdx and topIdx
-		nextIdx := ((topIdx - curIdx) / 2) + curIdx
+	for currentIndex < topIndex {
+		// nextIndex is set to halfway between currentIndex and topIndex
+		nextIndex := ((topIndex - currentIndex) / 2) + currentIndex
 
 		// Compare against both min and max to handle overlapping page bounds.
 		// When page bounds overlap due to truncation, we need to search left
 		// to find the first page that might contain the value.
 		switch {
-		case cmp(value, index.MinValue(nextIdx)) < 0:
+		case cmp(value, index.MinValue(nextIndex)) < 0:
 			// value < min: can't be in this page or any after it
-			topIdx = nextIdx
-		case cmp(value, index.MaxValue(nextIdx)) > 0:
-			// value > max: can't be in this page or any before it (including nextIdx)
-			curIdx = nextIdx + 1
+			topIndex = nextIndex
+		case cmp(value, index.MaxValue(nextIndex)) > 0:
+			// value > max: can't be in this page or any before it (including nextIndex)
+			currentIndex = nextIndex + 1
 		default:
 			// min <= value <= max: value might be in this page or an earlier one
 			// with overlapping bounds, so search left to find the first occurrence
-			topIdx = nextIdx
+			topIndex = nextIndex
 		}
 	}
 
-	// After the loop, curIdx == topIdx points to the candidate page.
+	// After the loop, currentIndex == topIndex points to the candidate page.
 	// Verify the value is actually within the page bounds.
-	if curIdx < n {
-		min := index.MinValue(curIdx)
-		max := index.MaxValue(curIdx)
+	if currentIndex < n {
+		minValue := index.MinValue(currentIndex)
+		maxValue := index.MaxValue(currentIndex)
 
-		// If value is not in pages[curIdx], then it's not in this columnChunk
-		if cmp(value, min) < 0 || cmp(value, max) > 0 {
-			return n
+		// If value is not in pages[currentIndex], then it's not in this columnChunk
+		if cmp(value, minValue) < 0 || cmp(value, maxValue) > 0 {
+			return numPages
 		}
 	}
 
-	return curIdx
+	return currentIndex
 }
 
 func linearSearch(index ColumnIndex, value Value, cmp func(Value, Value) int) int {

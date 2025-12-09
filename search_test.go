@@ -113,7 +113,7 @@ func TestSearchOverlappingBounds(t *testing.T) {
 	writer := parquet.NewSortingWriter[Row](buffer, 99,
 		parquet.PageBufferSize(100),
 		parquet.MaxRowsPerRowGroup(20000),
-		parquet.ColumnIndexSizeLimit(5),
+		parquet.ColumnIndexSizeLimit(func(path []string) int { return 5 }),
 		parquet.SortingWriterConfig(
 			parquet.SortingColumns(
 				parquet.Ascending("value"),
@@ -248,10 +248,11 @@ func TestSearchBoundaryValues(t *testing.T) {
 			}
 
 			buffer := bytes.NewBuffer(nil)
+			sizeLimit := tt.sizeLimit
 			writer := parquet.NewSortingWriter[Row](buffer, 99,
 				parquet.PageBufferSize(100),
 				parquet.MaxRowsPerRowGroup(20000),
-				parquet.ColumnIndexSizeLimit(tt.sizeLimit),
+				parquet.ColumnIndexSizeLimit(func(path []string) int { return sizeLimit }),
 				parquet.SortingWriterConfig(
 					parquet.SortingColumns(
 						parquet.Ascending("value"),
