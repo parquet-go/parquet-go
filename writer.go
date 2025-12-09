@@ -759,7 +759,11 @@ func newWriterRowGroup(w *writer, config *WriterConfig) *writerRowGroup {
 
 		c.header.encoder.Reset(c.header.protocol.NewWriter(&c.buffers.header))
 
-		if leaf.maxDefinitionLevel > 0 {
+		if c.maxRepetitionLevel > 0 {
+			c.repetitionLevelHistogram = make([]int64, int(c.maxRepetitionLevel)+1)
+		}
+		if c.maxDefinitionLevel > 0 {
+			c.definitionLevelHistogram = make([]int64, int(c.maxDefinitionLevel)+1)
 			c.encodings = addEncoding(c.encodings, format.RLE)
 		}
 
@@ -1168,7 +1172,16 @@ func (w *writer) writeRowGroup(rg *writerRowGroup, rowGroupSchema *Schema, rowGr
 	fileOffset := w.writer.offset
 
 	for i, c := range rg.columns {
-		rg.columnIndex[i] = format.ColumnIndex(c.columnIndex.ColumnIndex())
+		columnIndex := c.columnIndex.ColumnIndex()
+		columnIndex.RepetitionLevelHistogram = slices.Clone(c.pageRepetitionLevelHistograms)
+		columnIndex.DefinitionLevelHistogram = slices.Clone(c.pageDefinitionLevelHistograms)
+		rg.columnIndex[i] = columnIndex
+
+		c.columnChunk.MetaData.SizeStatistics = format.SizeStatistics{
+			UnencodedByteArrayDataBytes: c.totalUnencodedByteArrayBytes,
+			RepetitionLevelHistogram:    slices.Clone(c.repetitionLevelHistogram),
+			DefinitionLevelHistogram:    slices.Clone(c.definitionLevelHistogram),
+		}
 
 		if c.dictionary != nil {
 			c.columnChunk.MetaData.DictionaryPageOffset = w.writer.offset
@@ -1200,10 +1213,13 @@ func (w *writer) writeRowGroup(rg *writerRowGroup, rowGroupSchema *Schema, rowGr
 
 	for _, c := range rg.columns {
 		if len(c.filter) > 0 {
-			c.columnChunk.MetaData.BloomFilterOffset = w.writer.offset
+			bloomFilterOffset := w.writer.offset
+			c.columnChunk.MetaData.BloomFilterOffset = bloomFilterOffset
 			if err := c.writeBloomFilter(&w.writer); err != nil {
 				return 0, err
 			}
+			bloomFilterLength := w.writer.offset - bloomFilterOffset
+			c.columnChunk.MetaData.BloomFilterLength = int32(bloomFilterLength)
 		}
 	}
 
@@ -1231,25 +1247,18 @@ func (w *writer) writeRowGroup(rg *writerRowGroup, rowGroupSchema *Schema, rowGr
 		})
 	}
 
-	columns := make([]format.ColumnChunk, len(rg.columnChunk))
-	copy(columns, rg.columnChunk)
-
-	columnIndex := make([]format.ColumnIndex, len(rg.columnIndex))
-	copy(columnIndex, rg.columnIndex)
-
-	offsetIndex := make([]format.OffsetIndex, len(rg.offsetIndex))
-	copy(offsetIndex, rg.offsetIndex)
+	columns := slices.Clone(rg.columnChunk)
+	columnIndex := slices.Clone(rg.columnIndex)
+	offsetIndex := slices.Clone(rg.offsetIndex)
 
 	for i := range columns {
 		c := &columns[i]
-		c.MetaData.EncodingStats = make([]format.PageEncodingStats, len(c.MetaData.EncodingStats))
-		copy(c.MetaData.EncodingStats, rg.columnChunk[i].MetaData.EncodingStats)
+		c.MetaData.EncodingStats = slices.Clone(rg.columnChunk[i].MetaData.EncodingStats)
 	}
 
 	for i := range offsetIndex {
 		c := &offsetIndex[i]
-		c.PageLocations = make([]format.PageLocation, len(c.PageLocations))
-		copy(c.PageLocations, rg.offsetIndex[i].PageLocations)
+		c.PageLocations = slices.Clone(rg.offsetIndex[i].PageLocations)
 	}
 
 	w.rowGroups = append(w.rowGroups, format.RowGroup{
@@ -1433,6 +1442,12 @@ type ColumnWriter struct {
 	rowsBuffer             *buffer[int32]
 	repetitionLevelsBuffer *buffer[byte]
 	definitionLevelsBuffer *buffer[byte]
+
+	totalUnencodedByteArrayBytes  int64
+	repetitionLevelHistogram      []int64
+	definitionLevelHistogram      []int64
+	pageRepetitionLevelHistograms []int64
+	pageDefinitionLevelHistograms []int64
 }
 
 func (c *ColumnWriter) reset() {
@@ -1473,6 +1488,12 @@ func (c *ColumnWriter) reset() {
 	c.columnChunk.MetaData.EncodingStats = c.columnChunk.MetaData.EncodingStats[:0]
 	c.columnChunk.MetaData.BloomFilterOffset = 0
 	c.offsetIndex.PageLocations = c.offsetIndex.PageLocations[:0]
+
+	c.totalUnencodedByteArrayBytes = 0
+	clear(c.repetitionLevelHistogram)
+	clear(c.definitionLevelHistogram)
+	c.pageRepetitionLevelHistograms = c.pageRepetitionLevelHistograms[:0]
+	c.pageDefinitionLevelHistograms = c.pageDefinitionLevelHistograms[:0]
 }
 
 func (c *ColumnWriter) totalRowCount() int64 {
@@ -2010,6 +2031,24 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 		})
 
 		c.numRows += page.NumRows()
+		c.totalUnencodedByteArrayBytes += computeUnencodedByteArraySize(page)
+
+		repetitionLevels := page.RepetitionLevels()
+		definitionLevels := page.DefinitionLevels()
+
+		if c.maxRepetitionLevel > 0 {
+			accumulateLevelHistogram(c.repetitionLevelHistogram, repetitionLevels)
+			c.pageRepetitionLevelHistograms = appendPageLevelHistogram(
+				c.pageRepetitionLevelHistograms, repetitionLevels, c.maxRepetitionLevel,
+			)
+		}
+
+		if c.maxDefinitionLevel > 0 {
+			accumulateLevelHistogram(c.definitionLevelHistogram, definitionLevels)
+			c.pageDefinitionLevelHistograms = appendPageLevelHistogram(
+				c.pageDefinitionLevelHistograms, definitionLevels, c.maxDefinitionLevel,
+			)
+		}
 	}
 
 	pageType := header.Type
