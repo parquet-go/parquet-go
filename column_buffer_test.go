@@ -1820,3 +1820,117 @@ func TestPrimitiveTypesBypassJSON(t *testing.T) {
 		}
 	})
 }
+
+// TestMapWithListValue tests that maps with slice values using the parquet-value list tag
+// can be written and read correctly. This is a regression test for issues #267 and #268.
+// Issue #267: panic when writing a map with parquet-value:",list" tag
+// Issue #268: panic when reading a map with slice values from a LIST schema
+func TestMapWithListValue(t *testing.T) {
+	type Record struct {
+		ID  int64               `parquet:"id"`
+		Map map[string][]string `parquet:"map" parquet-value:",list"`
+	}
+
+	t.Run("WriteNilMap", func(t *testing.T) {
+		// This reproduced the panic from issue #267
+		record := Record{ID: 1, Map: nil}
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[Record](buf)
+		_, err := writer.Write([]Record{record})
+		if err != nil {
+			t.Fatalf("failed to write record with nil map: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("failed to close writer: %v", err)
+		}
+	})
+
+	t.Run("WriteEmptyMap", func(t *testing.T) {
+		record := Record{ID: 1, Map: map[string][]string{}}
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[Record](buf)
+		_, err := writer.Write([]Record{record})
+		if err != nil {
+			t.Fatalf("failed to write record with empty map: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("failed to close writer: %v", err)
+		}
+	})
+
+	t.Run("WriteAndReadMap", func(t *testing.T) {
+		original := []Record{
+			{
+				ID: 1,
+				Map: map[string][]string{
+					"fruits":     {"apple", "banana", "cherry"},
+					"vegetables": {"carrot", "potato"},
+				},
+			},
+			{
+				ID: 2,
+				Map: map[string][]string{
+					"colors": {"red", "green", "blue"},
+				},
+			},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[Record](buf)
+		if _, err := writer.Write(original); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("failed to close writer: %v", err)
+		}
+
+		// This reproduced the panic from issue #268
+		result, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		if len(result) != len(original) {
+			t.Fatalf("expected %d records, got %d", len(original), len(result))
+		}
+
+		for i := range original {
+			if result[i].ID != original[i].ID {
+				t.Errorf("record %d: expected ID %d, got %d", i, original[i].ID, result[i].ID)
+			}
+			if !reflect.DeepEqual(result[i].Map, original[i].Map) {
+				t.Errorf("record %d: map mismatch\nexpected: %v\ngot: %v", i, original[i].Map, result[i].Map)
+			}
+		}
+	})
+
+	t.Run("WriteMapWithEmptySliceValue", func(t *testing.T) {
+		record := Record{
+			ID: 1,
+			Map: map[string][]string{
+				"empty": {},
+				"full":  {"value"},
+			},
+		}
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[Record](buf)
+		if _, err := writer.Write([]Record{record}); err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("failed to close writer: %v", err)
+		}
+
+		result, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		if len(result) != 1 {
+			t.Fatalf("expected 1 record, got %d", len(result))
+		}
+		if !reflect.DeepEqual(result[0].Map, record.Map) {
+			t.Errorf("map mismatch\nexpected: %v\ngot: %v", record.Map, result[0].Map)
+		}
+	})
+}
