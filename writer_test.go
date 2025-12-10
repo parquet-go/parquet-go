@@ -2847,3 +2847,90 @@ func TestDictionaryMaxBytesMultipleRowGroups(t *testing.T) {
 		}
 	}
 }
+
+// TestIssue185 reproduces the issue reported in
+// https://github.com/parquet-go/parquet-go/issues/185
+// where rewriting a parquet file with nested types using GenericWriter[any]
+// causes a panic in the reflection layer.
+func TestIssue185(t *testing.T) {
+	type Address struct {
+		City string
+	}
+
+	type NestedType struct {
+		Name    string
+		Address Address
+	}
+
+	// Step 1: Create source file with nested types
+	sourceData := []NestedType{
+		{Name: "Alice", Address: Address{City: "New York"}},
+		{Name: "Bob", Address: Address{City: "Los Angeles"}},
+		{Name: "Charlie", Address: Address{City: "Chicago"}},
+	}
+
+	var sourceBuffer bytes.Buffer
+	sourceWriter := parquet.NewGenericWriter[NestedType](&sourceBuffer)
+	_, err := sourceWriter.Write(sourceData)
+	if err != nil {
+		t.Fatalf("failed to write source data: %v", err)
+	}
+	if err := sourceWriter.Close(); err != nil {
+		t.Fatalf("failed to close source writer: %v", err)
+	}
+
+	// Step 2: Read the file as []any and extract schema
+	sourceFile, err := parquet.OpenFile(bytes.NewReader(sourceBuffer.Bytes()), int64(sourceBuffer.Len()))
+	if err != nil {
+		t.Fatalf("failed to open source file: %v", err)
+	}
+
+	schema := sourceFile.Schema()
+
+	// Read rows as any
+	reader := parquet.NewGenericReader[any](bytes.NewReader(sourceBuffer.Bytes()))
+	defer reader.Close()
+
+	rows := make([]any, len(sourceData))
+	n, err := reader.Read(rows)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read rows: %v", err)
+	}
+	if n != len(sourceData) {
+		t.Fatalf("expected to read %d rows, got %d", len(sourceData), n)
+	}
+
+	// Step 3: Write rows (as maps) to a new file using the extracted schema
+	var destBuffer bytes.Buffer
+	destWriter := parquet.NewGenericWriter[any](&destBuffer, schema)
+	defer destWriter.Close()
+
+	_, err = destWriter.Write(rows)
+	if err != nil {
+		t.Fatalf("failed to write rows to destination: %v", err)
+	}
+
+	if err := destWriter.Close(); err != nil {
+		t.Fatalf("failed to close destination writer: %v", err)
+	}
+
+	// Verify the data can be read back correctly
+	verifyReader := parquet.NewGenericReader[NestedType](bytes.NewReader(destBuffer.Bytes()))
+	defer verifyReader.Close()
+
+	verifyRows := make([]NestedType, len(sourceData))
+	n, err = verifyReader.Read(verifyRows)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read verification rows: %v", err)
+	}
+	if n != len(sourceData) {
+		t.Fatalf("expected to read %d verification rows, got %d", len(sourceData), n)
+	}
+
+	// Verify data integrity
+	for i := range sourceData {
+		if verifyRows[i] != sourceData[i] {
+			t.Errorf("row %d: expected %+v, got %+v", i, sourceData[i], verifyRows[i])
+		}
+	}
+}
