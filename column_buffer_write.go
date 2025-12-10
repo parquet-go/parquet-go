@@ -97,9 +97,7 @@ func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) wr
 	if columnIndex < 0 {
 		panic("parquet: column not found: " + path.String())
 	}
-	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
-		columns[columnIndex].writeValues(levels, rows)
-	}
+	return makeWriteRowsFuncForNativeInt(t, columnIndex, column.node.Type())
 }
 
 func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {

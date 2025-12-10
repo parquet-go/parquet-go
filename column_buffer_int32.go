@@ -86,7 +86,6 @@ func (col *int32ColumnBuffer) writeValues(levels columnLevels, rows sparse.Array
 	n := len(col.values)
 	col.values = col.values[:n+rows.Len()]
 	sparse.GatherInt32(col.values[n:], rows.Int32Array())
-
 }
 
 func (col *int32ColumnBuffer) writeBoolean(levels columnLevels, value bool) {
