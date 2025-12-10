@@ -298,32 +298,6 @@ func (w *GenericWriter[T]) ColumnWriters() []*ColumnWriter {
 	return w.base.ColumnWriters()
 }
 
-func (w *GenericWriter[T]) writeRows(rows []T) (int, error) {
-	if cap(w.base.rowbuf) < len(rows) {
-		w.base.rowbuf = make([]Row, len(rows))
-	} else {
-		w.base.rowbuf = w.base.rowbuf[:len(rows)]
-	}
-	defer clearRows(w.base.rowbuf)
-
-	schema := w.base.Schema()
-	for i := range rows {
-		w.base.rowbuf[i] = schema.Deconstruct(w.base.rowbuf[i], &rows[i])
-	}
-
-	return w.base.WriteRows(w.base.rowbuf)
-}
-
-func (w *GenericWriter[T]) writeAny(rows []T) (n int, err error) {
-	for i := range rows {
-		if err = w.base.Write(rows[i]); err != nil {
-			return n, err
-		}
-		n++
-	}
-	return n, nil
-}
-
 // File returns a FileView of the written parquet file.
 // Only available after Close is called.
 func (w *GenericWriter[T]) File() FileView {
