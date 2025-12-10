@@ -821,7 +821,7 @@ func convertListWrapperToSlice(wrapper reflect.Value, targetSliceType reflect.Ty
 	elemType := targetSliceType.Elem()
 
 	// Copy elements from the wrapper to the result slice
-	for i := 0; i < n; i++ {
+	for i := range n {
 		listElem := listField.Index(i)
 		// Get the "Element" field from each list element struct
 		elementField := listElem.FieldByName("Element")
