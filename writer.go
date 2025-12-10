@@ -1782,7 +1782,7 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 		return 0, fmt.Errorf("encoding parquet data page: %w", err)
 	}
 	if c.dataPageType == format.DataPage {
-		buf.prependLevelsToDataPageV1(c.maxDefinitionLevel, c.maxDefinitionLevel)
+		buf.prependLevelsToDataPageV1(c.maxRepetitionLevel, c.maxDefinitionLevel)
 	}
 
 	uncompressedPageSize := buf.size()

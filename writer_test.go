@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress"
+	"github.com/parquet-go/parquet-go/compress/zstd"
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
@@ -102,6 +104,151 @@ func benchmarkGenericWriter[Row generator[Row]](b *testing.B) {
 			})
 		})
 	})
+}
+
+// TestIssue176DataPageV1WithDecimal tests the bug reported in issue #176
+// where files written with data page version 1 and DECIMAL type cannot be read
+// by Apache Parquet CLI tools.
+func TestIssue176DataPageV1WithDecimal(t *testing.T) {
+	// Create schema matching the issue description:
+	// - DECIMAL(38, 0) on FIXED_LEN_BYTE_ARRAY(16)
+	// - Optional field
+	schema := parquet.NewSchema("test", parquet.Group{
+		"A": parquet.Optional(parquet.Decimal(0, 38, parquet.FixedLenByteArrayType(16))),
+	})
+
+	// Write a test file with data page version 1 and zstd compression
+	var buf bytes.Buffer
+	writer := parquet.NewWriter(
+		&buf,
+		schema,
+		parquet.DataPageVersion(1),
+		parquet.Compression(&zstd.Codec{}),
+	)
+
+	// Create some test values - using big.Int for 38 precision decimal
+	testValues := []struct {
+		value *big.Int
+	}{
+		{value: big.NewInt(0)},
+		{value: big.NewInt(123456789)},
+		{value: big.NewInt(-987654321)},
+		{value: new(big.Int).Exp(big.NewInt(10), big.NewInt(37), nil)}, // 10^37, near max for 38 precision
+	}
+
+	// Write rows - need to write raw values since we're using a custom schema
+	for _, tv := range testValues {
+		// Convert big.Int to 16-byte fixed length byte array
+		var fixedBytes [16]byte
+		valueBytes := tv.value.Bytes()
+
+		// Copy to the end of the array (big-endian)
+		if len(valueBytes) > 16 {
+			t.Fatalf("value too large for 16 bytes: %v", tv.value)
+		}
+		copy(fixedBytes[16-len(valueBytes):], valueBytes)
+
+		// Handle negative numbers (two's complement)
+		if tv.value.Sign() < 0 {
+			// For negative numbers, we need to set the leading bytes
+			for i := range 16 - len(valueBytes) {
+				fixedBytes[i] = 0xFF
+			}
+		}
+
+		row := parquet.Row{
+			parquet.ValueOf(fixedBytes[:]).Level(0, 1, 0),
+		}
+
+		if _, err := writer.WriteRows([]parquet.Row{row}); err != nil {
+			t.Fatalf("WriteRows failed: %v", err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Try to read the file back
+	file := bytes.NewReader(buf.Bytes())
+	reader := parquet.NewReader(file)
+	defer reader.Close()
+
+	// Read rows back
+	rowNum := 0
+	for {
+		rows := make([]parquet.Row, 1)
+		rows[0] = make(parquet.Row, 1)
+		n, err := reader.ReadRows(rows)
+		if err != nil && err != io.EOF {
+			t.Fatalf("ReadRows error: %v", err)
+		}
+		rowNum += n
+		if n == 0 || err != nil {
+			break
+		}
+	}
+
+	if rowNum != len(testValues) {
+		t.Errorf("Expected to read %d rows, but got %d", len(testValues), rowNum)
+	}
+
+	t.Logf("Successfully wrote and read %d rows with data page v1", rowNum)
+}
+
+// TestIssue176NullValues tests writing null values with data page v1
+func TestIssue176NullValues(t *testing.T) {
+	schema := parquet.NewSchema("test", parquet.Group{
+		"A": parquet.Optional(parquet.Decimal(0, 38, parquet.FixedLenByteArrayType(16))),
+	})
+
+	var buf bytes.Buffer
+	writer := parquet.NewWriter(
+		&buf,
+		schema,
+		parquet.DataPageVersion(1),
+		parquet.Compression(&zstd.Codec{}),
+	)
+
+	// Write some null values
+	for range 5 {
+		row := parquet.Row{
+			parquet.ValueOf(nil).Level(0, 0, 0), // null value
+		}
+
+		if _, err := writer.WriteRows([]parquet.Row{row}); err != nil {
+			t.Fatalf("WriteRows failed: %v", err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Try to read the file back
+	file := bytes.NewReader(buf.Bytes())
+	reader := parquet.NewReader(file)
+	defer reader.Close()
+
+	rowNum := 0
+	for {
+		rows := make([]parquet.Row, 1)
+		rows[0] = make(parquet.Row, 1)
+		n, err := reader.ReadRows(rows)
+		if err != nil && err != io.EOF {
+			t.Fatalf("ReadRows error: %v", err)
+		}
+		rowNum += n
+		if n == 0 || err != nil {
+			break
+		}
+	}
+
+	if rowNum != 5 {
+		t.Errorf("Expected to read 5 rows, but got %d", rowNum)
+	}
+
+	t.Logf("Successfully wrote and read %d null rows with data page v1", rowNum)
 }
 
 func TestIssue249(t *testing.T) {
