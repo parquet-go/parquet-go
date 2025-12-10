@@ -13,12 +13,14 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/plain"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
+	"github.com/parquet-go/parquet-go/sparse"
 )
 
 const (
@@ -97,71 +99,105 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 		panic(err)
 	}
 
-	schema := config.Schema
 	t := typeOf[T]()
 
 	var genWriteErr error
 	if t != nil {
 		if columnName, ok := validateColumns(dereference(t)); !ok {
-			genWriteErr = fmt.Errorf("caonnot write %v: it has columns with the same paqruet column name %q", t, columnName)
+			genWriteErr = fmt.Errorf("caonnot write %v: it has columns with the same parquet column name %q", t, columnName)
 		}
 	}
 
-	if schema == nil && t != nil {
-		schema = schemaOf(dereference(t), config.SchemaConfig.StructTags...)
-		if len(schema.Columns()) == 0 {
-			genWriteErr = fmt.Errorf("cannot write %v: it has no columns (maybe it has no exported fields)", t)
-		}
-		config.Schema = schema
-	} else if schema != nil && len(schema.Columns()) == 0 {
-		genWriteErr = fmt.Errorf("cannot write %v: schema has no columns", t)
+	schemaFromConf := config.Schema
+	schemaFromType := (*Schema)(nil)
+
+	if t != nil && dereference(t).Kind() == reflect.Struct {
+		schemaFromType = schemaOf(dereference(t), config.SchemaConfig.StructTags...)
 	}
 
+	config.Schema = cmp.Or(schemaFromConf, schemaFromType)
 	if config.Schema == nil {
 		panic("generic writer must be instantiated with schema or concrete type.")
 	}
+	if len(config.Schema.Columns()) == 0 {
+		genWriteErr = fmt.Errorf("cannot write %v: it has no columns (maybe it has no exported fields)", t)
+	}
 
 	var writeFn writeFunc[T]
-	if genWriteErr != nil {
+	switch {
+	case genWriteErr != nil:
 		writeFn = func(*GenericWriter[T], []T) (int, error) { return 0, genWriteErr }
-	} else {
-		writeFn = writeFuncOf[T](t, config.Schema, config.SchemaConfig.StructTags)
+	case schemaFromType == config.Schema || (schemaFromType != nil && EqualNodes(config.Schema, schemaFromType)):
+		// The schema matches the type T, we can use the optimized
+		// writeRowsFunc algorithms mapping Go values directly to
+		// parquet columns, using the sparse package.
+		writeRows := writeRowsFuncOf(t, config.Schema, nil, config.SchemaConfig.StructTags)
+		writeFn = makeWriteFunc[T](t, writeRows)
+	default:
+		// The schema does not match the type T, we have to
+		// deconstruct each value of type T into a Row first.
+		// This is less efficient but still type-safe.
+		_, writeValue := writeValueFuncOf(0, config.Schema)
+		writeFn = makeWriteFunc[T](t, func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+			if rows.Len() == 0 {
+				writeValue(columns, levels, reflect.Value{})
+				return
+			}
+			for i := range rows.Len() {
+				v := reflect.ValueOf((*T)(rows.Index(i))).Elem()
+				writeValue(columns, levels, v)
+			}
+		})
 	}
 
 	return &GenericWriter[T]{
 		base: Writer{
 			output: output,
 			config: config,
-			schema: schema,
+			schema: config.Schema,
 			writer: newWriter(output, config),
 		},
 		write: writeFn,
 	}
 }
 
-type writeFunc[T any] func(*GenericWriter[T], []T) (int, error)
-
-func writeFuncOf[T any](t reflect.Type, schema *Schema, tagReplacements []StructTagOption) writeFunc[T] {
-	if t == nil {
-		return (*GenericWriter[T]).writeAny
+func validateColumns(t reflect.Type) (string, bool) {
+	if t.Kind() != reflect.Struct {
+		return "", true
 	}
-	switch t.Kind() {
-	case reflect.Interface, reflect.Map:
-		return (*GenericWriter[T]).writeRows
 
-	case reflect.Struct:
-		return makeWriteFunc[T](t, schema, tagReplacements)
+	columns := make(map[string]struct{}, t.NumField())
 
-	case reflect.Pointer:
-		if e := t.Elem(); e.Kind() == reflect.Struct {
-			return makeWriteFunc[T](t, schema, tagReplacements)
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		fieldTag, columnName := f.Tag.Get("parquet"), f.Name
+		if fieldTag != "" {
+			if commaIdx := strings.IndexByte(fieldTag, ','); commaIdx >= 0 {
+				fieldTag = fieldTag[:commaIdx]
+			}
+			if fieldTag == "-" {
+				continue
+			}
+			if fieldTag != "" {
+				columnName = fieldTag
+			}
+		}
+		if _, exists := columns[columnName]; exists {
+			return columnName, false
+		} else {
+			columns[columnName] = struct{}{}
 		}
 	}
-	panic("cannot create writer for values of type " + t.String())
+
+	return "", true
 }
 
-func makeWriteFunc[T any](t reflect.Type, schema *Schema, tagReplacements []StructTagOption) writeFunc[T] {
-	writeRows := writeRowsFuncOf(t, schema, nil, tagReplacements)
+type writeFunc[T any] func(*GenericWriter[T], []T) (int, error)
+
+func makeWriteFunc[T any](t reflect.Type, writeRows writeRowsFunc) writeFunc[T] {
 	return func(w *GenericWriter[T], rows []T) (n int, err error) {
 		if w.columns == nil {
 			w.columns = make([]ColumnBuffer, len(w.base.writer.currentRowGroup.columns))

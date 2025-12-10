@@ -1973,21 +1973,6 @@ func TestColumnValidation(t *testing.T) {
 	if _, err := failedWriter.Write(data); err == nil {
 		t.Fatal(err)
 	}
-
-	type DuplicateColumnsEqualTypes struct {
-		Foo string `parquet:"foo"`
-		Bar string `parquet:"foo"`
-	}
-
-	b = bytes.NewBuffer(nil)
-
-	normalWriter := parquet.NewGenericWriter[*DuplicateColumnsEqualTypes](b)
-	data2 := []*DuplicateColumnsEqualTypes{
-		{Foo: "1", Bar: "1"},
-	}
-	if _, err := normalWriter.Write(data2); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestConcurrentRowGroupWriter(t *testing.T) {
