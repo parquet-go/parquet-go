@@ -99,10 +99,9 @@ func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) wr
 }
 
 func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
-	// For slices (nested lists) and interface types, we just increment the
-	// definition level for present values without checking for null indexes.
-	// - Slices: []byte is treated as scalar, other slices are nested lists
-	// - Interface: handled by writeRowsFuncOfInterface which manages levels internally
+	// For interface types, we just increment the definition level for present
+	// values without checking for null indexes.
+	// Interface: handled by writeRowsFuncOfInterface which manages levels internally
 	writeOptional := func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
 			writeRows(columns, levels, rows)
@@ -116,8 +115,33 @@ func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, wr
 	case reflect.Interface:
 		return writeOptional
 	case reflect.Slice:
+		// For slices (nested lists), we need to distinguish between nil slices
+		// and empty slices. Nil slices should not increment the definition level
+		// (they represent null), while non-nil empty slices should increment it
+		// (they represent an empty list).
 		if t.Elem().Kind() != reflect.Uint8 {
-			return writeOptional
+			type sliceHeader struct {
+				base unsafe.Pointer
+				len  int
+				cap  int
+			}
+			return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+				if rows.Len() == 0 {
+					writeRows(columns, levels, rows)
+					return
+				}
+				// Process each slice individually to check for nil
+				for i := range rows.Len() {
+					p := (*sliceHeader)(rows.Index(i))
+					elemLevels := levels
+					// A nil slice has base=nil, while an empty slice has base!=nil but len=0
+					// We need to increment definition level for non-nil slices (including empty ones)
+					if p.base != nil {
+						elemLevels.definitionLevel++
+					}
+					writeRows(columns, elemLevels, rows.Slice(i, i+1))
+				}
+			}
 		}
 	}
 

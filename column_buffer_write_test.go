@@ -869,3 +869,49 @@ func TestJsonliteArrayOfPrimitives(t *testing.T) {
 		}
 	}
 }
+
+// TestOptionalListNullVsEmpty tests that nil slices and empty slices are
+// distinguishable when written to and read from parquet files with list,optional tags.
+// See: https://github.com/parquet-go/parquet-go/issues/7
+func TestOptionalListNullVsEmpty(t *testing.T) {
+	type Row struct {
+		ListTag []int32 `parquet:"list_tag,list,optional"`
+	}
+
+	rows := []Row{
+		{ListTag: nil},           // null list
+		{ListTag: []int32{}},     // empty list
+		{ListTag: []int32{1, 2}}, // list with values
+	}
+
+	buf := new(bytes.Buffer)
+	if err := Write(buf, rows); err != nil {
+		t.Fatalf("failed to write parquet: %v", err)
+	}
+
+	readRows, err := Read[Row](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("failed to read parquet: %v", err)
+	}
+
+	if len(readRows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(readRows))
+	}
+
+	// Row 0: should be nil (null list)
+	if readRows[0].ListTag != nil {
+		t.Errorf("row 0: expected nil list, got %v", readRows[0].ListTag)
+	}
+
+	// Row 1: should be empty slice (not nil)
+	if readRows[1].ListTag == nil {
+		t.Errorf("row 1: expected empty slice, got nil")
+	} else if len(readRows[1].ListTag) != 0 {
+		t.Errorf("row 1: expected empty slice, got %v", readRows[1].ListTag)
+	}
+
+	// Row 2: should have values [1, 2]
+	if len(readRows[2].ListTag) != 2 || readRows[2].ListTag[0] != 1 || readRows[2].ListTag[1] != 2 {
+		t.Errorf("row 2: expected [1, 2], got %v", readRows[2].ListTag)
+	}
+}
