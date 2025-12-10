@@ -1363,3 +1363,99 @@ func must[T any](v T, err error) T {
 	}
 	return v
 }
+
+// TestIssue69 reproduces the issue reported in
+// https://github.com/parquet-go/parquet-go/issues/69
+// where using GenericReader[any] to read rows and GenericWriter[any] to write them
+// causes a panic: "cannot create parquet value of type BYTE_ARRAY from go value of type interface {}"
+func TestIssue69(t *testing.T) {
+	// Step 1: Create a parquet file with some data
+	type TestRecord struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"`
+	}
+
+	sourceData := []TestRecord{
+		{ID: 1, Name: "Alice"},
+		{ID: 2, Name: "Bob"},
+		{ID: 3, Name: "Charlie"},
+	}
+
+	var sourceBuffer bytes.Buffer
+	sourceWriter := parquet.NewGenericWriter[TestRecord](&sourceBuffer)
+	_, err := sourceWriter.Write(sourceData)
+	if err != nil {
+		t.Fatalf("failed to write source data: %v", err)
+	}
+	if err := sourceWriter.Close(); err != nil {
+		t.Fatalf("failed to close source writer: %v", err)
+	}
+
+	// Step 2: Open the file and get the schema (like in the issue)
+	sourceFile, err := parquet.OpenFile(bytes.NewReader(sourceBuffer.Bytes()), int64(sourceBuffer.Len()))
+	if err != nil {
+		t.Fatalf("failed to open source file: %v", err)
+	}
+	schema := sourceFile.Schema()
+
+	// Step 3: Read the rows using GenericReader[any] with the schema (as in the issue)
+	reader := parquet.NewGenericReader[any](bytes.NewReader(sourceBuffer.Bytes()), &parquet.ReaderConfig{
+		Schema: schema,
+	})
+	defer reader.Close()
+
+	numRows := reader.NumRows()
+	rows := make([]any, numRows)
+	n, err := reader.Read(rows)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read rows: %v", err)
+	}
+	if int64(n) != numRows {
+		t.Fatalf("expected to read %d rows, got %d", numRows, n)
+	}
+
+	// Verify that the rows were read as map[string]interface{}
+	for i, row := range rows {
+		m, ok := row.(map[string]any)
+		if !ok {
+			t.Fatalf("row %d: expected map[string]any, got %T", i, row)
+		}
+		t.Logf("row %d: %+v", i, m)
+	}
+
+	// Step 4: Write the rows to a new file using GenericWriter[any]
+	// This is where the issue would cause a panic
+	var destBuffer bytes.Buffer
+	destWriter := parquet.NewGenericWriter[any](&destBuffer, schema)
+
+	// This Write call would panic with:
+	// "cannot create parquet value of type BYTE_ARRAY from go value of type interface {}"
+	_, err = destWriter.Write(rows)
+	if err != nil {
+		t.Fatalf("failed to write rows to destination: %v", err)
+	}
+
+	if err := destWriter.Close(); err != nil {
+		t.Fatalf("failed to close destination writer: %v", err)
+	}
+
+	// Step 5: Verify the data was written correctly by reading it back
+	verifyReader := parquet.NewGenericReader[TestRecord](bytes.NewReader(destBuffer.Bytes()))
+	defer verifyReader.Close()
+
+	verifyRows := make([]TestRecord, len(sourceData))
+	n, err = verifyReader.Read(verifyRows)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read verification rows: %v", err)
+	}
+	if n != len(sourceData) {
+		t.Fatalf("expected to read %d verification rows, got %d", len(sourceData), n)
+	}
+
+	// Verify data integrity
+	for i := range sourceData {
+		if verifyRows[i] != sourceData[i] {
+			t.Errorf("row %d: expected %+v, got %+v", i, sourceData[i], verifyRows[i])
+		}
+	}
+}
