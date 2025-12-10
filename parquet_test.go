@@ -1393,8 +1393,8 @@ func TestReadMapAsAnyIssue103(t *testing.T) {
 // reading with GenericReader[any]. Related to issue #103.
 func TestReadListAsAnyIssue103(t *testing.T) {
 	type RowType struct {
-		Name   string   `parquet:"name"`
-		Values []int    `parquet:"values"`
+		Name   string `parquet:"name"`
+		Values []int  `parquet:"values"`
 	}
 
 	typed := []RowType{
