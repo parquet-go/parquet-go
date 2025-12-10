@@ -1044,7 +1044,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 				}
 				setNode(String())
 
-			case "bytes":
+			case "bytes", "binary":
 				switch {
 				case t.Kind() == reflect.String:
 				case t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8:

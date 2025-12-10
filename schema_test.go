@@ -261,6 +261,18 @@ func TestSchemaOf(t *testing.T) {
 	required binary sb;
 }`,
 		},
+		// Test that the "binary" tag disables the STRING logical type on string fields
+		// This is useful when Go strings contain non-UTF8 data (see issue #262)
+		{
+			value: new(struct {
+				StringAsBinary string `parquet:"str_binary,binary"`
+				ByteAsBinary   []byte `parquet:"byte_binary,binary"`
+			}),
+			print: `message {
+	required binary str_binary;
+	required binary byte_binary;
+}`,
+		},
 		{
 			value: new(struct {
 				A struct {
