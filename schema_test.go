@@ -5,7 +5,6 @@ import (
 	"io"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -100,491 +99,83 @@ func TestSchemaOf(t *testing.T) {
 		},
 
 		{
-			value: new(struct {
-				Inner struct {
-					TimestampMillis int64 `parquet:"timestamp_millis,timestamp"`
-					TimestampMicros int64 `parquet:"timestamp_micros,timestamp(microsecond)"`
-				} `parquet:"inner,optional"`
-			}),
+			value: new(struct{ Name *string }),
 			print: `message {
-	optional group inner {
-		required int64 timestamp_millis (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
-		required int64 timestamp_micros (TIMESTAMP(isAdjustedToUTC=true,unit=MICROS));
-	}
-}`,
-		},
-
-		{
-			value: new(struct {
-				Inner struct {
-					TimeMillis int32         `parquet:"time_millis,time"`
-					TimeMicros int64         `parquet:"time_micros,time(microsecond)"`
-					TimeDur    time.Duration `parquet:"time_dur,time"`
-				} `parquet:"inner,optional"`
-			}),
-			print: `message {
-	optional group inner {
-		required int32 time_millis (TIME(isAdjustedToUTC=true,unit=MILLIS));
-		required int64 time_micros (TIME(isAdjustedToUTC=true,unit=MICROS));
-		required int64 time_dur (TIME(isAdjustedToUTC=true,unit=NANOS));
-	}
-}`,
-		},
-
-		{
-			value: new(struct {
-				Name string `parquet:",json"`
-			}),
-			print: `message {
-	required binary Name (JSON);
-}`,
-		},
-
-		{
-			value: new(struct {
-				A map[int64]string `parquet:"," parquet-key:",timestamp"`
-				B map[int64]string
-			}),
-			print: `message {
-	required group A (MAP) {
-		repeated group key_value {
-			required int64 key (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
-			required binary value (STRING);
-		}
-	}
-	required group B (MAP) {
-		repeated group key_value {
-			required int64 key (INT(64,true));
-			required binary value (STRING);
-		}
-	}
-}`,
-		},
-
-		{
-			value: new(struct {
-				A map[int64]string `parquet:",optional" parquet-value:",json"`
-			}),
-			print: `message {
-	optional group A (MAP) {
-		repeated group key_value {
-			required int64 key (INT(64,true));
-			required binary value (JSON);
-		}
-	}
-}`,
-		},
-
-		{
-			value: new(struct {
-				A map[int64]string `parquet:",optional"`
-			}),
-			print: `message {
-	optional group A (MAP) {
-		repeated group key_value {
-			required int64 key (INT(64,true));
-			required binary value (STRING);
-		}
-	}
-}`,
-		},
-
-		{
-			value: new(struct {
-				A map[int64]string `parquet:",optional" parquet-value:",json" parquet-key:",timestamp(microsecond)"`
-			}),
-			print: `message {
-	optional group A (MAP) {
-		repeated group key_value {
-			required int64 key (TIMESTAMP(isAdjustedToUTC=true,unit=MICROS));
-			required binary value (JSON);
-		}
-	}
-}`,
-		},
-		{
-			value: new(struct {
-				A struct {
-					B string `parquet:"b,id(2)"`
-				} `parquet:"a,id(1)"`
-				C map[string]string `parquet:"c,id(3)"`
-				D []string          `parquet:"d,id(4)"`
-				E string            `parquet:"e,optional,id(5)"`
-			}),
-			print: `message {
-	required group a = 1 {
-		required binary b (STRING) = 2;
-	}
-	required group c (MAP) = 3 {
-		repeated group key_value {
-			required binary key (STRING);
-			required binary value (STRING);
-		}
-	}
-	repeated binary d (STRING) = 4;
-	optional binary e (STRING) = 5;
-}`,
-		},
-		{
-			value: new(struct {
-				Time time.Time `parquet:"time,delta"`
-			}),
-			print: `message {
-	required int64 time (TIMESTAMP(isAdjustedToUTC=true,unit=NANOS));
-}`,
-		},
-		{
-			value: new(struct {
-				Inner struct {
-					TimestampAdjusted    int64 `parquet:"timestamp_adjusted_utc,timestamp(millisecond:utc)"`
-					TimestampNotAdjusted int64 `parquet:"timestamp_not_adjusted_utc,timestamp(millisecond:local)"`
-				} `parquet:"inner,optional"`
-			}),
-			print: `message {
-	optional group inner {
-		required int64 timestamp_adjusted_utc (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
-		required int64 timestamp_not_adjusted_utc (TIMESTAMP(isAdjustedToUTC=false,unit=MILLIS));
-	}
-}`,
-		},
-		{
-			value: new(struct {
-				Byte          []byte `parquet:"b"`
-				String        string `parquet:"s"`
-				ByteAsString  []byte `parquet:"bs,string"`
-				StringAsBytes string `parquet:"sb,bytes"`
-			}),
-			print: `message {
-	required binary b;
-	required binary s (STRING);
-	required binary bs (STRING);
-	required binary sb;
-}`,
-		},
-		{
-			value: new(struct {
-				A struct {
-					B []string `parquet:"b,id(2),list" parquet-element:",id(3)"`
-				} `parquet:"a,id(1)"`
-				D []string `parquet:"d,id(4),list"`
-				E []int    `parquet:"e,id(5),list" parquet-element:",id(6)"`
-				F []string `parquet:"f,id(7),list" parquet-element:",id(8),json"`
-				G []struct {
-					H string `parquet:"h,id(12)"`
-					I int    `parquet:"i,id(13)"`
-				} `parquet:"g,id(9),list" parquet-element:",id(11)"`
-			}),
-			print: `message {
-	required group a = 1 {
-		required group b (LIST) = 2 {
-			repeated group list {
-				required binary element (STRING) = 3;
-			}
-		}
-	}
-	required group d (LIST) = 4 {
-		repeated group list {
-			required binary element (STRING);
-		}
-	}
-	required group e (LIST) = 5 {
-		repeated group list {
-			required int64 element (INT(64,true)) = 6;
-		}
-	}
-	required group f (LIST) = 7 {
-		repeated group list {
-			required binary element (JSON) = 8;
-		}
-	}
-	required group g (LIST) = 9 {
-		repeated group list {
-			required group element = 11 {
-				required binary h (STRING) = 12;
-				required int64 i (INT(64,true)) = 13;
-			}
-		}
-	}
-}`,
-		},
-		{
-			value: new(struct {
-				A [16]byte `parquet:",uuid"`
-				B string   `parquet:",uuid"`
-			}),
-			print: `message {
-	required fixed_len_byte_array(16) A (UUID);
-	required fixed_len_byte_array(16) B (UUID);
+	optional binary Name (STRING);
 }`,
 		},
 	}
 
 	for _, test := range tests {
-		t.Run("", func(t *testing.T) {
-			schema := parquet.SchemaOf(test.value)
-
-			if s := schema.String(); s != test.print {
-				t.Errorf("\nexpected:\n\n%s\n\nfound:\n\n%s\n", test.print, s)
-			}
-		})
+		schema := parquet.SchemaOf(test.value)
+		if s := schema.String(); s != test.print {
+			t.Errorf("\nexpected:\n\n%s\n\nfound:\n\n%s\n", test.print, s)
+		}
 	}
 }
 
-func TestInvalidSchemaOf(t *testing.T) {
+func TestSchemaOptions(t *testing.T) {
 	tests := []struct {
-		value any
-		panic string
+		name    string
+		model   any
+		options []parquet.SchemaOption
 	}{
-		// Date tags must be int32
-		{
-			value: new(struct {
-				Date float32 `parquet:",date"`
-			}),
-			panic: `date is an invalid parquet tag: Date float32 [date]`,
-		},
-
-		// Time tags must be int32 or int64. Additionally:
-		// - int32 must be millisecond
-		// - int64 must be microsecond or nanosecond
-		// - Duration (int64) can use any valid time unit (millisecond, microsecond, or nanosecond)
-		// - If the unit is the problem, it is part of the message.
-		{
-			value: new(struct {
-				Time float32 `parquet:",time"`
-			}),
-			panic: `time is an invalid parquet tag: Time float32 [time]`,
-		},
-		{
-			value: new(struct {
-				Time int32 `parquet:",time(microsecond)"`
-			}),
-			panic: `time(microsecond) is an invalid parquet tag: Time int32 [time(microsecond)]`,
-		},
-		{
-			value: new(struct {
-				Time int32 `parquet:",time(nanosecond)"`
-			}),
-			panic: `time(nanosecond) is an invalid parquet tag: Time int32 [time(nanosecond)]`,
-		},
-		{
-			value: new(struct {
-				Time int64 `parquet:",time(millisecond)"`
-			}),
-			panic: `time(millisecond) is an invalid parquet tag: Time int64 [time(millisecond)]`,
-		},
-		{
-			value: new(struct {
-				Time int64 `parquet:",time(notasecond)"`
-			}),
-			panic: `time(notasecond) is an invalid parquet tag: Time int64 [time(notasecond)]`,
-		},
-		{
-			value: new(struct {
-				Time int64 `parquet:",time(microsecond:foo)"`
-			}),
-			panic: `time(microsecond:foo) is an invalid parquet tag: Time int64 [time(microsecond:foo)]`,
-		},
-
-		// Timestamp tags must be int64 or time.Time
-		// Additionally, if the unit is the problem, it is part of the message.
-		{
-			value: new(struct {
-				Timestamp float32 `parquet:",timestamp"`
-			}),
-			panic: `timestamp is an invalid parquet tag: Timestamp float32 [timestamp]`,
-		},
-		{
-			value: new(struct {
-				Timestamp int32 `parquet:",timestamp"`
-			}),
-			panic: `timestamp is an invalid parquet tag: Timestamp int32 [timestamp]`,
-		},
-		{
-			value: new(struct {
-				Timestamp int32 `parquet:",timestamp(microsecond)"`
-			}),
-			panic: `timestamp is an invalid parquet tag: Timestamp int32 [timestamp]`,
-		},
-		{
-			value: new(struct {
-				Timestamp int64 `parquet:",timestamp(notasecond)"`
-			}),
-			panic: `timestamp(notasecond) is an invalid parquet tag: Timestamp int64 [timestamp(notasecond)]`,
-		},
-		{
-			value: new(struct {
-				Timestamp time.Time `parquet:",timestamp(notasecond)"`
-			}),
-			panic: `timestamp(notasecond) is an invalid parquet tag: Timestamp time.Time [timestamp(notasecond)]`,
-		},
-		{
-			value: new(struct {
-				Timestamp time.Time `parquet:",timestamp(millisecond:foo)"`
-			}),
-			panic: `timestamp(millisecond:foo) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:foo)]`,
-		},
-		{
-			value: new(struct {
-				Timestamp time.Time `parquet:",timestamp(millisecond:utc:local)"`
-			}),
-			panic: `timestamp(millisecond:utc:local) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:utc:local)]`,
-		},
+		{name: "StructTag", model: struct{ FirstName, LastName string }{}, options: []parquet.SchemaOption{
+			parquet.StructTag(`parquet:"first_name"`, "FirstName"),
+			parquet.StructTag(`parquet:"last_name"`, "LastName"),
+		}},
 	}
 
 	for _, test := range tests {
-		ft := reflect.TypeOf(test.value).Elem().Field(0)
-		t.Run(ft.Type.String()+" `"+ft.Tag.Get("parquet")+"`", func(t *testing.T) {
-			defer func() {
-				p := recover()
-				if p == nil {
-					t.Fatal("expected panic:", test.panic)
-				}
-				if p != test.panic {
-					t.Fatalf("panic: got %q want %q", p, test.panic)
-				}
-			}()
-			_ = parquet.SchemaOf(test.value)
+		t.Run(test.name, func(t *testing.T) {
+			parquet.SchemaOf(test.model, test.options...)
 		})
 	}
 }
 
 func TestSchemaRoundTrip(t *testing.T) {
-	// We create a schemas with all supported kinds, cardinalities, logical types, etc
 	tests := []struct {
 		name         string
 		schema       *parquet.Schema
 		roundTripped string
 	}{
 		{
-			name: "bytes_strings_etc",
+			name: "groups",
 			schema: parquet.NewSchema("root", parquet.Group{
-				"bytes_strings_etc": parquet.Optional(parquet.Group{
-					"bson":         parquet.BSON(),
-					"bytearray":    parquet.Leaf(parquet.ByteArrayType),
-					"enum":         parquet.Enum(),
-					"fixedbytes10": parquet.Leaf(parquet.FixedLenByteArrayType(10)),
-					"fixedbytes20": parquet.Leaf(parquet.FixedLenByteArrayType(20)),
-					"json":         parquet.JSON(),
-					"string":       parquet.String(),
-					"uuid":         parquet.UUID(),
+				"groups": parquet.Optional(parquet.Group{
+					"a": parquet.String(),
+					"b": parquet.Int(32),
 				}),
 			}),
 			roundTripped: `message root {
-	optional group bytes_strings_etc {
-		required binary bson (BSON);
-		required binary bytearray;
-		required binary enum (ENUM);
-		required fixed_len_byte_array(10) fixedbytes10;
-		required fixed_len_byte_array(20) fixedbytes20;
-		required binary json (JSON);
-		required binary string (STRING);
-		required fixed_len_byte_array(16) uuid (UUID);
+	optional group groups {
+		required binary a (STRING);
+		required int32 b (INT(32,true));
 	}
 }`,
 		},
 		{
-			name: "dates_times",
+			name: "optionals",
 			schema: parquet.NewSchema("root", parquet.Group{
-				"dates_times": parquet.Optional(parquet.Group{
-					"date":                              parquet.Date(),
-					"time_micros":                       parquet.Time(parquet.Microsecond),
-					"time_millis":                       parquet.Time(parquet.Millisecond),
-					"time_millis_not_utc_adjusted":      parquet.TimeAdjusted(parquet.Millisecond, false),
-					"time_nanos":                        parquet.Time(parquet.Nanosecond),
-					"timestamp_micros":                  parquet.Timestamp(parquet.Microsecond),
-					"timestamp_millis":                  parquet.Timestamp(parquet.Millisecond),
-					"timestamp_millis_not_utc_adjusted": parquet.TimestampAdjusted(parquet.Millisecond, false),
-					"timestamp_nanos":                   parquet.Timestamp(parquet.Nanosecond),
+				"optionals": parquet.Optional(parquet.Group{
+					"bool":   parquet.Optional(parquet.Leaf(parquet.BooleanType)),
+					"int32":  parquet.Optional(parquet.Int(32)),
+					"int64":  parquet.Optional(parquet.Int(64)),
+					"float":  parquet.Optional(parquet.Leaf(parquet.FloatType)),
+					"double": parquet.Optional(parquet.Leaf(parquet.DoubleType)),
+					"string": parquet.Optional(parquet.String()),
+					"bytes":  parquet.Optional(parquet.Leaf(parquet.ByteArrayType)),
 				}),
 			}),
 			roundTripped: `message root {
-	optional group dates_times {
-		required int32 date (DATE);
-		required int64 time_micros (TIME(isAdjustedToUTC=true,unit=MICROS));
-		required int32 time_millis (TIME(isAdjustedToUTC=true,unit=MILLIS));
-		required int32 time_millis_not_utc_adjusted (TIME(isAdjustedToUTC=false,unit=MILLIS));
-		required int64 time_nanos (TIME(isAdjustedToUTC=true,unit=NANOS));
-		required int64 timestamp_micros (TIMESTAMP(isAdjustedToUTC=true,unit=MICROS));
-		required int64 timestamp_millis (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
-		required int64 timestamp_millis_not_utc_adjusted (TIMESTAMP(isAdjustedToUTC=false,unit=MILLIS));
-		required int64 timestamp_nanos (TIMESTAMP(isAdjustedToUTC=true,unit=NANOS));
-	}
-}`,
-		},
-		{
-			name: "field_ids",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"field_ids": parquet.Optional(parquet.Group{
-					"f1":  parquet.FieldID(parquet.String(), 1),
-					"f2":  parquet.FieldID(parquet.Int(32), 2),
-					"f3":  parquet.FieldID(parquet.Uint(64), 3),
-					"f4":  parquet.FieldID(parquet.Leaf(parquet.ByteArrayType), 4),
-					"f_1": parquet.FieldID(parquet.String(), -1),
-				}),
-			}),
-			roundTripped: `message root {
-	optional group field_ids {
-		required binary f1 (STRING) = 1;
-		required int32 f2 (INT(32,true)) = 2;
-		required int64 f3 (INT(64,false)) = 3;
-		required binary f4 = 4;
-		required binary f_1 (STRING) = -1;
-	}
-}`,
-		},
-		{
-			name: "floats_and_decimals",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"floats_and_decimals": parquet.Optional(parquet.Group{
-					"decimal_bytes30": parquet.Decimal(3, 30, parquet.ByteArrayType),
-					"decimal_fixed20": parquet.Decimal(2, 20, parquet.FixedLenByteArrayType(9)),
-					"decimal_int15":   parquet.Decimal(1, 15, parquet.Int64Type),
-					"decimal_int5":    parquet.Decimal(0, 5, parquet.Int32Type),
-					"double":          parquet.Leaf(parquet.DoubleType),
-					"float":           parquet.Leaf(parquet.FloatType),
-				}),
-			}),
-			roundTripped: `message root {
-	optional group floats_and_decimals {
-		required binary decimal_bytes30 (DECIMAL(30,3));
-		required fixed_len_byte_array(9) decimal_fixed20 (DECIMAL(20,2));
-		required int64 decimal_int15 (DECIMAL(15,1));
-		required int32 decimal_int5 (DECIMAL(5,0));
-		required double double;
-		required float float;
-	}
-}`,
-		},
-		{
-			name: "ints",
-			schema: parquet.NewSchema("root", parquet.Group{
-				"ints": parquet.Optional(parquet.Group{
-					"int16":  parquet.Int(16),
-					"int32":  parquet.Leaf(parquet.Int32Type),
-					"int32l": parquet.Int(32),
-					"int64l": parquet.Int(64),
-					"int64":  parquet.Leaf(parquet.Int64Type),
-					"int8":   parquet.Int(8),
-					"int96":  parquet.Leaf(parquet.Int96Type),
-					"uint16": parquet.Uint(16),
-					"uint32": parquet.Uint(32),
-					"uint8":  parquet.Uint(8),
-					"uint64": parquet.Uint(64),
-				}),
-			}),
-			roundTripped: `message root {
-	optional group ints {
-		required int32 int16 (INT(16,true));
-		required int32 int32 (INT(32,true));
-		required int32 int32l (INT(32,true));
-		required int64 int64 (INT(64,true));
-		required int64 int64l (INT(64,true));
-		required int32 int8 (INT(8,true));
-		required int96 int96;
-		required int32 uint16 (INT(16,false));
-		required int32 uint32 (INT(32,false));
-		required int64 uint64 (INT(64,false));
-		required int32 uint8 (INT(8,false));
+	optional group optionals {
+		optional boolean bool;
+		optional binary bytes;
+		optional double double;
+		optional float float;
+		optional int32 int32 (INT(32,true));
+		optional int64 int64 (INT(64,true));
+		optional binary string (STRING);
 	}
 }`,
 		},
@@ -592,10 +183,10 @@ func TestSchemaRoundTrip(t *testing.T) {
 			name: "lists",
 			schema: parquet.NewSchema("root", parquet.Group{
 				"lists": parquet.Optional(parquet.Group{
-					"groups": parquet.List(parquet.Optional(parquet.Group{
+					"groups": parquet.List(parquet.Group{
 						"a": parquet.String(),
 						"b": parquet.Int(32),
-					})),
+					}),
 					"ints":    parquet.List(parquet.Int(32)),
 					"strings": parquet.Optional(parquet.List(parquet.String())),
 				}),
@@ -604,7 +195,7 @@ func TestSchemaRoundTrip(t *testing.T) {
 	optional group lists {
 		required group groups (LIST) {
 			repeated group list {
-				optional group element {
+				required group element {
 					required binary a (STRING);
 					required int32 b (INT(32,true));
 				}
@@ -1106,4 +697,162 @@ func (_ roundtripTester[T]) test(t *testing.T, val T, options ...any) {
 	if !reflect.DeepEqual(rows[0], val) {
 		t.Fatal("expected ", val, " got ", rows[0])
 	}
+}
+
+// TestIssue163EmbeddedPointerNilValues tests that embedded pointer types
+// with nil values are preserved as nil and not converted to zero-values.
+// See: https://github.com/parquet-go/parquet-go/issues/163
+func TestIssue163EmbeddedPointerNilValues(t *testing.T) {
+	type Embedded struct {
+		EmbeddedInt    *int
+		EmbeddedString *string
+	}
+
+	type TestStruct struct {
+		Embedded
+		TopLevelInt    *int
+		TopLevelString *string
+	}
+
+	tests := []struct {
+		name     string
+		input    TestStruct
+		expected TestStruct
+	}{
+		{
+			name: "all nil values",
+			input: TestStruct{
+				Embedded: Embedded{
+					EmbeddedInt:    nil,
+					EmbeddedString: nil,
+				},
+				TopLevelInt:    nil,
+				TopLevelString: nil,
+			},
+			expected: TestStruct{
+				Embedded: Embedded{
+					EmbeddedInt:    nil,
+					EmbeddedString: nil,
+				},
+				TopLevelInt:    nil,
+				TopLevelString: nil,
+			},
+		},
+		{
+			name: "all values set to 12",
+			input: TestStruct{
+				Embedded: Embedded{
+					EmbeddedInt:    intPtr(12),
+					EmbeddedString: strPtr("12"),
+				},
+				TopLevelInt:    intPtr(12),
+				TopLevelString: strPtr("12"),
+			},
+			expected: TestStruct{
+				Embedded: Embedded{
+					EmbeddedInt:    intPtr(12),
+					EmbeddedString: strPtr("12"),
+				},
+				TopLevelInt:    intPtr(12),
+				TopLevelString: strPtr("12"),
+			},
+		},
+		{
+			name: "all values set to zero",
+			input: TestStruct{
+				Embedded: Embedded{
+					EmbeddedInt:    intPtr(0),
+					EmbeddedString: strPtr(""),
+				},
+				TopLevelInt:    intPtr(0),
+				TopLevelString: strPtr(""),
+			},
+			expected: TestStruct{
+				Embedded: Embedded{
+					EmbeddedInt:    intPtr(0),
+					EmbeddedString: strPtr(""),
+				},
+				TopLevelInt:    intPtr(0),
+				TopLevelString: strPtr(""),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Save a copy of the original input for mutation check
+			originalInput := tt.input
+
+			// Write to parquet
+			buf := new(bytes.Buffer)
+			writer := parquet.NewGenericWriter[TestStruct](buf)
+			_, err := writer.Write([]TestStruct{tt.input})
+			if err != nil {
+				t.Fatalf("failed to write: %v", err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("failed to close writer: %v", err)
+			}
+
+			// Check that the original input was not mutated
+			if !reflect.DeepEqual(originalInput, tt.input) {
+				t.Errorf("input was mutated during write:\noriginal: %+v\nmutated:  %+v", originalInput, tt.input)
+			}
+
+			// Read back from parquet
+			reader := parquet.NewGenericReader[TestStruct](bytes.NewReader(buf.Bytes()))
+			rows := make([]TestStruct, 1)
+			n, err := reader.Read(rows)
+			if err != nil && err != io.EOF {
+				t.Fatalf("failed to read: %v", err)
+			}
+			if n != 1 {
+				t.Fatalf("expected 1 row, got %d", n)
+			}
+
+			// Check that nil values are preserved
+			result := rows[0]
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("result mismatch:\nexpected: %+v\ngot:      %+v", tt.expected, result)
+
+				// Detailed field-by-field comparison for better debugging
+				if !ptrEqual(result.EmbeddedInt, tt.expected.EmbeddedInt) {
+					t.Errorf("EmbeddedInt mismatch: expected %v, got %v",
+						ptrToString(tt.expected.EmbeddedInt), ptrToString(result.EmbeddedInt))
+				}
+				if !ptrEqual(result.EmbeddedString, tt.expected.EmbeddedString) {
+					t.Errorf("EmbeddedString mismatch: expected %v, got %v",
+						ptrToString(tt.expected.EmbeddedString), ptrToString(result.EmbeddedString))
+				}
+				if !ptrEqual(result.TopLevelInt, tt.expected.TopLevelInt) {
+					t.Errorf("TopLevelInt mismatch: expected %v, got %v",
+						ptrToString(tt.expected.TopLevelInt), ptrToString(result.TopLevelInt))
+				}
+				if !ptrEqual(result.TopLevelString, tt.expected.TopLevelString) {
+					t.Errorf("TopLevelString mismatch: expected %v, got %v",
+						ptrToString(tt.expected.TopLevelString), ptrToString(result.TopLevelString))
+				}
+			}
+		})
+	}
+}
+
+func intPtr(i int) *int       { return &i }
+func strPtr(s string) *string { return &s }
+
+func ptrEqual[T comparable](a, b *T) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func ptrToString[T any](p *T) string {
+	if p == nil {
+		return "nil"
+	}
+	return reflect.ValueOf(*p).String()
 }

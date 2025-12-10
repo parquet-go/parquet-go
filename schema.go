@@ -556,18 +556,18 @@ func (s *structNode) Fields() []Field {
 	return fields
 }
 
-// fieldByIndex is like reflect.Value.FieldByIndex but returns the zero-value of
-// reflect.Value if one of the fields was a nil pointer instead of panicking.
+// fieldByIndex is like reflect.Value.FieldByIndex but returns the field value
+// without mutating the struct if intermediate pointers are nil.
 func fieldByIndex(v reflect.Value, index []int) reflect.Value {
-	for _, i := range index {
-		if v = v.Field(i); v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for j, i := range index {
+		v = v.Field(i)
+		// Only dereference pointers if they're not the final field and not nil
+		if j < len(index)-1 && (v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface) {
 			if v.IsNil() {
-				v.Set(reflect.New(v.Type().Elem()))
-				v = v.Elem()
-				break
-			} else {
-				v = v.Elem()
+				// Can't navigate through a nil pointer without mutating
+				return reflect.Value{}
 			}
+			v = v.Elem()
 		}
 	}
 	return v
