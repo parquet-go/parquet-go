@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -175,4 +176,142 @@ func TestWriterStatistics(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestStatsV1 tests that the StatsV1 option causes the deprecated Min/Max
+// statistics fields to be written in column chunk metadata.
+func TestStatsV1(t *testing.T) {
+	type Record struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"`
+	}
+
+	records := []Record{
+		{ID: 1, Name: "Alice"},
+		{ID: 2, Name: "Bob"},
+		{ID: 3, Name: "Charlie"},
+	}
+
+	// Test without DeprecatedDataPageStatistics - deprecated fields should be nil
+	t.Run("without DeprecatedDataPageStatistics", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		w := parquet.NewWriter(buf)
+
+		for _, record := range records {
+			if err := w.Write(&record); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		metadata := f.Metadata()
+		for _, col := range metadata.RowGroups[0].Columns {
+			stats := col.MetaData.Statistics
+			// MinValue and MaxValue should be set
+			if stats.MinValue == nil || stats.MaxValue == nil {
+				t.Errorf("MinValue or MaxValue is nil for column %v", col.MetaData.PathInSchema)
+			}
+			// Deprecated Min and Max should be nil (not set by default)
+			if stats.Min != nil || stats.Max != nil {
+				t.Errorf("deprecated Min or Max should be nil for column %v when DeprecatedDataPageStatistics is disabled", col.MetaData.PathInSchema)
+			}
+		}
+	})
+
+	// Test with DeprecatedDataPageStatistics - deprecated fields should be populated
+	t.Run("with DeprecatedDataPageStatistics", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		w := parquet.NewWriter(buf, parquet.DeprecatedDataPageStatistics(true))
+
+		for _, record := range records {
+			if err := w.Write(&record); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		metadata := f.Metadata()
+		for _, col := range metadata.RowGroups[0].Columns {
+			stats := col.MetaData.Statistics
+			// MinValue and MaxValue should be set
+			if stats.MinValue == nil || stats.MaxValue == nil {
+				t.Errorf("MinValue or MaxValue is nil for column %v", col.MetaData.PathInSchema)
+			}
+			// Deprecated Min and Max should also be set
+			if stats.Min == nil || stats.Max == nil {
+				t.Errorf("deprecated Min or Max is nil for column %v when DeprecatedDataPageStatistics is enabled", col.MetaData.PathInSchema)
+			}
+			// The values should match
+			if !bytes.Equal(stats.Min, stats.MinValue) {
+				t.Errorf("Min != MinValue for column %v: %v != %v", col.MetaData.PathInSchema, stats.Min, stats.MinValue)
+			}
+			if !bytes.Equal(stats.Max, stats.MaxValue) {
+				t.Errorf("Max != MaxValue for column %v: %v != %v", col.MetaData.PathInSchema, stats.Max, stats.MaxValue)
+			}
+		}
+
+		// Verify specific values for the ID column (int64)
+		idCol := metadata.RowGroups[0].Columns[0]
+		idStats := idCol.MetaData.Statistics
+		expectedMinID := int64(1)
+		expectedMaxID := int64(3)
+
+		gotMinID := int64(binary.LittleEndian.Uint64(idStats.MinValue))
+		gotMaxID := int64(binary.LittleEndian.Uint64(idStats.MaxValue))
+
+		if gotMinID != expectedMinID {
+			t.Errorf("ID MinValue = %d, want %d", gotMinID, expectedMinID)
+		}
+		if gotMaxID != expectedMaxID {
+			t.Errorf("ID MaxValue = %d, want %d", gotMaxID, expectedMaxID)
+		}
+
+		// Verify the deprecated fields have the same values
+		gotMinIDDeprecated := int64(binary.LittleEndian.Uint64(idStats.Min))
+		gotMaxIDDeprecated := int64(binary.LittleEndian.Uint64(idStats.Max))
+
+		if gotMinIDDeprecated != expectedMinID {
+			t.Errorf("ID Min (deprecated) = %d, want %d", gotMinIDDeprecated, expectedMinID)
+		}
+		if gotMaxIDDeprecated != expectedMaxID {
+			t.Errorf("ID Max (deprecated) = %d, want %d", gotMaxIDDeprecated, expectedMaxID)
+		}
+
+		// Verify specific values for the Name column (string)
+		nameCol := metadata.RowGroups[0].Columns[1]
+		nameStats := nameCol.MetaData.Statistics
+		expectedMinName := "Alice"
+		expectedMaxName := "Charlie"
+
+		if string(nameStats.MinValue) != expectedMinName {
+			t.Errorf("Name MinValue = %q, want %q", string(nameStats.MinValue), expectedMinName)
+		}
+		if string(nameStats.MaxValue) != expectedMaxName {
+			t.Errorf("Name MaxValue = %q, want %q", string(nameStats.MaxValue), expectedMaxName)
+		}
+
+		// Verify the deprecated fields have the same values
+		if string(nameStats.Min) != expectedMinName {
+			t.Errorf("Name Min (deprecated) = %q, want %q", string(nameStats.Min), expectedMinName)
+		}
+		if string(nameStats.Max) != expectedMaxName {
+			t.Errorf("Name Max (deprecated) = %q, want %q", string(nameStats.Max), expectedMaxName)
+		}
+	})
 }

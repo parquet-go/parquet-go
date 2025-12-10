@@ -757,7 +757,8 @@ func newWriterRowGroup(w *writer, config *WriterConfig) *writerRowGroup {
 			writePageBounds: !slices.ContainsFunc(config.SkipPageBounds, func(skip []string) bool {
 				return columnPath(skip).equal(leaf.path)
 			}),
-			encodings: make([]format.Encoding, 0, 3),
+			writeDeprecatedStatistics: config.DeprecatedDataPageStatistics,
+			encodings:                 make([]format.Encoding, 0, 3),
 			// Data pages in version 2 can omit compression when dictionary
 			// encoding is employed; only the dictionary page needs to be
 			// compressed, the data pages are encoded with the hybrid
@@ -1439,14 +1440,15 @@ type ColumnWriter struct {
 		encoder  thrift.Encoder
 	}
 
-	filter          []byte
-	numRows         int64
-	bufferIndex     int32
-	bufferSize      int32
-	writePageStats  bool
-	writePageBounds bool
-	isCompressed    bool
-	encodings       []format.Encoding
+	filter                    []byte
+	numRows                   int64
+	bufferIndex               int32
+	bufferSize                int32
+	writePageStats            bool
+	writePageBounds           bool
+	writeDeprecatedStatistics bool
+	isCompressed              bool
+	encodings                 []format.Encoding
 
 	columnChunk        *format.ColumnChunk
 	offsetIndex        *format.OffsetIndex
@@ -2028,6 +2030,9 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 					buf = make([]byte, 0)
 				}
 				c.columnChunk.MetaData.Statistics.MaxValue = maxValue.AppendBytes(buf)
+				if c.writeDeprecatedStatistics {
+					c.columnChunk.MetaData.Statistics.Max = c.columnChunk.MetaData.Statistics.MaxValue
+				}
 			}
 
 			if existingMinValue.isNull() || c.columnType.Compare(minValue, existingMinValue) < 0 {
@@ -2037,6 +2042,9 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 					buf = make([]byte, 0)
 				}
 				c.columnChunk.MetaData.Statistics.MinValue = minValue.AppendBytes(buf)
+				if c.writeDeprecatedStatistics {
+					c.columnChunk.MetaData.Statistics.Min = c.columnChunk.MetaData.Statistics.MinValue
+				}
 			}
 		}
 
