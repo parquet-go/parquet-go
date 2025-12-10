@@ -1747,3 +1747,26 @@ func TestDurationWithTimeLogicalType(t *testing.T) {
 		})
 	}
 }
+
+// TestIssue316WriteValueFuncOfMapWithInvalidValue tests that writeValueFuncOfMap
+// handles invalid reflect.Value correctly (i.e., does not panic).
+// This is a regression test for https://github.com/parquet-go/parquet-go/issues/316
+func TestIssue316WriteValueFuncOfMapWithInvalidValue(t *testing.T) {
+	// Create a MAP schema
+	schema := NewSchema("test", Group{
+		"data": Map(String(), String()),
+	})
+
+	columns := makeColumnBuffersForSchema(schema)
+
+	_, writeFunc := writeValueFuncOf(0, schema.Fields()[0])
+
+	// Test with invalid reflect.Value - this should not panic
+	// Prior to the fix, this would panic with "reflect: call of reflect.Value.Len on zero Value"
+	writeFunc(columns, columnLevels{}, reflect.Value{})
+
+	// Verify that a null was written (empty map representation)
+	if columns[0].Len() != 1 {
+		t.Errorf("expected 1 row, got %d", columns[0].Len())
+	}
+}

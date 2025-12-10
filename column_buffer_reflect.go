@@ -491,13 +491,20 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 	keyType := keyValueElem.Field(0).Type
 	valueType := keyValueElem.Field(1).Type
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, schemaOf(keyValueElem))
+	zeroKeyValue := reflect.Zero(keyValueElem)
 
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, mapValue reflect.Value) {
+		// Check for invalid or nil map first to avoid panic on Interface() or Len()
+		if !mapValue.IsValid() || mapValue.IsNil() {
+			writeValue(columns, levels, zeroKeyValue)
+			return
+		}
+
 		switch m := mapValue.Interface().(type) {
 		case protoreflect.Map:
 			n := m.Len()
 			if n == 0 {
-				writeValue(columns, levels, reflect.Zero(keyValueElem))
+				writeValue(columns, levels, zeroKeyValue)
 				return
 			}
 
@@ -518,7 +525,7 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 		}
 
 		if mapValue.Len() == 0 {
-			writeValue(columns, levels, reflect.Zero(keyValueElem))
+			writeValue(columns, levels, zeroKeyValue)
 			return
 		}
 
