@@ -321,7 +321,19 @@ func (f *groupField) Value(base reflect.Value) reflect.Value {
 			return reflect.ValueOf(nil)
 		}
 	}
-	return base.MapIndex(reflect.ValueOf(&f.name).Elem())
+	switch base.Kind() {
+	case reflect.Map:
+		return base.MapIndex(reflect.ValueOf(&f.name).Elem())
+	case reflect.Ptr:
+		if base.IsNil() {
+			base.Set(reflect.New(base.Type().Elem()))
+		}
+		return base.Elem().FieldByName(exportedStructFieldName(f.name))
+	case reflect.Struct:
+		return base.FieldByName(exportedStructFieldName(f.name))
+	default:
+		return base.MapIndex(reflect.ValueOf(&f.name).Elem())
+	}
 }
 
 func goTypeOf(node Node) reflect.Type {

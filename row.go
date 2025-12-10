@@ -708,6 +708,66 @@ func reconstructFuncOfList(columnIndex int16, node Node) (int16, reconstructFunc
 	return reconstructFuncOf(columnIndex, Repeated(listElementOf(node)))
 }
 
+// convertReflectValue converts src to dstType, handling struct-to-struct conversion
+// by field name and byte slice to string conversion.
+func convertReflectValue(src reflect.Value, dstType reflect.Type) reflect.Value {
+	srcType := src.Type()
+
+	// Fast path: same type
+	if srcType == dstType {
+		return src
+	}
+
+	// Direct conversion if possible
+	if srcType.ConvertibleTo(dstType) {
+		return src.Convert(dstType)
+	}
+
+	// Handle pointer-to-non-pointer: unwrap the pointer
+	if srcType.Kind() == reflect.Ptr && dstType.Kind() != reflect.Ptr {
+		if src.IsNil() {
+			return reflect.Zero(dstType)
+		}
+		return convertReflectValue(src.Elem(), dstType)
+	}
+
+	// Handle non-pointer-to-pointer: wrap in pointer
+	if srcType.Kind() != reflect.Ptr && dstType.Kind() == reflect.Ptr {
+		dst := reflect.New(dstType.Elem())
+		dst.Elem().Set(convertReflectValue(src, dstType.Elem()))
+		return dst
+	}
+
+	// Handle []byte to string
+	if srcType.Kind() == reflect.Slice && srcType.Elem().Kind() == reflect.Uint8 && dstType.Kind() == reflect.String {
+		return reflect.ValueOf(string(src.Bytes()))
+	}
+
+	// Handle string to []byte
+	if srcType.Kind() == reflect.String && dstType.Kind() == reflect.Slice && dstType.Elem().Kind() == reflect.Uint8 {
+		return reflect.ValueOf([]byte(src.String()))
+	}
+
+	// Handle struct-to-struct by field name
+	if srcType.Kind() == reflect.Struct && dstType.Kind() == reflect.Struct {
+		dst := reflect.New(dstType).Elem()
+		for i := 0; i < srcType.NumField(); i++ {
+			srcField := srcType.Field(i)
+			if dstField, ok := dstType.FieldByName(srcField.Name); ok {
+				srcFieldValue := src.Field(i)
+				dstFieldValue := dst.FieldByIndex(dstField.Index)
+				if dstFieldValue.CanSet() {
+					dstFieldValue.Set(convertReflectValue(srcFieldValue, dstField.Type))
+				}
+			}
+		}
+		return dst
+	}
+
+	// Fallback: return zero value
+	return reflect.Zero(dstType)
+}
+
 //go:noinline
 func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc) {
 	keyValue := mapKeyValueOf(node)
@@ -778,7 +838,7 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 				values[j] = column[len(column):len(column):cap(column)]
 			}
 
-			value.SetMapIndex(elem.Field(0).Convert(k), elem.Field(1).Convert(v))
+			value.SetMapIndex(convertReflectValue(elem.Field(0), k), convertReflectValue(elem.Field(1), v))
 			elem.SetZero()
 			levels.repetitionLevel = levels.repetitionDepth
 		}
