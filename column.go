@@ -53,7 +53,7 @@ func (c *Column) Repeated() bool { return schemaRepetitionTypeOf(c.schema) == fo
 func (c *Column) Required() bool { return schemaRepetitionTypeOf(c.schema) == format.Required }
 
 // Leaf returns true if c is a leaf column.
-func (c *Column) Leaf() bool { return c.index >= 0 }
+func (c *Column) Leaf() bool { return isLeafSchemaElement(c.schema) }
 
 // Fields returns the list of fields on the column.
 func (c *Column) Fields() []Field { return c.fields }
@@ -282,7 +282,10 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 	c.path = columnPath(path).append(c.schema.Name)
 
 	cl.schemaIndex++
-	numChildren := int(c.schema.NumChildren)
+	numChildren := 0
+	if c.schema.NumChildren != nil {
+		numChildren = int(*c.schema.NumChildren)
+	}
 
 	if isLeafSchemaElement(c.schema) {
 		c.typ = schemaElementTypeOf(c.schema)

@@ -473,7 +473,7 @@ type SchemaElement struct {
 	// the nesting is flattened to a single list by a depth-first traversal.
 	// The children count is used to construct the nested relationship.
 	// This field is not set when the element is a primitive type
-	NumChildren int32 `thrift:"5,optional"`
+	NumChildren *int32 `thrift:"5,optional"`
 
 	// DEPRECATED: When the schema is the result of a conversion from another model.
 	// Used to record the original type to help with cross conversion.

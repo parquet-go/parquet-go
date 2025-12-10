@@ -984,12 +984,18 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 			typeLength = &n
 		}
 
+		var numChildren *int32
+		if !node.Leaf() {
+			n := int32(len(node.Fields()))
+			numChildren = &n
+		}
+
 		w.schemaElements = append(w.schemaElements, format.SchemaElement{
 			Type:           nodeType.PhysicalType(),
 			TypeLength:     typeLength,
 			RepetitionType: repetitionType,
 			Name:           name,
-			NumChildren:    int32(len(node.Fields())),
+			NumChildren:    numChildren,
 			ConvertedType:  nodeType.ConvertedType(),
 			Scale:          scale,
 			Precision:      precision,

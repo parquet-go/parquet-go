@@ -707,6 +707,121 @@ func TestIssue304(t *testing.T) {
 	}
 }
 
+func TestIssue305(t *testing.T) {
+	// Test for issue #305: Invalid Parquet File Generation with Empty Struct Maps
+	// Structs containing map[string]struct{} fields (a common pattern for sets in Go)
+	// should generate valid Parquet files with empty groups that have NumChildren
+	// properly set to a non-null zero value.
+	type RowType struct {
+		Name           string
+		FavoriteColors map[string]struct{}
+	}
+
+	// Create a writer
+	var buf bytes.Buffer
+	writer := parquet.NewGenericWriter[RowType](&buf)
+
+	// Write data with map[string]struct{} (set pattern)
+	rows := []RowType{
+		{
+			Name: "John Doe",
+			FavoriteColors: map[string]struct{}{
+				"Red":   {},
+				"Green": {},
+				"Blue":  {},
+			},
+		},
+		{
+			Name:           "Jane Smith",
+			FavoriteColors: map[string]struct{}{"Yellow": {}},
+		},
+		{
+			Name:           "Bob Johnson",
+			FavoriteColors: map[string]struct{}{}, // empty map
+		},
+	}
+
+	if _, err := writer.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back and verify
+	reader := parquet.NewGenericReader[RowType](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRows := make([]RowType, len(rows))
+	n, err := reader.Read(readRows)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+
+	if n != len(rows) {
+		t.Fatalf("expected to read %d rows, got %d", len(rows), n)
+	}
+
+	// Verify the data
+	for i, expected := range rows {
+		got := readRows[i]
+		if got.Name != expected.Name {
+			t.Errorf("row %d: name mismatch: got %q, want %q", i, got.Name, expected.Name)
+		}
+		if len(got.FavoriteColors) != len(expected.FavoriteColors) {
+			t.Errorf("row %d: FavoriteColors length mismatch: got %d, want %d",
+				i, len(got.FavoriteColors), len(expected.FavoriteColors))
+		}
+		for color := range expected.FavoriteColors {
+			if _, ok := got.FavoriteColors[color]; !ok {
+				t.Errorf("row %d: missing color %q in FavoriteColors", i, color)
+			}
+		}
+	}
+
+	// Verify the schema has NumChildren properly set for the empty struct group
+	// The map value (struct{}) should be a group with NumChildren = 0 (not nil)
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := f.Schema()
+	// Navigate to the map value node: FavoriteColors -> key_value -> value
+	favoriteColorsField := schema.Fields()[1] // index 1 is FavoriteColors
+	if favoriteColorsField.Name() != "FavoriteColors" {
+		t.Fatalf("expected field FavoriteColors at index 1, got %s", favoriteColorsField.Name())
+	}
+
+	// In a MAP logical type, there should be a key_value group
+	keyValueField := favoriteColorsField.Fields()[0]
+	if keyValueField.Name() != "key_value" {
+		t.Fatalf("expected key_value field, got %s", keyValueField.Name())
+	}
+
+	// The key_value group should have 2 children: key and value
+	if len(keyValueField.Fields()) != 2 {
+		t.Fatalf("expected key_value to have 2 fields, got %d", len(keyValueField.Fields()))
+	}
+
+	// The value field should be the empty struct (group with 0 children)
+	valueField := keyValueField.Fields()[1]
+	if valueField.Name() != "value" {
+		t.Fatalf("expected value field, got %s", valueField.Name())
+	}
+
+	// The value should be a group (not a leaf)
+	if valueField.Leaf() {
+		t.Fatal("value field should be a group, not a leaf")
+	}
+
+	// The value should have 0 children (empty struct)
+	if len(valueField.Fields()) != 0 {
+		t.Fatalf("expected value to have 0 fields (empty struct), got %d", len(valueField.Fields()))
+	}
+}
+
 func TestGenericSetKeyValueMetadata(t *testing.T) {
 	testKey := "test-key"
 	testValue := "test-value"
