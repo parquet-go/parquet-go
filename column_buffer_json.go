@@ -36,6 +36,13 @@ func writeJSONToLeaf(col ColumnBuffer, levels columnLevels, val *jsonlite.Value,
 	}
 	switch val.Kind() {
 	case jsonlite.Null:
+		// For required ByteArray columns, write an empty byte array instead of null.
+		// This handles the case where JSON null is written to a required string column
+		// that may use dictionary encoding.
+		if typ.Kind() == ByteArray && node.Required() {
+			col.writeByteArray(levels, nil)
+			return
+		}
 		col.writeNull(levels)
 	case jsonlite.True, jsonlite.False:
 		col.writeBoolean(levels, val.Kind() == jsonlite.True)

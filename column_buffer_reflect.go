@@ -685,6 +685,14 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 		col := columns[columnIndex]
 	writeValue:
 		if !value.IsValid() {
+			// For required ByteArray columns (which may use dictionary encoding),
+			// write an empty byte array instead of null when value is missing.
+			// This matches the behavior expected when JSON fields are missing
+			// for required string columns.
+			if node.Type().Kind() == ByteArray && node.Required() {
+				col.writeByteArray(levels, nil)
+				return
+			}
 			col.writeNull(levels)
 			return
 		}
@@ -692,6 +700,12 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 		switch value.Kind() {
 		case reflect.Pointer, reflect.Interface:
 			if value.IsNil() {
+				// For required ByteArray columns, write an empty byte array
+				// instead of null when value is nil.
+				if node.Type().Kind() == ByteArray && node.Required() {
+					col.writeByteArray(levels, nil)
+					return
+				}
 				col.writeNull(levels)
 				return
 			}
