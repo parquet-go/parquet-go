@@ -2,9 +2,11 @@ package parquet_test
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"io"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -94,6 +96,16 @@ func testSearch(t *testing.T, pages [][]int32, expectIndex [][]int) {
 // TestSearchOverlappingBounds verifies that binary search correctly handles
 // overlapping page bounds that occur when min/max values are truncated due to
 // ColumnIndexSizeLimit. This test reproduces the bug fixed in PR #266.
+//
+// Note: This test uses GenericWriter with manually sorted rows instead of
+// SortingWriter. SortingWriter has a bug where it creates invalid parquet files
+// that cannot be read back. The issue is caused by shallow copying of slice fields
+// in row group metadata (OffsetIndex.PageLocations, ColumnMetaData.EncodingStats,
+// Statistics byte slices, etc.) when the writer is reused. When the writer is
+// reset between intermediate row groups, it modifies slice headers to length 0
+// via operations like `slice = slice[:0]`. These stale headers are then copied
+// during the shallow copy, resulting in empty arrays in the serialized metadata,
+// which causes thrift decoding errors when reading the file back.
 func TestSearchOverlappingBounds(t *testing.T) {
 	type Row struct {
 		Value string `parquet:"value"`
@@ -104,13 +116,17 @@ func TestSearchOverlappingBounds(t *testing.T) {
 		rows[i].Value = fmt.Sprintf("value_super_big_%v", i)
 	}
 
+	// Shuffle rows to simulate unsorted data
 	prng := rand.New(rand.NewSource(0))
 	prng.Shuffle(len(rows), func(i, j int) {
 		rows[i], rows[j] = rows[j], rows[i]
 	})
 
+	// Sort rows manually by value (instead of using SortingWriter due to bug mentioned above)
+	slices.SortFunc(rows, func(a, b Row) int { return cmp.Compare(a.Value, b.Value) })
+
 	buffer := bytes.NewBuffer(nil)
-	writer := parquet.NewSortingWriter[Row](buffer, 99,
+	writer := parquet.NewGenericWriter[Row](buffer,
 		parquet.PageBufferSize(100),
 		parquet.MaxRowsPerRowGroup(20000),
 		parquet.ColumnIndexSizeLimit(func(path []string) int { return 5 }),
