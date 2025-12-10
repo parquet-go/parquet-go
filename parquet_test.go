@@ -1336,6 +1336,105 @@ func TestReadMapAsAny(t *testing.T) {
 	}
 }
 
+// TestReadMapAsAnyIssue103 tests that maps are properly deserialized when
+// reading with GenericReader[any]. This reproduces the exact scenario from
+// https://github.com/parquet-go/parquet-go/issues/103 where users reported
+// getting {"key_value": [{"key":"a","value":1}]} instead of {"a":1}.
+func TestReadMapAsAnyIssue103(t *testing.T) {
+	// This is the exact struct from issue #103
+	type RowType struct {
+		FirstName string         `parquet:"first_name"`
+		Thing     map[string]int `parquet:"thing"`
+	}
+
+	// Write data using the typed writer
+	typed := []RowType{
+		{FirstName: "John", Thing: map[string]int{"a": 1}},
+		{FirstName: "Jane", Thing: map[string]int{"b": 2, "c": 3}},
+	}
+
+	var buf bytes.Buffer
+	if err := parquet.Write(&buf, typed); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back with the typed reader to verify writing worked
+	data, size := bytes.NewReader(buf.Bytes()), int64(buf.Len())
+	recs, err := parquet.Read[RowType](data, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(recs, typed) {
+		t.Errorf("typed read mismatch: want=%+v got=%+v", typed, recs)
+	}
+
+	// Now read with GenericReader[any] - this is what issue #103 was about.
+	// The expected result should be a proper Go map, NOT the internal
+	// Parquet storage format with key_value groups.
+	type obj = map[string]any
+	expected := []any{
+		obj{"first_name": "John", "thing": obj{"a": int64(1)}},
+		obj{"first_name": "Jane", "thing": obj{"b": int64(2), "c": int64(3)}},
+	}
+
+	anys, err := parquet.Read[any](data, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// This is the key assertion - maps should be returned as map[string]any,
+	// not as {"key_value": [{"key":"a","value":1}]}
+	if !reflect.DeepEqual(anys, expected) {
+		t.Errorf("any read mismatch:\nwant=%+v\ngot=%+v", expected, anys)
+	}
+}
+
+// TestReadListAsAnyIssue103 tests that lists are properly deserialized when
+// reading with GenericReader[any]. Related to issue #103.
+func TestReadListAsAnyIssue103(t *testing.T) {
+	type RowType struct {
+		Name   string   `parquet:"name"`
+		Values []int    `parquet:"values"`
+	}
+
+	typed := []RowType{
+		{Name: "first", Values: []int{1, 2, 3}},
+		{Name: "second", Values: []int{4, 5}},
+	}
+
+	var buf bytes.Buffer
+	if err := parquet.Write(&buf, typed); err != nil {
+		t.Fatal(err)
+	}
+
+	data, size := bytes.NewReader(buf.Bytes()), int64(buf.Len())
+
+	// Verify typed read works
+	recs, err := parquet.Read[RowType](data, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(recs, typed) {
+		t.Errorf("typed read mismatch: want=%+v got=%+v", typed, recs)
+	}
+
+	// Read with GenericReader[any]
+	type obj = map[string]any
+	expected := []any{
+		obj{"name": "first", "values": []any{int64(1), int64(2), int64(3)}},
+		obj{"name": "second", "values": []any{int64(4), int64(5)}},
+	}
+
+	anys, err := parquet.Read[any](data, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(anys, expected) {
+		t.Errorf("any read mismatch:\nwant=%+v\ngot=%+v", expected, anys)
+	}
+}
+
 // TestReadFileWithNullColumns tests reading a Parquet file that contains
 // columns where all values are NULL (logical_type=Null).
 // Reproduces https://github.com/parquet-go/parquet-go/issues/151
