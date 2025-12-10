@@ -2934,3 +2934,113 @@ func TestIssue185(t *testing.T) {
 		}
 	}
 }
+
+// TestIssue316 reproduces the issue reported in
+// https://github.com/parquet-go/parquet-go/issues/316
+// where nested maps with pointer struct values cause a panic when some of
+// the inner maps are nil.
+func TestIssue316(t *testing.T) {
+	// The issue involves multilevel Go structs containing nested maps where
+	// the inner map values are pointer types. When a pointer value in the
+	// outer map points to a struct with a nil inner map, the code panics
+	// with "invalid memory address or nil pointer dereference" when calling
+	// m.Len() on the nil map.
+
+	type LevelStats struct {
+		Avg            float64
+		Price          float64
+		CheapestPerLvl float64
+		Count          int64
+	}
+
+	type SecStats struct {
+		Levels         map[string]*LevelStats
+		CheapestPerSec float64
+	}
+
+	type Summary struct {
+		Sections map[string]*SecStats
+	}
+
+	// Create test data where some inner maps are nil
+	rows := []Summary{
+		{
+			Sections: map[string]*SecStats{
+				"section1": {
+					Levels: map[string]*LevelStats{
+						"level1": {Avg: 1.0, Price: 10.0, CheapestPerLvl: 5.0, Count: 100},
+						"level2": {Avg: 2.0, Price: 20.0, CheapestPerLvl: 15.0, Count: 200},
+					},
+					CheapestPerSec: 5.0,
+				},
+				"section2": {
+					Levels:         nil, // This nil map should not cause a panic
+					CheapestPerSec: 3.0,
+				},
+			},
+		},
+		{
+			Sections: nil, // Top-level nil map
+		},
+		{
+			Sections: map[string]*SecStats{
+				"section3": nil, // nil pointer value in map
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	writer := parquet.NewGenericWriter[Summary](&buf)
+
+	_, err := writer.Write(rows)
+	if err != nil {
+		t.Fatalf("failed to write rows: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back and verify basic structure
+	reader := parquet.NewGenericReader[Summary](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRows := make([]Summary, len(rows))
+	n, err := reader.Read(readRows)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read rows: %v", err)
+	}
+
+	if n != len(rows) {
+		t.Fatalf("expected to read %d rows, got %d", len(rows), n)
+	}
+
+	// Verify the first row which has fully populated data
+	if len(readRows[0].Sections) != 2 {
+		t.Errorf("row 0: expected 2 sections, got %d", len(readRows[0].Sections))
+	}
+	if s1, ok := readRows[0].Sections["section1"]; ok {
+		if len(s1.Levels) != 2 {
+			t.Errorf("row 0 section1: expected 2 levels, got %d", len(s1.Levels))
+		}
+		if s1.CheapestPerSec != 5.0 {
+			t.Errorf("row 0 section1: expected CheapestPerSec=5.0, got %f", s1.CheapestPerSec)
+		}
+	} else {
+		t.Error("row 0: missing section1")
+	}
+
+	// Verify section2 with nil Levels map
+	if s2, ok := readRows[0].Sections["section2"]; ok {
+		if s2.CheapestPerSec != 3.0 {
+			t.Errorf("row 0 section2: expected CheapestPerSec=3.0, got %f", s2.CheapestPerSec)
+		}
+	} else {
+		t.Error("row 0: missing section2")
+	}
+
+	// Verify the second row with nil Sections
+	if readRows[1].Sections != nil && len(readRows[1].Sections) != 0 {
+		t.Errorf("row 1: expected nil or empty Sections, got %d elements", len(readRows[1].Sections))
+	}
+}
