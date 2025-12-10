@@ -840,17 +840,18 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			return
 		}
 
-		buf := getColumnWriteBuffer()
-		defer putColumnWriteBuffer(buf)
+		b := memory.SliceBuffer[byte]{}
+		w := memory.SliceWriter{Buffer: &b}
+		defer b.Reset()
 
-		enc := json.NewEncoder(buf)
+		enc := json.NewEncoder(w)
 		enc.SetEscapeHTML(false)
 
 		if err := enc.Encode(value.Interface()); err != nil {
 			panic(err)
 		}
 
-		data := buf.Bytes()
+		data := b.Slice()
 		col.writeByteArray(levels, data[:len(data)-1])
 	}
 }

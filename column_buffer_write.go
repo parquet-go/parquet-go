@@ -670,14 +670,14 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 			v := reflect.NewAt(t, rows.Index(i))
 			b.Resize(0)
 
-			enc := json.NewEncoder(buf)
+			enc := json.NewEncoder(w)
 			enc.SetEscapeHTML(false)
 
 			if err := enc.Encode(v.Interface()); err != nil {
 				panic(err)
 			}
 
-			data := buf.Slice()
+			data := b.Slice()
 			columns[columnIndex].writeByteArray(levels, data[:len(data)-1])
 		}
 	}
