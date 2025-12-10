@@ -3,7 +3,10 @@ package parquet
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -231,4 +234,80 @@ func TestColumnBufferFixedLenByteArrayValueTooLarge(t *testing.T) {
 	col := newFixedLenByteArrayColumnBuffer(typ, 0, 10)
 
 	col.writeInt32(columnLevels{}, 42)
+}
+
+func TestFixedLenByteArrayWithSliceField(t *testing.T) {
+	// Test if FixedLenByteArrayType works with []byte fields (slices) instead
+	// of [N]byte (arrays). By default, SchemaOf maps []byte to ByteArrayType,
+	// so we need to manually construct a schema.
+	type FixedLenByteArrayWithSlice struct {
+		Value []byte
+	}
+
+	schema := NewSchema("test", Group{
+		"Value": Leaf(FixedLenByteArrayType(10)),
+	})
+
+	testData := []FixedLenByteArrayWithSlice{
+		{Value: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}},
+		{Value: []byte{10, 11, 12, 13, 14, 15, 16, 17, 18, 19}},
+		{Value: []byte{20, 21, 22, 23, 24, 25, 26, 27, 28, 29}},
+	}
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test_fixed.parquet")
+
+	f, err := os.Create(testFile)
+	if err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+
+	writer := NewGenericWriter[FixedLenByteArrayWithSlice](f, schema)
+	n, err := writer.Write(testData)
+	if err != nil {
+		t.Fatalf("failed to write data: %v", err)
+	}
+	if n != len(testData) {
+		t.Errorf("expected to write %d rows, wrote %d", len(testData), n)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("failed to close file: %v", err)
+	}
+
+	f2, err := os.Open(testFile)
+	if err != nil {
+		t.Fatalf("failed to open file: %v", err)
+	}
+	defer f2.Close()
+
+	stat, err := f2.Stat()
+	if err != nil {
+		t.Fatalf("failed to stat file: %v", err)
+	}
+
+	pf, err := OpenFile(f2, stat.Size())
+	if err != nil {
+		t.Fatalf("failed to open parquet file: %v", err)
+	}
+
+	reader := NewGenericReader[FixedLenByteArrayWithSlice](pf)
+	defer reader.Close()
+
+	readData := make([]FixedLenByteArrayWithSlice, len(testData))
+	n, err = reader.Read(readData)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read data: %v", err)
+	}
+	if n != len(testData) {
+		t.Errorf("expected to read %d rows, read %d", len(testData), n)
+	}
+
+	for i, expected := range testData {
+		if !bytes.Equal(readData[i].Value, expected.Value) {
+			t.Errorf("row %d: expected %v, got %v", i, expected.Value, readData[i].Value)
+		}
+	}
 }

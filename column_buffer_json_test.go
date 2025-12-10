@@ -652,9 +652,9 @@ func TestJSONRawMessageTimestamps(t *testing.T) {
 	}
 
 	type WriteRecord struct {
-		TimestampMillis json.RawMessage `parquet:"timestamp_millis,timestamp(millisecond)"`
-		TimestampMicros json.RawMessage `parquet:"timestamp_micros,timestamp(microsecond)"`
-		TimestampNanos  json.RawMessage `parquet:"timestamp_nanos,timestamp(nanosecond)"`
+		TimestampMillis json.RawMessage `parquet:"timestamp_millis"`
+		TimestampMicros json.RawMessage `parquet:"timestamp_micros"`
+		TimestampNanos  json.RawMessage `parquet:"timestamp_nanos"`
 	}
 
 	schema := SchemaOf(ReadRecord{})
