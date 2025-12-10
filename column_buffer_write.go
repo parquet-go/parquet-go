@@ -549,6 +549,11 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath, tagRepl
 	writeKeys := writeRowsFuncOf(keyType, schema, keyPath, tagReplacements)
 
 	valuePath := path.append("key_value", "value")
+	valueNode := findByPath(schema, valuePath)
+	// If the value is a LIST type, adjust the path to include list/element
+	if valueNode != nil && isList(valueNode) {
+		valuePath = valuePath.append("list", "element")
+	}
 	valueType := t.Elem()
 	writeValues := writeRowsFuncOf(valueType, schema, valuePath, tagReplacements)
 
