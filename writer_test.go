@@ -634,6 +634,79 @@ func TestIssue303_OptionalByteSlice(t *testing.T) {
 	}
 }
 
+func TestIssue304(t *testing.T) {
+	// Define schema with nested structure
+	type Address struct {
+		City    string `parquet:"city"`
+		Country string `parquet:"country"`
+	}
+
+	type Person struct {
+		Name    string  `parquet:"name"`
+		Age     int32   `parquet:"age"`
+		Address Address `parquet:"address"`
+	}
+
+	schema := parquet.SchemaOf(Person{})
+
+	// Create a writer with the nested schema
+	var buf bytes.Buffer
+	writer := parquet.NewGenericWriter[any](&buf, schema)
+
+	// Try to write using map[string]any with nested map[string]any
+	// This is the scenario from the issue where dynamic/unknown schema
+	// requires using map[string]any instead of predefined structs
+	row := map[string]any{
+		"name": "John Doe",
+		"age":  int32(30),
+		"address": map[string]any{
+			"city":    "Paris",
+			"country": "France",
+		},
+	}
+
+	// This should reproduce the panic:
+	// panic: reflect: call of reflect.Value.MapIndex on interface Value
+	_, err := writer.Write([]any{row})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back and verify
+	reader := parquet.NewReader(bytes.NewReader(buf.Bytes()))
+	readRow := make(map[string]any)
+	err = reader.Read(&readRow)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the data
+	if readRow["name"] != "John Doe" {
+		t.Errorf("name mismatch: got %v, want John Doe", readRow["name"])
+	}
+	if readRow["age"] != int32(30) {
+		t.Errorf("age mismatch: got %v, want 30", readRow["age"])
+	}
+	address, ok := readRow["address"].(map[string]any)
+	if !ok {
+		t.Fatalf("address is not map[string]any, got %T", readRow["address"])
+	}
+	if address["city"] != "Paris" {
+		t.Errorf("city mismatch: got %v, want Paris", address["city"])
+	}
+	if address["country"] != "France" {
+		t.Errorf("country mismatch: got %v, want France", address["country"])
+	}
+}
+
 func TestGenericSetKeyValueMetadata(t *testing.T) {
 	testKey := "test-key"
 	testValue := "test-value"
