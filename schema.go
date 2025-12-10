@@ -113,6 +113,8 @@ func (v *onceValue[T]) load(f func() *T) *T {
 //	timestamp | for int64 types use the TIMESTAMP logical type with, by default, millisecond precision
 //	split     | for float32/float64, use the BYTE_STREAM_SPLIT encoding
 //	id(n)     | where n is int denoting a column field id. Example id(2) for a column with field id of 2
+//	int(n)    | for integer types, use the parquet INT logical type with n bits (8, 16, 32, or 64)
+//	uint(n)   | for integer types, use the parquet UINT logical type with n bits (8, 16, 32, or 64)
 //
 // # The date logical type is an int32 value of the number of days since the unix epoch
 //
@@ -139,6 +141,15 @@ func (v *onceValue[T]) load(f func() *T) *T {
 //
 //	type Item struct {
 //		Cost int64 `parquet:"cost,decimal(0:3)"`
+//	}
+//
+// The int and uint tags allow explicit control over the logical integer type in
+// the parquet schema, independent of the Go type. This is useful for overriding
+// the default mapping or for documentation purposes; for example:
+//
+//	type Record struct {
+//		SmallValue int32  `parquet:"small_value,int(16)"`  // Store as INT(16,true)
+//		Unsigned   int64  `parquet:"unsigned,uint(32)"`    // Store as INT(32,false)
 //	}
 //
 // Invalid combination of struct tags and Go types, or repeating options will
@@ -794,6 +805,24 @@ func parseIDArgs(args string) (int, error) {
 	return strconv.Atoi(args)
 }
 
+func parseIntBitWidthArgs(args string) (int, error) {
+	if !strings.HasPrefix(args, "(") || !strings.HasSuffix(args, ")") {
+		return 0, fmt.Errorf("malformed integer bit width args: %s", args)
+	}
+	args = strings.TrimPrefix(args, "(")
+	args = strings.TrimSuffix(args, ")")
+	bitWidth, err := strconv.Atoi(args)
+	if err != nil {
+		return 0, err
+	}
+	switch bitWidth {
+	case 8, 16, 32, 64:
+		return bitWidth, nil
+	default:
+		return 0, fmt.Errorf("invalid integer bit width: %d (must be 8, 16, 32, or 64)", bitWidth)
+	}
+}
+
 func parseTimestampArgs(args string) (unit TimeUnit, isUTCNormalized bool, err error) {
 	if !strings.HasPrefix(args, "(") || !strings.HasSuffix(args, ")") {
 		return nil, false, fmt.Errorf("malformed timestamp args: %s", args)
@@ -1146,6 +1175,54 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					throwInvalidNode(t, "struct field has field id that is not a valid int", name, tags)
 				}
 				fieldID = id
+
+			case "int":
+				bitWidth, err := parseIntBitWidthArgs(args)
+				if err != nil {
+					throwInvalidTag(t, name, option+args)
+				}
+				// Get underlying type for pointer types
+				elemType := t
+				isPtr := t.Kind() == reflect.Ptr
+				if isPtr {
+					elemType = t.Elem()
+				}
+				switch elemType.Kind() {
+				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+					reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+					node := Int(bitWidth)
+					if isPtr {
+						// Wrap in Optional for pointer types (nil pointers = NULL values)
+						node = Optional(node)
+					}
+					setNode(node)
+				default:
+					throwInvalidTag(t, name, option+args)
+				}
+
+			case "uint":
+				bitWidth, err := parseIntBitWidthArgs(args)
+				if err != nil {
+					throwInvalidTag(t, name, option+args)
+				}
+				// Get underlying type for pointer types
+				elemType := t
+				isPtr := t.Kind() == reflect.Ptr
+				if isPtr {
+					elemType = t.Elem()
+				}
+				switch elemType.Kind() {
+				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+					reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+					node := Uint(bitWidth)
+					if isPtr {
+						// Wrap in Optional for pointer types (nil pointers = NULL values)
+						node = Optional(node)
+					}
+					setNode(node)
+				default:
+					throwInvalidTag(t, name, option+args)
+				}
 			}
 		})
 	}
