@@ -91,28 +91,41 @@ func (v *onceValue[T]) load(f func() *T) *T {
 // values describe the options, with the first one defining the name of the
 // parquet column.
 //
-// The following options are also supported in the "parquet" struct tag:
+// # Tags Available on All Types
 //
-//	optional  | make the parquet column optional
-//	snappy    | sets the parquet column compression codec to snappy
-//	gzip      | sets the parquet column compression codec to gzip
-//	brotli    | sets the parquet column compression codec to brotli
-//	lz4       | sets the parquet column compression codec to lz4
-//	zstd      | sets the parquet column compression codec to zstd
-//	plain     | enables the plain encoding (no-op default)
-//	dict      | enables dictionary encoding on the parquet column
-//	delta     | enables delta encoding on the parquet column
-//	list      | for slice types, use the parquet LIST logical type
-//	enum      | for string types, use the parquet ENUM logical type
-//	bytes     | for string types, use no parquet logical type
-//	string    | for []byte types, use the parquet STRING logical type
-//	uuid      | for string and [16]byte types, use the parquet UUID logical type
-//	decimal   | for int32, int64 and [n]byte types, use the parquet DECIMAL logical type
-//	date      | for int32 types use the DATE logical type
-//	time      | for int32 and int64 types use the TIME logical type
-//	timestamp | for int64 types use the TIMESTAMP logical type with, by default, millisecond precision
-//	split     | for float32/float64, use the BYTE_STREAM_SPLIT encoding
-//	id(n)     | where n is int denoting a column field id. Example id(2) for a column with field id of 2
+// The following tags can be used on any Go type:
+//
+//	optional     | make the parquet column optional
+//	snappy       | sets the parquet column compression codec to snappy
+//	gzip         | sets the parquet column compression codec to gzip
+//	brotli       | sets the parquet column compression codec to brotli
+//	lz4          | sets the parquet column compression codec to lz4
+//	zstd         | sets the parquet column compression codec to zstd
+//	uncompressed | explicitly sets no compression
+//	plain        | enables the plain encoding (no-op default)
+//	dict         | enables dictionary encoding on the parquet column
+//	id(n)        | sets the column field id, where n is an int. Example: id(2)
+//
+// # Type-Specific Tags
+//
+// The following tags are only valid on specific Go types:
+//
+//	delta     | int, int32, int64, uint, uint32, uint64 (DeltaBinaryPacked encoding)
+//	          | string, []byte, [N]byte (DeltaByteArray encoding)
+//	          | time.Time (DeltaBinaryPacked encoding)
+//	split     | float32, float64 (BYTE_STREAM_SPLIT encoding)
+//	list      | []T slices (parquet LIST logical type, not valid on []byte or json.RawMessage)
+//	enum      | string (parquet ENUM logical type)
+//	uuid      | string, [16]byte (parquet UUID logical type)
+//	decimal   | int32, int64, []byte, [N]byte (parquet DECIMAL logical type)
+//	date      | int32, time.Time, *time.Time (parquet DATE logical type)
+//	time      | int32 (millisecond precision only)
+//	          | int64 (microsecond or nanosecond precision)
+//	          | time.Duration (any precision, defaults to nanosecond)
+//	timestamp | int64, time.Time, *time.Time (parquet TIMESTAMP logical type)
+//	string    | string (no-op), []byte (use STRING logical type for byte slices)
+//	bytes     | string (omit STRING logical type), []byte (no-op)
+//	json      | map types (parquet JSON logical type)
 //
 // # The date logical type is an int32 value of the number of days since the unix epoch
 //
