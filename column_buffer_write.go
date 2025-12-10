@@ -252,6 +252,12 @@ func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tag
 		}
 	}
 
+	// Check if the schema node at this path is optional. If not, the pointer
+	// is just a Go implementation detail (like proto message types) and we
+	// should not increment the definition level.
+	node := findByPath(schema, path)
+	isOptional := node != nil && node.Optional()
+
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
 			writeRows(columns, levels, rows)
@@ -264,7 +270,9 @@ func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tag
 			elemLevels := levels
 			if p != nil {
 				a = makeArray(p, 1, elemSize)
-				elemLevels.definitionLevel++
+				if isOptional {
+					elemLevels.definitionLevel++
+				}
 			}
 			writeRows(columns, elemLevels, a)
 		}
@@ -276,14 +284,6 @@ func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagRe
 	elemType := t.Elem()
 	elemSize := uintptr(elemType.Size())
 	writeRows := writeRowsFuncOf(elemType, schema, path, tagReplacements)
-
-	// When the element is a pointer type, the writeRows function will be an
-	// instance returned by writeRowsFuncOfPointer, which handles incrementing
-	// the definition level if the pointer value is not nil.
-	definitionLevelIncrement := byte(0)
-	if elemType.Kind() != reflect.Ptr {
-		definitionLevelIncrement = 1
-	}
 
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		type sliceHeader struct {
@@ -307,7 +307,7 @@ func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagRe
 			elemLevels := levels
 			if a.Len() > 0 {
 				b = a.Slice(0, 1)
-				elemLevels.definitionLevel += definitionLevelIncrement
+				elemLevels.definitionLevel++
 			}
 
 			writeRows(columns, elemLevels, b)

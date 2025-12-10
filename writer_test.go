@@ -3191,3 +3191,93 @@ func TestIssue316(t *testing.T) {
 		t.Errorf("row 1: expected nil or empty Sections, got %d elements", len(readRows[1].Sections))
 	}
 }
+
+// TestIssue118 reproduces the issue reported in
+// https://github.com/parquet-go/parquet-go/issues/118
+// The issue was that []*string (slice of pointers to strings) was not
+// properly supported, causing a panic when writing.
+func TestIssue118(t *testing.T) {
+	type Row struct {
+		Name    string    `parquet:"name"`
+		Classes []*string `parquet:"classes,list"`
+	}
+
+	class1 := "math"
+	class2 := "science"
+
+	rows := []Row{
+		{Name: "Alice", Classes: []*string{&class1, &class2}},
+		{Name: "Bob", Classes: []*string{&class1, nil}}, // includes nil
+		{Name: "Charlie", Classes: []*string{}},         // empty slice
+		{Name: "Diana", Classes: nil},                   // nil slice
+	}
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[Row](&buf)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatalf("failed to write rows: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back and verify
+	r := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+	out := make([]Row, len(rows))
+	n, err := r.Read(out)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read rows: %v", err)
+	}
+	if n != len(rows) {
+		t.Fatalf("expected %d rows, got %d", len(rows), n)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("failed to close reader: %v", err)
+	}
+
+	// Verify Alice
+	if out[0].Name != "Alice" {
+		t.Errorf("row 0 name: got %q, want %q", out[0].Name, "Alice")
+	}
+	if len(out[0].Classes) != 2 {
+		t.Errorf("row 0 classes length: got %d, want 2", len(out[0].Classes))
+	} else {
+		if out[0].Classes[0] == nil || *out[0].Classes[0] != "math" {
+			t.Errorf("row 0 classes[0]: got %v, want math", out[0].Classes[0])
+		}
+		if out[0].Classes[1] == nil || *out[0].Classes[1] != "science" {
+			t.Errorf("row 0 classes[1]: got %v, want science", out[0].Classes[1])
+		}
+	}
+
+	// Verify Bob (has nil element)
+	if out[1].Name != "Bob" {
+		t.Errorf("row 1 name: got %q, want %q", out[1].Name, "Bob")
+	}
+	if len(out[1].Classes) != 2 {
+		t.Errorf("row 1 classes length: got %d, want 2", len(out[1].Classes))
+	} else {
+		if out[1].Classes[0] == nil || *out[1].Classes[0] != "math" {
+			t.Errorf("row 1 classes[0]: got %v, want math", out[1].Classes[0])
+		}
+		if out[1].Classes[1] != nil {
+			t.Errorf("row 1 classes[1]: got %v, want nil", out[1].Classes[1])
+		}
+	}
+
+	// Verify Charlie (empty slice)
+	if out[2].Name != "Charlie" {
+		t.Errorf("row 2 name: got %q, want %q", out[2].Name, "Charlie")
+	}
+	if len(out[2].Classes) != 0 {
+		t.Errorf("row 2 classes length: got %d, want 0", len(out[2].Classes))
+	}
+
+	// Verify Diana (nil slice - note: parquet doesn't distinguish between nil and empty slice)
+	if out[3].Name != "Diana" {
+		t.Errorf("row 3 name: got %q, want %q", out[3].Name, "Diana")
+	}
+	if len(out[3].Classes) != 0 {
+		t.Errorf("row 3 classes length: got %d, want 0", len(out[3].Classes))
+	}
+}
