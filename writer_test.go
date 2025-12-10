@@ -151,7 +151,7 @@ func TestIssue176DataPageV1WithDecimal(t *testing.T) {
 		// Handle negative numbers (two's complement)
 		if tv.value.Sign() < 0 {
 			// For negative numbers, we need to set the leading bytes
-			for i := 0; i < 16-len(valueBytes); i++ {
+			for i := range 16 - len(valueBytes) {
 				fixedBytes[i] = 0xFF
 			}
 		}
