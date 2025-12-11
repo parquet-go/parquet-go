@@ -685,6 +685,9 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 }
 
 func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) {
+	if columnIndex < 0 {
+		panic("writeValueFuncOfLeaf called with invalid columnIndex -1 (empty group)")
+	}
 	if columnIndex > MaxColumnIndex {
 		panic("row cannot be written because it has more than 127 columns")
 	}

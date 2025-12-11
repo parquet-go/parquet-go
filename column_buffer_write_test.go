@@ -915,3 +915,30 @@ func TestOptionalListNullVsEmpty(t *testing.T) {
 		t.Errorf("row 2: expected [1, 2], got %v", readRows[2].ListTag)
 	}
 }
+
+func TestEmptyGroupInterface(t *testing.T) {
+	type Record struct {
+		ID   int64 `parquet:"id"`
+		Data any   `parquet:"data"`
+	}
+
+	records := []Record{
+		{ID: 1, Data: map[string]any{}},             // Empty map
+		{ID: 2, Data: map[string]any{"key": "val"}}, // Non-empty map
+		{ID: 3, Data: nil},                          // Nil
+	}
+
+	buf := new(bytes.Buffer)
+	if err := Write(buf, records); err != nil {
+		t.Fatalf("failed to write records with empty groups: %v", err)
+	}
+
+	readRecords, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	if len(readRecords) != len(records) {
+		t.Errorf("expected %d records, got %d", len(records), len(readRecords))
+	}
+}
