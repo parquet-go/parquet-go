@@ -24,7 +24,7 @@ func TestColumnBufferFixedLenByteArrayWriteTypes(t *testing.T) {
 		}
 
 		expected := []byte{1}
-		actual := col.data[0:1]
+		actual := col.data.Slice()[0:1]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("expected %v, got %v", expected, actual)
 		}
@@ -38,7 +38,7 @@ func TestColumnBufferFixedLenByteArrayWriteTypes(t *testing.T) {
 
 		expected := make([]byte, 4)
 		binary.BigEndian.PutUint32(expected, 42)
-		actual := col.data[0:4]
+		actual := col.data.Slice()[0:4]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("expected %v, got %v", expected, actual)
 		}
@@ -51,7 +51,7 @@ func TestColumnBufferFixedLenByteArrayWriteTypes(t *testing.T) {
 		col.writeInt32(columnLevels{}, 42)
 
 		expected := []byte{0, 0, 0, 0, 0, 0, 0, 42}
-		actual := col.data[0:8]
+		actual := col.data.Slice()[0:8]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("expected %v, got %v", expected, actual)
 		}
@@ -65,7 +65,7 @@ func TestColumnBufferFixedLenByteArrayWriteTypes(t *testing.T) {
 
 		expected := make([]byte, 8)
 		binary.BigEndian.PutUint64(expected, 123456789)
-		actual := col.data[0:8]
+		actual := col.data.Slice()[0:8]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("expected %v, got %v", expected, actual)
 		}
@@ -79,7 +79,7 @@ func TestColumnBufferFixedLenByteArrayWriteTypes(t *testing.T) {
 
 		expected := make([]byte, 4)
 		binary.BigEndian.PutUint32(expected, math.Float32bits(3.14))
-		actual := col.data[0:4]
+		actual := col.data.Slice()[0:4]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("expected %v, got %v", expected, actual)
 		}
@@ -93,7 +93,7 @@ func TestColumnBufferFixedLenByteArrayWriteTypes(t *testing.T) {
 
 		expected := make([]byte, 8)
 		binary.BigEndian.PutUint64(expected, math.Float64bits(2.718))
-		actual := col.data[0:8]
+		actual := col.data.Slice()[0:8]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("expected %v, got %v", expected, actual)
 		}
@@ -116,7 +116,7 @@ func TestColumnBufferFixedLenByteArrayWriteInt96(t *testing.T) {
 	binary.BigEndian.PutUint32(expected[4:8], 200)
 	binary.BigEndian.PutUint32(expected[8:12], 100)
 
-	actual := col.data[0:12]
+	actual := col.data.Slice()[0:12]
 	if !bytes.Equal(actual, expected) {
 		t.Errorf("expected %v, got %v", expected, actual)
 	}
@@ -131,7 +131,7 @@ func TestColumnBufferFixedLenByteArrayWriteByteArray(t *testing.T) {
 		col.writeByteArray(columnLevels{}, []byte("hello"))
 
 		expected := []byte("hello")
-		actual := col.data[0:5]
+		actual := col.data.Slice()[0:5]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("expected %v, got %v", expected, actual)
 		}
@@ -158,7 +158,7 @@ func TestColumnBufferFixedLenByteArrayWriteNull(t *testing.T) {
 	col.writeNull(columnLevels{})
 
 	expected := []byte{0, 0, 0, 0}
-	actual := col.data[0:4]
+	actual := col.data.Slice()[0:4]
 	if !bytes.Equal(actual, expected) {
 		t.Errorf("expected %v, got %v", expected, actual)
 	}
@@ -173,7 +173,7 @@ func TestColumnBufferFixedLenByteArrayPadding(t *testing.T) {
 		col.writeInt32(columnLevels{}, 0x12345678)
 
 		expected := []byte{0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78}
-		actual := col.data[0:8]
+		actual := col.data.Slice()[0:8]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("expected %v, got %v", expected, actual)
 		}
@@ -189,7 +189,7 @@ func TestColumnBufferFixedLenByteArrayPadding(t *testing.T) {
 		binary.BigEndian.PutUint32(floatBytes, math.Float32bits(1.0))
 		expected := append([]byte{0, 0, 0, 0}, floatBytes...)
 
-		actual := col.data[0:8]
+		actual := col.data.Slice()[0:8]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("expected %v, got %v", expected, actual)
 		}
@@ -215,7 +215,7 @@ func TestColumnBufferFixedLenByteArrayWriteMultipleValues(t *testing.T) {
 		expected := make([]byte, 4)
 		binary.BigEndian.PutUint32(expected, expectedVal)
 
-		actual := col.data[offset : offset+4]
+		actual := col.data.Slice()[offset : offset+4]
 		if !bytes.Equal(actual, expected) {
 			t.Errorf("index %d: expected %v, got %v", i, expected, actual)
 		}

@@ -122,7 +122,7 @@ func TestWriteValueFuncOfOptional(t *testing.T) {
 				t.Fatalf("expected 1 row, got %d", optCol.Len())
 			}
 
-			isNull := optCol.rows[0] == -1
+			isNull := optCol.rows.Slice()[0] == -1
 			if isNull != tt.expectNull {
 				t.Errorf("expected null=%v, got null=%v", tt.expectNull, isNull)
 			}
@@ -707,9 +707,9 @@ func makeColumnBuffersForSchema(schema Node) []ColumnBuffer {
 
 		switch {
 		case leaf.maxRepetitionLevel > 0:
-			column = newRepeatedColumnBuffer(column, nil, nil, leaf.maxRepetitionLevel, leaf.maxDefinitionLevel, nullsGoFirst)
+			column = newRepeatedColumnBuffer(column, leaf.maxRepetitionLevel, leaf.maxDefinitionLevel, nullsGoFirst)
 		case leaf.maxDefinitionLevel > 0:
-			column = newOptionalColumnBuffer(column, nil, nil, leaf.maxDefinitionLevel, nullsGoFirst)
+			column = newOptionalColumnBuffer(column, leaf.maxDefinitionLevel, nullsGoFirst)
 		}
 		columns = append(columns, column)
 	})
@@ -734,9 +734,9 @@ func makeColumnBuffer(node Node, columnIndex int16, bufferCap int) ColumnBuffer 
 
 	switch {
 	case maxRepLevel > 0:
-		return newRepeatedColumnBuffer(column, nil, nil, maxRepLevel, maxDefLevel, nullsGoFirst)
+		return newRepeatedColumnBuffer(column, maxRepLevel, maxDefLevel, nullsGoFirst)
 	case maxDefLevel > 0:
-		return newOptionalColumnBuffer(column, nil, nil, maxDefLevel, nullsGoFirst)
+		return newOptionalColumnBuffer(column, maxDefLevel, nullsGoFirst)
 	default:
 		return column
 	}
@@ -778,7 +778,7 @@ func checkValue(t *testing.T, got Value, expected any) {
 
 func checkOptionalColumn(t *testing.T, name string, col *optionalColumnBuffer, expectNull bool, expectedValue any) {
 	t.Helper()
-	isNull := col.rows[0] == -1
+	isNull := col.rows.Slice()[0] == -1
 	if isNull != expectNull {
 		t.Errorf("%s: expected null=%v, got null=%v", name, expectNull, isNull)
 		return

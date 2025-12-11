@@ -9,7 +9,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("AllNonNull", func(t *testing.T) {
 		// Create a repeated column buffer with all non-null int32 values
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		// Write values: row with repetition levels [0, 1, 1]
 		// This represents a single row with 3 values
@@ -63,7 +63,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("MixOfNullAndNonNull", func(t *testing.T) {
 		// Create a repeated column buffer with mix of null and non-null values
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		// Write values: [non-null(10), null, non-null(20), null, non-null(30)]
 		// with repetition levels [0, 1, 1, 1, 1]
@@ -125,7 +125,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("AllNull", func(t *testing.T) {
 		// Create a repeated column buffer with all null values
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		// Write null values with repetition levels [0, 1, 1]
 		values := []Value{
@@ -177,7 +177,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("ReadFromMiddleOffset", func(t *testing.T) {
 		// Test reading from a non-zero offset
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		// Write 5 values
 		values := []Value{
@@ -217,7 +217,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("ReadPartial", func(t *testing.T) {
 		// Test reading when buffer is smaller than available values
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		values := []Value{
 			makeInt32Value(10, 0, 1, 0),
@@ -248,7 +248,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("ReadAtEnd", func(t *testing.T) {
 		// Test reading at the end of buffer returns EOF
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		values := []Value{
 			makeInt32Value(10, 0, 1, 0),
@@ -276,7 +276,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("ReadPastEnd", func(t *testing.T) {
 		// Test reading past the end returns EOF
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		values := []Value{
 			makeInt32Value(10, 0, 1, 0),
@@ -303,7 +303,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("NegativeOffset", func(t *testing.T) {
 		// Test negative offset returns error
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		values := []Value{
 			makeInt32Value(10, 0, 1, 0),
@@ -330,7 +330,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("EmptyBuffer", func(t *testing.T) {
 		// Test reading from empty buffer returns EOF
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		readBuf := make([]Value, 1)
 		n, err := col.ReadValuesAt(readBuf, 0)
@@ -345,7 +345,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("MultipleRows", func(t *testing.T) {
 		// Test reading across multiple rows
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		// Write two rows, each with repeated values
 		// Row 1: [10, 20] (repetition levels: 0, 1)
@@ -400,7 +400,7 @@ func TestRepeatedColumnBufferReadValuesAt(t *testing.T) {
 	t.Run("MixOfNullsAcrossRows", func(t *testing.T) {
 		// Test reading mix of nulls across multiple rows
 		base := newInt32ColumnBuffer(Int32Type, 0, 100)
-		col := newRepeatedColumnBuffer(base, nil, nil, 1, 1, nil)
+		col := newRepeatedColumnBuffer(base, 1, 1, nil)
 
 		// Row 1: [10, null, 20]
 		// Row 2: [null, 30]

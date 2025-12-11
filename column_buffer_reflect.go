@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/internal/memory"
 	"github.com/parquet-go/parquet-go/sparse"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -839,17 +840,18 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			return
 		}
 
-		buf := getColumnWriteBuffer()
-		defer putColumnWriteBuffer(buf)
+		b := memory.SliceBuffer[byte]{}
+		w := memory.SliceWriter{Buffer: &b}
+		defer b.Reset()
 
-		enc := json.NewEncoder(buf)
+		enc := json.NewEncoder(w)
 		enc.SetEscapeHTML(false)
 
 		if err := enc.Encode(value.Interface()); err != nil {
 			panic(err)
 		}
 
-		data := buf.Bytes()
+		data := b.Slice()
 		col.writeByteArray(levels, data[:len(data)-1])
 	}
 }
@@ -887,8 +889,9 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) {
 	if err != nil {
 		panic(fmt.Errorf("cannot parse string %q as UUID: %w", str, err))
 	}
-	buf := getColumnWriteBuffer()
-	buf.Write(parsedUUID[:])
-	col.writeByteArray(levels, buf.Bytes())
-	putColumnWriteBuffer(buf)
+	buf := memory.SliceBuffer[byte]{}
+	buf.Grow(16)
+	buf.Append(parsedUUID[:]...)
+	col.writeByteArray(levels, buf.Slice())
+	buf.Reset()
 }
