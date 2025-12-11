@@ -419,6 +419,14 @@ func writeRowsFuncOfInterface(t reflect.Type, schema *Schema, path columnPath) w
 	}
 
 	columnIndex := findColumnIndex(schema, node, path)
+	if columnIndex < 0 {
+		// Empty group node (e.g., from interface{} in map[string]any).
+		// Return a no-op function since there are no columns to write.
+		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+			// No-op: nothing to write for empty groups
+		}
+	}
+
 	// Get the schema-based write function for this node
 	_, writeValue := writeValueFuncOf(columnIndex, node)
 
@@ -444,6 +452,13 @@ func writeRowsFuncOfMapToGroup(t reflect.Type, schema *Schema, path columnPath, 
 	}
 
 	fields := groupNode.Fields()
+	if len(fields) == 0 {
+		// Empty group - return no-op function
+		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+			// No-op: empty group has no fields to write
+		}
+	}
+
 	writers := make([]fieldWriter, len(fields))
 	valueType := t.Elem()
 	columnIndex := findColumnIndex(schema, findByPath(schema, path), path)
@@ -541,6 +556,8 @@ var stringArrayPool sync.Pool // *stringArray
 // findColumnIndex finds the column index for a given node and path.
 // For leaf nodes, returns the column index directly.
 // For group nodes, recursively finds the first leaf column.
+// Returns -1 for empty group nodes (groups with no fields), which can occur
+// when using interface{} types in maps (e.g., map[string]any).
 func findColumnIndex(schema *Schema, node Node, path columnPath) int16 {
 	col := schema.lazyLoadState().mapping.lookup(path)
 	if col.columnIndex >= 0 {
@@ -551,7 +568,9 @@ func findColumnIndex(schema *Schema, node Node, path columnPath) int16 {
 	}
 	fields := node.Fields()
 	if len(fields) == 0 {
-		panic("group node has no fields at path: " + path.String())
+		// Empty group nodes can occur with interface{} types (e.g., map[string]any).
+		// Return -1 to indicate there are no columns to write.
+		return -1
 	}
 	firstFieldPath := path.append(fields[0].Name())
 	return findColumnIndex(schema, fields[0], firstFieldPath)
@@ -630,6 +649,13 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 	}
 
 	columnIndex := findColumnIndex(schema, schema, path)
+	if columnIndex < 0 {
+		// Empty group - return no-op function
+		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+			// No-op: empty group has no columns to write
+		}
+	}
+
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
 			columns[columnIndex].writeNull(levels)
@@ -740,6 +766,13 @@ func writeRowsFuncFor[T any](schema *Schema, path columnPath) writeRowsFunc {
 	}
 
 	columnIndex := findColumnIndex(schema, node, path)
+	if columnIndex < 0 {
+		// Empty group - return no-op function
+		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+			// No-op: empty group has no columns to write
+		}
+	}
+
 	_, writeValue := writeValueFuncOf(columnIndex, node)
 
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
