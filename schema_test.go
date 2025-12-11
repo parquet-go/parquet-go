@@ -317,6 +317,74 @@ func TestSchemaOf(t *testing.T) {
 	required fixed_len_byte_array(16) B (UUID);
 }`,
 		},
+
+		// Integer size tags: int(n) and uint(n)
+		{
+			value: new(struct {
+				Int8  int32 `parquet:"int8,int(8)"`
+				Int16 int32 `parquet:"int16,int(16)"`
+				Int32 int32 `parquet:"int32,int(32)"`
+				Int64 int64 `parquet:"int64,int(64)"`
+			}),
+			print: `message {
+	required int32 int8 (INT(8,true));
+	required int32 int16 (INT(16,true));
+	required int32 int32 (INT(32,true));
+	required int64 int64 (INT(64,true));
+}`,
+		},
+		{
+			value: new(struct {
+				Uint8  uint32 `parquet:"uint8,uint(8)"`
+				Uint16 uint32 `parquet:"uint16,uint(16)"`
+				Uint32 uint32 `parquet:"uint32,uint(32)"`
+				Uint64 uint64 `parquet:"uint64,uint(64)"`
+			}),
+			print: `message {
+	required int32 uint8 (INT(8,false));
+	required int32 uint16 (INT(16,false));
+	required int32 uint32 (INT(32,false));
+	required int64 uint64 (INT(64,false));
+}`,
+		},
+		// Override Go type default: int32 stored as uint(16)
+		{
+			value: new(struct {
+				Override int32 `parquet:"override,uint(16)"`
+			}),
+			print: `message {
+	required int32 override (INT(16,false));
+}`,
+		},
+		// Override Go type default: uint64 stored as int(32)
+		{
+			value: new(struct {
+				Override uint64 `parquet:"override,int(32)"`
+			}),
+			print: `message {
+	required int32 override (INT(32,true));
+}`,
+		},
+		// Use with optional tag
+		{
+			value: new(struct {
+				OptionalInt *int32 `parquet:"optional_int,int(16)"`
+			}),
+			print: `message {
+	optional int32 optional_int (INT(16,true));
+}`,
+		},
+		// Native smaller Go types with explicit tags
+		{
+			value: new(struct {
+				NativeInt8   int8   `parquet:"native_int8,int(8)"`
+				NativeUint16 uint16 `parquet:"native_uint16,uint(16)"`
+			}),
+			print: `message {
+	required int32 native_int8 (INT(8,true));
+	required int32 native_uint16 (INT(16,false));
+}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -428,6 +496,50 @@ func TestInvalidSchemaOf(t *testing.T) {
 				Timestamp time.Time `parquet:",timestamp(millisecond:utc:local)"`
 			}),
 			panic: `timestamp(millisecond:utc:local) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:utc:local)]`,
+		},
+
+		// Integer size tags must use valid bit widths (8, 16, 32, 64) and integer types
+		{
+			value: new(struct {
+				Int float32 `parquet:",int(32)"`
+			}),
+			panic: `int(32) is an invalid parquet tag: Int float32 [int(32)]`,
+		},
+		{
+			value: new(struct {
+				Int string `parquet:",int(16)"`
+			}),
+			panic: `int(16) is an invalid parquet tag: Int string [int(16)]`,
+		},
+		{
+			value: new(struct {
+				Int int32 `parquet:",int(24)"`
+			}),
+			panic: `int(24) is an invalid parquet tag: Int int32 [int(24)]`,
+		},
+		{
+			value: new(struct {
+				Uint float64 `parquet:",uint(64)"`
+			}),
+			panic: `uint(64) is an invalid parquet tag: Uint float64 [uint(64)]`,
+		},
+		{
+			value: new(struct {
+				Uint int64 `parquet:",uint(128)"`
+			}),
+			panic: `uint(128) is an invalid parquet tag: Uint int64 [uint(128)]`,
+		},
+		{
+			value: new(struct {
+				Int int32 `parquet:",int(notanumber)"`
+			}),
+			panic: `int(notanumber) is an invalid parquet tag: Int int32 [int(notanumber)]`,
+		},
+		{
+			value: new(struct {
+				Int int32 `parquet:",int()"`
+			}),
+			panic: `int() is an invalid parquet tag: Int int32 [int()]`,
 		},
 	}
 
@@ -1105,5 +1217,160 @@ func (_ roundtripTester[T]) test(t *testing.T, val T, options ...any) {
 	}
 	if !reflect.DeepEqual(rows[0], val) {
 		t.Fatal("expected ", val, " got ", rows[0])
+	}
+}
+
+func TestIntegerSizeTagsRoundTrip(t *testing.T) {
+	// Test that integer size tags work correctly for reading and writing data
+	type IntSizeTest struct {
+		Int8Val   int32  `parquet:"int8_val,int(8)"`
+		Int16Val  int32  `parquet:"int16_val,int(16)"`
+		Int32Val  int32  `parquet:"int32_val,int(32)"`
+		Int64Val  int64  `parquet:"int64_val,int(64)"`
+		Uint8Val  uint32 `parquet:"uint8_val,uint(8)"`
+		Uint16Val uint32 `parquet:"uint16_val,uint(16)"`
+		Uint32Val uint32 `parquet:"uint32_val,uint(32)"`
+		Uint64Val uint64 `parquet:"uint64_val,uint(64)"`
+	}
+
+	testValues := []IntSizeTest{
+		{
+			Int8Val:   -128,
+			Int16Val:  -32768,
+			Int32Val:  -2147483648,
+			Int64Val:  -9223372036854775808,
+			Uint8Val:  255,
+			Uint16Val: 65535,
+			Uint32Val: 4294967295,
+			Uint64Val: 18446744073709551615,
+		},
+		{
+			Int8Val:   0,
+			Int16Val:  0,
+			Int32Val:  0,
+			Int64Val:  0,
+			Uint8Val:  0,
+			Uint16Val: 0,
+			Uint32Val: 0,
+			Uint64Val: 0,
+		},
+		{
+			Int8Val:   127,
+			Int16Val:  32767,
+			Int32Val:  2147483647,
+			Int64Val:  9223372036854775807,
+			Uint8Val:  128,
+			Uint16Val: 32768,
+			Uint32Val: 2147483648,
+			Uint64Val: 9223372036854775808,
+		},
+	}
+
+	// Write data
+	buf := bytes.NewBuffer(nil)
+	w := parquet.NewGenericWriter[IntSizeTest](buf)
+	if _, err := w.Write(testValues); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify schema has correct logical types
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := file.Schema()
+	expectedSchema := `message IntSizeTest {
+	required int32 int8_val (INT(8,true));
+	required int32 int16_val (INT(16,true));
+	required int32 int32_val (INT(32,true));
+	required int64 int64_val (INT(64,true));
+	required int32 uint8_val (INT(8,false));
+	required int32 uint16_val (INT(16,false));
+	required int32 uint32_val (INT(32,false));
+	required int64 uint64_val (INT(64,false));
+}`
+	if schema.String() != expectedSchema {
+		t.Errorf("unexpected schema:\nexpected:\n%s\n\nfound:\n%s", expectedSchema, schema.String())
+	}
+
+	// Read data back and verify
+	rows := make([]IntSizeTest, len(testValues))
+	r := parquet.NewGenericReader[IntSizeTest](bytes.NewReader(buf.Bytes()))
+	n, err := r.Read(rows)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != len(testValues) {
+		t.Fatalf("expected %d rows, got %d", len(testValues), n)
+	}
+	if !reflect.DeepEqual(rows, testValues) {
+		t.Fatalf("expected %v, got %v", testValues, rows)
+	}
+}
+
+func TestIntegerSizeTagsOverride(t *testing.T) {
+	// Test that integer size tags can override the default Go type mapping
+	// Note: The Go type must be compatible with the parquet physical type:
+	// - int(8), int(16), int(32), uint(8), uint(16), uint(32) -> physical int32
+	// - int(64), uint(64) -> physical int64
+	type OverrideTest struct {
+		// int32 with uint(16) logical type - overrides default signed to unsigned
+		ToUnsigned int32 `parquet:"to_unsigned,uint(16)"`
+		// uint32 with int(8) logical type - overrides default unsigned to signed
+		ToSigned uint32 `parquet:"to_signed,int(8)"`
+		// int8 stored with explicit int(8) logical type (matches default)
+		ExplicitInt8 int8 `parquet:"explicit_int8,int(8)"`
+		// uint16 stored with explicit uint(16) logical type (matches default)
+		ExplicitUint16 uint16 `parquet:"explicit_uint16,uint(16)"`
+	}
+
+	testValues := []OverrideTest{
+		{ToUnsigned: 42, ToSigned: 100, ExplicitInt8: -50, ExplicitUint16: 1000},
+		{ToUnsigned: 0, ToSigned: 0, ExplicitInt8: 0, ExplicitUint16: 0},
+		{ToUnsigned: 32767, ToSigned: 127, ExplicitInt8: 127, ExplicitUint16: 65535},
+	}
+
+	buf := bytes.NewBuffer(nil)
+	w := parquet.NewGenericWriter[OverrideTest](buf)
+	if _, err := w.Write(testValues); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify schema has correct logical types (override from Go defaults)
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := file.Schema()
+	expectedSchema := `message OverrideTest {
+	required int32 to_unsigned (INT(16,false));
+	required int32 to_signed (INT(8,true));
+	required int32 explicit_int8 (INT(8,true));
+	required int32 explicit_uint16 (INT(16,false));
+}`
+	if schema.String() != expectedSchema {
+		t.Errorf("unexpected schema:\nexpected:\n%s\n\nfound:\n%s", expectedSchema, schema.String())
+	}
+
+	// Read back and verify
+	rows := make([]OverrideTest, len(testValues))
+	r := parquet.NewGenericReader[OverrideTest](bytes.NewReader(buf.Bytes()))
+	n, err := r.Read(rows)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != len(testValues) {
+		t.Fatalf("expected %d rows, got %d", len(testValues), n)
+	}
+	if !reflect.DeepEqual(rows, testValues) {
+		t.Fatalf("expected %v, got %v", testValues, rows)
 	}
 }
