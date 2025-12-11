@@ -1172,6 +1172,38 @@ func TestConvertValue(t *testing.T) {
 			toType:    parquet.Int64Type,
 			toValue:   parquet.Int64Value(ns),
 		},
+
+		// JSON and BYTE_ARRAY conversions - regression test for type assertion bug
+		// where jsonType.ConvertValue used *byteArrayType (pointer) but byteArrayType
+		// is a value type, causing BYTE_ARRAY to JSON conversion to fail.
+		{
+			scenario:  "byte array to json",
+			fromType:  parquet.ByteArrayType,
+			fromValue: parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+			toType:    parquet.JSON().Type(),
+			toValue:   parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+		},
+		{
+			scenario:  "json to byte array",
+			fromType:  parquet.JSON().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+			toType:    parquet.ByteArrayType,
+			toValue:   parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+		},
+		{
+			scenario:  "string to json",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+			toType:    parquet.JSON().Type(),
+			toValue:   parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+		},
+		{
+			scenario:  "json to string",
+			fromType:  parquet.JSON().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+			toType:    parquet.String().Type(),
+			toValue:   parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+		},
 	}
 
 	for _, test := range timestampConversionTests {
