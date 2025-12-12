@@ -1204,6 +1204,38 @@ func TestConvertValue(t *testing.T) {
 			toType:    parquet.String().Type(),
 			toValue:   parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
 		},
+
+		// BSON conversions - same fix as JSON
+		{
+			scenario:  "byte array to bson",
+			fromType:  parquet.ByteArrayType,
+			fromValue: parquet.ByteArrayValue([]byte{0x05, 0x00, 0x00, 0x00, 0x00}),
+			toType:    parquet.BSON().Type(),
+			toValue:   parquet.ByteArrayValue([]byte{0x05, 0x00, 0x00, 0x00, 0x00}),
+		},
+		{
+			scenario:  "bson to byte array",
+			fromType:  parquet.BSON().Type(),
+			fromValue: parquet.ByteArrayValue([]byte{0x05, 0x00, 0x00, 0x00, 0x00}),
+			toType:    parquet.ByteArrayType,
+			toValue:   parquet.ByteArrayValue([]byte{0x05, 0x00, 0x00, 0x00, 0x00}),
+		},
+
+		// ENUM conversions - same fix as JSON
+		{
+			scenario:  "byte array to enum",
+			fromType:  parquet.ByteArrayType,
+			fromValue: parquet.ByteArrayValue([]byte("VALUE")),
+			toType:    parquet.Enum().Type(),
+			toValue:   parquet.ByteArrayValue([]byte("VALUE")),
+		},
+		{
+			scenario:  "enum to byte array",
+			fromType:  parquet.Enum().Type(),
+			fromValue: parquet.ByteArrayValue([]byte("VALUE")),
+			toType:    parquet.ByteArrayType,
+			toValue:   parquet.ByteArrayValue([]byte("VALUE")),
+		},
 	}
 
 	for _, test := range timestampConversionTests {
