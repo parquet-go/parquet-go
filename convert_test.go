@@ -1172,6 +1172,70 @@ func TestConvertValue(t *testing.T) {
 			toType:    parquet.Int64Type,
 			toValue:   parquet.Int64Value(ns),
 		},
+
+		// JSON and BYTE_ARRAY conversions - regression test for type assertion bug
+		// where jsonType.ConvertValue used *byteArrayType (pointer) but byteArrayType
+		// is a value type, causing BYTE_ARRAY to JSON conversion to fail.
+		{
+			scenario:  "byte array to json",
+			fromType:  parquet.ByteArrayType,
+			fromValue: parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+			toType:    parquet.JSON().Type(),
+			toValue:   parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+		},
+		{
+			scenario:  "json to byte array",
+			fromType:  parquet.JSON().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+			toType:    parquet.ByteArrayType,
+			toValue:   parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+		},
+		{
+			scenario:  "string to json",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+			toType:    parquet.JSON().Type(),
+			toValue:   parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+		},
+		{
+			scenario:  "json to string",
+			fromType:  parquet.JSON().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+			toType:    parquet.String().Type(),
+			toValue:   parquet.ByteArrayValue([]byte(`{"key":"value"}`)),
+		},
+
+		// BSON conversions - same fix as JSON
+		{
+			scenario:  "byte array to bson",
+			fromType:  parquet.ByteArrayType,
+			fromValue: parquet.ByteArrayValue([]byte{0x05, 0x00, 0x00, 0x00, 0x00}),
+			toType:    parquet.BSON().Type(),
+			toValue:   parquet.ByteArrayValue([]byte{0x05, 0x00, 0x00, 0x00, 0x00}),
+		},
+		{
+			scenario:  "bson to byte array",
+			fromType:  parquet.BSON().Type(),
+			fromValue: parquet.ByteArrayValue([]byte{0x05, 0x00, 0x00, 0x00, 0x00}),
+			toType:    parquet.ByteArrayType,
+			toValue:   parquet.ByteArrayValue([]byte{0x05, 0x00, 0x00, 0x00, 0x00}),
+		},
+
+		// ENUM conversions - same fix as JSON
+		{
+			scenario:  "byte array to enum",
+			fromType:  parquet.ByteArrayType,
+			fromValue: parquet.ByteArrayValue([]byte("VALUE")),
+			toType:    parquet.Enum().Type(),
+			toValue:   parquet.ByteArrayValue([]byte("VALUE")),
+		},
+		{
+			scenario:  "enum to byte array",
+			fromType:  parquet.Enum().Type(),
+			fromValue: parquet.ByteArrayValue([]byte("VALUE")),
+			toType:    parquet.ByteArrayType,
+			toValue:   parquet.ByteArrayValue([]byte("VALUE")),
+		},
 	}
 
 	for _, test := range timestampConversionTests {

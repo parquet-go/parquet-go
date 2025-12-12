@@ -2516,3 +2516,227 @@ func equalSortingColumnsTest(a, b parquet.SortingColumn) bool {
 
 	return a.Descending() == b.Descending() && a.NullsFirst() == b.NullsFirst()
 }
+
+// TestMergeRowGroupsJSONAndByteArrayConversion tests that merging row groups
+// where one has JSON logical type and one has plain BYTE_ARRAY works correctly.
+// This is a regression test for a bug where jsonType.ConvertValue() used
+// *byteArrayType (pointer) in type assertion, but byteArrayType is a value type,
+// causing conversions from plain BYTE_ARRAY to JSON to always fail.
+func TestMergeRowGroupsJSONAndByteArrayConversion(t *testing.T) {
+	// Struct with plain []byte (becomes BYTE_ARRAY without JSON logical type)
+	type PlainRecord struct {
+		ID   int64  `parquet:"id"`
+		Data []byte `parquet:"data"` // Plain BYTE_ARRAY
+	}
+
+	// Struct with []byte tagged as JSON (becomes BYTE_ARRAY with JSON logical type)
+	type JSONRecord struct {
+		ID   int64  `parquet:"id"`
+		Data []byte `parquet:"data,json"` // JSON logical type
+	}
+
+	// Create first parquet file with plain BYTE_ARRAY schema
+	plainBuf := &bytes.Buffer{}
+	plainWriter := parquet.NewGenericWriter[PlainRecord](plainBuf)
+	_, err := plainWriter.Write([]PlainRecord{
+		{ID: 1, Data: []byte(`{"key":"value1"}`)},
+		{ID: 2, Data: []byte(`{"key":"value2"}`)},
+	})
+	if err != nil {
+		t.Fatalf("Failed to write plain records: %v", err)
+	}
+	plainWriter.Close()
+
+	// Create second parquet file with JSON logical type
+	jsonBuf := &bytes.Buffer{}
+	jsonWriter := parquet.NewGenericWriter[JSONRecord](jsonBuf)
+	_, err = jsonWriter.Write([]JSONRecord{
+		{ID: 3, Data: []byte(`{"key":"value3"}`)},
+		{ID: 4, Data: []byte(`{"key":"value4"}`)},
+	})
+	if err != nil {
+		t.Fatalf("Failed to write JSON records: %v", err)
+	}
+	jsonWriter.Close()
+
+	// Read back the files to get row groups
+	plainReader := parquet.NewReader(bytes.NewReader(plainBuf.Bytes()))
+	jsonReader := parquet.NewReader(bytes.NewReader(jsonBuf.Bytes()))
+
+	plainFile := plainReader.File()
+	jsonFile := jsonReader.File()
+
+	// Verify schemas are different
+	plainSchema := plainFile.Schema()
+	jsonSchema := jsonFile.Schema()
+
+	plainDataField, ok := plainSchema.Lookup("data")
+	if !ok {
+		t.Fatal("'data' field not found in plain schema")
+	}
+	jsonDataField, ok := jsonSchema.Lookup("data")
+	if !ok {
+		t.Fatal("'data' field not found in JSON schema")
+	}
+
+	// Plain schema should NOT have JSON logical type
+	if plainDataField.Node.Type().LogicalType() != nil && plainDataField.Node.Type().LogicalType().Json != nil {
+		t.Error("Plain schema should not have JSON logical type")
+	}
+
+	// JSON schema SHOULD have JSON logical type
+	if jsonDataField.Node.Type().LogicalType() == nil || jsonDataField.Node.Type().LogicalType().Json == nil {
+		t.Error("JSON schema should have JSON logical type")
+	}
+
+	// Test merging plain BYTE_ARRAY into JSON (the bug case)
+	t.Run("plain BYTE_ARRAY to JSON", func(t *testing.T) {
+		plainRowGroup := plainFile.RowGroups()[0]
+		jsonRowGroup := jsonFile.RowGroups()[0]
+
+		// This was the failing case before the fix - merging plain BYTE_ARRAY values
+		// into a schema that expects JSON logical type
+		merged, err := parquet.MergeRowGroups([]parquet.RowGroup{plainRowGroup, jsonRowGroup})
+		if err != nil {
+			t.Fatalf("MergeRowGroups failed: %v", err)
+		}
+
+		// Now write the merged row group to a new file and read it back
+		// This exercises the conversion path that was broken
+		outputBuf := &bytes.Buffer{}
+		writer := parquet.NewWriter(outputBuf, merged.Schema())
+		rows := merged.Rows()
+		_, err = parquet.CopyRows(writer, rows)
+		rows.Close()
+		if err != nil {
+			t.Fatalf("CopyRows failed (this is where the conversion bug manifests): %v", err)
+		}
+		writer.Close()
+
+		// Re-read from the written file
+		reader := parquet.NewReader(bytes.NewReader(outputBuf.Bytes()))
+		mergedFile := reader.File()
+		merged, err = parquet.MergeRowGroups(mergedFile.RowGroups())
+		if err != nil {
+			t.Fatalf("MergeRowGroups failed: %v", err)
+		}
+
+		// Verify the merged schema has JSON logical type (preferred over plain)
+		mergedSchema := merged.Schema()
+		mergedDataField, ok := mergedSchema.Lookup("data")
+		if !ok {
+			t.Fatal("'data' field not found in merged schema")
+		}
+		if mergedDataField.Node.Type().LogicalType() == nil || mergedDataField.Node.Type().LogicalType().Json == nil {
+			t.Error("Expected merged schema to have JSON logical type for 'data' field")
+		}
+
+		// Read all rows to verify data conversion worked
+		finalRows := merged.Rows()
+		defer finalRows.Close()
+
+		readRows := make([]parquet.Row, 0, 4)
+		readBuffer := make([]parquet.Row, 10)
+		for {
+			n, err := finalRows.ReadRows(readBuffer)
+			for _, row := range readBuffer[:n] {
+				readRows = append(readRows, row.Clone())
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("Failed to read merged rows: %v", err)
+			}
+		}
+
+		if len(readRows) != 4 {
+			t.Fatalf("Expected 4 rows, got %d", len(readRows))
+		}
+
+		// Verify all data values are present and readable
+		// Column order in merged schema: data (0), id (1) - alphabetical
+		for i, row := range readRows {
+			if len(row) != 2 {
+				t.Errorf("Row %d: expected 2 columns, got %d", i, len(row))
+				continue
+			}
+			// The 'data' column is index 0 (alphabetical ordering)
+			dataVal := row[0]
+			if dataVal.IsNull() {
+				t.Errorf("Row %d: data value is null", i)
+				continue
+			}
+			if dataVal.Kind() != parquet.ByteArray {
+				t.Errorf("Row %d: expected ByteArray kind, got %v", i, dataVal.Kind())
+				continue
+			}
+			data := string(dataVal.ByteArray())
+			if len(data) == 0 {
+				t.Errorf("Row %d: data is empty", i)
+			}
+			// Just verify it's valid JSON-like content
+			if data[0] != '{' {
+				t.Errorf("Row %d: expected JSON object, got %q", i, data)
+			}
+		}
+	})
+
+	// Test merging JSON into plain BYTE_ARRAY (reverse order)
+	t.Run("JSON to plain BYTE_ARRAY", func(t *testing.T) {
+		plainRowGroup := plainFile.RowGroups()[0]
+		jsonRowGroup := jsonFile.RowGroups()[0]
+
+		// Merge with JSON first - should still prefer JSON logical type
+		merged, err := parquet.MergeRowGroups([]parquet.RowGroup{jsonRowGroup, plainRowGroup})
+		if err != nil {
+			t.Fatalf("MergeRowGroups failed: %v", err)
+		}
+
+		// Read all rows
+		rows := merged.Rows()
+		defer rows.Close()
+
+		readRows := make([]parquet.Row, 0, 4)
+		readBuffer := make([]parquet.Row, 10)
+		for {
+			n, err := rows.ReadRows(readBuffer)
+			for _, row := range readBuffer[:n] {
+				readRows = append(readRows, row.Clone())
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("Failed to read merged rows: %v", err)
+			}
+		}
+
+		if len(readRows) != 4 {
+			t.Fatalf("Expected 4 rows, got %d", len(readRows))
+		}
+
+		// Verify all data is readable (order may differ due to merge order)
+		// Column order in merged schema: data (0), id (1) - alphabetical
+		for i, row := range readRows {
+			if len(row) != 2 {
+				t.Errorf("Row %d: expected 2 columns, got %d", i, len(row))
+				continue
+			}
+			// The 'data' column is index 0 (alphabetical ordering)
+			dataVal := row[0]
+			if dataVal.IsNull() {
+				t.Errorf("Row %d: data value is null", i)
+				continue
+			}
+			if dataVal.Kind() != parquet.ByteArray {
+				t.Errorf("Row %d: expected ByteArray kind, got %v", i, dataVal.Kind())
+				continue
+			}
+			data := string(dataVal.ByteArray())
+			if len(data) == 0 {
+				t.Errorf("Row %d: data is empty", i)
+			}
+		}
+	})
+}
