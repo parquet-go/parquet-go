@@ -213,23 +213,24 @@ func (c *ReaderConfig) Validate() error {
 //		CreatedBy: "my test program",
 //	})
 type WriterConfig struct {
-	CreatedBy            string
-	ColumnPageBuffers    BufferPool
-	ColumnIndexSizeLimit func(path []string) int
-	PageBufferSize       int
-	WriteBufferSize      int
-	DataPageVersion      int
-	DataPageStatistics   bool
-	MaxRowsPerRowGroup   int64
-	KeyValueMetadata     map[string]string
-	Schema               *Schema
-	BloomFilters         []BloomFilterColumn
-	Compression          compress.Codec
-	Sorting              SortingConfig
-	SkipPageBounds       [][]string
-	Encodings            map[Kind]encoding.Encoding
-	DictionaryMaxBytes   int64
-	SchemaConfig         *SchemaConfig
+	CreatedBy                    string
+	ColumnPageBuffers            BufferPool
+	ColumnIndexSizeLimit         func(path []string) int
+	PageBufferSize               int
+	WriteBufferSize              int
+	DataPageVersion              int
+	DataPageStatistics           bool
+	DeprecatedDataPageStatistics bool
+	MaxRowsPerRowGroup           int64
+	KeyValueMetadata             map[string]string
+	Schema                       *Schema
+	BloomFilters                 []BloomFilterColumn
+	Compression                  compress.Codec
+	Sorting                      SortingConfig
+	SkipPageBounds               [][]string
+	Encodings                    map[Kind]encoding.Encoding
+	DictionaryMaxBytes           int64
+	SchemaConfig                 *SchemaConfig
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -288,22 +289,23 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 	}
 
 	*config = WriterConfig{
-		CreatedBy:            coalesceString(c.CreatedBy, config.CreatedBy),
-		ColumnPageBuffers:    coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
-		ColumnIndexSizeLimit: coalesceColumnIndexLimit(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
-		PageBufferSize:       coalesceInt(c.PageBufferSize, config.PageBufferSize),
-		WriteBufferSize:      coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
-		DataPageVersion:      coalesceInt(c.DataPageVersion, config.DataPageVersion),
-		DataPageStatistics:   coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
-		MaxRowsPerRowGroup:   coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
-		KeyValueMetadata:     keyValueMetadata,
-		Schema:               coalesceSchema(c.Schema, config.Schema),
-		BloomFilters:         coalesceSlices(c.BloomFilters, config.BloomFilters),
-		Compression:          coalesceCompression(c.Compression, config.Compression),
-		Sorting:              coalesceSortingConfig(c.Sorting, config.Sorting),
-		SkipPageBounds:       coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
-		Encodings:            encodings,
-		SchemaConfig:         coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
+		CreatedBy:                    coalesceString(c.CreatedBy, config.CreatedBy),
+		ColumnPageBuffers:            coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
+		ColumnIndexSizeLimit:         coalesceColumnIndexLimit(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
+		PageBufferSize:               coalesceInt(c.PageBufferSize, config.PageBufferSize),
+		WriteBufferSize:              coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
+		DataPageVersion:              coalesceInt(c.DataPageVersion, config.DataPageVersion),
+		DataPageStatistics:           coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
+		DeprecatedDataPageStatistics: coalesceBool(c.DeprecatedDataPageStatistics, config.DeprecatedDataPageStatistics),
+		MaxRowsPerRowGroup:           coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
+		KeyValueMetadata:             keyValueMetadata,
+		Schema:                       coalesceSchema(c.Schema, config.Schema),
+		BloomFilters:                 coalesceSlices(c.BloomFilters, config.BloomFilters),
+		Compression:                  coalesceCompression(c.Compression, config.Compression),
+		Sorting:                      coalesceSortingConfig(c.Sorting, config.Sorting),
+		SkipPageBounds:               coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
+		Encodings:                    encodings,
+		SchemaConfig:                 coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
 	}
 }
 
@@ -634,6 +636,22 @@ func DataPageVersion(version int) WriterOption {
 // Defaults to true.
 func DataPageStatistics(enabled bool) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.DataPageStatistics = enabled })
+}
+
+// DeprecatedDataPageStatistics creates a configuration option which defines
+// whether to also write the deprecated Min/Max fields in column chunk
+// statistics, in addition to the standard MinValue/MaxValue fields. This option
+// is useful for backward compatibility with older readers that only understand
+// the deprecated fields.
+//
+// The deprecated Min/Max fields use signed comparison, while MinValue/MaxValue
+// respect the column's logical type ordering. For columns where these orderings
+// differ (e.g., unsigned integers), enabling this option may produce incorrect
+// statistics for older readers.
+//
+// Defaults to false.
+func DeprecatedDataPageStatistics(enabled bool) WriterOption {
+	return writerOption(func(config *WriterConfig) { config.DeprecatedDataPageStatistics = enabled })
 }
 
 // KeyValueMetadata creates a configuration option which adds key/value metadata
