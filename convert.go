@@ -252,26 +252,23 @@ func (c *conversion) Convert(rows []Row) (int, error) {
 
 		for columnIndex, conv := range c.columns {
 			columnOffset := len(row)
-			if conv.sourceIndex < 0 {
-				// When there is no source column, we put a single value as
-				// placeholder in the column. This is a condition where the
-				// target contained a column which did not exist at had not
-				// other columns existing at that same level.
-				var value Value
-				if conv.isOptional {
-					// Optional field: create null value (kind = 0)
-					value = Value{}
-				} else {
-					// Required field: create typed zero value
-					value = ZeroValue(conv.targetKind)
-				}
-				row = append(row, value)
-			} else {
-				sourceValues := source.columns[conv.sourceIndex]
-				// We must copy to the output row first and not mutate the
-				// source columns because multiple target columns may map to
-				// the same source column.
+
+			// Get source values if available
+			var sourceValues []Value
+			if conv.sourceIndex >= 0 {
+				sourceValues = source.columns[conv.sourceIndex]
+			}
+
+			if len(sourceValues) > 0 {
 				row = append(row, sourceValues...)
+			} else {
+				// No source values - add placeholder to maintain sequential column order.
+				// This happens when the column doesn't exist in source or has no values for this row.
+				if conv.isOptional {
+					row = append(row, NullValue())
+				} else {
+					row = append(row, ZeroValue(conv.targetKind))
+				}
 			}
 			columnValues := row[columnOffset:]
 
@@ -341,6 +338,9 @@ func Convert(to, from Node) (conv Conversion, err error) {
 		targetColumn := targetMapping.lookup(path)
 		sourceColumn := sourceMapping.lookup(path)
 
+		// Track whether this column exists in source BEFORE any closestColumn lookup
+		isMissingColumn := sourceColumn.node == nil
+
 		conversions := []conversionFunc{}
 		if sourceColumn.node != nil {
 			targetType := targetColumn.node.Type()
@@ -394,7 +394,9 @@ func Convert(to, from Node) (conv Conversion, err error) {
 
 			closestColumn := sourceMapping.lookupClosest(path)
 			if closestColumn.node != nil {
-				// There's a sibling column we can use as a template for structure
+				// There's a sibling column we can use as a template for structure.
+				// The sibling's values provide the repetition count for repeated groups.
+				// The conversion functions transform them to typed zeros or nulls.
 				if isOptionalField {
 					// Optional field: convert to null values while mirroring structure
 					conversions = append(conversions, convertToNullOptional(targetColumn.maxDefinitionLevel))
@@ -402,7 +404,7 @@ func Convert(to, from Node) (conv Conversion, err error) {
 					// Required field: convert to typed zero values
 					conversions = append(conversions, convertToZero(targetKind))
 				}
-				// Use the closest column as source for structure/levels
+				// Use the sibling column as the source for structural information
 				sourceColumn = closestColumn
 			} else {
 				// No sibling columns exist
@@ -418,9 +420,13 @@ func Convert(to, from Node) (conv Conversion, err error) {
 		// Store target column type for creating proper null values
 		targetType := targetColumn.node.Type()
 
-		// Determine sourceIndex: -1 if column doesn't exist in source
+		// Determine sourceIndex: use the source column index (which may be a
+		// sibling's index if the column is missing but has a sibling).
+		// For missing columns without siblings, sourceColumn.columnIndex will
+		// be -1 (from the initial lookup returning an empty leafColumn).
 		sourceIndex := int(sourceColumn.columnIndex)
-		if sourceColumn.node == nil {
+		// Only set to -1 if truly missing AND no sibling was found
+		if isMissingColumn && sourceColumn.node == nil {
 			sourceIndex = -1
 		}
 
@@ -711,17 +717,9 @@ func (p missingPage) RepetitionLevels() []byte { return nil }
 func (p missingPage) DefinitionLevels() []byte { return nil }
 func (p missingPage) Data() encoding.Values    { return p.typ.NewValues(nil, nil) }
 func (p missingPage) Values() ValueReader {
-	var adjacentReader ValueReader
-	if p.adjacentPages != nil {
-		// Open the adjacent page to read levels from
-		if adjacentPage, err := p.adjacentPages.ReadPage(); err == nil {
-			adjacentReader = adjacentPage.Values()
-		}
-	}
-
 	return &missingPageValues{
 		page:           p,
-		adjacentReader: adjacentReader,
+		adjacentPages:  p.adjacentPages,     // Store the Pages reader to read multiple pages
 		adjacentBuffer: make([]Value, 1024), // Reasonable buffer size
 	}
 }
@@ -729,12 +727,16 @@ func (p missingPage) Values() ValueReader {
 type missingPageValues struct {
 	page           missingPage
 	read           int64
-	adjacentReader ValueReader // Reader for adjacent column to mirror levels
+	adjacentPages  Pages       // Pages reader for adjacent column (to read multiple pages)
+	adjacentReader ValueReader // Current page's reader for adjacent column to mirror levels
 	adjacentBuffer []Value     // Buffer for reading adjacent values
 }
 
 func (r *missingPageValues) ReadValues(values []Value) (int, error) {
 	remain := r.page.numValues - r.read
+	if remain == 0 {
+		return 0, io.EOF
+	}
 	if int64(len(values)) > remain {
 		values = values[:remain]
 	}
@@ -742,13 +744,17 @@ func (r *missingPageValues) ReadValues(values []Value) (int, error) {
 	typ := r.page.typ
 	columnIndex := ^r.page.column
 
+	var n int
+	var err error
 	// Case 1: No adjacent column (root-level field, no siblings)
-	if r.adjacentReader == nil {
-		return r.readWithoutAdjacent(values, typ, columnIndex)
+	if r.adjacentPages == nil {
+		n, err = r.readWithoutAdjacent(values, typ, columnIndex)
+	} else {
+		// Case 2: Has adjacent column - mirror its repetition/definition levels
+		n, err = r.readWithAdjacent(values, typ, columnIndex)
 	}
 
-	// Case 2: Has adjacent column - mirror its repetition/definition levels
-	return r.readWithAdjacent(values, typ, columnIndex)
+	return n, err
 }
 
 func (r *missingPageValues) readWithoutAdjacent(values []Value, typ Type, columnIndex int16) (int, error) {
@@ -788,54 +794,84 @@ func (r *missingPageValues) readWithoutAdjacent(values []Value, typ Type, column
 }
 
 func (r *missingPageValues) readWithAdjacent(values []Value, typ Type, columnIndex int16) (int, error) {
-	// Read values from adjacent column to get its levels
-	n, err := r.adjacentReader.ReadValues(r.adjacentBuffer[:len(values)])
-	if err != nil && err != io.EOF {
-		return 0, err
-	}
-
 	// Determine if this missing column is required or optional
 	isRequired := r.page.maxDefinitionLevel == 0
+	totalRead := 0
 
-	for i := range n {
-		repLevel := r.adjacentBuffer[i].repetitionLevel
-		adjacentDefLevel := r.adjacentBuffer[i].definitionLevel
-
-		var defLevel byte
-		var value Value
-
-		if isRequired {
-			// Required field: produce zero/default values
-			value = ZeroValue(typ.Kind())
-			// Mirror adjacent definition level structure
-			defLevel = adjacentDefLevel
-		} else {
-			// Optional field: produce nulls
-			// Definition level indicates null at appropriate nesting
-			if adjacentDefLevel < r.page.maxDefinitionLevel {
-				// Adjacent is null at some level, follow its definition
-				defLevel = adjacentDefLevel
-			} else {
-				// Adjacent is present, but we are null at leaf level
-				defLevel = r.page.maxDefinitionLevel - 1
+	for totalRead < len(values) {
+		// Initialize or get next page from adjacent column if needed
+		if r.adjacentReader == nil {
+			adjacentPage, err := r.adjacentPages.ReadPage()
+			if err == io.EOF {
+				// No more adjacent pages - we're done
+				if totalRead > 0 {
+					r.read += int64(totalRead)
+					return totalRead, nil
+				}
+				r.read += int64(totalRead)
+				return totalRead, io.EOF
 			}
+			if err != nil {
+				return totalRead, err
+			}
+			r.adjacentReader = adjacentPage.Values()
 		}
 
-		value.repetitionLevel = repLevel
-		value.definitionLevel = defLevel
-		value.columnIndex = columnIndex
-		values[i] = value
+		// Read values from adjacent column to get its levels
+		remaining := values[totalRead:]
+		n, err := r.adjacentReader.ReadValues(r.adjacentBuffer[:len(remaining)])
+
+		for i := range n {
+			repLevel := r.adjacentBuffer[i].repetitionLevel
+			adjacentDefLevel := r.adjacentBuffer[i].definitionLevel
+
+			var defLevel byte
+			var value Value
+
+			if isRequired {
+				// Required field: produce zero/default values
+				value = ZeroValue(typ.Kind())
+				// Mirror adjacent definition level structure
+				defLevel = adjacentDefLevel
+			} else {
+				// Optional field: produce nulls
+				// Definition level indicates null at appropriate nesting
+				if adjacentDefLevel < r.page.maxDefinitionLevel {
+					// Adjacent is null at some level, follow its definition
+					defLevel = adjacentDefLevel
+				} else {
+					// Adjacent is present, but we are null at leaf level
+					defLevel = r.page.maxDefinitionLevel - 1
+				}
+			}
+
+			value.repetitionLevel = repLevel
+			value.definitionLevel = defLevel
+			value.columnIndex = columnIndex
+			remaining[i] = value
+		}
+
+		totalRead += n
+
+		if err == io.EOF {
+			// Current adjacent page exhausted, try next page
+			r.adjacentReader = nil
+			continue
+		}
+		if err != nil {
+			return totalRead, err
+		}
 	}
 
-	r.read += int64(n)
-	if err == io.EOF {
-		return n, io.EOF
-	}
-	return n, nil
+	r.read += int64(totalRead)
+	return totalRead, nil
 }
 
 func (r *missingPageValues) Close() error {
 	r.read = r.page.numValues
+	if r.adjacentPages != nil {
+		return r.adjacentPages.Close()
+	}
 	return nil
 }
 
