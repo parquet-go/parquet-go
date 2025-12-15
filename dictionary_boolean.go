@@ -93,7 +93,7 @@ func (d *booleanDictionary) insert(indexes []int32, rows sparse.Array) {
 func (d *booleanDictionary) Lookup(indexes []int32, values []Value) {
 	model := d.makeValue(false)
 	memsetValues(values, model)
-	d.lookup(indexes, makeArrayValue(values, offsetOfU64))
+	d.lookup(indexes, makeArrayValue(values, offsetOfBool))
 }
 
 func (d *booleanDictionary) lookup(indexes []int32, rows sparse.Array) {

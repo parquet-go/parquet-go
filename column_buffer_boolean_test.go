@@ -232,3 +232,33 @@ func TestColumnBufferBooleanEdgeCases(t *testing.T) {
 		}
 	})
 }
+
+// TestIssue406BooleanDictionaryLookup tests that boolean dictionary lookup correctly
+// writes values at the proper offset.
+// Issue: https://github.com/parquet-go/parquet-go/issues/406
+func TestIssue406BooleanDictionaryLookup(t *testing.T) {
+	// Create a boolean dictionary with both true and false values
+	boolValues := []byte{0b00000010} // false=0, true=1
+	dict := newBooleanDictionary(
+		BooleanType,
+		0,
+		2, // two values: false at index 0, true at index 1
+		BooleanType.NewValues(boolValues, nil),
+	)
+
+	// Lookup values: index 1 (true), index 0 (false), index 1 (true)
+	indexes := []int32{1, 0, 1}
+	values := make([]Value, len(indexes))
+
+	// Perform the lookup
+	dict.Lookup(indexes, values)
+
+	// Check that the boolean values are correctly read
+	expected := []bool{true, false, true}
+	for i, exp := range expected {
+		got := values[i].Boolean()
+		if got != exp {
+			t.Errorf("index %d: expected %v, got %v", i, exp, got)
+		}
+	}
+}

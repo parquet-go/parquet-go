@@ -1027,3 +1027,45 @@ func printColumnLayout(t *testing.T, f *os.File) {
 		parquet.Release(p)
 	}
 }
+
+// TestIssue406LeadingBooleanField tests reading boolean fields in typed structs.
+// Issue: https://github.com/parquet-go/parquet-go/issues/406
+func TestIssue406LeadingBooleanField(t *testing.T) {
+	type Row struct {
+		F bool   `parquet:"f"`
+		G int64  `parquet:"g"`
+		S string `parquet:"s"`
+	}
+
+	// Write rows with explicit boolean values
+	rows := []Row{
+		{F: true, G: 1, S: "first"},
+		{F: false, G: 2, S: "second"},
+		{F: true, G: 3, S: "third"},
+	}
+
+	buffer := new(bytes.Buffer)
+	if err := parquet.Write(buffer, rows); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	// Read back with typed struct
+	reader := bytes.NewReader(buffer.Bytes())
+	result, err := parquet.Read[Row](reader, reader.Size())
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	// Verify all boolean values are correctly read
+	for i, row := range result {
+		if row.F != rows[i].F {
+			t.Errorf("row %d: F mismatch: got %v, want %v", i, row.F, rows[i].F)
+		}
+		if row.G != rows[i].G {
+			t.Errorf("row %d: G mismatch: got %v, want %v", i, row.G, rows[i].G)
+		}
+		if row.S != rows[i].S {
+			t.Errorf("row %d: S mismatch: got %q, want %q", i, row.S, rows[i].S)
+		}
+	}
+}
