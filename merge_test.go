@@ -2740,3 +2740,174 @@ func TestMergeRowGroupsJSONAndByteArrayConversion(t *testing.T) {
 		}
 	})
 }
+
+// TestMergeRowGroupsWithMissingColumnsMultiPage tests merging row groups with different
+// schemas where some columns are missing, using enough data to span multiple pages.
+// This exercises two key fixes:
+// 1. Nested multiColumnChunk flattening (multi_row_group.go)
+// 2. missingPageValues multi-page reading (convert.go)
+func TestMergeRowGroupsWithMissingColumnsMultiPage(t *testing.T) {
+	// Schema A: has columns ID, X, Y
+	type SchemaA struct {
+		ID int64  `parquet:"id"`
+		X  string `parquet:"x"`
+		Y  int32  `parquet:"y"`
+	}
+
+	// Schema B: has columns ID, X, Z (missing Y, has Z instead)
+	type SchemaB struct {
+		ID int64  `parquet:"id"`
+		X  string `parquet:"x"`
+		Z  int32  `parquet:"z"`
+	}
+
+	// Use enough rows to span multiple pages
+	const rowsPerFile = 1000
+
+	// Helper to create a parquet file with SchemaA
+	createFileA := func(startID int64) *parquet.File {
+		buf := &bytes.Buffer{}
+		writer := parquet.NewGenericWriter[SchemaA](buf, parquet.PageBufferSize(256)) // Small pages
+		records := make([]SchemaA, rowsPerFile)
+		for i := range records {
+			records[i] = SchemaA{
+				ID: startID + int64(i),
+				X:  fmt.Sprintf("a-value-%d", startID+int64(i)),
+				Y:  int32(startID) + int32(i)*10 + 1, // +1 to ensure non-zero
+			}
+		}
+		if _, err := writer.Write(records); err != nil {
+			t.Fatalf("Failed to write SchemaA records: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("Failed to close SchemaA writer: %v", err)
+		}
+
+		file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("Failed to open SchemaA file: %v", err)
+		}
+		return file
+	}
+
+	// Helper to create a parquet file with SchemaB
+	createFileB := func(startID int64) *parquet.File {
+		buf := &bytes.Buffer{}
+		writer := parquet.NewGenericWriter[SchemaB](buf, parquet.PageBufferSize(256)) // Small pages
+		records := make([]SchemaB, rowsPerFile)
+		for i := range records {
+			records[i] = SchemaB{
+				ID: startID + int64(i),
+				X:  fmt.Sprintf("b-value-%d", startID+int64(i)),
+				Z:  int32(startID) + int32(i)*100 + 1, // +1 to ensure non-zero
+			}
+		}
+		if _, err := writer.Write(records); err != nil {
+			t.Fatalf("Failed to write SchemaB records: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("Failed to close SchemaB writer: %v", err)
+		}
+
+		file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("Failed to open SchemaB file: %v", err)
+		}
+		return file
+	}
+
+	// Create 4 files: 2 with SchemaA, 2 with SchemaB
+	fileA1 := createFileA(0)
+	fileA2 := createFileA(10000)
+	fileB1 := createFileB(20000)
+	fileB2 := createFileB(30000)
+
+	// First level merge: merge A1+B1 and A2+B2 separately
+	// This creates multiColumnChunk structures
+	merged1, err := parquet.MergeRowGroups([]parquet.RowGroup{
+		fileA1.RowGroups()[0],
+		fileB1.RowGroups()[0],
+	})
+	if err != nil {
+		t.Fatalf("First merge (A1+B1) failed: %v", err)
+	}
+
+	merged2, err := parquet.MergeRowGroups([]parquet.RowGroup{
+		fileA2.RowGroups()[0],
+		fileB2.RowGroups()[0],
+	})
+	if err != nil {
+		t.Fatalf("Second merge (A2+B2) failed: %v", err)
+	}
+
+	// Second level merge: merge the two merged results
+	// This exercises nested multiColumnChunk flattening
+	finalMerged, err := parquet.MergeRowGroups([]parquet.RowGroup{merged1, merged2})
+	if err != nil {
+		t.Fatalf("Final merge failed: %v", err)
+	}
+
+	// Verify the merged schema has all columns (id, x, y, z)
+	mergedSchema := finalMerged.Schema()
+	columns := mergedSchema.Columns()
+	if len(columns) != 4 {
+		t.Fatalf("Expected 4 columns in merged schema, got %d: %v", len(columns), columns)
+	}
+
+	// Write the merged data to a buffer - this exercises the conversion code
+	// and will panic if there are issues with missing column handling
+	outputBuf := &bytes.Buffer{}
+	writer := parquet.NewWriter(outputBuf, mergedSchema)
+
+	rows := finalMerged.Rows()
+	n, err := parquet.CopyRows(writer, rows)
+	rows.Close()
+	if err != nil {
+		t.Fatalf("CopyRows failed: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Writer close failed: %v", err)
+	}
+
+	expectedRows := int64(rowsPerFile * 4) // 4 files
+	if n != expectedRows {
+		t.Fatalf("Expected %d rows copied, got %d", expectedRows, n)
+	}
+
+	// Read back and verify data integrity
+	outputFile, err := parquet.OpenFile(bytes.NewReader(outputBuf.Bytes()), int64(outputBuf.Len()))
+	if err != nil {
+		t.Fatalf("Failed to open output file: %v", err)
+	}
+
+	// Verify the output file has the expected number of rows
+	outputRowCount := outputFile.RowGroups()[0].NumRows()
+	if outputRowCount != expectedRows {
+		t.Errorf("Expected %d rows in output, got %d", expectedRows, outputRowCount)
+	}
+
+	// Verify we can read back all rows without error (the original panic test)
+	reader := outputFile.RowGroups()[0].Rows()
+	defer reader.Close()
+
+	rowBuf := make([]parquet.Row, 100)
+	totalRows := int64(0)
+	for {
+		n, err := reader.ReadRows(rowBuf)
+		totalRows += int64(n)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("ReadRows failed: %v", err)
+		}
+	}
+
+	if totalRows != expectedRows {
+		t.Errorf("Expected %d total rows read, got %d", expectedRows, totalRows)
+	}
+
+	// Note: When merging schemas with missing columns, the missing columns become optional.
+	// The key test is that merge, write, and read operations complete without panic.
+	t.Logf("Successfully merged and wrote %d rows from 4 files with different schemas", totalRows)
+}

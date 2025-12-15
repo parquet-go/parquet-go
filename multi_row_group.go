@@ -38,10 +38,30 @@ func (m *multiRowGroup) init(schema *Schema, sorting []SortingColumn, rowGroups 
 	for i := range columns {
 		columns[i].rowGroup = m
 		columns[i].column = i
-		columns[i].chunks = make([]ColumnChunk, len(columnChunks))
+		// Don't pre-allocate - we need to flatten nested multiColumnChunks
+		columns[i].chunks = nil
+		columns[i].rowCounts = nil
 
 		for j, chunks := range columnChunks {
-			columns[i].chunks[j] = chunks[i]
+			chunk := chunks[i]
+			// Flatten nested multiColumnChunks to avoid nesting issues
+			// when merging already-merged row groups
+			if mcc, ok := chunk.(*multiColumnChunk); ok {
+				columns[i].chunks = append(columns[i].chunks, mcc.chunks...)
+				// Copy row counts from nested multiColumnChunk if available,
+				// otherwise use the nested rowGroup's row counts
+				if len(mcc.rowCounts) > 0 {
+					columns[i].rowCounts = append(columns[i].rowCounts, mcc.rowCounts...)
+				} else {
+					// Fall back to computing from the nested rowGroup
+					for _, rg := range mcc.rowGroup.rowGroups {
+						columns[i].rowCounts = append(columns[i].rowCounts, rg.NumRows())
+					}
+				}
+			} else {
+				columns[i].chunks = append(columns[i].chunks, chunk)
+				columns[i].rowCounts = append(columns[i].rowCounts, rowGroups[j].NumRows())
+			}
 		}
 	}
 
@@ -107,9 +127,10 @@ func (m *multiRowGroup) Schema() *Schema { return m.schema }
 func (m *multiRowGroup) Rows() Rows { return NewRowGroupRowReader(m) }
 
 type multiColumnChunk struct {
-	rowGroup *multiRowGroup
-	column   int
-	chunks   []ColumnChunk
+	rowGroup  *multiRowGroup
+	column    int
+	chunks    []ColumnChunk
+	rowCounts []int64 // row count for each chunk (used when chunks are flattened)
 }
 
 func (c *multiColumnChunk) Type() Type {
@@ -504,13 +525,20 @@ func (m *multiPages) SeekToRow(rowIndex int64) error {
 		}
 	}
 
-	rowGroups := m.column.rowGroup.rowGroups
-	numRows := int64(0)
+	// Use rowCounts if available (flattened chunks), otherwise use rowGroups
+	rowCounts := m.column.rowCounts
+	numChunks := len(m.column.chunks)
 	m.pages = nil
 	m.index = 0
 
-	for m.index < len(rowGroups) {
-		numRows = rowGroups[m.index].NumRows()
+	for m.index < numChunks {
+		var numRows int64
+		if len(rowCounts) > m.index {
+			numRows = rowCounts[m.index]
+		} else {
+			// Fall back to rowGroups if rowCounts not populated
+			numRows = m.column.rowGroup.rowGroups[m.index].NumRows()
+		}
 		if rowIndex < numRows {
 			break
 		}
@@ -518,7 +546,7 @@ func (m *multiPages) SeekToRow(rowIndex int64) error {
 		m.index++
 	}
 
-	if m.index < len(rowGroups) {
+	if m.index < numChunks {
 		m.pages = m.column.chunks[m.index].Pages()
 		m.index++
 		return m.pages.SeekToRow(rowIndex)
