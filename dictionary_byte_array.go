@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"math"
 	"strconv"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -72,6 +73,13 @@ func (d *byteArrayDictionary) insert(indexes []int32, rows sparse.Array) {
 
 		index, exists := d.table[value]
 		if !exists {
+			// Check if adding this value would cause uint32 overflow in offsets.
+			// The offsets are stored as uint32, so the total size of all values
+			// cannot exceed math.MaxUint32 bytes.
+			newLen := int64(d.values.Len()) + int64(len(value))
+			if newLen > math.MaxUint32 {
+				panic("parquet: byte array dictionary size exceeds maximum (4GB); use DictionaryMaxBytes writer option to limit dictionary size")
+			}
 			value = d.alloc.copyString(value)
 			index = int32(len(d.table))
 			d.table[value] = index

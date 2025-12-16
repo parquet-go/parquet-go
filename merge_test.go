@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"testing"
@@ -2910,4 +2912,117 @@ func TestMergeRowGroupsWithMissingColumnsMultiPage(t *testing.T) {
 	// Note: When merging schemas with missing columns, the missing columns become optional.
 	// The key test is that merge, write, and read operations complete without panic.
 	t.Logf("Successfully merged and wrote %d rows from 4 files with different schemas", totalRows)
+}
+
+func TestMergeRowGroupsFromTestdataFiles(t *testing.T) {
+	mergeDir := "testdata/merge"
+
+	entries, err := os.ReadDir(mergeDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("testdata/merge directory does not exist")
+		}
+		t.Fatalf("failed to read testdata/merge directory: %v", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		testDir := filepath.Join(mergeDir, entry.Name())
+		t.Run(entry.Name(), func(t *testing.T) {
+			// Find all parquet files in this directory
+			parquetFiles, err := filepath.Glob(filepath.Join(testDir, "*.parquet"))
+			if err != nil {
+				t.Fatalf("failed to glob parquet files: %v", err)
+			}
+
+			if len(parquetFiles) == 0 {
+				t.Skip("no parquet files found")
+			}
+
+			// Open all parquet files and collect row groups
+			var rowGroups []parquet.RowGroup
+			var openFiles []*os.File
+			defer func() {
+				for _, f := range openFiles {
+					f.Close()
+				}
+			}()
+
+			for _, path := range parquetFiles {
+				f, err := os.Open(path)
+				if err != nil {
+					t.Fatalf("failed to open file %s: %v", path, err)
+				}
+				openFiles = append(openFiles, f)
+
+				stat, err := f.Stat()
+				if err != nil {
+					t.Fatalf("failed to stat file %s: %v", path, err)
+				}
+
+				pf, err := parquet.OpenFile(f, stat.Size(),
+					parquet.SkipBloomFilters(true),
+					parquet.SkipPageIndex(true),
+					parquet.ReadBufferSize(256*1024), // 256 KiB
+				)
+				if err != nil {
+					t.Fatalf("failed to open parquet file %s: %v", path, err)
+				}
+
+				rowGroups = append(rowGroups, pf.RowGroups()...)
+			}
+
+			t.Logf("merging %d row groups from %d files", len(rowGroups), len(parquetFiles))
+
+			// Merge row groups
+			mergedRowGroups, err := parquet.MergeRowGroups(rowGroups)
+			if err != nil {
+				t.Fatalf("failed to merge row groups: %v", err)
+			}
+
+			// Write merged data to a buffer
+			var output bytes.Buffer
+			writer := parquet.NewWriter(&output, mergedRowGroups.Schema(),
+				parquet.DataPageStatistics(true),
+				parquet.PageBufferSize(1024*1024),       // 1 MiB
+				parquet.WriteBufferSize(256*1024),       // 256 KiB
+				parquet.MaxRowsPerRowGroup(1000000),     // 1M rows
+				parquet.DictionaryMaxBytes(2*1024*1024), // 2 MiB - limit dictionary size to prevent overflow
+			)
+
+			rowReader := mergedRowGroups.Rows()
+			defer rowReader.Close()
+
+			n, err := parquet.CopyRows(writer, rowReader)
+			if err != nil {
+				t.Fatalf("failed to copy rows: %v", err)
+			}
+
+			if err := writer.Close(); err != nil {
+				t.Fatalf("failed to close writer: %v", err)
+			}
+
+			t.Logf("successfully merged and wrote %d rows to %d bytes", n, output.Len())
+
+			// Verify the merged file can be read back
+			mergedFile, err := parquet.OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+			if err != nil {
+				t.Fatalf("failed to open merged file: %v", err)
+			}
+
+			// Read all rows to ensure data integrity
+			rows := mergedFile.RowGroups()
+			var totalRows int64
+			for _, rg := range rows {
+				totalRows += rg.NumRows()
+			}
+
+			if totalRows != n {
+				t.Errorf("expected %d rows in merged file, got %d", n, totalRows)
+			}
+		})
+	}
 }
