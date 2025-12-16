@@ -162,7 +162,7 @@ func TestIssue406ReconstructWithPoolReuse(t *testing.T) {
 	}
 
 	// Run multiple iterations to exercise pool reuse
-	for iteration := 0; iteration < 5; iteration++ {
+	for iteration := range 5 {
 		for i, tc := range testCases {
 			// Deconstruct the parquet row into a Row ([]Value)
 			parquetRow := schema.Deconstruct(nil, tc.parquet)
