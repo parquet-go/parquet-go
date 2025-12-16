@@ -1529,8 +1529,16 @@ func (c *ColumnWriter) Flush() (err error) {
 		// Check dictionary size limit BEFORE writing the page
 		// to decide if we should switch to PLAIN for future pages
 		var fallbackToPlain bool
-		if c.dictionary != nil && !c.hasSwitchedToPlain && c.dictionaryMaxBytes > 0 {
-			if currentDictSize := c.dictionary.Size(); currentDictSize > c.dictionaryMaxBytes {
+		if c.dictionary != nil && !c.hasSwitchedToPlain {
+			currentDictSize := c.dictionary.Size()
+			// Check user-configured limit
+			if c.dictionaryMaxBytes > 0 && currentDictSize > c.dictionaryMaxBytes {
+				fallbackToPlain = true
+			}
+			// For byte array dictionaries, enforce hard limit of 1GB.
+			// The offsets are stored as uint32 (max 4GB), but a dictionary larger
+			// than 1GB doesn't make practical sense and wastes memory.
+			if !fallbackToPlain && c.columnType.Kind() == ByteArray && currentDictSize > 1024*1024*1024 {
 				fallbackToPlain = true
 			}
 		}
