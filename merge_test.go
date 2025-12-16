@@ -2987,9 +2987,9 @@ func TestMergeRowGroupsFromTestdataFiles(t *testing.T) {
 			var output bytes.Buffer
 			writer := parquet.NewWriter(&output, mergedRowGroups.Schema(),
 				parquet.DataPageStatistics(true),
-				parquet.PageBufferSize(1024*1024),      // 1 MiB
-				parquet.WriteBufferSize(256*1024),      // 256 KiB
-				parquet.MaxRowsPerRowGroup(1000000),    // 1M rows
+				parquet.PageBufferSize(1024*1024),       // 1 MiB
+				parquet.WriteBufferSize(256*1024),       // 256 KiB
+				parquet.MaxRowsPerRowGroup(1000000),     // 1M rows
 				parquet.DictionaryMaxBytes(2*1024*1024), // 2 MiB - limit dictionary size to prevent overflow
 			)
 
