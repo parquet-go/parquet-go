@@ -2,7 +2,9 @@ package parquet
 
 import (
 	"bytes"
+	"fmt"
 	"io"
+	"os"
 
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/plain"
@@ -18,6 +20,9 @@ type byteArrayPage struct {
 
 func newByteArrayPage(typ Type, columnIndex int16, numValues int32, values encoding.Values) *byteArrayPage {
 	data, offsets := values.ByteArray()
+	if len(offsets) != int(numValues)+1 {
+		fmt.Fprintf(os.Stderr, "BUG 412 creating invalid new byte array page: %d offsets, numValues=%d\n", len(offsets), numValues)
+	}
 	return &byteArrayPage{
 		typ:         typ,
 		values:      memory.SliceBufferFrom(data),
@@ -59,6 +64,10 @@ func (page *byteArrayPage) index(i int) []byte {
 	values := page.values.Slice()
 	j := offsets[i+0]
 	k := offsets[i+1]
+	if j > k {
+		fmt.Fprintf(os.Stderr, "BUG 412 byte array page index lookup invalid: %d offsets, %d values, j=%d, k=%d\n", len(offsets), len(values), j, k)
+		return values[0:0:0]
+	}
 	return values[j:k:k]
 }
 
