@@ -151,3 +151,27 @@ func TestWriteZeroStatisticsFields(t *testing.T) {
 		}
 	})
 }
+
+// TestWriterZeroRowGroupOrdinal verifies that the Ordinal field in RowGroup is
+// serialized for the first row group whose value is zero. Without writezero,
+// RowGroup{Ordinal:0} the serialized bytes [68, 0] will be omitted.
+func TestWriteZeroRowGroupOrdinal(t *testing.T) {
+	protocol := &thrift.CompactProtocol{}
+	rg := &format.RowGroup{
+		Ordinal: 0,
+	}
+	b, err := thrift.Marshal(protocol, rg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// | Bytes | Pos | Field	     | Value |
+	// |-------|-----|---------------|-------|
+	// | 25 12 |  1  | Columns       |  []   |
+	// | 22  0 |  2  | TotalByteSize |   0   |
+	// | 22  0 |  3  | NumRows	     |   0   |
+	// | 68  0 |  7  | Ordinal	     |   0   |
+	if !bytes.Equal(b, []byte{25, 12, 22, 0, 22, 0, 68, 0, 0}) {
+		t.Errorf("RowGroup{Ordinal:0} not found in serialized bytes: %v", b)
+	}
+}
