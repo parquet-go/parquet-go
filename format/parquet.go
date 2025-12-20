@@ -998,7 +998,10 @@ type RowGroup struct {
 	TotalCompressedSize int64 `thrift:"6,optional"`
 
 	// Row group ordinal in the file.
-	Ordinal int16 `thrift:"7,optional"`
+	// The writezero tag ensures ordinal 0 is serialized; without it, Ordinal=0
+	// would be omitted while Ordinal=1,2,... would be written, which breaks
+	// readers with strict validation for row group ordinals.
+	Ordinal int16 `thrift:"7,optional,writezero"`
 }
 
 // Empty struct to signal the order defined by the physical or logical type.
