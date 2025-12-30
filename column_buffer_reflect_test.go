@@ -1770,3 +1770,101 @@ func TestIssue316WriteValueFuncOfMapWithInvalidValue(t *testing.T) {
 		t.Errorf("expected 1 row, got %d", columns[0].Len())
 	}
 }
+
+func TestGenericWriterAnyPointerVsOptionalTag(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema *Schema
+		data   any
+	}{
+		{
+			name: "string_nil",
+			schema: SchemaOf(struct {
+				V string `parquet:"v,optional"`
+			}{}),
+			data: struct {
+				V *string `parquet:"v"`
+			}{V: nil},
+		},
+		{
+			name: "string_value",
+			schema: SchemaOf(struct {
+				V string `parquet:"v,optional"`
+			}{}),
+			data: struct {
+				V *string `parquet:"v"`
+			}{V: ptr("hello")},
+		},
+		{
+			name: "int32_nil",
+			schema: SchemaOf(struct {
+				V int32 `parquet:"v,optional"`
+			}{}),
+			data: struct {
+				V *int32 `parquet:"v"`
+			}{V: nil},
+		},
+		{
+			name: "int32_value",
+			schema: SchemaOf(struct {
+				V int32 `parquet:"v,optional"`
+			}{}),
+			data: struct {
+				V *int32 `parquet:"v"`
+			}{V: ptr(int32(42))},
+		},
+		{
+			name: "map_nil",
+			schema: SchemaOf(struct {
+				V map[string]string `parquet:"v,optional"`
+			}{}),
+			data: struct {
+				V *map[string]string `parquet:"v"`
+			}{V: nil},
+		},
+		{
+			name: "map_value",
+			schema: SchemaOf(struct {
+				V map[string]string `parquet:"v,optional"`
+			}{}),
+			data: struct {
+				V *map[string]string `parquet:"v"`
+			}{V: &map[string]string{"k": "v"}},
+		},
+		{
+			name: "map_non_nil_pointer_to_nil_map",
+			schema: SchemaOf(struct {
+				V map[string]string `parquet:"v,optional"`
+			}{}),
+			data: struct {
+				V *map[string]string `parquet:"v"`
+			}{V: new(map[string]string)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			writer := NewGenericWriter[any](buf, tt.schema)
+			_, err := writer.Write([]any{tt.data})
+			if err != nil {
+				t.Fatalf("error writing: %v", err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("error closing writer: %v", err)
+			}
+
+			rows, err := Read[any](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatalf("error reading: %v", err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("expected 1 row read, got %d", len(rows))
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T {
+	return &v
+}

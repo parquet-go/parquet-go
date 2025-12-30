@@ -495,6 +495,15 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 	zeroKeyValue := reflect.Zero(keyValueElem)
 
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, mapValue reflect.Value) {
+		if mapValue.Kind() == reflect.Pointer {
+			// Return early in the nil case to avoid dealing later with a zero value returned by Elem()
+			if mapValue.IsNil() {
+				writeValue(columns, levels, zeroKeyValue)
+				return
+			}
+			mapValue = mapValue.Elem()
+		}
+
 		// Check for invalid or nil map first to avoid panic on Interface() or Len()
 		if !mapValue.IsValid() || mapValue.IsNil() {
 			writeValue(columns, levels, zeroKeyValue)
