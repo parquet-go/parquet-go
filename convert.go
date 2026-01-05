@@ -570,8 +570,11 @@ func ConvertRowGroup(rowGroup RowGroup, conv Conversion) RowGroup {
 		isMissing := sourceColumn.node == nil
 
 		if isMissing {
-			// Find adjacent column for mirroring levels
-			adjacentChunk := findAdjacentColumnChunk(schema, i, columns, sourceMapping)
+			var adjacentChunk ColumnChunk
+			if leaf.maxRepetitionLevel > 0 {
+				// Find adjacent column for mirroring levels
+				adjacentChunk = findAdjacentColumnChunk(schema, i, columns, sourceMapping)
+			}
 
 			columns[i] = &missingColumnChunk{
 				typ:                leaf.node.Type(),
