@@ -1,6 +1,7 @@
 package parquet_test
 
 import (
+	"fmt"
 	"io"
 	"reflect"
 	"testing"
@@ -2125,5 +2126,57 @@ func TestConvertMissingRequiredInRepeatedGroupWithOptionalAdjacent(t *testing.T)
 	}
 	if !reflect.DeepEqual(result, expectedRow1) {
 		t.Errorf("row 1: expected %+v, got %+v", expectedRow1, result)
+	}
+}
+
+func BenchmarkConvertLargeSchemaDifferent(b *testing.B) {
+	const numColumns = 30000
+	const numCommonColumns = 25000 // 25k columns in common, 5k different
+
+	// Build two schemas with many columns, but with some differences
+	toFields := make(parquet.Group)
+	fromFields := make(parquet.Group)
+
+	for i := range numColumns {
+		var toFieldName, fromFieldName string
+		var fieldNode parquet.Node
+
+		if i < numCommonColumns {
+			// Common columns
+			toFieldName = fmt.Sprintf("field_%d", i)
+			fromFieldName = toFieldName
+		} else {
+			// Different columns for to vs from
+			toFieldName = fmt.Sprintf("to_field_%d", i)
+			fromFieldName = fmt.Sprintf("from_field_%d", i)
+		}
+
+		// Alternate between different types
+		switch i % 5 {
+		case 0:
+			fieldNode = parquet.Int(64)
+		case 1:
+			fieldNode = parquet.String()
+		case 2:
+			fieldNode = parquet.Int(32)
+		case 3:
+			fieldNode = parquet.Leaf(parquet.DoubleType)
+		case 4:
+			fieldNode = parquet.Leaf(parquet.BooleanType)
+		}
+
+		toFields[toFieldName] = fieldNode
+		fromFields[fromFieldName] = fieldNode
+	}
+
+	toSchema := parquet.NewSchema("benchmark", toFields)
+	fromSchema := parquet.NewSchema("benchmark", fromFields)
+
+	b.ResetTimer()
+	for b.Loop() {
+		_, err := parquet.Convert(toSchema, fromSchema)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }
