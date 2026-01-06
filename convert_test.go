@@ -2129,6 +2129,241 @@ func TestConvertMissingRequiredInRepeatedGroupWithOptionalAdjacent(t *testing.T)
 	}
 }
 
+// TestConvertMissingColumnSliceWithAdjacentPages tests that when slicing a missing page
+// with adjacent pages (for level mirroring), the adjacent reader is properly seeked.
+// This is a regression test for a bug where slicing a missing page didn't seek the adjacent reader.
+func TestConvertMissingColumnSliceWithAdjacentPages(t *testing.T) {
+	// Source schema has ID and Name columns
+	type SourceSchema struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"`
+	}
+
+	// Target schema has ID, Name, and Extra columns
+	// Extra is missing in source, so it needs to mirror levels from adjacent columns
+	type TargetSchema struct {
+		ID    int64  `parquet:"id"`
+		Extra string `parquet:"extra"` // Missing column that will need adjacent pages
+		Name  string `parquet:"name"`
+	}
+
+	sourceSchema := parquet.SchemaOf(&SourceSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	// Create test data with multiple rows
+	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
+	testData := []SourceSchema{
+		{ID: 1, Name: "first"},
+		{ID: 2, Name: "second"},
+		{ID: 3, Name: "third"},
+		{ID: 4, Name: "fourth"},
+		{ID: 5, Name: "fifth"},
+	}
+	if _, err := buffer.Write(testData); err != nil {
+		t.Fatal(err)
+	}
+
+	// Convert to target schema
+	conversion, err := parquet.Convert(targetSchema, sourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	chunks := convertedRowGroup.ColumnChunks()
+
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 column chunks, got %d", len(chunks))
+	}
+
+	// Get the Extra column chunk (index 1) - this should be a missing column
+	extraChunk := chunks[1]
+
+	// Read the page from the missing column
+	pages := extraChunk.Pages()
+	defer pages.Close()
+
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal("error reading page:", err)
+	}
+
+	// Test slicing the page at different offsets
+	testCases := []struct {
+		name  string
+		start int64
+		end   int64
+		want  int
+	}{
+		{"slice first row", 0, 1, 1},
+		{"slice middle rows", 1, 3, 2},
+		{"slice last row", 4, 5, 1},
+		{"slice multiple rows from middle", 2, 5, 3},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Slice the page
+			slicedPage := page.Slice(tc.start, tc.end)
+
+			// Verify the slice has the correct number of values
+			if slicedPage.NumValues() != tc.end-tc.start {
+				t.Errorf("sliced page NumValues: got %d, want %d",
+					slicedPage.NumValues(), tc.end-tc.start)
+			}
+
+			// Read values from the sliced page
+			reader := slicedPage.Values()
+			values := make([]parquet.Value, 10)
+			totalRead := 0
+
+			for {
+				n, err := reader.ReadValues(values)
+				if n > 0 {
+					// Verify that we can read the values and they have proper column indices
+					for i := range n {
+						if values[i].Column() != 1 { // Extra column is at index 1
+							t.Errorf("value has wrong column index: got %d, want 1",
+								values[i].Column())
+						}
+						// Missing required column should produce empty strings
+						if !values[i].IsNull() && values[i].String() != "" {
+							t.Errorf("missing required column should produce empty string, got %q",
+								values[i].String())
+						}
+					}
+					totalRead += n
+				}
+				if err != nil {
+					break
+				}
+			}
+
+			if totalRead != tc.want {
+				t.Errorf("read wrong number of values: got %d, want %d",
+					totalRead, tc.want)
+			}
+		})
+	}
+}
+
+// TestConvertMissingColumnSliceWithOptionalAdjacent tests slicing when the adjacent
+// column has optional values, ensuring levels are still properly mirrored
+func TestConvertMissingColumnSliceWithOptionalAdjacent(t *testing.T) {
+	type SourceSchema struct {
+		ID    int64   `parquet:"id"`
+		Value *string `parquet:"value,optional"` // Optional field with some nulls
+	}
+
+	type TargetSchema struct {
+		ID      int64   `parquet:"id"`
+		Value   *string `parquet:"value,optional"`
+		Missing string  `parquet:"missing"` // Missing required column
+	}
+
+	sourceSchema := parquet.SchemaOf(&SourceSchema{})
+	targetSchema := parquet.SchemaOf(&TargetSchema{})
+
+	// Create test data with mix of null and non-null values
+	val1 := "first"
+	val3 := "third"
+	val5 := "fifth"
+
+	buffer := parquet.NewGenericBuffer[SourceSchema](sourceSchema)
+	if _, err := buffer.Write([]SourceSchema{
+		{ID: 1, Value: &val1},
+		{ID: 2, Value: nil},
+		{ID: 3, Value: &val3},
+		{ID: 4, Value: nil},
+		{ID: 5, Value: &val5},
+		{ID: 6, Value: nil},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conversion, err := parquet.Convert(targetSchema, sourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	convertedRowGroup := parquet.ConvertRowGroup(buffer, conversion)
+	chunks := convertedRowGroup.ColumnChunks()
+
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(chunks))
+	}
+
+	// Get the missing column chunk
+	missingChunk := chunks[2] // Missing column
+
+	// Read the page from the missing column
+	pages := missingChunk.Pages()
+	defer pages.Close()
+
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal("error reading page:", err)
+	}
+
+	// Test slicing at different offsets to ensure adjacent reader seeking works
+	testCases := []struct {
+		name  string
+		start int64
+		end   int64
+		want  int
+	}{
+		{"slice first two rows", 0, 2, 2},
+		{"slice middle rows", 2, 4, 2},
+		{"slice last two rows", 4, 6, 2},
+		{"slice across null boundary", 1, 5, 4},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Slice the page
+			slicedPage := page.Slice(tc.start, tc.end)
+
+			// Verify the slice has the correct number of values
+			if slicedPage.NumValues() != tc.end-tc.start {
+				t.Errorf("sliced page NumValues: got %d, want %d",
+					slicedPage.NumValues(), tc.end-tc.start)
+			}
+
+			// Read values from the sliced page
+			reader := slicedPage.Values()
+			values := make([]parquet.Value, 10)
+			totalRead := 0
+
+			for {
+				n, err := reader.ReadValues(values)
+				if n > 0 {
+					// Verify that we can read the values and they have proper column indices
+					for i := range n {
+						if values[i].Column() != 2 { // Missing column is at index 2
+							t.Errorf("value has wrong column index: got %d, want 2",
+								values[i].Column())
+						}
+						// Missing required column should produce empty strings
+						if !values[i].IsNull() && values[i].String() != "" {
+							t.Errorf("missing required column should produce empty string, got %q",
+								values[i].String())
+						}
+					}
+					totalRead += n
+				}
+				if err != nil {
+					break
+				}
+			}
+
+			if totalRead != tc.want {
+				t.Errorf("read wrong number of values: got %d, want %d",
+					totalRead, tc.want)
+			}
+		})
+	}
+}
+
 func BenchmarkConvertLargeSchemaDifferent(b *testing.B) {
 	const numColumns = 30000
 	const numCommonColumns = 25000 // 25k columns in common, 5k different
