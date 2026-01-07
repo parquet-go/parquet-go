@@ -655,8 +655,20 @@ func makeLeafColumns(root *Column) []*Column {
 
 func makeFileRowGroups(file *File, columns []*Column) []FileRowGroup {
 	rowGroups := file.metadata.RowGroups
+
+	// Ensure ordinals are set
+	emptyOrdinals := true
+	for _, rg := range rowGroups {
+		if rg.Ordinal != 0 {
+			emptyOrdinals = false
+		}
+	}
+
 	fileRowGroups := make([]FileRowGroup, len(rowGroups))
 	for i := range fileRowGroups {
+		if emptyOrdinals {
+			rowGroups[i].Ordinal = int16(i)
+		}
 		fileRowGroups[i].init(file, columns, &rowGroups[i])
 	}
 	return fileRowGroups
