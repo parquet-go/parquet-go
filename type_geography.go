@@ -11,6 +11,10 @@ import (
 	"github.com/twpayne/go-geom/encoding/wkb"
 )
 
+func Geography(crs string, algorithm format.EdgeInterpolationAlgorithm) Node {
+	return Leaf(&geographyType{CRS: crs, Algorithm: algorithm})
+}
+
 type geographyType format.GeographyType
 
 func (t *geographyType) String() string { return (*format.GeographyType)(t).String() }
@@ -30,7 +34,7 @@ func (t *geographyType) ColumnOrder() *format.ColumnOrder { return byteArrayType
 func (t *geographyType) PhysicalType() *format.Type { return byteArrayType{}.PhysicalType() }
 
 func (t *geographyType) LogicalType() *format.LogicalType {
-	f := &format.LogicalType{Geography: &format.GeographyType{}}
+	f := &format.LogicalType{Geography: (*format.GeographyType)(t)}
 	if t.CRS == "" {
 		f.Geography.CRS = format.GeometryDefaultCRS
 	}
@@ -85,7 +89,20 @@ func (t *geographyType) AssignValue(dst reflect.Value, src Value) error {
 			return nil
 		}
 
-		data := src.byteArray()
+		data := src.Bytes()
+		g, err := wkb.Unmarshal(data)
+		if err != nil {
+			return err
+		}
+		dst.Set(reflect.ValueOf(g))
+		return nil
+	case reflect.TypeOf((*geom.T)(nil)).Elem():
+		if src.IsNull() {
+			dst.Set(reflect.Zero(dst.Type()))
+			return nil
+		}
+
+		data := src.Bytes()
 		g, err := wkb.Unmarshal(data)
 		if err != nil {
 			return err

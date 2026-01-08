@@ -11,6 +11,8 @@ import (
 	"github.com/twpayne/go-geom/encoding/wkb"
 )
 
+func Geometry(crs string) Node { return Leaf(&geometryType{CRS: crs}) }
+
 type geometryType format.GeometryType
 
 var geometryDefaultCRSLogicType = format.GeometryType{
@@ -84,7 +86,20 @@ func (t *geometryType) AssignValue(dst reflect.Value, src Value) error {
 			return nil
 		}
 
-		data := src.byteArray()
+		data := src.Bytes()
+		g, err := wkb.Unmarshal(data)
+		if err != nil {
+			return err
+		}
+		dst.Set(reflect.ValueOf(g))
+		return nil
+	case reflect.TypeOf((*geom.T)(nil)).Elem():
+		if src.IsNull() {
+			dst.Set(reflect.Zero(dst.Type()))
+			return nil
+		}
+
+		data := src.Bytes()
 		g, err := wkb.Unmarshal(data)
 		if err != nil {
 			return err

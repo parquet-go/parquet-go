@@ -2,6 +2,7 @@ package format
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/parquet-go/parquet-go/deprecated"
 )
@@ -300,21 +301,47 @@ const (
 	Karney    EdgeInterpolationAlgorithm = 4
 )
 
+const (
+	SphericalName = "SPHERICAL"
+	VincentyName  = "VINCENTY"
+	ThomasName    = "THOMAS"
+	AndoyerName   = "ANDOYER"
+	KarneyName    = "KARNEY"
+)
+
 func (e EdgeInterpolationAlgorithm) String() string {
 	switch e {
 	case Spherical:
-		return "SPHERICAL"
+		return SphericalName
 	case Vincenty:
-		return "VINCENTY"
+		return VincentyName
 	case Thomas:
-		return "THOMAS"
+		return ThomasName
 	case Andoyer:
-		return "ANDOYER"
+		return AndoyerName
 	case Karney:
-		return "KARNEY"
+		return KarneyName
 	default:
 		return "EdgeInterpolationAlgorithm(?)"
 	}
+}
+
+func (e *EdgeInterpolationAlgorithm) FromString(s string) error {
+	switch strings.ToUpper(s) {
+	case SphericalName:
+		*e = Spherical
+	case VincentyName:
+		*e = Vincenty
+	case ThomasName:
+		*e = Thomas
+	case AndoyerName:
+		*e = Andoyer
+	case KarneyName:
+		*e = Karney
+	default:
+		return fmt.Errorf("invalid EdgeInterpolationAlgorithm: %q", s)
+	}
+	return nil
 }
 
 const (
