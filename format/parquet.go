@@ -317,6 +317,11 @@ func (e EdgeInterpolationAlgorithm) String() string {
 	}
 }
 
+const (
+	defaultCRS         = "OGC:CRS84"
+	GeometryDefaultCRS = defaultCRS
+)
+
 // Embedded Geometry logical type annotation
 //
 // Geospatial features in the Well-Known Binary (WKB) format and edges interpolation
@@ -336,10 +341,12 @@ type GeometryType struct {
 func (t *GeometryType) String() string {
 	crs := t.CRS
 	if crs == "" {
-		crs = "OGC:CRS84"
+		crs = GeometryDefaultCRS
 	}
 	return fmt.Sprintf("GEOMETRY(%q)", crs)
 }
+
+const GeographyDefaultCRS = defaultCRS
 
 // Embedded Geography logical type annotation
 //
@@ -364,7 +371,7 @@ type GeographyType struct {
 func (t *GeographyType) String() string {
 	crs := t.CRS
 	if crs == "" {
-		crs = "OGC:CRS84"
+		crs = GeographyDefaultCRS
 	}
 	return fmt.Sprintf("GEOGRAPHY(%q, %s)", crs, t.Algorithm)
 }
