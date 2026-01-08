@@ -64,7 +64,7 @@ func protoFieldNameFromTag(tag reflect.StructTag) string {
 	if protoTag == "" {
 		return ""
 	}
-	for _, part := range strings.Split(protoTag, ",") {
+	for part := range strings.SplitSeq(protoTag, ",") {
 		if name, value, ok := strings.Cut(part, "="); ok && name == "name" {
 			return value
 		}
