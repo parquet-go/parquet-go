@@ -317,6 +317,44 @@ func TestSchemaOf(t *testing.T) {
 	required fixed_len_byte_array(16) B (UUID);
 }`,
 		},
+
+		// Test that protobuf tag names are used as column names
+		{
+			value: new(struct {
+				UserId    string `protobuf:"bytes,1,opt,name=user_id,proto3"`
+				FirstName string `protobuf:"bytes,2,opt,name=first_name,json=firstName,proto3"`
+			}),
+			print: `message {
+	required binary user_id (STRING);
+	required binary first_name (STRING);
+}`,
+		},
+
+		// Test that explicit parquet tag name takes precedence over protobuf tag name
+		{
+			value: new(struct {
+				UserId string `protobuf:"bytes,1,opt,name=proto_user_id,proto3" parquet:"parquet_user_id"`
+			}),
+			print: `message {
+	required binary parquet_user_id (STRING);
+}`,
+		},
+
+		// Test protobuf tags with nested structs
+		{
+			value: new(struct {
+				User struct {
+					Id   int64  `protobuf:"varint,1,opt,name=id,proto3"`
+					Name string `protobuf:"bytes,2,opt,name=name,proto3"`
+				} `protobuf:"bytes,1,opt,name=user,proto3"`
+			}),
+			print: `message {
+	required group user {
+		required int64 id (INT(64,true));
+		required binary name (STRING);
+	}
+}`,
+		},
 	}
 
 	for _, test := range tests {
