@@ -401,7 +401,11 @@ type valuesSliceBuffer struct {
 
 func (v *valuesSliceBuffer) reserve(n int) [][]Value {
 	if n <= cap(v.values) {
-		return v.values[:n]
+		v.values = v.values[:n]
+		// Clear any stale slices from previous use to prevent data corruption
+		// when reusing pooled buffers.
+		clear(v.values)
+		return v.values
 	}
 	// we can try to keep growing by the power of two, but we care more about the
 	// memory footprint so  this should suffice.
