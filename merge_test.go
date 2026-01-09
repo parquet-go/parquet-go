@@ -1403,6 +1403,20 @@ func TestMergeNodes(t *testing.T) {
 				"name": parquet.Required(parquet.String()), // STRING preserved
 			}),
 		},
+		{
+			name: "preserve VARIANT logical type",
+			nodes: []parquet.Node{
+				parquet.Group{
+					"attributes": parquet.Variant(),
+				},
+				parquet.Group{
+					"attributes": parquet.Variant(),
+				},
+			},
+			expected: parquet.Required(parquet.Group{
+				"attributes": parquet.Variant(),
+			}),
+		},
 	}
 
 	for _, test := range tests {
