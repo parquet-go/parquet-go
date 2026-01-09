@@ -34,7 +34,7 @@ func (t *geographyType) ColumnOrder() *format.ColumnOrder { return byteArrayType
 func (t *geographyType) PhysicalType() *format.Type { return byteArrayType{}.PhysicalType() }
 
 func (t *geographyType) LogicalType() *format.LogicalType {
-	f := &format.LogicalType{Geography: (*format.GeographyType)(t)}
+	f := &format.LogicalType{Geography: &format.GeographyType{}}
 	if t.CRS == "" {
 		f.Geography.CRS = format.GeometryDefaultCRS
 	}
