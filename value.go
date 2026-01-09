@@ -43,7 +43,7 @@ type Value struct {
 	// levels
 	definitionLevel byte
 	repetitionLevel byte
-	columnIndex     int16 // XOR so the zero-value is -1
+	columnIndex     uint16 // XOR so the zero-value is -1
 }
 
 // ValueReader is an interface implemented by types that support reading
@@ -478,7 +478,13 @@ func (v *Value) uint64() uint64          { return v.u64 }
 func (v *Value) byteArray() []byte       { return unsafe.Slice(v.ptr, v.u64) }
 func (v *Value) string() string          { return unsafe.String(v.ptr, v.u64) }
 func (v *Value) be128() *[16]byte        { return (*[16]byte)(unsafe.Pointer(v.ptr)) }
-func (v *Value) column() int             { return int(^v.columnIndex) }
+func (v *Value) column() int {
+	col := ^v.columnIndex
+	if col == math.MaxUint16 {
+		return -1
+	}
+	return int(col)
+}
 
 func (v Value) convertToBoolean(x bool) Value {
 	v.kind = ^int8(Boolean)

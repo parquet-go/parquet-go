@@ -13,10 +13,10 @@ type byteArrayPage struct {
 	typ         Type
 	values      memory.SliceBuffer[byte]
 	offsets     memory.SliceBuffer[uint32]
-	columnIndex int16
+	columnIndex uint16
 }
 
-func newByteArrayPage(typ Type, columnIndex int16, numValues int32, values encoding.Values) *byteArrayPage {
+func newByteArrayPage(typ Type, columnIndex uint16, numValues int32, values encoding.Values) *byteArrayPage {
 	data, offsets := values.ByteArray()
 	return &byteArrayPage{
 		typ:         typ,
