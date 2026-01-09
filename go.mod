@@ -10,6 +10,7 @@ require (
 	github.com/parquet-go/bitpack v1.0.0
 	github.com/parquet-go/jsonlite v1.0.0
 	github.com/pierrec/lz4/v4 v4.1.21
+	github.com/twpayne/go-geom v1.6.1
 	golang.org/x/sys v0.38.0
 	google.golang.org/protobuf v1.34.2
 )

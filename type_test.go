@@ -3,10 +3,14 @@ package parquet_test
 import (
 	"bytes"
 	"io"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
+	"github.com/twpayne/go-geom"
+	"github.com/twpayne/go-geom/encoding/wkb"
 )
 
 func TestLogicalTypesEqual(t *testing.T) {
@@ -314,6 +318,50 @@ func TestEqualTypes(t *testing.T) {
 			type1:    parquet.Decimal(10, 2, parquet.Int32Type).Type(),
 			type2:    parquet.Decimal(10, 2, parquet.Int64Type).Type(),
 			expected: false,
+		},
+		// Geometry logical types
+		{
+			name:     "geometry types with same CRS",
+			type1:    parquet.Geometry(format.GeometryDefaultCRS).Type(),
+			type2:    parquet.Geometry(format.GeometryDefaultCRS).Type(),
+			expected: true,
+		},
+		{
+			name:     "geometry types with different CRS",
+			type1:    parquet.Geometry(format.GeometryDefaultCRS).Type(),
+			type2:    parquet.Geometry("OGC:CRS83").Type(),
+			expected: false,
+		},
+		{
+			name:     "geometry with empty CRS vs default CRS",
+			type1:    parquet.Geometry("").Type(),
+			type2:    parquet.Geometry(format.GeometryDefaultCRS).Type(),
+			expected: true,
+		},
+		// Geography logical types
+		{
+			name:     "geography types with same CRS and algorithm",
+			type1:    parquet.Geography(format.GeographyDefaultCRS, 0).Type(),
+			type2:    parquet.Geography(format.GeographyDefaultCRS, 0).Type(),
+			expected: true,
+		},
+		{
+			name:     "geography types with different CRS",
+			type1:    parquet.Geography(format.GeographyDefaultCRS, format.Karney).Type(),
+			type2:    parquet.Geography("OGC:CRS83", format.Karney).Type(),
+			expected: false,
+		},
+		{
+			name:     "geography types with same CRS but different algorithm",
+			type1:    parquet.Geography(format.GeographyDefaultCRS, format.Karney).Type(),
+			type2:    parquet.Geography(format.GeographyDefaultCRS, format.Andoyer).Type(),
+			expected: false,
+		},
+		{
+			name:     "geography with empty CRS vs default CRS",
+			type1:    parquet.Geography("", format.Spherical).Type(),
+			type2:    parquet.Geography(format.GeographyDefaultCRS, format.Spherical).Type(),
+			expected: true,
 		},
 	}
 
@@ -624,5 +672,69 @@ func TestIssue326(t *testing.T) {
 	// Verify second row has NULL
 	if rows[1].CreatedAt != nil {
 		t.Errorf("expected second row to have nil CreatedAt, got %v", rows[1].CreatedAt)
+	}
+}
+
+func TestGeometry(t *testing.T) {
+	type Record struct {
+		Geometry  geom.T `parquet:"geometry,optional,geometry(OGC:CRS84)"`
+		Geography geom.T `parquet:"geography,optional,geography(OGC:CRS84:Vincenty)"`
+		WKBBytes  []byte `parquet:"wkb_bytes,optional,geometry"`
+	}
+
+	geomBytes, err := wkb.Marshal(geom.NewPointFlat(geom.XY, []float64{0, 0}), wkb.NDR)
+	if err != nil {
+		t.Fatalf("failed to marshal geometry: %v", err)
+	}
+
+	records := []Record{
+		{
+			Geometry:  geom.NewPointFlat(geom.XY, []float64{0, 0}),
+			Geography: geom.NewPointFlat(geom.XY, []float64{0, 0}),
+			WKBBytes:  geomBytes,
+		},
+		{
+			Geometry:  nil,
+			Geography: nil,
+			WKBBytes:  nil,
+		}, // NULL geometries
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close: %v", err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]Record, 2)
+	n, _ := reader.Read(readRecords)
+	readRecords = readRecords[:n]
+
+	r := readRecords[0]
+	if !reflect.DeepEqual(r.Geometry, records[0].Geometry) {
+		t.Errorf("geometry mismatch: got %v, want %v", r.Geometry, records[0].Geometry)
+	}
+	if !reflect.DeepEqual(r.Geography, records[0].Geography) {
+		t.Errorf("geography mismatch: got %v, want %v", r.Geography, records[0].Geography)
+	}
+	if !bytes.Equal(r.WKBBytes, records[0].WKBBytes) {
+		t.Errorf("WKB bytes mismatch: got %v, want %v", r.WKBBytes, records[0].WKBBytes)
+	}
+
+	r = readRecords[1]
+	if r.Geometry != nil {
+		t.Errorf("expected nil geometry, got %v", r.Geometry)
+	}
+	if r.Geography != nil {
+		t.Errorf("expected nil geography, got %v", r.Geography)
+	}
+	if r.WKBBytes != nil {
+		t.Errorf("expected nil WKBBytes, got %v", r.WKBBytes)
 	}
 }
