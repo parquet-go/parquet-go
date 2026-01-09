@@ -214,15 +214,13 @@ func makeWriteFunc[T any](t reflect.Type, writeRows writeRowsFunc) writeFunc[T] 
 	}
 }
 
+// Close must be called after all values were produced to the writer in order to
+// flush all buffers and write the parquet footer. The writer can only be reused
+// if Reset is called first. Failure to do so will result in defined behavior.
 func (w *GenericWriter[T]) Close() error {
 	if err := w.base.Close(); err != nil {
 		return err
 	}
-	// Nil out the columns slice to allow the column buffers to be garbage
-	// collected and to ensure that any subsequent use of this writer after
-	// Close will result in a clear panic rather than operating on closed
-	// resources.
-	w.columns = nil
 	return nil
 }
 
@@ -230,6 +228,9 @@ func (w *GenericWriter[T]) Flush() error {
 	return w.base.Flush()
 }
 
+// Reset clears the state of the writer without flushing any of the buffers,
+// and setting the output to the io.Writer passed as argument, allowing the
+// writer to be reused to produce another parquet file.
 func (w *GenericWriter[T]) Reset(output io.Writer) {
 	w.base.Reset(output)
 }
@@ -1713,8 +1714,8 @@ func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
 	return numRows, nil
 }
 
-// Close closes the column writer and releases all dependent resources.
-// New values should not be written after the ColumnWriter is closed.
+// Close closes the column writer and resets all dependent resources.
+// It can be reused after Close is called.
 func (c *ColumnWriter) Close() (err error) {
 	if c.columnBuffer == nil {
 		return nil
@@ -1723,7 +1724,6 @@ func (c *ColumnWriter) Close() (err error) {
 		return err
 	}
 	c.columnBuffer.Reset()
-	c.columnBuffer = nil
 	return nil
 }
 
