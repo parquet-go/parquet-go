@@ -120,3 +120,56 @@ func TestGetNodeTags(t *testing.T) {
 		})
 	}
 }
+
+func TestProtoFieldNameFromTag(t *testing.T) {
+	tests := []struct {
+		name      string
+		structTag reflect.StructTag
+		expected  string
+	}{
+		{
+			name:      "standard protobuf tag",
+			structTag: reflect.StructTag(`protobuf:"bytes,1,opt,name=user_id,proto3"`),
+			expected:  "user_id",
+		},
+		{
+			name:      "protobuf tag with json field",
+			structTag: reflect.StructTag(`protobuf:"bytes,2,opt,name=first_name,json=firstName,proto3"`),
+			expected:  "first_name",
+		},
+		{
+			name:      "protobuf tag with varint type",
+			structTag: reflect.StructTag(`protobuf:"varint,3,opt,name=age,proto3"`),
+			expected:  "age",
+		},
+		{
+			name:      "no protobuf tag",
+			structTag: reflect.StructTag(`json:"user_id"`),
+			expected:  "",
+		},
+		{
+			name:      "empty protobuf tag",
+			structTag: reflect.StructTag(`protobuf:""`),
+			expected:  "",
+		},
+		{
+			name:      "protobuf tag without name field",
+			structTag: reflect.StructTag(`protobuf:"bytes,1,opt,proto3"`),
+			expected:  "",
+		},
+		{
+			name:      "protobuf tag with parquet tag (parquet takes precedence via schema logic)",
+			structTag: reflect.StructTag(`protobuf:"bytes,1,opt,name=proto_name,proto3" parquet:"parquet_name"`),
+			expected:  "proto_name",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := protoFieldNameFromTag(test.structTag)
+			if actual != test.expected {
+				t.Errorf("expected %q, got %q", test.expected, actual)
+			}
+		})
+	}
+}
