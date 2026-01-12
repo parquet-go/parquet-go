@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -3284,5 +3285,72 @@ func TestIssue118(t *testing.T) {
 	}
 	if len(out[3].Classes) != 0 {
 		t.Errorf("row 3 classes length: got %d, want 0", len(out[3].Classes))
+	}
+}
+
+func TestWriteOptionalJSONRawMessage(t *testing.T) {
+	type Row struct {
+		Buf json.RawMessage `parquet:"buf,json,optional"`
+	}
+
+	roundTrip := func(val json.RawMessage) json.RawMessage {
+		var buf bytes.Buffer
+		w := parquet.NewGenericWriter[Row](&buf)
+		if _, err := w.Write([]Row{{Buf: val}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		r := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+		out := make([]Row, 1)
+		if n, err := r.Read(out); n != len(out) {
+			t.Fatal(err)
+		}
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return out[0].Buf
+	}
+
+	for _, tt := range []struct {
+		name     string
+		input    json.RawMessage
+		expected json.RawMessage
+	}{
+		{
+			name:     "json object",
+			input:    json.RawMessage(`{"test":"value"}`),
+			expected: json.RawMessage(`{"test":"value"}`),
+		},
+		{
+			name:     "null",
+			input:    json.RawMessage(`null`),
+			expected: json.RawMessage(`null`),
+		},
+		{
+			name:     "nil",
+			input:    nil,
+			expected: nil,
+		},
+		{
+			name:     "json object formatting preserved",
+			input:    json.RawMessage(`{    "test" : "value" }`),
+			expected: json.RawMessage(`{    "test" : "value" }`),
+		},
+		// The tradeoff for the performant direct write is we don't parse or validate the
+		// JSON; therefore, this is allowed.
+		{
+			name:     "invalid json",
+			input:    json.RawMessage(`{{`),
+			expected: json.RawMessage(`{{`),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := roundTrip(tt.input); string(got) != string(tt.expected) {
+				t.Fatalf("optional json.RawMessage round-trip mismatch: got=%q want=%q", got, tt.expected)
+			}
+		})
 	}
 }
