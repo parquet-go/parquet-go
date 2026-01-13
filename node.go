@@ -1,8 +1,10 @@
 package parquet
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -382,16 +384,61 @@ func goTypeOfGroup(node Node) reflect.Type {
 	fields := node.Fields()
 	structFields := make([]reflect.StructField, len(fields))
 	for i, field := range fields {
-		structFields[i].Name = exportedStructFieldName(field.Name())
+		if isValidGoIdentifier(field.Name()) {
+			structFields[i].Name = exportedStructFieldName(field.Name())
+		} else if strings.IndexByte(field.Name(), ',') != -1 {
+			// Ruh-roh! We cannot create a valid Go identifier, but neither can we
+			// create a valid Go struct tag for mapping a synthetic field name.
+			panic(fmt.Sprintf("schema node contains an invalid name %q: fields must not have commas in their name", field.Name()))
+		} else {
+			// Assign a synthetic name. The struct tag below will map this name
+			// to the correct column name in the schema.
+			structFields[i].Name = "SyntheticField__" + strconv.Itoa(i+1)
+		}
 		structFields[i].Type = field.GoType()
-		// TODO: can we reconstruct a struct tag that would be valid if a value
-		// of this type were passed to SchemaOf?
+		structFields[i].Tag = reflect.StructTag(`parquet:` + strconv.Quote(field.Name()))
 	}
 	return reflect.StructOf(structFields)
 }
 
+// From the language spec: https://go.dev/ref/spec#Keywords
+var goKeywords = map[string]struct{}{
+	"break": {}, "default": {}, "func": {}, "interface": {}, "select": {},
+	"case": {}, "defer": {}, "go": {}, "map": {}, "struct": {},
+	"chan": {}, "else": {}, "goto": {}, "package": {}, "switch": {},
+	"const": {}, "fallthrough": {}, "if": {}, "range": {}, "type": {},
+	"continue": {}, "for": {}, "import": {}, "return": {}, "var": {},
+}
+
+func isValidGoIdentifier(name string) bool {
+	for i, r := range name {
+		if r == '_' || unicode.IsLetter(r) {
+			continue
+		}
+		if i == 0 {
+			// First character of identifier must be a letter or an underscore.
+			return false
+		}
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	// It is composed of all valid characters. The last test is
+	// to make sure this is not a Go keyword.
+	_, isKeyword := goKeywords[name]
+	return !isKeyword
+}
+
 func exportedStructFieldName(name string) string {
 	firstRune, size := utf8.DecodeRuneInString(name)
+	if unicode.IsUpper(firstRune) {
+		return name
+	}
+	if firstRune == '_' {
+		// If it starts with an underscore, we can't just capitalize the first letter.
+		// So we add a capital-letter prefix to make the name exported.
+		return "X" + name
+	}
 	return string([]rune{unicode.ToUpper(firstRune)}) + name[size:]
 }
 

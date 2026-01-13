@@ -765,3 +765,52 @@ func TestEncodingOf(t *testing.T) {
 		})
 	}
 }
+
+func TestGoTypeOfGroup(t *testing.T) {
+	groupNode := Group{
+		// Some invalid names because they are Go keywords
+		"for":  Leaf(Int32Type),
+		"if":   Leaf(Int64Type),
+		"type": Leaf(BooleanType),
+		// Invalid because they contain invalid characters
+		"$abc":        Uint(32),
+		`abc"def"ghi`: Uint(64),
+		// Needs prefix to export
+		"_underscore_": String(),
+		// Normal names
+		"AlreadyExported": Leaf(ByteArrayType),
+		"not_exported":    Leaf(FloatType),
+	}
+	goType := groupNode.GoType()
+	var expectedType struct {
+		SyntheticField__1 int32   `parquet:"$abc"`
+		AlreadyExported   []byte  `parquet:"AlreadyExported"`
+		X_underscore_     []byte  `parquet:"_underscore_"`
+		SyntheticField__4 int64   `parquet:"abc\"def\"ghi"`
+		SyntheticField__5 int32   `parquet:"for"`
+		SyntheticField__6 int64   `parquet:"if"`
+		Not_exported      float32 `parquet:"not_exported"`
+		SyntheticField__8 bool    `parquet:"type"`
+	}
+	if !goType.AssignableTo(reflect.TypeOf(expectedType)) {
+		t.Errorf("Unexpected GoType for group: %v", goType)
+	}
+
+	// GoType is not possible for a group with a field
+	// whose name contains a comma since we cannot encode
+	// the field name into a valid Go struct tag value.
+	var p any
+	func() {
+		defer func() {
+			p = recover()
+		}()
+		Group{
+			"a,b,c": String(),
+		}.GoType()
+	}()
+	if p == nil {
+		t.Error("expected GoType() to panic for a group with a field whose name contains a comma")
+	} else {
+		t.Log(p)
+	}
+}
