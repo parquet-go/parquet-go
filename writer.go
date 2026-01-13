@@ -2045,16 +2045,20 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 		definitionLevels := page.DefinitionLevels()
 
 		if c.maxRepetitionLevel > 0 {
-			accumulateLevelHistogram(c.repetitionLevelHistogram, repetitionLevels)
-			c.pageRepetitionLevelHistograms = appendPageLevelHistogram(
-				c.pageRepetitionLevelHistograms, repetitionLevels, c.maxRepetitionLevel,
+			c.pageRepetitionLevelHistograms = accumulateAndAppendPageLevelHistogram(
+				c.repetitionLevelHistogram,
+				c.pageRepetitionLevelHistograms,
+				repetitionLevels,
+				c.maxRepetitionLevel,
 			)
 		}
 
 		if c.maxDefinitionLevel > 0 {
-			accumulateLevelHistogram(c.definitionLevelHistogram, definitionLevels)
-			c.pageDefinitionLevelHistograms = appendPageLevelHistogram(
-				c.pageDefinitionLevelHistograms, definitionLevels, c.maxDefinitionLevel,
+			c.pageDefinitionLevelHistograms = accumulateAndAppendPageLevelHistogram(
+				c.definitionLevelHistogram,
+				c.pageDefinitionLevelHistograms,
+				definitionLevels,
+				c.maxDefinitionLevel,
 			)
 		}
 	}
