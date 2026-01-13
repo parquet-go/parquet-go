@@ -383,63 +383,70 @@ func goTypeOfLeaf(node Node) reflect.Type {
 func goTypeOfGroup(node Node) reflect.Type {
 	fields := node.Fields()
 	structFields := make([]reflect.StructField, len(fields))
+	names := make(map[string]struct{}, len(fields))
 	for i, field := range fields {
-		if isValidGoIdentifier(field.Name()) {
-			structFields[i].Name = exportedStructFieldName(field.Name())
-		} else if strings.IndexByte(field.Name(), ',') != -1 {
+		if strings.IndexByte(field.Name(), ',') != -1 {
 			// Ruh-roh! We cannot create a valid Go identifier, but neither can we
 			// create a valid Go struct tag for mapping a synthetic field name.
 			panic(fmt.Sprintf("schema node contains an invalid name %q: fields must not have commas in their name", field.Name()))
-		} else {
-			// Assign a synthetic name. The struct tag below will map this name
-			// to the correct column name in the schema.
-			structFields[i].Name = "SyntheticField__" + strconv.Itoa(i+1)
 		}
+		name := exportedStructFieldName(field.Name())
+		for {
+			if _, alreadyUsed := names[name]; !alreadyUsed {
+				break
+			}
+			name += "_" // add suffix to fix collision
+		}
+		names[name] = struct{}{}
+		structFields[i].Name = name
 		structFields[i].Type = field.GoType()
 		structFields[i].Tag = reflect.StructTag(`parquet:` + strconv.Quote(field.Name()))
 	}
 	return reflect.StructOf(structFields)
 }
 
-// From the language spec: https://go.dev/ref/spec#Keywords
-var goKeywords = map[string]struct{}{
-	"break": {}, "default": {}, "func": {}, "interface": {}, "select": {},
-	"case": {}, "defer": {}, "go": {}, "map": {}, "struct": {},
-	"chan": {}, "else": {}, "goto": {}, "package": {}, "switch": {},
-	"const": {}, "fallthrough": {}, "if": {}, "range": {}, "type": {},
-	"continue": {}, "for": {}, "import": {}, "return": {}, "var": {},
-}
-
-func isValidGoIdentifier(name string) bool {
-	for i, r := range name {
-		if r == '_' || unicode.IsLetter(r) {
-			continue
-		}
-		if i == 0 {
-			// First character of identifier must be a letter or an underscore.
-			return false
-		}
-		if !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	// It is composed of all valid characters. The last test is
-	// to make sure this is not a Go keyword.
-	_, isKeyword := goKeywords[name]
-	return !isKeyword
-}
-
 func exportedStructFieldName(name string) string {
 	firstRune, size := utf8.DecodeRuneInString(name)
 	if unicode.IsUpper(firstRune) {
+		return sanitize(name)
+	}
+	upperFirstRune := unicode.ToUpper(firstRune)
+	if upperFirstRune == firstRune {
+		// First character was not a letter, so just trying to upper-case the first
+		// character won't export the field. We need to add an upper-case prefix instead.
+		return "X" + sanitize(name)
+	}
+	return string([]rune{upperFirstRune}) + sanitize(name[size:])
+}
+
+// sanitize replaces any character that are invalid in a Go identifier with "_".
+func sanitize(name string) string {
+	if isSanitized(name) {
+		// Fast path: name is fine, no need to allocate or compute anything.
 		return name
 	}
-	if firstRune == '_' {
-		// If it starts with an underscore, we can't just capitalize the first letter.
-		// So we add a capital-letter prefix to make the name exported.
-		return "X" + name
+	var newName strings.Builder
+	for _, r := range name {
+		if isValidInGoIdent(r) {
+			newName.WriteRune(r)
+		} else {
+			newName.WriteByte('_')
+		}
 	}
-	return string([]rune{unicode.ToUpper(firstRune)}) + name[size:]
+	return newName.String()
+}
+
+func isSanitized(name string) bool {
+	for _, r := range name {
+		if !isValidInGoIdent(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidInGoIdent(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 func isList(node Node) bool {

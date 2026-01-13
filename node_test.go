@@ -7,6 +7,7 @@ import (
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/compress/gzip"
 	"github.com/parquet-go/parquet-go/compress/snappy"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
@@ -768,29 +769,38 @@ func TestEncodingOf(t *testing.T) {
 
 func TestGoTypeOfGroup(t *testing.T) {
 	groupNode := Group{
-		// Some invalid names because they are Go keywords
-		"for":  Leaf(Int32Type),
-		"if":   Leaf(Int64Type),
-		"type": Leaf(BooleanType),
-		// Invalid because they contain invalid characters
-		"$abc":        Uint(32),
-		`abc"def"ghi`: Uint(64),
-		// Needs prefix to export
-		"_underscore_": String(),
 		// Normal names
 		"AlreadyExported": Leaf(ByteArrayType),
 		"not_exported":    Leaf(FloatType),
+		// Go keywords are okay because they get upper-cased
+		"for":  Leaf(Int32Type),
+		"if":   Leaf(Int64Type),
+		"type": Leaf(BooleanType),
+		// Needs prefix to export
+		"_underscore_": String(),
+		"123":          String(),
+		// Invalid because they contain invalid characters
+		"$abc":        Uint(32),
+		`abc"def"ghi`: Uint(64),
+		// Conflicts
+		"alreadyExported": Leaf(DoubleType),
+		"_abc":            Leaf(Int96Type),
+		"@abc":            Leaf(FixedLenByteArrayType(4)),
 	}
 	goType := groupNode.GoType()
 	var expectedType struct {
-		SyntheticField__1 int32   `parquet:"$abc"`
-		AlreadyExported   []byte  `parquet:"AlreadyExported"`
-		X_underscore_     []byte  `parquet:"_underscore_"`
-		SyntheticField__4 int64   `parquet:"abc\"def\"ghi"`
-		SyntheticField__5 int32   `parquet:"for"`
-		SyntheticField__6 int64   `parquet:"if"`
-		Not_exported      float32 `parquet:"not_exported"`
-		SyntheticField__8 bool    `parquet:"type"`
+		X_abc            int32            `parquet:"$abc"`
+		X123             []byte           `parquet:"123"`
+		X_abc_           [4]byte          `parquet:"@abc"`
+		AlreadyExported  []byte           `parquet:"AlreadyExported"`
+		X_abc__          deprecated.Int96 `parquet:"_abc"`
+		X_underscore_    []byte           `parquet:"_underscore_"`
+		Abc_def_ghi      int64            `parquet:"abc\"def\"ghi"`
+		AlreadyExported_ float64          `parquet:"alreadyExported"`
+		For              int32            `parquet:"for"`
+		If               int64            `parquet:"if"`
+		Not_exported     float32          `parquet:"not_exported"`
+		Type             bool             `parquet:"type"`
 	}
 	if !goType.AssignableTo(reflect.TypeOf(expectedType)) {
 		t.Errorf("Unexpected GoType for group: %v", goType)
