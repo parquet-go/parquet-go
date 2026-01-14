@@ -32,6 +32,8 @@ func (variantNode) Type() Type { return &variantType{} }
 
 type variantType format.VariantType
 
+var variantLogicalType = format.LogicalType{Variant: new(format.VariantType)}
+
 func (t *variantType) String() string { return (*format.VariantType)(t).String() }
 
 func (t *variantType) Kind() Kind { panic("cannot call Kind on parquet VARIANT type") }
@@ -50,9 +52,7 @@ func (t *variantType) ColumnOrder() *format.ColumnOrder { return nil }
 
 func (t *variantType) PhysicalType() *format.Type { return nil }
 
-func (t *variantType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{Variant: (*format.VariantType)(t)}
-}
+func (t *variantType) LogicalType() *format.LogicalType { return &variantLogicalType }
 
 func (t *variantType) ConvertedType() *deprecated.ConvertedType { return nil }
 
