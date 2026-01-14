@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -737,4 +738,51 @@ func TestGeometry(t *testing.T) {
 	if r.WKBBytes != nil {
 		t.Errorf("expected nil WKBBytes, got %v", r.WKBBytes)
 	}
+}
+
+func TestShreddedVariant(t *testing.T) {
+	// These are just error cases. Non-error cases are covered in TestSchemaRoundTrip.
+	errTestCases := []parquet.Node{
+		parquet.Variant(),
+		parquet.Map(parquet.String(), parquet.Leaf(parquet.ByteArrayType)),
+		parquet.Decimal(0, 39, parquet.FixedLenByteArrayType(16)),
+		parquet.Uint(8),
+		parquet.Uint(16),
+		parquet.Uint(32),
+		parquet.Uint(64),
+		parquet.Repeated(parquet.Leaf(parquet.Int32Type)),
+		parquet.Repeated(parquet.String()),
+		parquet.Enum(),
+		parquet.Geometry(format.GeometryDefaultCRS),
+		parquet.Geography(format.GeographyDefaultCRS, format.Spherical),
+		// Also test some logical types that we don't yet support or provide API to construct
+		parquet.Leaf(logicalType{Type: parquet.ByteArrayType, lt: format.LogicalType{Unknown: &format.NullType{}}}),
+		parquet.Leaf(logicalType{Type: parquet.ByteArrayType, lt: format.LogicalType{Float16: &format.Float16Type{}}}),
+	}
+	for _, testCase := range errTestCases {
+		// Direct
+		_, err := parquet.ShreddedVariant(testCase)
+		if err == nil {
+			t.Errorf("ShreddedVariant(%v) should have returned an error", testCase)
+		} else if !strings.Contains(err.Error(), "not allowed") {
+			t.Errorf("error message should contain 'not allowed': %q", err.Error())
+		}
+		// Indirect (group that contains the offending type)
+		group := parquet.Group{"a": parquet.String(), "b": testCase}
+		_, err = parquet.ShreddedVariant(group)
+		if err == nil {
+			t.Errorf("ShreddedVariant(%v) should have returned an error", group)
+		} else if !strings.Contains(err.Error(), "not allowed") {
+			t.Errorf("error message should contain 'not allowed': %q", err.Error())
+		}
+	}
+}
+
+type logicalType struct {
+	parquet.Type
+	lt format.LogicalType
+}
+
+func (l logicalType) LogicalType() *format.LogicalType {
+	return &l.lt
 }
