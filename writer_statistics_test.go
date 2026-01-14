@@ -330,7 +330,7 @@ func BenchmarkLevelHistogram(b *testing.B) {
 		var pageHistograms []int64
 
 		b.ResetTimer()
-		for range b.N {
+		for b.Loop() {
 			clear(columnHistogram)
 			pageHistograms = pageHistograms[:0]
 
@@ -344,7 +344,7 @@ func BenchmarkLevelHistogram(b *testing.B) {
 		var pageHistograms []int64
 
 		b.ResetTimer()
-		for range b.N {
+		for b.Loop() {
 			clear(columnHistogram)
 			pageHistograms = pageHistograms[:0]
 
