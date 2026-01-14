@@ -37,11 +37,10 @@ import (
 // - nil *structpb.Struct, *structpb.ListValue, *structpb.Value
 // - Zero values for value types
 func isNullValue(value reflect.Value) bool {
-	if !value.IsValid() {
-		return true
-	}
-
 	switch value.Kind() {
+	case reflect.Invalid:
+		return true
+
 	case reflect.Pointer, reflect.Interface:
 		if value.IsNil() {
 			return true
@@ -705,12 +704,11 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 	return columnIndex + 1, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 		col := columns[columnIndex]
 	writeValue:
-		if !value.IsValid() {
+		switch value.Kind() {
+		case reflect.Invalid:
 			col.writeNull(levels)
 			return
-		}
 
-		switch value.Kind() {
 		case reflect.Pointer, reflect.Interface:
 			if value.IsNil() {
 				col.writeNull(levels)
