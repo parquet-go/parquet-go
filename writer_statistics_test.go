@@ -1,11 +1,11 @@
-package parquet_test
+package parquet
 
 import (
 	"bytes"
 	"encoding/binary"
+	"math/rand"
 	"testing"
 
-	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -30,8 +30,8 @@ func TestWriterStatistics(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	w := parquet.NewWriter(buf,
-		parquet.BloomFilters(parquet.SplitBlockFilter(10, "name")),
+	w := NewWriter(buf,
+		BloomFilters(SplitBlockFilter(10, "name")),
 	)
 
 	for _, record := range records {
@@ -44,7 +44,7 @@ func TestWriterStatistics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestStatsV1(t *testing.T) {
 	// Test without DeprecatedDataPageStatistics - deprecated fields should be nil
 	t.Run("without DeprecatedDataPageStatistics", func(t *testing.T) {
 		buf := new(bytes.Buffer)
-		w := parquet.NewWriter(buf)
+		w := NewWriter(buf)
 
 		for _, record := range records {
 			if err := w.Write(&record); err != nil {
@@ -207,7 +207,7 @@ func TestStatsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -229,7 +229,7 @@ func TestStatsV1(t *testing.T) {
 	// Test with DeprecatedDataPageStatistics - deprecated fields should be populated
 	t.Run("with DeprecatedDataPageStatistics", func(t *testing.T) {
 		buf := new(bytes.Buffer)
-		w := parquet.NewWriter(buf, parquet.DeprecatedDataPageStatistics(true))
+		w := NewWriter(buf, DeprecatedDataPageStatistics(true))
 
 		for _, record := range records {
 			if err := w.Write(&record); err != nil {
@@ -241,7 +241,7 @@ func TestStatsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -312,6 +312,48 @@ func TestStatsV1(t *testing.T) {
 		}
 		if string(nameStats.Max) != expectedMaxName {
 			t.Errorf("Name Max (deprecated) = %q, want %q", string(nameStats.Max), expectedMaxName)
+		}
+	})
+}
+
+func BenchmarkLevelHistogram(b *testing.B) {
+	prng := rand.New(rand.NewSource(0))
+	levels := make([]byte, 100_000)
+	for i := range levels {
+		levels[i] = byte(prng.Intn(4))
+	}
+
+	const maxLevel byte = 3
+
+	b.Run("current", func(b *testing.B) {
+		columnHistogram := make([]int64, maxLevel+1)
+		var pageHistograms []int64
+
+		b.ResetTimer()
+		for b.Loop() {
+			clear(columnHistogram)
+			pageHistograms = pageHistograms[:0]
+
+			accumulateLevelHistogram(columnHistogram, levels)
+			pageHistograms = appendPageLevelHistogram(pageHistograms, levels, maxLevel)
+		}
+	})
+
+	b.Run("optimized", func(b *testing.B) {
+		columnHistogram := make([]int64, maxLevel+1)
+		var pageHistograms []int64
+
+		b.ResetTimer()
+		for b.Loop() {
+			clear(columnHistogram)
+			pageHistograms = pageHistograms[:0]
+
+			pageHistograms = accumulateAndAppendPageLevelHistogram(
+				columnHistogram,
+				pageHistograms,
+				levels,
+				maxLevel,
+			)
 		}
 	})
 }
