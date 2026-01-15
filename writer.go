@@ -1598,7 +1598,7 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 		compression:        c.compression,
 		maxRepetitionLevel: c.maxRepetitionLevel,
 		maxDefinitionLevel: c.maxDefinitionLevel,
-		index:              int16(c.bufferIndex),
+		index:              uint16(c.bufferIndex),
 	}
 
 	var pageReader io.Reader = c.pageBuffer

@@ -405,7 +405,7 @@ func isMap(node Node) bool {
 	return logicalType != nil && logicalType.Map != nil
 }
 
-func numLeafColumnsOf(node Node) int16 {
+func numLeafColumnsOf(node Node) uint16 {
 	return makeColumnIndex(numLeafColumns(node, 0))
 }
 
