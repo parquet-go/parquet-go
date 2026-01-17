@@ -175,9 +175,9 @@ func TestSortingWriterFlushWithThreshold(t *testing.T) {
 	}
 
 	const (
-		totalRows     = 10000
-		flushEvery    = 2000
-		sortRowCount  = 500 // Small to create many internal temp groups
+		totalRows    = 10000
+		flushEvery   = 2000
+		sortRowCount = 500 // Small to create many internal temp groups
 	)
 
 	// Generate rows with random IDs
@@ -201,10 +201,7 @@ func TestSortingWriterFlushWithThreshold(t *testing.T) {
 	// Write rows and flush periodically (mimicking the user's original pattern)
 	written := 0
 	for written < totalRows {
-		end := written + flushEvery
-		if end > totalRows {
-			end = totalRows
-		}
+		end := min(written+flushEvery, totalRows)
 
 		if _, err := writer.Write(allRows[written:end]); err != nil {
 			t.Fatal(err)
