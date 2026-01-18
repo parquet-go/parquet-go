@@ -638,14 +638,18 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath, tagRepl
 }
 
 func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
-	// If this is a string or a byte array write directly.
-	switch t.Kind() {
-	case reflect.String:
-		return writeRowsFuncOfRequired(t, schema, path)
-	case reflect.Slice:
-		if t.Elem().Kind() == reflect.Uint8 {
-			return writeRowsFuncOfRequired(t, schema, path)
+	// If this is a string or a byte array, write directly.
+	if t.Kind() == reflect.String || (t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8) {
+		column, _ := schema.Lookup(path...)
+		isOptional := column.Node.Optional()
+
+		// This fast-path avoids the optional checks, so check here and wrap the writer
+		// if required.
+		writer := writeRowsFuncOfRequired(t, schema, path)
+		if isOptional {
+			writer = writeRowsFuncOfOptional(t, schema, path, writer)
 		}
+		return writer
 	}
 
 	columnIndex := findColumnIndex(schema, schema, path)
