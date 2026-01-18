@@ -60,6 +60,197 @@ func TestSortingWriter(t *testing.T) {
 	assertRowsEqual(t, rows, read)
 }
 
+// TestSortingWriterMultipleFlush verifies that calling Flush() multiple times
+// still produces a globally sorted output with a single row group.
+// This tests the fix for the issue where multiple Flush() calls would create
+// separate row groups that were only sorted independently.
+func TestSortingWriterMultipleFlush(t *testing.T) {
+	type Row struct {
+		Value int32 `parquet:"value"`
+	}
+
+	// Create rows with values that span a wide range
+	// We'll write them in batches where each batch has values from the full range
+	// This ensures that if row groups were sorted independently, the output would be wrong
+	allRows := make([]Row, 0, 3000)
+
+	prng := rand.New(rand.NewSource(42))
+
+	// Batch 1: values 0-999 shuffled
+	batch1 := make([]Row, 1000)
+	for i := range batch1 {
+		batch1[i].Value = int32(i)
+	}
+	prng.Shuffle(len(batch1), func(i, j int) { batch1[i], batch1[j] = batch1[j], batch1[i] })
+
+	// Batch 2: values 0-999 shuffled (overlapping with batch 1)
+	batch2 := make([]Row, 1000)
+	for i := range batch2 {
+		batch2[i].Value = int32(i)
+	}
+	prng.Shuffle(len(batch2), func(i, j int) { batch2[i], batch2[j] = batch2[j], batch2[i] })
+
+	// Batch 3: values 0-999 shuffled (overlapping with batches 1 and 2)
+	batch3 := make([]Row, 1000)
+	for i := range batch3 {
+		batch3[i].Value = int32(i)
+	}
+	prng.Shuffle(len(batch3), func(i, j int) { batch3[i], batch3[j] = batch3[j], batch3[i] })
+
+	buffer := bytes.NewBuffer(nil)
+	// Use a small sortRowCount to force multiple internal temp row groups
+	writer := parquet.NewSortingWriter[Row](buffer, 99,
+		parquet.SortingWriterConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("value"),
+			),
+		),
+	)
+
+	// Write batch 1 and flush
+	if _, err := writer.Write(batch1); err != nil {
+		t.Fatal(err)
+	}
+	allRows = append(allRows, batch1...)
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write batch 2 and flush
+	if _, err := writer.Write(batch2); err != nil {
+		t.Fatal(err)
+	}
+	allRows = append(allRows, batch2...)
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write batch 3 (no flush before close)
+	if _, err := writer.Write(batch3); err != nil {
+		t.Fatal(err)
+	}
+	allRows = append(allRows, batch3...)
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open the file and verify there's only one row group
+	f, err := parquet.OpenFile(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.RowGroups()) != 1 {
+		t.Errorf("expected 1 row group, got %d", len(f.RowGroups()))
+	}
+
+	// Read all rows and verify they're globally sorted
+	read, err := parquet.Read[Row](bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sort expected rows
+	slices.SortFunc(allRows, func(a, b Row) int {
+		return cmp.Compare(a.Value, b.Value)
+	})
+
+	assertRowsEqual(t, allRows, read)
+
+	// Additional check: verify the output is actually sorted
+	for i := 1; i < len(read); i++ {
+		if read[i].Value < read[i-1].Value {
+			t.Errorf("output not sorted: row %d has value %d, but row %d has value %d",
+				i-1, read[i-1].Value, i, read[i].Value)
+		}
+	}
+}
+
+// TestSortingWriterFlushWithThreshold mimics a real-world pattern where
+// Flush() is called periodically based on row count thresholds.
+func TestSortingWriterFlushWithThreshold(t *testing.T) {
+	type Row struct {
+		ID    int64   `parquet:"id"`
+		Score float64 `parquet:"score"`
+	}
+
+	const (
+		totalRows    = 10000
+		flushEvery   = 2000
+		sortRowCount = 500 // Small to create many internal temp groups
+	)
+
+	// Generate rows with random IDs
+	prng := rand.New(rand.NewSource(123))
+	allRows := make([]Row, totalRows)
+	for i := range allRows {
+		allRows[i].ID = prng.Int63n(1000000)
+		allRows[i].Score = prng.Float64() * 100
+	}
+
+	buffer := bytes.NewBuffer(nil)
+	writer := parquet.NewSortingWriter[Row](buffer, sortRowCount,
+		parquet.SortingWriterConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("id"),
+				parquet.Descending("score"),
+			),
+		),
+	)
+
+	// Write rows and flush periodically (mimicking the user's original pattern)
+	written := 0
+	for written < totalRows {
+		end := min(written+flushEvery, totalRows)
+
+		if _, err := writer.Write(allRows[written:end]); err != nil {
+			t.Fatal(err)
+		}
+		written = end
+
+		// Flush after each batch (except the last one, which Close will handle)
+		if written < totalRows {
+			if err := writer.Flush(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open and verify single row group
+	f, err := parquet.OpenFile(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.RowGroups()) != 1 {
+		t.Errorf("expected 1 row group, got %d", len(f.RowGroups()))
+	}
+
+	// Read and verify global sorting
+	read, err := parquet.Read[Row](bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(read) != totalRows {
+		t.Fatalf("expected %d rows, got %d", totalRows, len(read))
+	}
+
+	// Verify output is sorted by id ascending, then score descending
+	for i := 1; i < len(read); i++ {
+		prev, curr := read[i-1], read[i]
+		if prev.ID > curr.ID {
+			t.Errorf("not sorted by id at row %d: %d > %d", i, prev.ID, curr.ID)
+		}
+		if prev.ID == curr.ID && prev.Score < curr.Score {
+			t.Errorf("not sorted by score (desc) at row %d: %f < %f", i, prev.Score, curr.Score)
+		}
+	}
+}
+
 func TestSortingWriterDropDuplicatedRows(t *testing.T) {
 	type Row struct {
 		Value int32 `parquet:"value"`
