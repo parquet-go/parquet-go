@@ -7,6 +7,7 @@ import (
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/compress/gzip"
 	"github.com/parquet-go/parquet-go/compress/snappy"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
@@ -763,5 +764,63 @@ func TestEncodingOf(t *testing.T) {
 					enc.String(), tc.expectedEncoding.String())
 			}
 		})
+	}
+}
+
+func TestGoTypeOfGroup(t *testing.T) {
+	groupNode := Group{
+		// Normal names
+		"AlreadyExported": Leaf(ByteArrayType),
+		"not_exported":    Leaf(FloatType),
+		// Go keywords are okay because they get upper-cased
+		"for":  Leaf(Int32Type),
+		"if":   Leaf(Int64Type),
+		"type": Leaf(BooleanType),
+		// Needs prefix to export
+		"_underscore_": String(),
+		"123":          String(),
+		// Invalid because they contain invalid characters
+		"$abc":        Uint(32),
+		`abc"def"ghi`: Uint(64),
+		// Conflicts
+		"alreadyExported": Leaf(DoubleType),
+		"_abc":            Leaf(Int96Type),
+		"@abc":            Leaf(FixedLenByteArrayType(4)),
+	}
+	goType := groupNode.GoType()
+	var expectedType struct {
+		X_abc            int32            `parquet:"$abc"`
+		X123             []byte           `parquet:"123"`
+		X_abc_           [4]byte          `parquet:"@abc"`
+		AlreadyExported  []byte           `parquet:"AlreadyExported"`
+		X_abc__          deprecated.Int96 `parquet:"_abc"`
+		X_underscore_    []byte           `parquet:"_underscore_"`
+		Abc_def_ghi      int64            `parquet:"abc\"def\"ghi"`
+		AlreadyExported_ float64          `parquet:"alreadyExported"`
+		For              int32            `parquet:"for"`
+		If               int64            `parquet:"if"`
+		Not_exported     float32          `parquet:"not_exported"`
+		Type             bool             `parquet:"type"`
+	}
+	if !goType.AssignableTo(reflect.TypeOf(expectedType)) {
+		t.Errorf("Unexpected GoType for group: %v", goType)
+	}
+
+	// GoType is not possible for a group with a field
+	// whose name contains a comma since we cannot encode
+	// the field name into a valid Go struct tag value.
+	var p any
+	func() {
+		defer func() {
+			p = recover()
+		}()
+		Group{
+			"a,b,c": String(),
+		}.GoType()
+	}()
+	if p == nil {
+		t.Error("expected GoType() to panic for a group with a field whose name contains a comma")
+	} else {
+		t.Log(p)
 	}
 }
