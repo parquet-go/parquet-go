@@ -1276,7 +1276,7 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 
 	var reuseColumnIndex *[]format.ColumnIndex = nil
 	if cap(w.columnIndexes) > columnIndexIndex {
-		// Extend the slice by one element (this will grow the underlying array too if necessary)
+		// Extend the slice by one element
 		w.columnIndexes = w.columnIndexes[:columnIndexIndex+1]
 		reuseColumnIndex = &w.columnIndexes[columnIndexIndex]
 	}
@@ -1292,7 +1292,7 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 
 	var reuseOffsetIndex *[]format.OffsetIndex = nil
 	if cap(w.offsetIndexes) > offsetIndexIndex {
-		// Extend the slice by one element (this will grow the underlying array too if necessary)
+		// Extend the slice by one element
 		w.offsetIndexes = w.offsetIndexes[:offsetIndexIndex+1]
 		reuseOffsetIndex = &w.offsetIndexes[offsetIndexIndex]
 	}
