@@ -2,7 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
-	"encoding/json"
+        "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -3354,3 +3354,66 @@ func TestWriteOptionalJSONRawMessage(t *testing.T) {
 		})
 	}
 }
+
+
+func TestReuseNumAllocs(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatal("require no panic")
+		}
+	}()
+
+	type testStruct struct {
+		A int
+		B bool
+		C string
+		D float64
+		E int32
+		F []byte
+		G int64
+	}
+
+	tests := make([]testStruct, 100)
+	for i := range 100 {
+		tests[i] = testStruct{
+			A: i + 1,
+			B: i%2 == 0,
+			C: fmt.Sprintf("test%d", i),
+			D: float64(i),
+			E: int32(i),
+			F: []byte(fmt.Sprintf("test%d", i)),
+			G: int64(i),
+		}
+	}
+
+	b := bytes.NewBuffer(nil)
+	w := parquet.NewGenericWriter[testStruct](b, parquet.MaxRowsPerRowGroup(10))
+
+	if _, err := w.Write(tests[0:50]); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// test number of allocs after reset writer
+
+	allocs := testing.AllocsPerRun(10000, func() {
+		b.Reset()
+		w.Reset(b)
+		if _, err := w.Write(tests[50:100]); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// We want this to fail if there are more allocations than before.
+	// However, we also want it to fail if there are fewer allocations, so the test can be updated to set the new
+	// bar lower.
+	if allocs > 171.01 || allocs < 170.99 {
+		t.Errorf("storageSend expected 171 memory allocs per run, got %v", allocs)
+	}
+
+}
+
