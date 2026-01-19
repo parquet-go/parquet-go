@@ -80,7 +80,7 @@ func testSearch(t *testing.T, pages [][]int32, expectIndex [][]int) {
 		)
 	}
 
-	formatIndex := indexer.ColumnIndex()
+	formatIndex := indexer.ColumnIndex(nil)
 	columnIndex := parquet.NewColumnIndex(parquet.Int32, &formatIndex)
 
 	for _, values := range expectIndex {
