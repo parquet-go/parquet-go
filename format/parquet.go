@@ -1142,6 +1142,7 @@ func (o *OffsetIndex) Reset() {
 		o.PageLocations[k].CompressedPageSize = 0
 		o.PageLocations[k].FirstRowIndex = 0
 	}
+	o.PageLocations = o.PageLocations[:0]
 	o.UnencodedByteArrayDataBytes = o.UnencodedByteArrayDataBytes[:0]
 }
 
@@ -1203,9 +1204,11 @@ func (c *ColumnIndex) Reset() {
 	for k := range c.MaxValues {
 		c.MaxValues[k] = c.MaxValues[k][:0]
 	}
+	c.MaxValues = c.MaxValues[:0]
 	for k := range c.MinValues {
 		c.MinValues[k] = c.MinValues[k][:0]
 	}
+	c.MinValues = c.MinValues[:0]
 }
 
 type AesGcmV1 struct {
