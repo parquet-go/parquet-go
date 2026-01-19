@@ -44,7 +44,7 @@ func TestBinaryColumnIndexMinMax(t *testing.T) {
 			parquet.ValueOf(min),
 			parquet.ValueOf(max),
 		)
-		formatIndex := indexer.ColumnIndex()
+		formatIndex := indexer.ColumnIndex(nil)
 		columnIndex := parquet.NewColumnIndex(kind, &formatIndex)
 		for i := 5; i < len(testCase); i += 2 {
 			value := testCase[i].([]byte)
@@ -67,7 +67,7 @@ func Test_ColumnIndexReuse(t *testing.T) {
 		parquet.ValueOf(min),
 		parquet.ValueOf(max),
 	)
-	before := indexer.ColumnIndex()
+	before := indexer.ColumnIndex(nil)
 	if len(before.NullPages) != 1 {
 		t.Fatalf("expected 1 null page, got %d", len(before.NullPages))
 	}
@@ -87,7 +87,7 @@ func Test_ColumnIndexReuse(t *testing.T) {
 		parquet.ValueOf(min),
 		parquet.ValueOf(max),
 	)
-	after := indexer.ColumnIndex()
+	after := indexer.ColumnIndex(nil)
 
 	if len(after.NullPages) != 2 {
 		t.Fatalf("expected 2 null pages, got %d", len(after.NullPages))
