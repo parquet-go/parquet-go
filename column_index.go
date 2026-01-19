@@ -845,7 +845,7 @@ func splitByteArrays(reuse *[][]byte, scratch *[]byte, data []byte) [][]byte {
 	// Need to ensure the passed-in reuse and scratch slices are updated
 	*scratch = buffer
 	*reuse = values
-	
+
 	return values
 }
 
