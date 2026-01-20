@@ -309,6 +309,22 @@ func TestSchemaOf(t *testing.T) {
 		},
 		{
 			value: new(struct {
+				ArrayOfArrays [][]int32 `parquet:"array_of_arrays,list" parquet-element:",list"`
+			}),
+			print: `message {
+	required group array_of_arrays (LIST) {
+		repeated group list {
+			required group element (LIST) {
+				repeated group list {
+					required int32 element (INT(32,true));
+				}
+			}
+		}
+	}
+}`,
+		},
+		{
+			value: new(struct {
 				A [16]byte `parquet:",uuid"`
 				B string   `parquet:",uuid"`
 			}),
