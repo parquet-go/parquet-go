@@ -307,6 +307,13 @@ func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tag
 func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	elemType := t.Elem()
 	elemSize := uintptr(elemType.Size())
+
+	// If the current node is a LIST, we need to drill down to the element
+	// to find the schema node for the slice elements.
+	if node := findByPath(schema, path); node != nil && isList(node) {
+		path = path.append("list", "element")
+	}
+
 	writeRows := writeRowsFuncOf(elemType, schema, path, tagReplacements)
 
 	// Check if the element schema node is optional.

@@ -3411,3 +3411,38 @@ func TestReuseNumAllocs(t *testing.T) {
 	// between OS/CPU architectures. So we just report the number of allocations (when run with -test.v)
 	t.Logf("TestReuseNumAllocs got %v memory allocs per run", allocs)
 }
+
+func TestGenericWriterNestedList(t *testing.T) {
+	type Row struct {
+		ArrayOfArrays [][]int32 `parquet:"array_of_arrays,list" parquet-element:",list"`
+	}
+
+	rows := []Row{
+		{ArrayOfArrays: [][]int32{{1, 2}, {3, 4}}},
+		{ArrayOfArrays: [][]int32{{5}, {6, 7, 8}}},
+	}
+
+	var buf bytes.Buffer
+	writer := parquet.NewGenericWriter[Row](&buf)
+
+	if _, err := writer.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+	readRows := make([]Row, len(rows))
+	n, err := reader.Read(readRows)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != len(rows) {
+		t.Fatalf("expected %d rows, got %d", len(rows), n)
+	}
+
+	if !reflect.DeepEqual(rows, readRows) {
+		t.Errorf("rows mismatch:\nwant: %+v\ngot:  %+v", rows, readRows)
+	}
+}
