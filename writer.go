@@ -1188,7 +1188,6 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 	fileOffset := w.writer.offset
 
 	for i, c := range rg.columns {
-		rg.columnIndex[i].Reset()
 		rg.columnIndex[i] = c.columnIndex.ColumnIndex(&rg.columnIndex[i])
 		rg.columnIndex[i].RepetitionLevelHistogram = append(rg.columnIndex[i].RepetitionLevelHistogram[:0], c.pageRepetitionLevelHistograms...)
 		rg.columnIndex[i].DefinitionLevelHistogram = append(rg.columnIndex[i].DefinitionLevelHistogram[:0], c.pageDefinitionLevelHistograms...)
