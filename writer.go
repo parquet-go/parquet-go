@@ -1318,7 +1318,7 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 
 	for i := range offsetIndex {
 		c := &offsetIndex[i]
-		c.PageLocations = append(c.PageLocations[:0], rg.offsetIndex[i].PageLocations...)
+		c.PageLocations = slices.Clone(rg.offsetIndex[i].PageLocations)
 	}
 
 	if reuseRowGroup == nil {
