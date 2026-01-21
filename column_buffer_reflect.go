@@ -597,8 +597,18 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 				m := value.Convert(reflect.TypeFor[map[string]any]()).Interface().(map[string]any)
 				for i := range writers {
 					w := &writers[i]
-					v := m[w.fieldName]
-					w.writeValue(columns, levels, reflect.ValueOf(v))
+					v, ok := m[w.fieldName]
+					if !ok || v == nil {
+						w.writeValue(columns, levels, reflect.Value{})
+						continue
+					}
+					rv := reflect.ValueOf(v)
+					if rv.Kind() != reflect.Pointer && rv.Kind() != reflect.Interface {
+						wrapped := reflect.New(rv.Type())
+						wrapped.Elem().Set(rv)
+						rv = wrapped
+					}
+					w.writeValue(columns, levels, rv)
 				}
 
 			default:
