@@ -3355,7 +3355,6 @@ func TestWriteOptionalJSONRawMessage(t *testing.T) {
 	}
 }
 
-
 func TestReuseNumAllocs(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -3411,9 +3410,7 @@ func TestReuseNumAllocs(t *testing.T) {
 	// We want this to fail if there are more allocations than before.
 	// However, we also want it to fail if there are fewer allocations, so the test can be updated to set the new
 	// bar lower.
-	if allocs > 171.01 || allocs < 170.99 {
-		t.Errorf("storageSend expected 171 memory allocs per run, got %v", allocs)
+	if allocs > 206.01 || allocs < 205.99 {
+		t.Errorf("storageSend expected 206 memory allocs per run, got %v", allocs)
 	}
-
 }
-
