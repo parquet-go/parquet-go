@@ -202,3 +202,40 @@ func testProtocolReadWriteValues(t *testing.T, p thrift.Protocol) {
 		})
 	}
 }
+
+// TestBoolDecoding tests that the boolean decoder treats both 0 and 2 as false.
+func TestBoolDecoding(t *testing.T) {
+	for _, test := range protocols {
+		t.Run(test.name, func(t *testing.T) {
+			testCases := []struct {
+				byteValue     byte
+				expectedValue bool
+				description   string
+			}{
+				{0, false, "byte value 0 should decode as false"},
+				{1, true, "byte value 1 should decode as true"},
+				{2, false, "byte value 2 should decode as false"},
+				{3, true, "byte value 3 should decode as true"},
+				{255, true, "byte value 255 should decode as true"},
+			}
+
+			for _, tc := range testCases {
+				t.Run(tc.description, func(t *testing.T) {
+					// Create a buffer with the test byte value.
+					b := bytes.NewBuffer([]byte{tc.byteValue})
+					r := test.proto.NewReader(b)
+
+					// Read the boolean value.
+					result, err := r.ReadBool()
+					if err != nil {
+						t.Fatalf("failed to read bool: %v", err)
+					}
+
+					if result != tc.expectedValue {
+						t.Errorf("byte value %d: expected %v, got %v", tc.byteValue, tc.expectedValue, result)
+					}
+				})
+			}
+		})
+	}
+}
