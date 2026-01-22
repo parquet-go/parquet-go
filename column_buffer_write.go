@@ -309,6 +309,17 @@ func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagRe
 	elemSize := uintptr(elemType.Size())
 	writeRows := writeRowsFuncOf(elemType, schema, path, tagReplacements)
 
+	// Check if the element schema node is optional.
+	// This handles the case of `parquet-element:",optional"` tag where
+	// the list elements themselves are optional (non-pointer basic types).
+	// For pointer types (like []*string), the pointer handling already
+	// takes care of optionality via writeRowsFuncOfPointer.
+	if elemType.Kind() != reflect.Ptr {
+		if node := findByPath(schema, path); node != nil && node.Optional() {
+			writeRows = writeRowsFuncOfOptional(elemType, schema, path, writeRows)
+		}
+	}
+
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		type sliceHeader struct {
 			base unsafe.Pointer
