@@ -859,7 +859,7 @@ func splitFixedLenByteArrays(reuse *[][]byte, data []byte, size int) [][]byte {
 		values = (*reuse)[:0]
 	}
 	sizeReq := len(data) / size
-	for i := 0; i < sizeReq; i++ {
+	for i := range sizeReq {
 		j := (i + 0) * size
 		k := (i + 1) * size
 		if cap(values) <= sizeReq {

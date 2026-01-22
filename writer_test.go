@@ -2,7 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
-        "encoding/json"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -3380,7 +3380,7 @@ func TestReuseNumAllocs(t *testing.T) {
 			C: fmt.Sprintf("test%d", i),
 			D: float64(i),
 			E: int32(i),
-			F: []byte(fmt.Sprintf("test%d", i)),
+			F: fmt.Appendf(nil, "test%d", i),
 			G: int64(i),
 		}
 	}
