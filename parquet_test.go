@@ -1558,3 +1558,36 @@ func TestIssue69(t *testing.T) {
 		}
 	}
 }
+
+// TestIssue445 reproduces the issue reported in
+// https://github.com/parquet-go/parquet-go/issues/445
+// where array elements become zero-values when using parquet-element:",optional"
+func TestIssue445(t *testing.T) {
+	type Data struct {
+		RequiredElements []int32 `parquet:"required_elements,list" parquet-element:""`
+		OptionalElements []int32 `parquet:"optional_elements,list" parquet-element:",optional"`
+	}
+
+	input := []Data{
+		{
+			RequiredElements: []int32{1, 2, 3},
+			OptionalElements: []int32{3, 2, 1},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := parquet.Write(&buf, input); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+
+	data, size := bytes.NewReader(buf.Bytes()), int64(buf.Len())
+
+	output, err := parquet.Read[Data](data, size)
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	if !reflect.DeepEqual(input, output) {
+		t.Errorf("data mismatch:\nwant: %+v\ngot:  %+v", input, output)
+	}
+}
