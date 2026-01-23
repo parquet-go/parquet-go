@@ -270,13 +270,13 @@ type ColumnIndexer interface {
 	// Add a page to the column indexer.
 	IndexPage(numValues, numNulls int64, min, max Value)
 
-	// ColumnIndex Generates a format.ColumnIndex value from the current state of the
-	// column indexer. If r is not nil, the buffers in r are reused.
+	// Generates a format.ColumnIndex value from the current state of the
+	// column indexer.
 	//
 	// The returned value may reference internal buffers, in which case the
 	// values remain valid until the next call to IndexPage or Reset on the
 	// column indexer.
-	ColumnIndex(r *format.ColumnIndex) format.ColumnIndex
+	ColumnIndex() format.ColumnIndex
 }
 
 type baseColumnIndexer struct {
@@ -294,50 +294,34 @@ func (i *baseColumnIndexer) observe(numValues, numNulls int64) {
 	i.nullCounts = append(i.nullCounts, numNulls)
 }
 
-func (i *baseColumnIndexer) columnIndex(r *format.ColumnIndex, minValues, maxValues [][]byte, minOrder, maxOrder int) format.ColumnIndex {
-	if r == nil {
-		nullPages := make([]bool, len(i.nullPages))
-		copy(nullPages, i.nullPages)
-		nullCounts := make([]int64, len(i.nullCounts))
-		copy(nullCounts, i.nullCounts)
-		return format.ColumnIndex{
-			NullPages:     nullPages,
-			NullCounts:    nullCounts,
-			MinValues:     minValues,
-			MaxValues:     maxValues,
-			BoundaryOrder: boundaryOrderOf(minOrder, maxOrder),
-		}
-	} else {
-		r.NullPages = append(r.NullPages[:0], i.nullPages...)
-		r.NullCounts = append(r.NullCounts[:0], i.nullCounts...)
-		r.MinValues = append(r.MinValues[:0], minValues...)
-		r.MaxValues = append(r.MaxValues[:0], maxValues...)
-		r.BoundaryOrder = boundaryOrderOf(minOrder, maxOrder)
+func (i *baseColumnIndexer) columnIndex(minValues, maxValues [][]byte, minOrder, maxOrder int) format.ColumnIndex {
+	nullPages := make([]bool, len(i.nullPages))
+	copy(nullPages, i.nullPages)
+	nullCounts := make([]int64, len(i.nullCounts))
+	copy(nullCounts, i.nullCounts)
+	return format.ColumnIndex{
+		NullPages:     nullPages,
+		NullCounts:    nullCounts,
+		MinValues:     minValues,
+		MaxValues:     maxValues,
+		BoundaryOrder: boundaryOrderOf(minOrder, maxOrder),
 	}
-	return *r
 }
 
 type booleanColumnIndexer struct {
 	baseColumnIndexer
 	minValues []bool
 	maxValues []bool
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newBooleanColumnIndexer() *booleanColumnIndexer {
-	return &booleanColumnIndexer{
-		scratch1: make([][]byte, 0),
-		scratch2: make([][]byte, 0),
-	}
+	return new(booleanColumnIndexer)
 }
 
 func (i *booleanColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *booleanColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -346,10 +330,10 @@ func (i *booleanColumnIndexer) IndexPage(numValues, numNulls int64, min, max Val
 	i.maxValues = append(i.maxValues, max.boolean())
 }
 
-func (i *booleanColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	return i.columnIndex(r,
-		splitFixedLenByteArrays(&i.scratch1, unsafecast.Slice[byte](i.minValues), 1),
-		splitFixedLenByteArrays(&i.scratch2, unsafecast.Slice[byte](i.maxValues), 1),
+func (i *booleanColumnIndexer) ColumnIndex() format.ColumnIndex {
+	return i.columnIndex(
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 1),
+		splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 1),
 		orderOfBool(i.minValues),
 		orderOfBool(i.maxValues),
 	)
@@ -359,23 +343,16 @@ type int32ColumnIndexer struct {
 	baseColumnIndexer
 	minValues []int32
 	maxValues []int32
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newInt32ColumnIndexer() *int32ColumnIndexer {
-	return &int32ColumnIndexer{
-		scratch1: make([][]byte, 0),
-		scratch2: make([][]byte, 0),
-	}
+	return new(int32ColumnIndexer)
 }
 
 func (i *int32ColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *int32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -384,10 +361,10 @@ func (i *int32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 	i.maxValues = append(i.maxValues, max.int32())
 }
 
-func (i *int32ColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	return i.columnIndex(r,
-		splitFixedLenByteArrays(&i.scratch1, columnIndexInt32Values(i.minValues), 4),
-		splitFixedLenByteArrays(&i.scratch2, columnIndexInt32Values(i.maxValues), 4),
+func (i *int32ColumnIndexer) ColumnIndex() format.ColumnIndex {
+	return i.columnIndex(
+		splitFixedLenByteArrays(columnIndexInt32Values(i.minValues), 4),
+		splitFixedLenByteArrays(columnIndexInt32Values(i.maxValues), 4),
 		orderOfInt32(i.minValues),
 		orderOfInt32(i.maxValues),
 	)
@@ -397,23 +374,16 @@ type int64ColumnIndexer struct {
 	baseColumnIndexer
 	minValues []int64
 	maxValues []int64
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newInt64ColumnIndexer() *int64ColumnIndexer {
-	return &int64ColumnIndexer{
-		scratch1: make([][]byte, 0),
-		scratch2: make([][]byte, 0),
-	}
+	return new(int64ColumnIndexer)
 }
 
 func (i *int64ColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *int64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -422,10 +392,10 @@ func (i *int64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 	i.maxValues = append(i.maxValues, max.int64())
 }
 
-func (i *int64ColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	return i.columnIndex(r,
-		splitFixedLenByteArrays(&i.scratch1, columnIndexInt64Values(i.minValues), 8),
-		splitFixedLenByteArrays(&i.scratch2, columnIndexInt64Values(i.maxValues), 8),
+func (i *int64ColumnIndexer) ColumnIndex() format.ColumnIndex {
+	return i.columnIndex(
+		splitFixedLenByteArrays(columnIndexInt64Values(i.minValues), 8),
+		splitFixedLenByteArrays(columnIndexInt64Values(i.maxValues), 8),
 		orderOfInt64(i.minValues),
 		orderOfInt64(i.maxValues),
 	)
@@ -435,23 +405,16 @@ type int96ColumnIndexer struct {
 	baseColumnIndexer
 	minValues []deprecated.Int96
 	maxValues []deprecated.Int96
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newInt96ColumnIndexer() *int96ColumnIndexer {
-	return &int96ColumnIndexer{
-		scratch1: make([][]byte, 0),
-		scratch2: make([][]byte, 0),
-	}
+	return new(int96ColumnIndexer)
 }
 
 func (i *int96ColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *int96ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -460,10 +423,10 @@ func (i *int96ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 	i.maxValues = append(i.maxValues, max.Int96())
 }
 
-func (i *int96ColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	return i.columnIndex(r,
-		splitFixedLenByteArrays(&i.scratch1, columnIndexInt96Values(i.minValues), 12),
-		splitFixedLenByteArrays(&i.scratch2, columnIndexInt96Values(i.maxValues), 12),
+func (i *int96ColumnIndexer) ColumnIndex() format.ColumnIndex {
+	return i.columnIndex(
+		splitFixedLenByteArrays(columnIndexInt96Values(i.minValues), 12),
+		splitFixedLenByteArrays(columnIndexInt96Values(i.maxValues), 12),
 		deprecated.OrderOfInt96(i.minValues),
 		deprecated.OrderOfInt96(i.maxValues),
 	)
@@ -473,23 +436,16 @@ type floatColumnIndexer struct {
 	baseColumnIndexer
 	minValues []float32
 	maxValues []float32
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newFloatColumnIndexer() *floatColumnIndexer {
-	return &floatColumnIndexer{
-		scratch1: make([][]byte, 0),
-		scratch2: make([][]byte, 0),
-	}
+	return new(floatColumnIndexer)
 }
 
 func (i *floatColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *floatColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -498,10 +454,10 @@ func (i *floatColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 	i.maxValues = append(i.maxValues, max.float())
 }
 
-func (i *floatColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	return i.columnIndex(r,
-		splitFixedLenByteArrays(&i.scratch1, columnIndexFloatValues(i.minValues), 4),
-		splitFixedLenByteArrays(&i.scratch2, columnIndexFloatValues(i.maxValues), 4),
+func (i *floatColumnIndexer) ColumnIndex() format.ColumnIndex {
+	return i.columnIndex(
+		splitFixedLenByteArrays(columnIndexFloatValues(i.minValues), 4),
+		splitFixedLenByteArrays(columnIndexFloatValues(i.maxValues), 4),
 		orderOfFloat32(i.minValues),
 		orderOfFloat32(i.maxValues),
 	)
@@ -511,23 +467,16 @@ type doubleColumnIndexer struct {
 	baseColumnIndexer
 	minValues []float64
 	maxValues []float64
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newDoubleColumnIndexer() *doubleColumnIndexer {
-	return &doubleColumnIndexer{
-		scratch1: make([][]byte, 0),
-		scratch2: make([][]byte, 0),
-	}
+	return new(doubleColumnIndexer)
 }
 
 func (i *doubleColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *doubleColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -536,10 +485,10 @@ func (i *doubleColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 	i.maxValues = append(i.maxValues, max.double())
 }
 
-func (i *doubleColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	return i.columnIndex(r,
-		splitFixedLenByteArrays(&i.scratch1, columnIndexDoubleValues(i.minValues), 8),
-		splitFixedLenByteArrays(&i.scratch2, columnIndexDoubleValues(i.maxValues), 8),
+func (i *doubleColumnIndexer) ColumnIndex() format.ColumnIndex {
+	return i.columnIndex(
+		splitFixedLenByteArrays(columnIndexDoubleValues(i.minValues), 8),
+		splitFixedLenByteArrays(columnIndexDoubleValues(i.maxValues), 8),
 		orderOfFloat64(i.minValues),
 		orderOfFloat64(i.maxValues),
 	)
@@ -550,21 +499,16 @@ type byteArrayColumnIndexer struct {
 	sizeLimit int
 	minValues []byte
 	maxValues []byte
-	scratch   []byte
 }
 
 func newByteArrayColumnIndexer(sizeLimit int) *byteArrayColumnIndexer {
-	return &byteArrayColumnIndexer{
-		sizeLimit: sizeLimit,
-		scratch:   make([]byte, 0),
-	}
+	return &byteArrayColumnIndexer{sizeLimit: sizeLimit}
 }
 
 func (i *byteArrayColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch = i.scratch[:0]
 }
 
 func (i *byteArrayColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -573,14 +517,9 @@ func (i *byteArrayColumnIndexer) IndexPage(numValues, numNulls int64, min, max V
 	i.maxValues = plain.AppendByteArray(i.maxValues, max.byteArray())
 }
 
-func (i *byteArrayColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	var reuseMin, reuseMax *[][]byte
-	if r != nil {
-		reuseMin = &r.MinValues
-		reuseMax = &r.MaxValues
-	}
-	minValues := splitByteArrays(reuseMin, &i.scratch, i.minValues)
-	maxValues := splitByteArrays(reuseMax, &i.scratch, i.maxValues)
+func (i *byteArrayColumnIndexer) ColumnIndex() format.ColumnIndex {
+	minValues := splitByteArrays(i.minValues)
+	maxValues := splitByteArrays(i.maxValues)
 	if sizeLimit := i.sizeLimit; sizeLimit > 0 {
 		for i, v := range minValues {
 			minValues[i] = truncateLargeMinByteArrayValue(v, sizeLimit)
@@ -589,7 +528,7 @@ func (i *byteArrayColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.Colum
 			maxValues[i] = truncateLargeMaxByteArrayValue(v, sizeLimit)
 		}
 	}
-	return i.columnIndex(r,
+	return i.columnIndex(
 		minValues,
 		maxValues,
 		orderOfBytes(minValues),
@@ -603,16 +542,12 @@ type fixedLenByteArrayColumnIndexer struct {
 	sizeLimit int
 	minValues []byte
 	maxValues []byte
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newFixedLenByteArrayColumnIndexer(size, sizeLimit int) *fixedLenByteArrayColumnIndexer {
 	return &fixedLenByteArrayColumnIndexer{
 		size:      size,
 		sizeLimit: sizeLimit,
-		scratch1:  make([][]byte, 0),
-		scratch2:  make([][]byte, 0),
 	}
 }
 
@@ -620,8 +555,6 @@ func (i *fixedLenByteArrayColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *fixedLenByteArrayColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -630,9 +563,9 @@ func (i *fixedLenByteArrayColumnIndexer) IndexPage(numValues, numNulls int64, mi
 	i.maxValues = append(i.maxValues, max.byteArray()...)
 }
 
-func (i *fixedLenByteArrayColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	minValues := splitFixedLenByteArrays(&i.scratch1, i.minValues, i.size)
-	maxValues := splitFixedLenByteArrays(&i.scratch2, i.maxValues, i.size)
+func (i *fixedLenByteArrayColumnIndexer) ColumnIndex() format.ColumnIndex {
+	minValues := splitFixedLenByteArrays(i.minValues, i.size)
+	maxValues := splitFixedLenByteArrays(i.maxValues, i.size)
 	if sizeLimit := i.sizeLimit; sizeLimit > 0 {
 		for i, v := range minValues {
 			minValues[i] = truncateLargeMinByteArrayValue(v, sizeLimit)
@@ -641,7 +574,7 @@ func (i *fixedLenByteArrayColumnIndexer) ColumnIndex(r *format.ColumnIndex) form
 			maxValues[i] = truncateLargeMaxByteArrayValue(v, sizeLimit)
 		}
 	}
-	return i.columnIndex(r,
+	return i.columnIndex(
 		minValues,
 		maxValues,
 		orderOfBytes(minValues),
@@ -653,23 +586,16 @@ type uint32ColumnIndexer struct {
 	baseColumnIndexer
 	minValues []uint32
 	maxValues []uint32
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newUint32ColumnIndexer() *uint32ColumnIndexer {
-	return &uint32ColumnIndexer{
-		scratch1: make([][]byte, 0),
-		scratch2: make([][]byte, 0),
-	}
+	return new(uint32ColumnIndexer)
 }
 
 func (i *uint32ColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *uint32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -678,10 +604,10 @@ func (i *uint32ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 	i.maxValues = append(i.maxValues, max.uint32())
 }
 
-func (i *uint32ColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	return i.columnIndex(r,
-		splitFixedLenByteArrays(&i.scratch1, columnIndexUint32Values(i.minValues), 4),
-		splitFixedLenByteArrays(&i.scratch2, columnIndexUint32Values(i.maxValues), 4),
+func (i *uint32ColumnIndexer) ColumnIndex() format.ColumnIndex {
+	return i.columnIndex(
+		splitFixedLenByteArrays(columnIndexUint32Values(i.minValues), 4),
+		splitFixedLenByteArrays(columnIndexUint32Values(i.maxValues), 4),
 		orderOfUint32(i.minValues),
 		orderOfUint32(i.maxValues),
 	)
@@ -691,23 +617,16 @@ type uint64ColumnIndexer struct {
 	baseColumnIndexer
 	minValues []uint64
 	maxValues []uint64
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newUint64ColumnIndexer() *uint64ColumnIndexer {
-	return &uint64ColumnIndexer{
-		scratch1: make([][]byte, 0),
-		scratch2: make([][]byte, 0),
-	}
+	return new(uint64ColumnIndexer)
 }
 
 func (i *uint64ColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *uint64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -716,10 +635,10 @@ func (i *uint64ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Valu
 	i.maxValues = append(i.maxValues, max.uint64())
 }
 
-func (i *uint64ColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	return i.columnIndex(r,
-		splitFixedLenByteArrays(&i.scratch1, columnIndexUint64Values(i.minValues), 8),
-		splitFixedLenByteArrays(&i.scratch2, columnIndexUint64Values(i.maxValues), 8),
+func (i *uint64ColumnIndexer) ColumnIndex() format.ColumnIndex {
+	return i.columnIndex(
+		splitFixedLenByteArrays(columnIndexUint64Values(i.minValues), 8),
+		splitFixedLenByteArrays(columnIndexUint64Values(i.maxValues), 8),
 		orderOfUint64(i.minValues),
 		orderOfUint64(i.maxValues),
 	)
@@ -729,23 +648,16 @@ type be128ColumnIndexer struct {
 	baseColumnIndexer
 	minValues [][16]byte
 	maxValues [][16]byte
-	scratch1  [][]byte
-	scratch2  [][]byte
 }
 
 func newBE128ColumnIndexer() *be128ColumnIndexer {
-	return &be128ColumnIndexer{
-		scratch1: make([][]byte, 0),
-		scratch2: make([][]byte, 0),
-	}
+	return new(be128ColumnIndexer)
 }
 
 func (i *be128ColumnIndexer) Reset() {
 	i.reset()
 	i.minValues = i.minValues[:0]
 	i.maxValues = i.maxValues[:0]
-	i.scratch1 = i.scratch1[:0]
-	i.scratch2 = i.scratch2[:0]
 }
 
 func (i *be128ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
@@ -758,10 +670,10 @@ func (i *be128ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value
 	}
 }
 
-func (i *be128ColumnIndexer) ColumnIndex(r *format.ColumnIndex) format.ColumnIndex {
-	minValues := splitFixedLenByteArrays(&i.scratch1, unsafecast.Slice[byte](i.minValues), 16)
-	maxValues := splitFixedLenByteArrays(&i.scratch2, unsafecast.Slice[byte](i.maxValues), 16)
-	return i.columnIndex(r,
+func (i *be128ColumnIndexer) ColumnIndex() format.ColumnIndex {
+	minValues := splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 16)
+	maxValues := splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 16)
+	return i.columnIndex(
 		minValues,
 		maxValues,
 		orderOfBytes(minValues),
@@ -801,79 +713,31 @@ func incrementByteArrayInplace(value []byte) {
 	}
 }
 
-// splitByteArrays splits the given byte array into multiple byte arrays.
-// The returned slice is a slice of slices. Each slice contains the values of a single column.
-// The length of the returned slice is the same as the number of values in the given byte array.
-// The reuse and scratch parameters are used to avoid allocations.
-func splitByteArrays(reuse *[][]byte, scratch *[]byte, data []byte) [][]byte {
+func splitByteArrays(data []byte) [][]byte {
 	length := 0
 	plain.RangeByteArray(data, func([]byte) error {
 		length++
 		return nil
 	})
-	var buffer []byte
-	var values [][]byte
-	if reuse == nil {
-		panic("reuse must not be nil")
-	} else if *reuse == nil {
-		values = make([][]byte, 0, length)
-	} else {
-		values = (*reuse)[:0]
-	}
-	if scratch == nil {
-		panic("scratch must not be nil")
-	} else if *scratch == nil {
-		buffer = make([]byte, 0, length)
-	} else {
-		buffer = (*scratch)[:0]
-	}
+	buffer := make([]byte, 0, len(data)-(4*length))
+	values := make([][]byte, 0, length)
 	plain.RangeByteArray(data, func(value []byte) error {
 		offset := len(buffer)
 		buffer = append(buffer, value...)
-		// Use append if there's not enough capacity in the slice
-		if cap(values) <= len(values) {
-			// need to make a new slice to hold the actual value and append it,
-			// which will grow values
-			values = append(values, copyBytes(buffer[offset:]))
-		} else {
-			values = values[:len(values)+1]
-			values[len(values)-1] = append(values[len(values)-1], buffer[offset:]...)
-		}
-
+		values = append(values, buffer[offset:])
 		return nil
 	})
-	// Need to ensure the passed-in reuse and scratch slices are updated
-	*scratch = buffer
-	*reuse = values
-
 	return values
 }
 
-func splitFixedLenByteArrays(reuse *[][]byte, data []byte, size int) [][]byte {
-	var values [][]byte
-	if reuse == nil {
-		panic("reuse must not be nil")
-	} else if *reuse == nil {
-		values = make([][]byte, 0, len(data)/size)
-	} else {
-		values = (*reuse)[:0]
-	}
-	sizeReq := len(data) / size
-	for i := range sizeReq {
+func splitFixedLenByteArrays(data []byte, size int) [][]byte {
+	data = copyBytes(data)
+	values := make([][]byte, len(data)/size)
+	for i := range values {
 		j := (i + 0) * size
 		k := (i + 1) * size
-		if cap(values) <= sizeReq {
-			scratch := make([]byte, 0)
-			scratch = append(scratch, data[j:k:k]...)
-			values = append(values, scratch)
-		} else {
-			values = values[:len(values)+1]
-			values[i] = append(values[i][:0], data[j:k:k]...)
-		}
+		values[i] = data[j:k:k]
 	}
-	// Ensure the passed-in reuse slice is updated
-	*reuse = values
-
 	return values
 }
 
