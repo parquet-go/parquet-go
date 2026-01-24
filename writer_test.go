@@ -3354,3 +3354,60 @@ func TestWriteOptionalJSONRawMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestReuseNumAllocs(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatal("require no panic")
+		}
+	}()
+
+	type testStruct struct {
+		A int
+		B bool
+		C string
+		D float64
+		E int32
+		F []byte
+		G int64
+	}
+
+	tests := make([]testStruct, 100)
+	for i := range 100 {
+		tests[i] = testStruct{
+			A: i + 1,
+			B: i%2 == 0,
+			C: fmt.Sprintf("test%d", i),
+			D: float64(i),
+			E: int32(i),
+			F: fmt.Appendf(nil, "test%d", i),
+			G: int64(i),
+		}
+	}
+
+	b := bytes.NewBuffer(nil)
+	w := parquet.NewGenericWriter[testStruct](b, parquet.MaxRowsPerRowGroup(10))
+
+	if _, err := w.Write(tests[0:50]); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// test number of allocs after reset writer
+
+	allocs := testing.AllocsPerRun(10000, func() {
+		b.Reset()
+		w.Reset(b)
+		if _, err := w.Write(tests[50:100]); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// Ideally we would fail if there are more allocations than before. However, the number of allocations varies
+	// between OS/CPU architectures. So we just report the number of allocations (when run with -test.v)
+	t.Logf("TestReuseNumAllocs got %v memory allocs per run", allocs)
+}
