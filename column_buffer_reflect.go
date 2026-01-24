@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"math/bits"
 	"reflect"
 	"sort"
@@ -790,10 +791,23 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			return
 
 		case reflect.Float32:
+			typ := node.Type()
+			logicalType := typ.LogicalType()
+			if logicalType != nil && logicalType.Decimal != nil {
+				col.writeInt32(levels, int32(float32(value.Float()*math.Pow10(int(logicalType.Decimal.Scale)))))
+				return
+			}
 			col.writeFloat(levels, float32(value.Float()))
 			return
 
 		case reflect.Float64:
+			typ := node.Type()
+			logicalType := typ.LogicalType()
+			if logicalType != nil && logicalType.Decimal != nil {
+				col.writeInt64(levels, int64(value.Float()*math.Pow10(int(logicalType.Decimal.Scale))))
+				return
+			}
+
 			col.writeDouble(levels, value.Float())
 			return
 

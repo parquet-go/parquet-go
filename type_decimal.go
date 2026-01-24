@@ -1,6 +1,9 @@
 package parquet
 
 import (
+	"math"
+	"reflect"
+
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/format"
 )
@@ -37,4 +40,17 @@ func (t *decimalType) LogicalType() *format.LogicalType {
 
 func (t *decimalType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Decimal]
+}
+
+func (t *decimalType) AssignValue(dst reflect.Value, src Value) error {
+	switch t.Type {
+	case Int32Type:
+		val := float32(src.int32()) / float32(math.Pow10(int(t.decimal.Scale)))
+		dst.Set(reflect.ValueOf(val))
+	case Int64Type:
+		val := float64(src.int64()) / math.Pow10(int(t.decimal.Scale))
+		dst.Set(reflect.ValueOf(val))
+	}
+
+	return nil
 }
