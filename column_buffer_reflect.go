@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/binary"
 	"encoding/json"
@@ -818,9 +819,12 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				case Int64:
 					col.writeInt64(levels, val)
 				case ByteArray:
-					buf := make([]byte, 8)
-					binary.Encode(buf, binary.LittleEndian, val)
-					col.writeByteArray(levels, buf)
+					var buf bytes.Buffer
+					err := binary.Write(&buf, binary.LittleEndian, val)
+					if err != nil {
+						panic(err)
+					}
+					col.writeByteArray(levels, buf.Bytes())
 				}
 
 				return
