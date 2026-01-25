@@ -3306,6 +3306,11 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 			typ:   parquet.Decimal(2, 16, parquet.Int64Type),
 			value: float64(999999999998.12),
 		},
+		{
+			name:  "byte array",
+			typ:   parquet.Decimal(2, 18, parquet.ByteArrayType),
+			value: float64(99999999999998.12),
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer

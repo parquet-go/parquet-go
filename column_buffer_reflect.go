@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"cmp"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -794,7 +795,15 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			typ := node.Type()
 			logicalType := typ.LogicalType()
 			if logicalType != nil && logicalType.Decimal != nil {
-				col.writeInt32(levels, int32(float32(value.Float()*math.Pow10(int(logicalType.Decimal.Scale)))))
+				val := int32(float32(value.Float() * math.Pow10(int(logicalType.Decimal.Scale))))
+				switch typ.Kind() {
+				case Int32:
+					col.writeInt32(levels, val)
+				case ByteArray:
+					buf := make([]byte, 4)
+					binary.Encode(buf, binary.LittleEndian, val)
+					col.writeByteArray(levels, buf)
+				}
 				return
 			}
 			col.writeFloat(levels, float32(value.Float()))
@@ -804,7 +813,16 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			typ := node.Type()
 			logicalType := typ.LogicalType()
 			if logicalType != nil && logicalType.Decimal != nil {
-				col.writeInt64(levels, int64(value.Float()*math.Pow10(int(logicalType.Decimal.Scale))))
+				val := int64(value.Float() * math.Pow10(int(logicalType.Decimal.Scale)))
+				switch typ.Kind() {
+				case Int64:
+					col.writeInt64(levels, val)
+				case ByteArray:
+					buf := make([]byte, 8)
+					binary.Encode(buf, binary.LittleEndian, val)
+					col.writeByteArray(levels, buf)
+				}
+
 				return
 			}
 

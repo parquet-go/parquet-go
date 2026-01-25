@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"reflect"
 
@@ -45,11 +47,15 @@ func (t *decimalType) ConvertedType() *deprecated.ConvertedType {
 func (t *decimalType) AssignValue(dst reflect.Value, src Value) error {
 	switch t.Type {
 	case Int32Type:
-		val := float32(src.int32()) / float32(math.Pow10(int(t.decimal.Scale)))
-		dst.Set(reflect.ValueOf(val))
+		dst.Set(reflect.ValueOf(float32(src.int32()) / float32(math.Pow10(int(t.decimal.Scale)))))
 	case Int64Type:
-		val := float64(src.int64()) / math.Pow10(int(t.decimal.Scale))
-		dst.Set(reflect.ValueOf(val))
+		dst.Set(reflect.ValueOf(float64(src.int64()) / math.Pow10(int(t.decimal.Scale))))
+	case ByteArrayType:
+		var val int64
+		if err := binary.Read(bytes.NewReader(src.ByteArray()), binary.LittleEndian, &val); err != nil {
+			return err
+		}
+		dst.Set(reflect.ValueOf(float64(val) / math.Pow10(int(t.decimal.Scale))))
 	}
 
 	return nil
