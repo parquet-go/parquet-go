@@ -3292,24 +3292,34 @@ func TestIssue118(t *testing.T) {
 // where the value is not written nor read correctly
 func TestIssue449DecimalReadWrite(t *testing.T) {
 	for _, tt := range []struct {
-		name  string
-		typ   parquet.Node
-		value any
+		name     string
+		typ      parquet.Node
+		value    any
+		expected any
 	}{
 		{
-			name:  "int32",
-			typ:   parquet.Decimal(2, 4, parquet.Int32Type),
-			value: float32(1.25),
+			name:     "int32",
+			typ:      parquet.Decimal(2, 4, parquet.Int32Type),
+			value:    float32(1.25),
+			expected: float32(1.25),
 		},
 		{
-			name:  "int64",
-			typ:   parquet.Decimal(2, 16, parquet.Int64Type),
-			value: float64(999999999998.12),
+			name:     "int64",
+			typ:      parquet.Decimal(2, 16, parquet.Int64Type),
+			value:    float64(999999999998.12),
+			expected: float64(999999999998.12),
 		},
 		{
-			name:  "byte array",
-			typ:   parquet.Decimal(2, 18, parquet.ByteArrayType),
-			value: float64(99999999999998.12),
+			name:     "int64 rounding", //adding a failing test until I'm sure rounding is the right thing to do
+			typ:      parquet.Decimal(2, 16, parquet.Int64Type),
+			value:    float64(1.555),
+			expected: float64(1.56),
+		},
+		{
+			name:     "byte array",
+			typ:      parquet.Decimal(2, 18, parquet.ByteArrayType),
+			value:    float64(99999999999998.12),
+			expected: float64(99999999999998.12),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3339,8 +3349,8 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 				t.Fatalf("unexpected row type: %T", row)
 			}
 
-			if row["a"] != tt.value {
-				t.Fatalf("expected %f, got %v", tt.value, row["a"])
+			if row["a"] != tt.expected {
+				t.Fatalf("expected %.*f, got %v", tt.typ.Type().LogicalType().Decimal.Scale, tt.expected, row["a"])
 			}
 		})
 	}

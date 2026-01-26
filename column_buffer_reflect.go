@@ -801,9 +801,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				case Int32:
 					col.writeInt32(levels, val)
 				case ByteArray:
-					buf := make([]byte, 4)
-					binary.Encode(buf, binary.LittleEndian, val)
-					col.writeByteArray(levels, buf)
+					col.writeByteArray(levels, numberToByteArray(val))
 				}
 				return
 			}
@@ -819,14 +817,8 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				case Int64:
 					col.writeInt64(levels, val)
 				case ByteArray:
-					var buf bytes.Buffer
-					err := binary.Write(&buf, binary.LittleEndian, val)
-					if err != nil {
-						panic(err)
-					}
-					col.writeByteArray(levels, buf.Bytes())
+					col.writeByteArray(levels, numberToByteArray(val))
 				}
-
 				return
 			}
 
@@ -942,4 +934,13 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) {
 	buf.Append(parsedUUID[:]...)
 	col.writeByteArray(levels, buf.Slice())
 	buf.Reset()
+}
+
+func numberToByteArray(data any) []byte {
+	var buf bytes.Buffer
+	err := binary.Write(&buf, binary.LittleEndian, data)
+	if err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
 }
