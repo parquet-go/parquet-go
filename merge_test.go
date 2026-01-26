@@ -1417,6 +1417,22 @@ func TestMergeNodes(t *testing.T) {
 				"attributes": parquet.Variant(),
 			}),
 		},
+		{
+			name: "compatible encoding preserved - DELTA_LENGTH_BYTE_ARRAY with ByteArray result",
+			nodes: []parquet.Node{
+				parquet.Encoded(parquet.Leaf(parquet.ByteArrayType), &parquet.DeltaLengthByteArray),
+				parquet.Leaf(parquet.FixedLenByteArrayType(16)),
+			},
+			expected: parquet.Required(parquet.Encoded(parquet.Leaf(parquet.ByteArrayType), &parquet.DeltaLengthByteArray)),
+		},
+		{
+			name: "incompatible encoding fallback - FixedLenByteArray result drops DELTA_LENGTH_BYTE_ARRAY",
+			nodes: []parquet.Node{
+				parquet.Leaf(parquet.FixedLenByteArrayType(16)),
+				parquet.Encoded(parquet.Leaf(parquet.ByteArrayType), &parquet.DeltaLengthByteArray),
+			},
+			expected: parquet.Required(parquet.Leaf(parquet.FixedLenByteArrayType(16))),
+		},
 	}
 
 	for _, test := range tests {
