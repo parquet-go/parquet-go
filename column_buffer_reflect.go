@@ -796,13 +796,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			typ := node.Type()
 			logicalType := typ.LogicalType()
 			if logicalType != nil && logicalType.Decimal != nil {
-				val := int32(float32(value.Float() * math.Pow10(int(logicalType.Decimal.Scale))))
-				switch typ.Kind() {
-				case Int32:
-					col.writeInt32(levels, val)
-				case ByteArray:
-					col.writeByteArray(levels, numberToByteArray(val))
-				}
+				decimalToByteArray(col, levels, typ, value, logicalType.Decimal.Scale)
 				return
 			}
 			col.writeFloat(levels, float32(value.Float()))
@@ -812,13 +806,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			typ := node.Type()
 			logicalType := typ.LogicalType()
 			if logicalType != nil && logicalType.Decimal != nil {
-				val := int64(value.Float() * math.Pow10(int(logicalType.Decimal.Scale)))
-				switch typ.Kind() {
-				case Int64:
-					col.writeInt64(levels, val)
-				case ByteArray:
-					col.writeByteArray(levels, numberToByteArray(val))
-				}
+				decimalToByteArray(col, levels, typ, value, logicalType.Decimal.Scale)
 				return
 			}
 
@@ -934,6 +922,18 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) {
 	buf.Append(parsedUUID[:]...)
 	col.writeByteArray(levels, buf.Slice())
 	buf.Reset()
+}
+
+func decimalToByteArray(col ColumnBuffer, levels columnLevels, typ Type, value reflect.Value, scale int32) {
+	val := int64(value.Float() * math.Pow10(int(scale)))
+	switch typ.Kind() {
+	case Int32:
+		col.writeInt32(levels, int32(val))
+	case Int64:
+		col.writeInt64(levels, val)
+	case ByteArray:
+		col.writeByteArray(levels, numberToByteArray(val))
+	}
 }
 
 func numberToByteArray(data any) []byte {
