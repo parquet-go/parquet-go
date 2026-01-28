@@ -3288,6 +3288,74 @@ func TestIssue118(t *testing.T) {
 	}
 }
 
+// TestIssue449DecimalReadWRite tests the bug reported in issue #449
+// where the value is not written nor read correctly
+func TestIssue449DecimalReadWrite(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		typ      parquet.Node
+		value    any
+		expected any
+	}{
+		{
+			name:     "int32",
+			typ:      parquet.Decimal(2, 4, parquet.Int32Type),
+			value:    float32(1.25),
+			expected: float32(1.25),
+		},
+		{
+			name:     "int64",
+			typ:      parquet.Decimal(2, 16, parquet.Int64Type),
+			value:    float64(999999999998.12),
+			expected: float64(999999999998.12),
+		},
+		{
+			name:     "int64 rounding", //adding a failing test until I'm sure rounding is the right thing to do
+			typ:      parquet.Decimal(2, 16, parquet.Int64Type),
+			value:    float64(1.555),
+			expected: float64(1.56),
+		},
+		{
+			name:     "byte array",
+			typ:      parquet.Decimal(2, 18, parquet.ByteArrayType),
+			value:    float64(99999999999998.12),
+			expected: float64(99999999999998.12),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			schema := parquet.NewSchema(tt.name, parquet.Group{"a": tt.typ})
+			w := parquet.NewGenericWriter[any](&buf, schema)
+			_, err := w.Write([]any{map[string]any{"a": tt.value}})
+			if err != nil {
+				t.Fatalf("unable to write: %s", err)
+			}
+
+			if err := w.Close(); err != nil {
+				t.Fatalf("unable to close writer: %s", err)
+			}
+
+			r := parquet.NewGenericReader[any](bytes.NewReader(buf.Bytes()))
+			out := make([]any, 1)
+			if n, err := r.Read(out); n != len(out) {
+				t.Fatalf("unable to read: %s", err)
+			}
+			if err := r.Close(); err != nil {
+				t.Fatalf("unable to close reader: %s", err)
+			}
+
+			row, ok := out[0].(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected row type: %T", row)
+			}
+
+			if row["a"] != tt.expected {
+				t.Fatalf("expected %.*f, got %v", tt.typ.Type().LogicalType().Decimal.Scale, tt.expected, row["a"])
+			}
+		})
+	}
+}
+
 func TestWriteOptionalJSONRawMessage(t *testing.T) {
 	type Row struct {
 		Buf json.RawMessage `parquet:"buf,json,optional"`
