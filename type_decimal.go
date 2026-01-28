@@ -43,8 +43,7 @@ func Decimal(scale, precision int, typ Type) Node {
 }
 
 type decimalType struct {
-	decimal  format.DecimalType
-	fixedLen int
+	decimal format.DecimalType
 	Type
 }
 
