@@ -938,7 +938,7 @@ func decimalToByteArray(col ColumnBuffer, levels columnLevels, typ Type, value r
 
 func numberToByteArray(data any) []byte {
 	var buf bytes.Buffer
-	err := binary.Write(&buf, binary.LittleEndian, data)
+	err := binary.Write(&buf, binary.BigEndian, data)
 	if err != nil {
 		panic(err)
 	}
