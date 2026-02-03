@@ -14,6 +14,7 @@ import (
 
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
+	"github.com/parquet-go/parquet-go/format/thriftdecode"
 	"github.com/parquet-go/parquet-go/internal/memory"
 )
 
@@ -248,10 +249,13 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 
 	columnIndexes := make([]format.ColumnIndex, numColumnChunks)
 	offsetIndexes := make([]format.OffsetIndex, numColumnChunks)
-	indexBuffer := make([]byte, max(int(columnIndexLength), int(offsetIndexLength)))
 
+	// Use separate buffers for column indexes and offset indexes.
+	// Column index data must be kept alive because DecodeColumnIndex uses
+	// zero-copy decoding - MinValues/MaxValues reference the input buffer.
+	var columnIndexData []byte
 	if columnIndexOffset > 0 {
-		columnIndexData := indexBuffer[:columnIndexLength]
+		columnIndexData = make([]byte, columnIndexLength)
 
 		if cast, ok := f.reader.(interface{ SetColumnIndexSection(offset, length int64) }); ok {
 			cast.SetColumnIndexSection(columnIndexOffset, columnIndexLength)
@@ -269,7 +273,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 				offset := c.ColumnIndexOffset - columnIndexOffset
 				length := int64(c.ColumnIndexLength)
 				buffer := columnIndexData[offset : offset+length]
-				if err := thrift.Unmarshal(&f.protocol, buffer, &columnIndexes[(i*numColumns)+j]); err != nil {
+				if err := thriftdecode.DecodeColumnIndex(buffer, &columnIndexes[(i*numColumns)+j]); err != nil {
 					return fmt.Errorf("decoding column index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
 				}
 			}
@@ -281,7 +285,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 	}
 
 	if offsetIndexOffset > 0 {
-		offsetIndexData := indexBuffer[:offsetIndexLength]
+		offsetIndexData := make([]byte, offsetIndexLength)
 
 		if cast, ok := f.reader.(interface{ SetOffsetIndexSection(offset, length int64) }); ok {
 			cast.SetOffsetIndexSection(offsetIndexOffset, offsetIndexLength)
@@ -295,8 +299,8 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 				offset := c.OffsetIndexOffset - offsetIndexOffset
 				length := int64(c.OffsetIndexLength)
 				buffer := offsetIndexData[offset : offset+length]
-				if err := thrift.Unmarshal(&f.protocol, buffer, &offsetIndexes[(i*numColumns)+j]); err != nil {
-					return fmt.Errorf("decoding column index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
+				if err := thriftdecode.DecodeOffsetIndex(buffer, &offsetIndexes[(i*numColumns)+j]); err != nil {
+					return fmt.Errorf("decoding offset index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
 				}
 			}
 			return nil
