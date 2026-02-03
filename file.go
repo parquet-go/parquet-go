@@ -12,8 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
+	"github.com/parquet-go/parquet-go/format/thriftdecode"
 	"github.com/parquet-go/parquet-go/internal/memory"
 )
 
@@ -26,7 +26,6 @@ const (
 // here: https://github.com/apache/parquet-format#file-format
 type File struct {
 	metadata      format.FileMetaData
-	protocol      thrift.CompactProtocol
 	reader        io.ReaderAt
 	size          int64
 	schema        *Schema
@@ -114,7 +113,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		}
 	}
 
-	if err := thrift.Unmarshal(&f.protocol, footerData, &f.metadata); err != nil {
+	if err := thriftdecode.DecodeFileMetaData(footerData, &f.metadata); err != nil {
 		return nil, fmt.Errorf("reading parquet file metadata: %w", err)
 	}
 	if len(f.metadata.Schema) == 0 {
@@ -146,8 +145,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		defer putBufioReader(rbuf, rbufpool)
 
 		header := format.BloomFilterHeader{}
-		compact := thrift.CompactProtocol{}
-		decoder := thrift.NewDecoder(compact.NewReader(rbuf))
+		decoder := thriftdecode.NewBloomFilterHeaderDecoder(rbuf)
 
 		for i := range rowGroups {
 			g := &rowGroups[i]
@@ -158,6 +156,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 				if offset := c.chunk.MetaData.BloomFilterOffset; offset > 0 {
 					section.Seek(offset, io.SeekStart)
 					rbuf.Reset(section)
+					decoder.Reset(rbuf)
 
 					header = format.BloomFilterHeader{}
 					if err := decoder.Decode(&header); err != nil {
@@ -248,10 +247,13 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 
 	columnIndexes := make([]format.ColumnIndex, numColumnChunks)
 	offsetIndexes := make([]format.OffsetIndex, numColumnChunks)
-	indexBuffer := make([]byte, max(int(columnIndexLength), int(offsetIndexLength)))
 
+	// Use separate buffers for column indexes and offset indexes.
+	// Column index data must be kept alive because DecodeColumnIndex uses
+	// zero-copy decoding - MinValues/MaxValues reference the input buffer.
+	var columnIndexData []byte
 	if columnIndexOffset > 0 {
-		columnIndexData := indexBuffer[:columnIndexLength]
+		columnIndexData = make([]byte, columnIndexLength)
 
 		if cast, ok := f.reader.(interface{ SetColumnIndexSection(offset, length int64) }); ok {
 			cast.SetColumnIndexSection(columnIndexOffset, columnIndexLength)
@@ -269,7 +271,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 				offset := c.ColumnIndexOffset - columnIndexOffset
 				length := int64(c.ColumnIndexLength)
 				buffer := columnIndexData[offset : offset+length]
-				if err := thrift.Unmarshal(&f.protocol, buffer, &columnIndexes[(i*numColumns)+j]); err != nil {
+				if err := thriftdecode.DecodeColumnIndex(buffer, &columnIndexes[(i*numColumns)+j]); err != nil {
 					return fmt.Errorf("decoding column index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
 				}
 			}
@@ -281,7 +283,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 	}
 
 	if offsetIndexOffset > 0 {
-		offsetIndexData := indexBuffer[:offsetIndexLength]
+		offsetIndexData := make([]byte, offsetIndexLength)
 
 		if cast, ok := f.reader.(interface{ SetOffsetIndexSection(offset, length int64) }); ok {
 			cast.SetOffsetIndexSection(offsetIndexOffset, offsetIndexLength)
@@ -295,8 +297,8 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 				offset := c.OffsetIndexOffset - offsetIndexOffset
 				length := int64(c.OffsetIndexLength)
 				buffer := offsetIndexData[offset : offset+length]
-				if err := thrift.Unmarshal(&f.protocol, buffer, &offsetIndexes[(i*numColumns)+j]); err != nil {
-					return fmt.Errorf("decoding column index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
+				if err := thriftdecode.DecodeOffsetIndex(buffer, &offsetIndexes[(i*numColumns)+j]); err != nil {
+					return fmt.Errorf("decoding offset index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
 				}
 			}
 			return nil
@@ -654,7 +656,7 @@ func (c *FileColumnChunk) readColumnIndexFrom(reader io.ReaderAt) (*FileColumnIn
 	if _, err := readAt(reader, indexData, offset); err != nil {
 		return nil, fmt.Errorf("read %d bytes column index at offset %d: %w", length, offset, err)
 	}
-	if err := thrift.Unmarshal(&c.file.protocol, indexData, &columnIndex); err != nil {
+	if err := thriftdecode.DecodeColumnIndex(indexData, &columnIndex); err != nil {
 		return nil, fmt.Errorf("decode column index: rowGroup=%d columnChunk=%d/%d: %w", c.rowGroup.Ordinal, c.Column(), len(c.rowGroup.Columns), err)
 	}
 	index := &FileColumnIndex{index: &columnIndex, kind: c.column.Type().Kind()}
@@ -683,7 +685,7 @@ func (c *FileColumnChunk) readOffsetIndex(reader io.ReaderAt) (*FileOffsetIndex,
 	if _, err := readAt(reader, indexData, offset); err != nil {
 		return nil, fmt.Errorf("read %d bytes offset index at offset %d: %w", length, offset, err)
 	}
-	if err := thrift.Unmarshal(&c.file.protocol, indexData, &offsetIndex); err != nil {
+	if err := thriftdecode.DecodeOffsetIndex(indexData, &offsetIndex); err != nil {
 		return nil, fmt.Errorf("decode offset index: rowGroup=%d columnChunk=%d/%d: %w", c.rowGroup.Ordinal, c.Column(), len(c.rowGroup.Columns), err)
 	}
 	index := &FileOffsetIndex{index: &offsetIndex}
@@ -710,8 +712,7 @@ func (c *FileColumnChunk) readBloomFilter(reader io.ReaderAt) (*FileBloomFilter,
 	defer putBufioReader(rbuf, rbufpool)
 
 	header := format.BloomFilterHeader{}
-	compact := thrift.CompactProtocol{}
-	decoder := thrift.NewDecoder(compact.NewReader(rbuf))
+	decoder := thriftdecode.NewBloomFilterHeaderDecoder(rbuf)
 
 	if err := decoder.Decode(&header); err != nil {
 		return nil, fmt.Errorf("decoding bloom filter header: %w", err)
@@ -732,8 +733,7 @@ type FilePages struct {
 	rbufpool *memory.Pool[bufio.Reader]
 	section  io.SectionReader
 
-	protocol thrift.CompactProtocol
-	decoder  thrift.Decoder
+	decoder thriftdecode.PageHeaderDecoder
 
 	baseOffset int64
 	dataOffset int64
@@ -763,7 +763,7 @@ func (f *FilePages) init(c *FileColumnChunk, reader io.ReaderAt) {
 
 	f.section = *io.NewSectionReader(reader, f.baseOffset, c.chunk.MetaData.TotalCompressedSize)
 	f.rbuf, f.rbufpool = getBufioReader(&f.section, f.bufferSize)
-	f.decoder.Reset(f.protocol.NewReader(f.rbuf))
+	f.decoder.Reset(f.rbuf)
 	f.index = 0
 	Release(f.lastPage)
 	f.lastPage = nil
@@ -925,7 +925,7 @@ func (f *FilePages) readDictionary() error {
 	rbuf, pool := getBufioReader(chunk, f.bufferSize)
 	defer putBufioReader(rbuf, pool)
 
-	decoder := thrift.NewDecoder(f.protocol.NewReader(rbuf))
+	decoder := thriftdecode.NewPageHeaderDecoder(rbuf)
 
 	header := new(format.PageHeader)
 
