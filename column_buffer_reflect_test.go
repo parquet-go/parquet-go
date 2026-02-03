@@ -211,6 +211,201 @@ func TestWriteValueFuncOfOptionalGroup(t *testing.T) {
 	}
 }
 
+// TestWriteValueFuncOfMapAnyToOptionalWithZeroValues tests that writeValueFuncOf
+// handles zero values from map[string]any correctly (i.e., zero values are not treated as NULL).
+// This is a regression test for the bug where map[string]any{"v": 0.0} was treated as NULL.
+func TestWriteValueFuncOfMapAnyToOptionalWithZeroValues(t *testing.T) {
+	tests := []struct {
+		name        string
+		fieldType   Type
+		value       map[string]any
+		expectNull  bool
+		expectValue any
+	}{
+		// float32 tests
+		{
+			name:        "float32 zero value",
+			fieldType:   FloatType,
+			value:       map[string]any{"v": float32(0.0)},
+			expectNull:  false,
+			expectValue: float32(0.0),
+		},
+		{
+			name:        "float32 non-zero value",
+			fieldType:   FloatType,
+			value:       map[string]any{"v": float32(3.14)},
+			expectNull:  false,
+			expectValue: float32(3.14),
+		},
+		{
+			name:       "float32 missing key",
+			fieldType:  FloatType,
+			value:      map[string]any{},
+			expectNull: true,
+		},
+		{
+			name:       "float32 nil value",
+			fieldType:  FloatType,
+			value:      map[string]any{"v": nil},
+			expectNull: true,
+		},
+
+		// float64 tests
+		{
+			name:        "float64 zero value",
+			fieldType:   DoubleType,
+			value:       map[string]any{"v": float64(0.0)},
+			expectNull:  false,
+			expectValue: float64(0.0),
+		},
+		{
+			name:        "float64 non-zero value",
+			fieldType:   DoubleType,
+			value:       map[string]any{"v": float64(2.718)},
+			expectNull:  false,
+			expectValue: float64(2.718),
+		},
+		{
+			name:       "float64 missing key",
+			fieldType:  DoubleType,
+			value:      map[string]any{},
+			expectNull: true,
+		},
+		{
+			name:       "float64 nil value",
+			fieldType:  DoubleType,
+			value:      map[string]any{"v": nil},
+			expectNull: true,
+		},
+
+		// int32 tests
+		{
+			name:        "int32 zero value",
+			fieldType:   Int32Type,
+			value:       map[string]any{"v": int32(0)},
+			expectNull:  false,
+			expectValue: int32(0),
+		},
+		{
+			name:        "int32 non-zero value",
+			fieldType:   Int32Type,
+			value:       map[string]any{"v": int32(42)},
+			expectNull:  false,
+			expectValue: int32(42),
+		},
+		{
+			name:       "int32 missing key",
+			fieldType:  Int32Type,
+			value:      map[string]any{},
+			expectNull: true,
+		},
+		{
+			name:       "int32 nil value",
+			fieldType:  Int32Type,
+			value:      map[string]any{"v": nil},
+			expectNull: true,
+		},
+
+		// int64 tests
+		{
+			name:        "int64 zero value",
+			fieldType:   Int64Type,
+			value:       map[string]any{"v": int64(0)},
+			expectNull:  false,
+			expectValue: int64(0),
+		},
+		{
+			name:        "int64 non-zero value",
+			fieldType:   Int64Type,
+			value:       map[string]any{"v": int64(999)},
+			expectNull:  false,
+			expectValue: int64(999),
+		},
+		{
+			name:       "int64 missing key",
+			fieldType:  Int64Type,
+			value:      map[string]any{},
+			expectNull: true,
+		},
+		{
+			name:       "int64 nil value",
+			fieldType:  Int64Type,
+			value:      map[string]any{"v": nil},
+			expectNull: true,
+		},
+
+		// bool tests
+		{
+			name:        "bool false value",
+			fieldType:   BooleanType,
+			value:       map[string]any{"v": false},
+			expectNull:  false,
+			expectValue: false,
+		},
+		{
+			name:        "bool true value",
+			fieldType:   BooleanType,
+			value:       map[string]any{"v": true},
+			expectNull:  false,
+			expectValue: true,
+		},
+		{
+			name:       "bool missing key",
+			fieldType:  BooleanType,
+			value:      map[string]any{},
+			expectNull: true,
+		},
+		{
+			name:       "bool nil value",
+			fieldType:  BooleanType,
+			value:      map[string]any{"v": nil},
+			expectNull: true,
+		},
+
+		// string tests
+		{
+			name:        "string empty value",
+			fieldType:   ByteArrayType,
+			value:       map[string]any{"v": ""},
+			expectNull:  false,
+			expectValue: "",
+		},
+		{
+			name:        "string non-empty value",
+			fieldType:   ByteArrayType,
+			value:       map[string]any{"v": "hello"},
+			expectNull:  false,
+			expectValue: "hello",
+		},
+		{
+			name:       "string missing key",
+			fieldType:  ByteArrayType,
+			value:      map[string]any{},
+			expectNull: true,
+		},
+		{
+			name:       "string nil value",
+			fieldType:  ByteArrayType,
+			value:      map[string]any{"v": nil},
+			expectNull: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := Group{"v": Optional(Leaf(tt.fieldType))}
+			columns := makeColumnBuffersForSchema(schema)
+			_, writeFunc := writeValueFuncOf(0, schema)
+
+			val := reflect.ValueOf(tt.value)
+			writeFunc(columns, columnLevels{}, val)
+
+			optCol := columns[0].(*optionalColumnBuffer)
+			checkOptionalColumn(t, "v", optCol, tt.expectNull, tt.expectValue)
+		})
+	}
+}
+
 // TestWriteValueFuncOfMapToGroup tests writing maps to group schemas
 func TestWriteValueFuncOfMapToGroup(t *testing.T) {
 	type Point struct {
@@ -1867,4 +2062,74 @@ func TestGenericWriterAnyPointerVsOptionalTag(t *testing.T) {
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+// TestGenericWriterMapAnyZeroValues tests end-to-end writing and reading of zero values
+// from map[string]any to optional fields. This is a regression test for the bug where
+// zero values like 0.0, 0, false, "" from map[string]any were incorrectly treated as NULL.
+func TestGenericWriterMapAnyZeroValues(t *testing.T) {
+	type TestRow struct {
+		F32 float32 `parquet:"f32,optional"`
+		F64 float64 `parquet:"f64,optional"`
+		I32 int32   `parquet:"i32,optional"`
+		I64 int64   `parquet:"i64,optional"`
+		B   bool    `parquet:"b,optional"`
+		S   string  `parquet:"s,optional"`
+	}
+
+	schema := SchemaOf(TestRow{})
+
+	input := []map[string]any{
+		{
+			"f32": float32(0.0),
+			"f64": float64(0.0),
+			"i32": int32(0),
+			"i64": int64(0),
+			"b":   false,
+			"s":   "",
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[map[string]any](buf, schema)
+
+	n, err := writer.Write(input)
+	if err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 row written, got %d", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	var got TestRow
+	if err := reader.Read(&got); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	// Zero values should be correctly read back, not NULL
+	if got.F32 != 0.0 {
+		t.Errorf("expected f32=0.0, got %v", got.F32)
+	}
+	if got.F64 != 0.0 {
+		t.Errorf("expected f64=0.0, got %v", got.F64)
+	}
+	if got.I32 != 0 {
+		t.Errorf("expected i32=0, got %v", got.I32)
+	}
+	if got.I64 != 0 {
+		t.Errorf("expected i64=0, got %v", got.I64)
+	}
+	if got.B != false {
+		t.Errorf("expected b=false, got %v", got.B)
+	}
+	if got.S != "" {
+		t.Errorf("expected s=\"\", got %q", got.S)
+	}
 }
