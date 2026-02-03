@@ -1,10 +1,13 @@
 package parquet
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"math/bits"
 	"reflect"
 	"sort"
@@ -788,10 +791,23 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			return
 
 		case reflect.Float32:
+			typ := node.Type()
+			logicalType := typ.LogicalType()
+			if logicalType != nil && logicalType.Decimal != nil {
+				decimalToByteArray(col, levels, typ, value, logicalType.Decimal.Scale)
+				return
+			}
 			col.writeFloat(levels, float32(value.Float()))
 			return
 
 		case reflect.Float64:
+			typ := node.Type()
+			logicalType := typ.LogicalType()
+			if logicalType != nil && logicalType.Decimal != nil {
+				decimalToByteArray(col, levels, typ, value, logicalType.Decimal.Scale)
+				return
+			}
+
 			col.writeDouble(levels, value.Float())
 			return
 
@@ -904,4 +920,25 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) {
 	buf.Append(parsedUUID[:]...)
 	col.writeByteArray(levels, buf.Slice())
 	buf.Reset()
+}
+
+func decimalToByteArray(col ColumnBuffer, levels columnLevels, typ Type, value reflect.Value, scale int32) {
+	val := int64(value.Float() * math.Pow10(int(scale)))
+	switch typ.Kind() {
+	case Int32:
+		col.writeInt32(levels, int32(val))
+	case Int64:
+		col.writeInt64(levels, val)
+	case ByteArray:
+		col.writeByteArray(levels, numberToByteArray(val))
+	}
+}
+
+func numberToByteArray(data any) []byte {
+	var buf bytes.Buffer
+	err := binary.Write(&buf, binary.BigEndian, data)
+	if err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
 }
