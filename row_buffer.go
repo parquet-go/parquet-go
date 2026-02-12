@@ -226,7 +226,10 @@ func (p *rowBufferPage) NumNulls() int64 {
 
 func (p *rowBufferPage) Bounds() (min, max Value, ok bool) {
 	p.scan(func(value Value) {
-		if !value.IsNull() {
+		// Skip null values and NaN float/double values. NaN is excluded from
+		// min/max statistics to enable correct predicate pushdown in query
+		// engines. See boundsFloat32ExcludeNaN for the full rationale.
+		if !value.IsNull() && !valueIsNaN(value) {
 			switch {
 			case !ok:
 				min, max, ok = value, value, true

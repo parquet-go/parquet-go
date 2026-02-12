@@ -51,10 +51,15 @@ func (page *floatPage) max() float32 { return maxFloat32(page.values.Slice()) }
 func (page *floatPage) bounds() (min, max float32) { return boundsFloat32(page.values.Slice()) }
 
 func (page *floatPage) Bounds() (min, max Value, ok bool) {
-	if ok = page.values.Len() > 0; ok {
-		minFloat32, maxFloat32 := page.bounds()
-		min = page.makeValue(minFloat32)
-		max = page.makeValue(maxFloat32)
+	if page.values.Len() > 0 {
+		// Exclude NaN values from min/max statistics. See boundsFloat32ExcludeNaN
+		// for details on why this is necessary for correct predicate pushdown.
+		minFloat, maxFloat, hasNonNaN := boundsFloat32ExcludeNaN(page.values.Slice())
+		if hasNonNaN {
+			min = page.makeValue(minFloat)
+			max = page.makeValue(maxFloat)
+			ok = true
+		}
 	}
 	return min, max, ok
 }
