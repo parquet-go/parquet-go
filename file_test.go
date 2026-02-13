@@ -494,21 +494,9 @@ func TestReadDictionaryPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	foundRows := 0
-	for _, rg := range pf.RowGroups() {
-		cc := rg.ColumnChunks()[0]
-		pages := cc.Pages()
 
-		filePages := pages.(*parquet.FilePages)
-		dict, err := filePages.ReadDictionary()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if dict == nil {
-			t.Fatal("expected dictionary page to be available")
-		}
-
+	check := func(pages parquet.Pages) {
 		for {
 			page, err := pages.ReadPage()
 			if err != nil && err != io.EOF {
@@ -540,7 +528,50 @@ func TestReadDictionaryPage(t *testing.T) {
 
 			parquet.Release(page)
 		}
+	}
 
+	encodedDictionaries := make([][]byte, len(pf.RowGroups()))
+	for i, rg := range pf.RowGroups() {
+		cc := rg.ColumnChunks()[0]
+		pages := cc.Pages()
+
+		filePages := pages.(*parquet.FilePages)
+		dict, err := filePages.ReadDictionary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dict == nil {
+			t.Fatal("expected dictionary page to be available")
+		}
+		check(filePages)
+		encodedDictionary, err := dict.Type().Encode(nil, dict.Page().Data(), &parquet.DeltaByteArray)
+		if err != nil {
+			t.Fatal("expected dictionary to be encoded")
+		}
+		encodedDictionaries[i] = encodedDictionary
+		pages.Close()
+	}
+
+	if foundRows != totalRows {
+		t.Fatalf("expected %d rows, got %d", totalRows, foundRows)
+	}
+	foundRows = 0
+
+	// Reusing dictionary read previously
+	for i, rg := range pf.RowGroups() {
+		cc := rg.ColumnChunks()[0]
+		pages := cc.Pages()
+
+		filePages := pages.(*parquet.FilePages)
+		values := cc.Type().NewValues(make([]byte, 0, 10), make([]uint32, 0, 10))
+		values, err = cc.Type().Decode(values, encodedDictionaries[i], &parquet.DeltaByteArray)
+		if err != nil {
+			t.Fatal("error decoding dictionary")
+		}
+		_, offsets := values.Data()
+		newDictionary := cc.Type().NewDictionary(cc.Column(), len(offsets), values)
+		filePages.InitDictionary(newDictionary)
+		check(filePages)
 		pages.Close()
 	}
 
