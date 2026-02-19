@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"math/bits"
 	"reflect"
 	"sort"
@@ -758,6 +759,8 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 				writeProtoAny(col, levels, msg, node)
 			case geom.T:
 				writeGeometry(col, levels, msg, node)
+			case *big.Float:
+				writeBigFloat(col, levels, msg, node)
 			default:
 				value = value.Elem()
 				goto writeValue
@@ -796,7 +799,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			typ := node.Type()
 			logicalType := typ.LogicalType()
 			if logicalType != nil && logicalType.Decimal != nil {
-				decimalToByteArray(col, levels, typ, value, logicalType.Decimal.Scale)
+				decimalValue(col, levels, typ, value, logicalType.Decimal.Scale)
 				return
 			}
 			col.writeFloat(levels, float32(value.Float()))
@@ -806,7 +809,7 @@ func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) 
 			typ := node.Type()
 			logicalType := typ.LogicalType()
 			if logicalType != nil && logicalType.Decimal != nil {
-				decimalToByteArray(col, levels, typ, value, logicalType.Decimal.Scale)
+				decimalValue(col, levels, typ, value, logicalType.Decimal.Scale)
 				return
 			}
 
@@ -924,7 +927,7 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) {
 	buf.Reset()
 }
 
-func decimalToByteArray(col ColumnBuffer, levels columnLevels, typ Type, value reflect.Value, scale int32) {
+func decimalValue(col ColumnBuffer, levels columnLevels, typ Type, value reflect.Value, scale int32) {
 	val := int64(value.Float() * math.Pow10(int(scale)))
 	switch typ.Kind() {
 	case Int32:
@@ -943,4 +946,56 @@ func numberToByteArray(data any) []byte {
 		panic(err)
 	}
 	return buf.Bytes()
+}
+
+func writeBigFloat(col ColumnBuffer, levels columnLevels, f *big.Float, node Node) {
+	typ := node.Type()
+	logicalType := typ.LogicalType()
+	if logicalType == nil || logicalType.Decimal == nil {
+		panic("writeBigFloat requires a decimal logical type")
+	}
+
+	scale := int(logicalType.Decimal.Scale)
+	// Compute minimum precision needed: decimal precision * log2(10) ≈ precision * 3.32
+	// We use precision * 4 + 64 for safety margin
+	minPrec := uint(logicalType.Decimal.Precision)*4 + 64
+	prec := max(f.Prec(), minPrec)
+	scaleFactor := new(big.Float).SetPrec(prec)
+	scaleFactor.SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil))
+	scaled := new(big.Float).SetPrec(prec).Mul(f, scaleFactor)
+	unscaled, _ := scaled.Int(nil)
+	col.writeByteArray(levels, bigIntToByteArray(unscaled))
+}
+
+func bigIntToByteArray(i *big.Int) []byte {
+	if i.Sign() >= 0 {
+		b := i.Bytes()
+		// Add leading zero byte if high bit is set to avoid being interpreted as negative
+		if len(b) > 0 && b[0]&0x80 != 0 {
+			b = append([]byte{0}, b...)
+		}
+		return b
+	}
+	// Negative: convert to two's complement
+	// Get the absolute value bytes
+	abs := new(big.Int).Abs(i)
+	b := abs.Bytes()
+	// Add a leading zero byte to ensure we have room for sign
+	if len(b) == 0 || b[0]&0x80 != 0 {
+		b = append([]byte{0}, b...)
+	}
+	// Invert all bits
+	for j := range b {
+		b[j] = ^b[j]
+	}
+	// Add 1
+	carry := byte(1)
+	for j := len(b) - 1; j >= 0 && carry > 0; j-- {
+		sum := b[j] + carry
+		b[j] = sum
+		if sum != 0 {
+			carry = 0
+		}
+	}
+	return b
 }

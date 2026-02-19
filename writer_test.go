@@ -3294,39 +3294,44 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		typ      parquet.Node
-		value    any
-		expected any
+		value    func() (any, error)
+		expected func() (any, error)
 	}{
 		{
-			name:     "int32",
-			typ:      parquet.Decimal(2, 4, parquet.Int32Type),
-			value:    float32(1.25),
-			expected: float32(1.25),
+			name:  "int32",
+			typ:   parquet.Decimal(2, 4, parquet.Int32Type),
+			value: func() (any, error) { return float32(1.25), nil },
 		},
 		{
-			name:     "int64",
-			typ:      parquet.Decimal(2, 16, parquet.Int64Type),
-			value:    float64(999999999998.12),
-			expected: float64(999999999998.12),
+			name:  "int64",
+			typ:   parquet.Decimal(2, 16, parquet.Int64Type),
+			value: func() (any, error) { return float64(999999999998.12), nil },
 		},
 		{
 			name:     "int64 rounding", //adding a failing test until I'm sure rounding is the right thing to do
 			typ:      parquet.Decimal(2, 16, parquet.Int64Type),
-			value:    float64(1.555),
-			expected: float64(1.56),
+			value:    func() (any, error) { return float64(1.555), nil },
+			expected: func() (any, error) { return float64(1.56), nil },
 		},
 		{
-			name:     "byte array",
-			typ:      parquet.Decimal(2, 18, parquet.ByteArrayType),
-			value:    float64(99999999999998.12),
-			expected: float64(99999999999998.12),
+			name: "byte array",
+			typ:  parquet.Decimal(2, 40, parquet.ByteArrayType),
+			value: func() (any, error) {
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.12", 10, 40, big.ToNearestEven)
+				return f, err
+			},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			schema := parquet.NewSchema(tt.name, parquet.Group{"a": tt.typ})
 			w := parquet.NewGenericWriter[any](&buf, schema)
-			_, err := w.Write([]any{map[string]any{"a": tt.value}})
+			v, err := tt.value()
+			if err != nil {
+				t.Fatalf("unable get test value: %s", err)
+			}
+
+			_, err = w.Write([]any{map[string]any{"a": v}})
 			if err != nil {
 				t.Fatalf("unable to write: %s", err)
 			}
@@ -3349,8 +3354,24 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 				t.Fatalf("unexpected row type: %T", row)
 			}
 
-			if row["a"] != tt.expected {
-				t.Fatalf("expected %.*f, got %v", tt.typ.Type().LogicalType().Decimal.Scale, tt.expected, row["a"])
+			exp := v
+			if tt.expected != nil {
+				exp, err = tt.expected()
+				if err != nil {
+					t.Fatalf("unable get test expected value: %s", err)
+				}
+			}
+
+			if expFloat, ok := exp.(*big.Float); ok {
+				actualFloat, ok := row["a"].(*big.Float)
+				if !ok {
+					t.Fatalf("expected *big.Float, got %T", row["a"])
+				}
+				if expFloat.Cmp(actualFloat) != 0 {
+					t.Fatalf("expected %v, got %v", exp, row["a"])
+				}
+			} else if row["a"] != exp {
+				t.Fatalf("expected %v, got %v", exp, row["a"])
 			}
 		})
 	}

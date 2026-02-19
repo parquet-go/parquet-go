@@ -1,10 +1,9 @@
 package parquet
 
 import (
-	"bytes"
-	"encoding/binary"
 	"log"
 	"math"
+	"math/big"
 	"reflect"
 	"strconv"
 
@@ -64,11 +63,28 @@ func (t *decimalType) AssignValue(dst reflect.Value, src Value) error {
 	case Int64Type:
 		dst.Set(reflect.ValueOf(float64(src.int64()) / math.Pow10(int(t.decimal.Scale))))
 	case ByteArrayType:
-		var val int64
-		if err := binary.Read(bytes.NewReader(src.ByteArray()), binary.LittleEndian, &val); err != nil {
-			return err
+		data := src.ByteArray()
+		val := new(big.Int)
+		if len(data) > 0 && data[0]&0x80 != 0 {
+			// Negative number: convert from two's complement
+			tmp := make([]byte, len(data))
+			for i, b := range data {
+				tmp[i] = ^b
+			}
+			val.SetBytes(tmp)
+			val.Add(val, big.NewInt(1))
+			val.Neg(val)
+		} else {
+			val.SetBytes(data)
 		}
-		dst.Set(reflect.ValueOf(float64(val) / math.Pow10(int(t.decimal.Scale))))
+		// Use enough precision to represent the decimal value accurately
+		// precision * log2(10) ≈ precision * 3.32, round up generously
+		prec := max(uint(t.decimal.Precision)*4+64, 192)
+		f := new(big.Float).SetPrec(prec).SetInt(val)
+		scaleFactor := new(big.Float).SetPrec(prec)
+		scaleFactor.SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(t.decimal.Scale)), nil))
+		f.Quo(f, scaleFactor)
+		dst.Set(reflect.ValueOf(f))
 	}
 	return nil
 }
