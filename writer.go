@@ -2008,7 +2008,15 @@ func (c *ColumnWriter) fallbackDictionaryToPlain() error {
 		c.columnType = indexedType.Type
 	}
 	if c.plainColumnBuffer == nil {
-		c.plainColumnBuffer = c.columnType.NewColumnBuffer(int(c.bufferIndex), int(c.bufferSize))
+		base := c.columnType.NewColumnBuffer(int(c.bufferIndex), int(c.bufferSize))
+		switch {
+		case c.maxRepetitionLevel > 0:
+			c.plainColumnBuffer = newRepeatedColumnBuffer(base, c.maxRepetitionLevel, c.maxDefinitionLevel, nullsGoLast)
+		case c.maxDefinitionLevel > 0:
+			c.plainColumnBuffer = newOptionalColumnBuffer(base, c.maxDefinitionLevel, nullsGoLast)
+		default:
+			c.plainColumnBuffer = base
+		}
 	}
 	c.columnBuffer = c.plainColumnBuffer
 	c.encoding = &plain.Encoding{}
