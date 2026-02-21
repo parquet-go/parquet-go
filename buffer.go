@@ -600,12 +600,12 @@ func (p *bufferedPage) Release() {
 	bufferUnref(p.repetitionLevels)
 }
 
-// ReleaseAndDetachValues releases all underlying buffers except the one backing byte-array contents. This
-// allows row and values read from the buffer to continue to be valid, instead relying
-// on the garbage collector after it is no longer needed.
+// ReleaseAndDetachValues releases all underlying buffers except those backing byte-array contents.
+// This allows rows and values read from the buffer to continue to be valid, relying
+// on the garbage collector after they are no longer needed.
 func (p *bufferedPage) ReleaseAndDetachValues() {
 	// We don't return the values buffer to the pool and allow
-	// standard GC to track it.  Remove debug finalizer.
+	// standard GC to track it. Remove debug finalizer.
 	if debug.TRACEBUF > 0 {
 		runtime.SetFinalizer(p.values, nil)
 	}

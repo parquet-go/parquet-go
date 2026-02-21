@@ -127,6 +127,7 @@ func (r *columnChunkValueReader) ReadValues(values []Value) (int, error) {
 
 	for {
 		if r.values == nil {
+			r.clear() // Release PREVIOUS page here, before reading new one
 			p, err := r.pages.ReadPage()
 			if err != nil {
 				return 0, err
@@ -145,7 +146,7 @@ func (r *columnChunkValueReader) ReadValues(values []Value) (int, error) {
 		if err != io.EOF {
 			return 0, err
 		}
-		r.clear()
+		r.values = nil // Just mark as nil, don't release yet
 	}
 }
 

@@ -21,7 +21,7 @@ func newByteArrayPage(typ Type, columnIndex int16, numValues int32, values encod
 	return &byteArrayPage{
 		typ:         typ,
 		values:      memory.SliceBufferFrom(data),
-		offsets:     memory.SliceBufferFrom(offsets[:numValues+1]),
+		offsets:     memory.SliceBufferFrom(offsets),
 		columnIndex: ^columnIndex,
 	}
 }
