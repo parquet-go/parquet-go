@@ -3308,7 +3308,7 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 			value: func() (any, error) { return float64(999999999998.12), nil },
 		},
 		{
-			name:     "int64 rounding", //adding a failing test until I'm sure rounding is the right thing to do
+			name:     "int64 rounding",
 			typ:      parquet.Decimal(2, 16, parquet.Int64Type),
 			value:    func() (any, error) { return float64(1.555), nil },
 			expected: func() (any, error) { return float64(1.56), nil },
@@ -3316,6 +3316,14 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 		{
 			name: "byte array",
 			typ:  parquet.Decimal(2, 40, parquet.ByteArrayType),
+			value: func() (any, error) {
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.12", 10, 40, big.ToNearestEven)
+				return f, err
+			},
+		},
+		{
+			name: "fixed length byte array",
+			typ:  parquet.Decimal(2, 40, parquet.FixedLenByteArrayType(18)),
 			value: func() (any, error) {
 				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.12", 10, 40, big.ToNearestEven)
 				return f, err

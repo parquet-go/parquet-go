@@ -928,7 +928,7 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) {
 }
 
 func decimalValue(col ColumnBuffer, levels columnLevels, typ Type, value reflect.Value, scale int32) {
-	val := int64(value.Float() * math.Pow10(int(scale)))
+	val := int64(math.Round(value.Float() * math.Pow10(int(scale))))
 	switch typ.Kind() {
 	case Int32:
 		col.writeInt32(levels, int32(val))
@@ -964,7 +964,12 @@ func writeBigFloat(col ColumnBuffer, levels columnLevels, f *big.Float, node Nod
 	scaleFactor.SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil))
 	scaled := new(big.Float).SetPrec(prec).Mul(f, scaleFactor)
 	unscaled, _ := scaled.Int(nil)
-	col.writeByteArray(levels, bigIntToByteArray(unscaled))
+
+	b := bigIntToByteArray(unscaled)
+	if typ.Kind() == FixedLenByteArray {
+		b = padToFixedLen(b, typ.Length(), unscaled.Sign() < 0)
+	}
+	col.writeByteArray(levels, b)
 }
 
 func bigIntToByteArray(i *big.Int) []byte {
@@ -998,4 +1003,24 @@ func bigIntToByteArray(i *big.Int) []byte {
 		}
 	}
 	return b
+}
+
+func padToFixedLen(b []byte, length int, negative bool) []byte {
+	if len(b) == length {
+		return b
+	}
+	if len(b) > length {
+		panic(fmt.Sprintf("decimal value requires %d bytes but fixed length is %d", len(b), length))
+	}
+	padByte := byte(0x00)
+	if negative {
+		padByte = 0xFF
+	}
+	result := make([]byte, length)
+	padding := length - len(b)
+	for i := range padding {
+		result[i] = padByte
+	}
+	copy(result[padding:], b)
+	return result
 }

@@ -59,10 +59,24 @@ func (t *decimalType) ConvertedType() *deprecated.ConvertedType {
 func (t *decimalType) AssignValue(dst reflect.Value, src Value) error {
 	switch t.Type {
 	case Int32Type:
-		dst.Set(reflect.ValueOf(float32(src.int32()) / float32(math.Pow10(int(t.decimal.Scale)))))
+		switch dst.Kind() {
+		case reflect.Int32:
+			dst.SetInt(int64(src.int32()))
+		default:
+			dst.Set(reflect.ValueOf(float32(src.int32()) / float32(math.Pow10(int(t.decimal.Scale)))))
+		}
 	case Int64Type:
-		dst.Set(reflect.ValueOf(float64(src.int64()) / math.Pow10(int(t.decimal.Scale))))
-	case ByteArrayType:
+		switch dst.Kind() {
+		case reflect.Int64:
+			dst.SetInt(src.int64())
+		default:
+			dst.Set(reflect.ValueOf(float64(src.int64()) / math.Pow10(int(t.decimal.Scale))))
+		}
+	default:
+		// ByteArray and FixedLenByteArray
+		if t.Type.Kind() != ByteArray && t.Type.Kind() != FixedLenByteArray {
+			return nil
+		}
 		data := src.ByteArray()
 		val := new(big.Int)
 		if len(data) > 0 && data[0]&0x80 != 0 {
