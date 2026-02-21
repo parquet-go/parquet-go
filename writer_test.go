@@ -3446,3 +3446,61 @@ func TestGenericWriterNestedList(t *testing.T) {
 		t.Errorf("rows mismatch:\nwant: %+v\ngot:  %+v", rows, readRows)
 	}
 }
+
+// TestIssue456DataPageV2DictFallbackOptional tests the bug reported in PR #456
+// where reading a DataPageV2 file with an optional column that fell back from
+// dictionary encoding to PLAIN encoding causes a nil pointer dereference.
+//
+// The issue was that fallbackDictionaryToPlain() was not wrapping the plain
+// column buffer with optional/repeated buffer wrappers, causing definition
+// levels to be omitted from DataPageV2 pages.
+func TestIssue456DataPageV2DictFallbackOptional(t *testing.T) {
+	schema := parquet.NewSchema("row", parquet.Group{
+		"properties": parquet.Optional(parquet.String()),
+	})
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewWriter(buf,
+		schema,
+		parquet.DefaultEncoding(&parquet.RLEDictionary),
+		parquet.DataPageVersion(2),
+		parquet.PageBufferSize(256),
+		parquet.DictionaryMaxBytes(128),
+	)
+
+	// Write enough rows with unique values to exceed the dictionary size limit
+	// Each string is ~20 bytes, so 128 bytes / 20 = ~6 unique values before fallback
+	const rows = 2000
+	for i := range rows {
+		s := fmt.Sprintf("%s-%04d", strings.Repeat("x", 16), i)
+		row := parquet.Row{parquet.ValueOf(s).Level(0, 1, 0)}
+		if _, err := w.WriteRows([]parquet.Row{row}); err != nil {
+			t.Fatalf("failed to write row %d: %v", i, err)
+		}
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Read back all rows - this should not panic with nil pointer dereference
+	reader := parquet.NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	rowBuf := make([]parquet.Row, 128)
+	totalRead := 0
+	for {
+		n, err := reader.ReadRows(rowBuf)
+		totalRead += n
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatalf("failed to read rows: %v", err)
+		}
+	}
+
+	if totalRead != rows {
+		t.Errorf("expected to read %d rows, got %d", rows, totalRead)
+	}
+}
