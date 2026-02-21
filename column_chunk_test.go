@@ -144,18 +144,7 @@ func testColumnChunkScan[Row generator[Row]](t *testing.T) {
 		// The remaining alloc consists of format.PageHeader, bufferedPage, FilePages, etc.
 		avgAllocPerPage := (allocPerRun - uint64(dictSize*runs)) / uint64(numPages)
 
-		// Byte array types (including strings and nested types containing them)
-		// clone their data to prevent use-after-free when pooled buffers are
-		// reused across files during operations like MergeRowGroups. This is
-		// necessary for memory safety but means allocation is proportional to
-		// data size rather than fixed overhead.
-		typeName := reflect.TypeOf(model).Name()
-		isByteArrayType := typeName == "byteArrayColumn" ||
-			typeName == "stringColumn" ||
-			typeName == "mapColumn" ||
-			typeName == "contact"
-
-		if !isByteArrayType && int(avgAllocPerPage) > 1000 {
+		if int(avgAllocPerPage) > 1000 {
 			t.Errorf("avg alloc per page should be under 1KB, got %d", avgAllocPerPage)
 		}
 	})
