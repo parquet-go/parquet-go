@@ -3288,6 +3288,122 @@ func TestIssue118(t *testing.T) {
 	}
 }
 
+// TestIssue449DecimalReadWRite tests the bug reported in issue #449
+// where the value is not written nor read correctly
+func TestIssue449DecimalReadWrite(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		typ      parquet.Node
+		value    func() (any, error)
+		expected func() (any, error)
+	}{
+		{
+			name:  "int32",
+			typ:   parquet.Decimal(2, 4, parquet.Int32Type),
+			value: func() (any, error) { return float32(1.25), nil },
+		},
+		{
+			name:  "int64",
+			typ:   parquet.Decimal(2, 16, parquet.Int64Type),
+			value: func() (any, error) { return float64(999999999998.12), nil },
+		},
+		{
+			name:     "int64 rounding",
+			typ:      parquet.Decimal(2, 16, parquet.Int64Type),
+			value:    func() (any, error) { return float64(1.555), nil },
+			expected: func() (any, error) { return float64(1.56), nil },
+		},
+		{
+			name: "byte array",
+			typ:  parquet.Decimal(2, 40, parquet.ByteArrayType),
+			value: func() (any, error) {
+				// Use high precision to ensure exact representation
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.12", 10, 256, big.ToNearestEven)
+				return f, err
+			},
+		},
+		{
+			name: "byte array rounding",
+			typ:  parquet.Decimal(2, 40, parquet.ByteArrayType),
+			value: func() (any, error) {
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.126", 10, 256, big.ToNearestEven)
+				return f, err
+			},
+			expected: func() (any, error) {
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.13", 10, 256, big.ToNearestEven)
+				return f, err
+			},
+		},
+		{
+			name: "fixed length byte array",
+			typ:  parquet.Decimal(2, 40, parquet.FixedLenByteArrayType(18)),
+			value: func() (any, error) {
+				// Use high precision to ensure exact representation
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.12", 10, 256, big.ToNearestEven)
+				return f, err
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			schema := parquet.NewSchema(tt.name, parquet.Group{"a": tt.typ})
+			w := parquet.NewGenericWriter[any](&buf, schema)
+			v, err := tt.value()
+			if err != nil {
+				t.Fatalf("unable get test value: %s", err)
+			}
+
+			_, err = w.Write([]any{map[string]any{"a": v}})
+			if err != nil {
+				t.Fatalf("unable to write: %s", err)
+			}
+
+			if err := w.Close(); err != nil {
+				t.Fatalf("unable to close writer: %s", err)
+			}
+
+			r := parquet.NewGenericReader[any](bytes.NewReader(buf.Bytes()))
+			out := make([]any, 1)
+			if n, err := r.Read(out); n != len(out) {
+				t.Fatalf("unable to read: %s", err)
+			}
+			if err := r.Close(); err != nil {
+				t.Fatalf("unable to close reader: %s", err)
+			}
+
+			row, ok := out[0].(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected row type: %T", row)
+			}
+
+			exp := v
+			if tt.expected != nil {
+				exp, err = tt.expected()
+				if err != nil {
+					t.Fatalf("unable get test expected value: %s", err)
+				}
+			}
+
+			if expFloat, ok := exp.(*big.Float); ok {
+				actualFloat, ok := row["a"].(*big.Float)
+				if !ok {
+					t.Fatalf("expected *big.Float, got %T", row["a"])
+				}
+				// Compare at decimal precision since binary floats can't exactly represent
+				// decimal fractions like 0.12
+				scale := int(tt.typ.Type().LogicalType().Decimal.Scale)
+				expText := expFloat.Text('f', scale)
+				actualText := actualFloat.Text('f', scale)
+				if expText != actualText {
+					t.Fatalf("expected %s, got %s", expText, actualText)
+				}
+			} else if row["a"] != exp {
+				t.Fatalf("expected %v, got %v", exp, row["a"])
+			}
+		})
+	}
+}
+
 func TestWriteOptionalJSONRawMessage(t *testing.T) {
 	type Row struct {
 		Buf json.RawMessage `parquet:"buf,json,optional"`
