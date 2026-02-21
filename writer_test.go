@@ -3317,7 +3317,20 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 			name: "byte array",
 			typ:  parquet.Decimal(2, 40, parquet.ByteArrayType),
 			value: func() (any, error) {
-				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.12", 10, 40, big.ToNearestEven)
+				// Use high precision to ensure exact representation
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.12", 10, 256, big.ToNearestEven)
+				return f, err
+			},
+		},
+		{
+			name: "byte array rounding",
+			typ:  parquet.Decimal(2, 40, parquet.ByteArrayType),
+			value: func() (any, error) {
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.126", 10, 256, big.ToNearestEven)
+				return f, err
+			},
+			expected: func() (any, error) {
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.13", 10, 256, big.ToNearestEven)
 				return f, err
 			},
 		},
@@ -3325,7 +3338,8 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 			name: "fixed length byte array",
 			typ:  parquet.Decimal(2, 40, parquet.FixedLenByteArrayType(18)),
 			value: func() (any, error) {
-				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.12", 10, 40, big.ToNearestEven)
+				// Use high precision to ensure exact representation
+				f, _, err := big.ParseFloat("99999999999999999999999999999999999998.12", 10, 256, big.ToNearestEven)
 				return f, err
 			},
 		},
@@ -3375,8 +3389,13 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 				if !ok {
 					t.Fatalf("expected *big.Float, got %T", row["a"])
 				}
-				if expFloat.Cmp(actualFloat) != 0 {
-					t.Fatalf("expected %v, got %v", exp, row["a"])
+				// Compare at decimal precision since binary floats can't exactly represent
+				// decimal fractions like 0.12
+				scale := int(tt.typ.Type().LogicalType().Decimal.Scale)
+				expText := expFloat.Text('f', scale)
+				actualText := actualFloat.Text('f', scale)
+				if expText != actualText {
+					t.Fatalf("expected %s, got %s", expText, actualText)
 				}
 			} else if row["a"] != exp {
 				t.Fatalf("expected %v, got %v", exp, row["a"])

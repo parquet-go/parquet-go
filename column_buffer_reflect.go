@@ -963,6 +963,13 @@ func writeBigFloat(col ColumnBuffer, levels columnLevels, f *big.Float, node Nod
 	scaleFactor := new(big.Float).SetPrec(prec)
 	scaleFactor.SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil))
 	scaled := new(big.Float).SetPrec(prec).Mul(f, scaleFactor)
+	// Round to nearest integer (add 0.5 and truncate for positive, subtract 0.5 for negative)
+	half := new(big.Float).SetPrec(prec).SetFloat64(0.5)
+	if scaled.Sign() >= 0 {
+		scaled.Add(scaled, half)
+	} else {
+		scaled.Sub(scaled, half)
+	}
 	unscaled, _ := scaled.Int(nil)
 
 	b := bigIntToByteArray(unscaled)
