@@ -3056,3 +3056,110 @@ func TestMergeRowGroupsFromTestdataFiles(t *testing.T) {
 		})
 	}
 }
+
+// TestMergeRowGroupsByteArrayUseAfterFree tests for a use-after-free bug where
+// ReleaseAndDetachValues() would release the offsets buffer but keep the values buffer,
+// causing subsequent reads via byteArrayPage.index() to use garbage offsets.
+func TestMergeRowGroupsByteArrayUseAfterFree(t *testing.T) {
+	type Row struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"`
+		Data string `parquet:"data"`
+	}
+
+	const numRowGroups = 5
+	const rowsPerGroup = 1000
+
+	// Generate expected data
+	expectedRows := make([]Row, 0, numRowGroups*rowsPerGroup)
+	for rg := range numRowGroups {
+		for i := range rowsPerGroup {
+			expectedRows = append(expectedRows, Row{
+				ID:   int64(rg*rowsPerGroup + i),
+				Name: fmt.Sprintf("name-%d-%d", rg, i),
+				Data: fmt.Sprintf("data-payload-%d-%d-extra-content-to-make-strings-longer", rg, i),
+			})
+		}
+	}
+
+	// Create separate parquet files for each row group
+	rowGroups := make([]parquet.RowGroup, 0, numRowGroups)
+	for rg := range numRowGroups {
+		buf := &bytes.Buffer{}
+		writer := parquet.NewGenericWriter[Row](buf, parquet.PageBufferSize(256)) // Small pages to force multiple pages
+
+		start := rg * rowsPerGroup
+		end := start + rowsPerGroup
+		if _, err := writer.Write(expectedRows[start:end]); err != nil {
+			t.Fatalf("Failed to write rows: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("Failed to close writer: %v", err)
+		}
+
+		file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("Failed to open file: %v", err)
+		}
+
+		rowGroups = append(rowGroups, file.RowGroups()...)
+	}
+
+	// Merge row groups
+	merged, err := parquet.MergeRowGroups(rowGroups)
+	if err != nil {
+		t.Fatalf("Failed to merge row groups: %v", err)
+	}
+
+	// Read all rows through the merged row group
+	rows := merged.Rows()
+	defer rows.Close()
+
+	readRows := make([]parquet.Row, 0, numRowGroups*rowsPerGroup)
+	rowBuf := make([]parquet.Row, 100)
+	for {
+		n, err := rows.ReadRows(rowBuf)
+		for i := range n {
+			readRows = append(readRows, slices.Clone(rowBuf[i]))
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Failed to read rows: %v", err)
+		}
+	}
+
+	// Verify row count
+	if len(readRows) != len(expectedRows) {
+		t.Fatalf("Expected %d rows, got %d", len(expectedRows), len(readRows))
+	}
+
+	// Verify each row's string data is correct (not corrupted)
+	// The bug causes garbage offsets which would make byteArrayPage.index()
+	// return invalid slices with "slice bounds out of range" panics or garbage data.
+	schema := merged.Schema()
+	for i, row := range readRows {
+		// Extract values using schema lookup
+		var id int64
+		var name, data string
+		for _, val := range row {
+			col := val.Column()
+			path := schema.Columns()[col]
+			switch path[0] {
+			case "id":
+				id = val.Int64()
+			case "name":
+				name = string(val.ByteArray())
+			case "data":
+				data = string(val.ByteArray())
+			}
+		}
+
+		expected := expectedRows[i]
+		if id != expected.ID || name != expected.Name || data != expected.Data {
+			t.Errorf("Row %d mismatch:\n  got:      id=%d, name=%q, data=%q\n  expected: id=%d, name=%q, data=%q",
+				i, id, name, data, expected.ID, expected.Name, expected.Data)
+		}
+	}
+}
