@@ -18,15 +18,13 @@ type byteArrayPage struct {
 
 func newByteArrayPage(typ Type, columnIndex int16, numValues int32, values encoding.Values) *byteArrayPage {
 	data, offsets := values.ByteArray()
-	// Clone the buffers to ensure the page owns its data.
-	// The input slices may come from pooled buffers that get released
-	// after the page is created, which would cause use-after-free bugs.
-	valuesBuf := memory.SliceBufferFrom(data)
-	offsetsBuf := memory.SliceBufferFrom(offsets[:numValues+1])
+	if len(offsets) != int(numValues)+1 {
+		println("parquet: warning: byte array page has", len(offsets), "offsets but numValues is", numValues, "(expected", numValues+1, "offsets)")
+	}
 	return &byteArrayPage{
 		typ:         typ,
-		values:      (&valuesBuf).Clone(),
-		offsets:     (&offsetsBuf).Clone(),
+		values:      memory.SliceBufferFrom(data),
+		offsets:     memory.SliceBufferFrom(offsets),
 		columnIndex: ^columnIndex,
 	}
 }
