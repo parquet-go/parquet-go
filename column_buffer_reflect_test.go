@@ -1241,6 +1241,136 @@ func TestTimeDurationRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTimeDurationPointerRoundTrip tests that *time.Duration with time tag roundtrips correctly (issue #442)
+func TestTimeDurationPointerRoundTrip(t *testing.T) {
+	type Row struct {
+		Duration *time.Duration `parquet:",time"`
+	}
+
+	testDuration := 14*time.Hour + 30*time.Minute + 45*time.Second + 123456789*time.Nanosecond
+
+	// Test with non-nil value
+	t.Run("non-nil", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[Row](buf)
+
+		rows := []Row{{Duration: &testDuration}}
+		n, err := writer.Write(rows)
+		if err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		if n != 1 {
+			t.Fatalf("expected to write 1 row, wrote %d", n)
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatalf("failed to close writer: %v", err)
+		}
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var got Row
+		if err := reader.Read(&got); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		if got.Duration == nil {
+			t.Fatal("expected non-nil duration, got nil")
+		}
+		if *got.Duration != testDuration {
+			t.Errorf("expected %v, got %v", testDuration, *got.Duration)
+		}
+	})
+
+	// Test with nil value
+	t.Run("nil", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[Row](buf)
+
+		rows := []Row{{Duration: nil}}
+		n, err := writer.Write(rows)
+		if err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		if n != 1 {
+			t.Fatalf("expected to write 1 row, wrote %d", n)
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatalf("failed to close writer: %v", err)
+		}
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		var got Row
+		if err := reader.Read(&got); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+
+		if got.Duration != nil {
+			t.Errorf("expected nil duration, got %v", *got.Duration)
+		}
+	})
+
+	// Test with mixed nil and non-nil values
+	t.Run("mixed", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := NewGenericWriter[Row](buf)
+
+		dur1 := 5 * time.Minute
+		dur2 := 10 * time.Hour
+
+		rows := []Row{
+			{Duration: &dur1},
+			{Duration: nil},
+			{Duration: &dur2},
+		}
+		n, err := writer.Write(rows)
+		if err != nil {
+			t.Fatalf("failed to write: %v", err)
+		}
+		if n != 3 {
+			t.Fatalf("expected to write 3 rows, wrote %d", n)
+		}
+
+		if err := writer.Close(); err != nil {
+			t.Fatalf("failed to close writer: %v", err)
+		}
+
+		reader := NewReader(bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		// Row 0: non-nil
+		var got0 Row
+		if err := reader.Read(&got0); err != nil {
+			t.Fatalf("failed to read row 0: %v", err)
+		}
+		if got0.Duration == nil || *got0.Duration != dur1 {
+			t.Errorf("row 0: expected %v, got %v", dur1, got0.Duration)
+		}
+
+		// Row 1: nil
+		var got1 Row
+		if err := reader.Read(&got1); err != nil {
+			t.Fatalf("failed to read row 1: %v", err)
+		}
+		if got1.Duration != nil {
+			t.Errorf("row 1: expected nil, got %v", *got1.Duration)
+		}
+
+		// Row 2: non-nil
+		var got2 Row
+		if err := reader.Read(&got2); err != nil {
+			t.Fatalf("failed to read row 2: %v", err)
+		}
+		if got2.Duration == nil || *got2.Duration != dur2 {
+			t.Errorf("row 2: expected %v, got %v", dur2, got2.Duration)
+		}
+	})
+}
+
 // TestTimeTypesWithMultipleRows tests writing and reading multiple rows with time types
 func TestTimeTypesWithMultipleRows(t *testing.T) {
 	type Event struct {
