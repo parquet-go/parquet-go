@@ -538,27 +538,35 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 			levels.repetitionDepth++
 			levels.definitionLevel++
 
-			elem := reflect.New(keyValueElem).Elem()
-			k := elem.Field(0)
-			v := elem.Field(1)
+			// Check first element to determine if values are convertible
+			var valueConvertible bool
+			for _, mapVal := range m.Range {
+				valueConvertible = reflect.ValueOf(mapVal.Interface()).Type().ConvertibleTo(valueType)
+				break
+			}
 
-			anyElem := reflect.New(anyValueKVType).Elem()
-			anyK := anyElem.Field(0)
-			anyV := anyElem.Field(1)
+			if valueConvertible {
+				elem := reflect.New(keyValueElem).Elem()
+				k := elem.Field(0)
+				v := elem.Field(1)
 
-			for mapKey, mapVal := range m.Range {
-				keyVal := reflect.ValueOf(mapKey.Interface())
-				valVal := reflect.ValueOf(mapVal.Interface())
-				if valVal.Type().ConvertibleTo(valueType) {
-					k.Set(keyVal.Convert(keyType))
-					v.Set(valVal.Convert(valueType))
+				for mapKey, mapVal := range m.Range {
+					k.Set(reflect.ValueOf(mapKey.Interface()).Convert(keyType))
+					v.Set(reflect.ValueOf(mapVal.Interface()).Convert(valueType))
 					writeValue(columns, levels, elem)
-				} else {
-					anyK.Set(keyVal.Convert(keyType))
-					anyV.Set(valVal)
-					writeValue(columns, levels, anyElem)
+					levels.repetitionLevel = levels.repetitionDepth
 				}
-				levels.repetitionLevel = levels.repetitionDepth
+			} else {
+				anyElem := reflect.New(anyValueKVType).Elem()
+				anyK := anyElem.Field(0)
+				anyV := anyElem.Field(1)
+
+				for mapKey, mapVal := range m.Range {
+					anyK.Set(reflect.ValueOf(mapKey.Interface()).Convert(keyType))
+					anyV.Set(reflect.ValueOf(mapVal.Interface()))
+					writeValue(columns, levels, anyElem)
+					levels.repetitionLevel = levels.repetitionDepth
+				}
 			}
 			return
 		}
@@ -575,27 +583,35 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 		mapKey := reflect.New(mapType.Key()).Elem()
 		mapElem := reflect.New(mapType.Elem()).Elem()
 
-		elem := reflect.New(keyValueElem).Elem()
-		k := elem.Field(0)
-		v := elem.Field(1)
+		// Check convertibility once, outside the loop
+		valueConvertible := mapType.Elem().ConvertibleTo(valueType)
 
-		anyElem := reflect.New(anyValueKVType).Elem()
-		anyK := anyElem.Field(0)
-		anyV := anyElem.Field(1)
+		if valueConvertible {
+			elem := reflect.New(keyValueElem).Elem()
+			k := elem.Field(0)
+			v := elem.Field(1)
 
-		for it := mapValue.MapRange(); it.Next(); {
-			mapKey.SetIterKey(it)
-			mapElem.SetIterValue(it)
-			k.Set(mapKey.Convert(keyType))
-			if mapElem.Type().ConvertibleTo(valueType) {
+			for it := mapValue.MapRange(); it.Next(); {
+				mapKey.SetIterKey(it)
+				mapElem.SetIterValue(it)
+				k.Set(mapKey.Convert(keyType))
 				v.Set(mapElem.Convert(valueType))
 				writeValue(columns, levels, elem)
-			} else {
+				levels.repetitionLevel = levels.repetitionDepth
+			}
+		} else {
+			anyElem := reflect.New(anyValueKVType).Elem()
+			anyK := anyElem.Field(0)
+			anyV := anyElem.Field(1)
+
+			for it := mapValue.MapRange(); it.Next(); {
+				mapKey.SetIterKey(it)
+				mapElem.SetIterValue(it)
 				anyK.Set(mapKey.Convert(keyType))
 				anyV.Set(reflect.ValueOf(mapElem.Interface()))
 				writeValue(columns, levels, anyElem)
+				levels.repetitionLevel = levels.repetitionDepth
 			}
-			levels.repetitionLevel = levels.repetitionDepth
 		}
 	}
 }
