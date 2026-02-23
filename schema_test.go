@@ -131,6 +131,24 @@ func TestSchemaOf(t *testing.T) {
 }`,
 		},
 
+		// Issue #442: Test *time.Duration with time tag
+		{
+			value: new(struct {
+				Inner struct {
+					TimeDurPtr   *time.Duration `parquet:"time_dur_ptr,time"`
+					TimeDurPtrMs *time.Duration `parquet:"time_dur_ptr_ms,time(millisecond)"`
+					TimeDurPtrUs *time.Duration `parquet:"time_dur_ptr_us,time(microsecond)"`
+				} `parquet:"inner,optional"`
+			}),
+			print: `message {
+	optional group inner {
+		optional int64 time_dur_ptr (TIME(isAdjustedToUTC=true,unit=NANOS));
+		optional int32 time_dur_ptr_ms (TIME(isAdjustedToUTC=true,unit=MILLIS));
+		optional int64 time_dur_ptr_us (TIME(isAdjustedToUTC=true,unit=MICROS));
+	}
+}`,
+		},
+
 		{
 			value: new(struct {
 				Name string `parquet:",json"`
