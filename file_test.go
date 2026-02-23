@@ -1159,3 +1159,23 @@ func TestRepeatedEmptyGroup(t *testing.T) {
 		// have no columns to store repetition levels
 	}
 }
+
+func TestIssue406(t *testing.T) {
+	type Row struct {
+		A *string `parquet:"a"`
+		B int32   `parquet:"b"`
+		C float64 `parquet:"c"`
+		D bool    `parquet:"d"`
+		E []int32 `parquet:"e,list"`
+	}
+	rows, err := parquet.ReadFile[Row]("./testdata/datapage_v2.snappy.parquet")
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	wantD := []bool{true, true, true, false, true}
+	for i, row := range rows {
+		if got, want := row.D, wantD[i]; got != want {
+			t.Errorf("[%d].d: got %v want %v", i, got, want)
+		}
+	}
+}
