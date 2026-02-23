@@ -730,15 +730,15 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 
 		if dictionary != nil {
 			c.header.dict.Type = format.DictionaryPage
-			c.header.dict.DictionaryPageHeader = new(format.DictionaryPageHeader)
+			c.header.dict.DictionaryPageHeader.Valid = true
 		}
 
 		c.header.page.Type = dataPageType
 		switch dataPageType {
 		case format.DataPage:
-			c.header.page.DataPageHeader = new(format.DataPageHeader)
+			c.header.page.DataPageHeader.Valid = true
 		case format.DataPageV2:
-			c.header.page.DataPageHeaderV2 = new(format.DataPageHeaderV2)
+			c.header.page.DataPageHeaderV2.Valid = true
 		}
 
 		c.header.encoder.Reset(c.header.protocol.NewWriter(&c.header.buffer))
@@ -782,7 +782,7 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 			MetaData: format.ColumnMetaData{
 				Type:             format.Type(c.columnType.Kind()),
 				Encoding:         c.encodings,
-				PathInSchema:     c.columnPath,
+				PathInSchema:     thrift.Slice[string](c.columnPath),
 				Codec:            c.compression.CompressionCodec(),
 				KeyValueMetadata: nil, // TODO
 			},
@@ -955,43 +955,45 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 	config.Schema.forEachNode(func(name string, node Node) {
 		nodeType := node.Type()
 
-		repetitionType := (*format.FieldRepetitionType)(nil)
-		if node != config.Schema { // the root has no repetition type
-			repetitionType = fieldRepetitionTypePtrOf(node)
+		elem := format.SchemaElement{
+			Name:    name,
+			FieldID: int32(node.ID()),
 		}
+
+		if node != config.Schema { // the root has no repetition type
+			elem.RepetitionType = fieldRepetitionTypeNullOf(node)
+		}
+
 		// For backward compatibility with older readers, the parquet specification
 		// recommends to set the scale and precision on schema elements when the
 		// column is of logical type decimal.
 		logicalType := nodeType.LogicalType()
-		scale, precision := (*int32)(nil), (*int32)(nil)
-		if logicalType != nil && logicalType.Decimal != nil {
-			scale = &logicalType.Decimal.Scale
-			precision = &logicalType.Decimal.Precision
+		if logicalType != nil {
+			elem.LogicalType.Set(*logicalType)
+			if logicalType.Decimal != nil {
+				elem.Scale.Set(logicalType.Decimal.Scale)
+				elem.Precision.Set(logicalType.Decimal.Precision)
+			}
 		}
 
-		typeLength := (*int32)(nil)
 		if n := int32(nodeType.Length()); n > 0 {
-			typeLength = &n
+			elem.TypeLength.Set(n)
 		}
 
-		var numChildren *int32
 		if !node.Leaf() {
 			n := int32(len(node.Fields()))
-			numChildren = &n
+			elem.NumChildren.Set(n)
 		}
 
-		w.schemaElements = append(w.schemaElements, format.SchemaElement{
-			Type:           nodeType.PhysicalType(),
-			TypeLength:     typeLength,
-			RepetitionType: repetitionType,
-			Name:           name,
-			NumChildren:    numChildren,
-			ConvertedType:  nodeType.ConvertedType(),
-			Scale:          scale,
-			Precision:      precision,
-			FieldID:        int32(node.ID()),
-			LogicalType:    logicalType,
-		})
+		if physType := nodeType.PhysicalType(); physType != nil {
+			elem.Type.Set(*physType)
+		}
+
+		if convType := nodeType.ConvertedType(); convType != nil {
+			elem.ConvertedType.Set(*convType)
+		}
+
+		w.schemaElements = append(w.schemaElements, elem)
 	})
 
 	w.currentRowGroup = newConcurrentRowGroupWriter(w, config)
@@ -1705,9 +1707,9 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 
 		switch header.Type {
 		case format.DataPage:
-			page, err = column.decodeDataPageV1(DataPageHeaderV1{header.DataPageHeader}, pbuf, nil, header.UncompressedPageSize)
+			page, err = column.decodeDataPageV1(DataPageHeaderV1{&header.DataPageHeader.V}, pbuf, nil, header.UncompressedPageSize)
 		case format.DataPageV2:
-			page, err = column.decodeDataPageV2(DataPageHeaderV2{header.DataPageHeaderV2}, pbuf, nil, header.UncompressedPageSize)
+			page, err = column.decodeDataPageV2(DataPageHeaderV2{&header.DataPageHeaderV2.V}, pbuf, nil, header.UncompressedPageSize)
 		}
 		if page != nil {
 			err = c.writePageToFilter(page)
@@ -1868,23 +1870,23 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 	numRows := page.NumRows()
 	numNulls := page.NumNulls()
 	switch {
-	case c.header.page.DataPageHeader != nil:
-		*c.header.page.DataPageHeader = format.DataPageHeader{
+	case c.header.page.DataPageHeader.Valid:
+		c.header.page.DataPageHeader.V = format.DataPageHeader{
 			NumValues:               int32(numValues),
 			Encoding:                c.encoding.Encoding(),
 			DefinitionLevelEncoding: format.RLE,
 			RepetitionLevelEncoding: format.RLE,
 			Statistics:              statistics,
 		}
-	case c.header.page.DataPageHeaderV2 != nil:
-		*c.header.page.DataPageHeaderV2 = format.DataPageHeaderV2{
+	case c.header.page.DataPageHeaderV2.Valid:
+		c.header.page.DataPageHeaderV2.V = format.DataPageHeaderV2{
 			NumValues:                  int32(numValues),
 			NumNulls:                   int32(numNulls),
 			NumRows:                    int32(numRows),
 			Encoding:                   c.encoding.Encoding(),
 			DefinitionLevelsByteLength: int32(len(buf.definitions)),
 			RepetitionLevelsByteLength: int32(len(buf.repetitions)),
-			IsCompressed:               &c.isCompressed,
+			IsCompressed:               thrift.New(c.isCompressed),
 			Statistics:                 statistics,
 		}
 	}
@@ -1946,7 +1948,7 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	c.header.dict.CompressedPageSize = int32(buf.size())
 	c.header.dict.CRC = int32(buf.crc32())
 
-	*c.header.dict.DictionaryPageHeader = format.DictionaryPageHeader{
+	c.header.dict.DictionaryPageHeader.V = format.DictionaryPageHeader{
 		NumValues: int32(dict.Len()),
 		Encoding:  format.Plain,
 		IsSorted:  false,
@@ -2137,11 +2139,11 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 	encoding := format.Encoding(-1)
 	switch pageType {
 	case format.DataPageV2:
-		encoding = header.DataPageHeaderV2.Encoding
+		encoding = header.DataPageHeaderV2.V.Encoding
 	case format.DataPage:
-		encoding = header.DataPageHeader.Encoding
+		encoding = header.DataPageHeader.V.Encoding
 	case format.DictionaryPage:
-		encoding = header.DictionaryPageHeader.Encoding
+		encoding = header.DictionaryPageHeader.V.Encoding
 	}
 
 	c.columnChunk.MetaData.TotalUncompressedSize += int64(uncompressedSize)

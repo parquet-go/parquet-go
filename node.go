@@ -12,6 +12,7 @@ import (
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -226,22 +227,16 @@ func (n *leafNode) Compression() compress.Codec { return nil }
 
 func (n *leafNode) GoType() reflect.Type { return goTypeOfLeaf(n) }
 
-var repetitionTypes = [...]format.FieldRepetitionType{
-	0: format.Required,
-	1: format.Optional,
-	2: format.Repeated,
-}
-
-func fieldRepetitionTypePtrOf(node Node) *format.FieldRepetitionType {
+func fieldRepetitionTypeNullOf(node Node) thrift.Null[format.FieldRepetitionType] {
 	switch {
 	case node.Required():
-		return &repetitionTypes[format.Required]
+		return thrift.New(format.Required)
 	case node.Optional():
-		return &repetitionTypes[format.Optional]
+		return thrift.New(format.Optional)
 	case node.Repeated():
-		return &repetitionTypes[format.Repeated]
+		return thrift.New(format.Repeated)
 	default:
-		return nil
+		return thrift.Null[format.FieldRepetitionType]{}
 	}
 }
 
