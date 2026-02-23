@@ -1868,3 +1868,70 @@ func TestGenericWriterAnyPointerVsOptionalTag(t *testing.T) {
 func ptr[T any](v T) *T {
 	return &v
 }
+
+// TestIssue417MapStructOptionalField tests that GenericWriter[any] can write
+// maps with struct values where the schema uses value fields with optional tag
+// but the data uses pointer fields for the same purpose.
+// See https://github.com/parquet-go/parquet-go/issues/417
+func TestIssue417MapStructOptionalField(t *testing.T) {
+	type SchemaNestedStruct struct {
+		NestedInt32 int32 `parquet:"nested_int32,optional"`
+	}
+	type SchemaRow struct {
+		Data map[string]SchemaNestedStruct `parquet:"data"`
+	}
+
+	type DataNestedStruct struct {
+		NestedInt32 *int32 `parquet:"nested_int32"`
+	}
+	type DataRow struct {
+		Data map[string]DataNestedStruct `parquet:"data"`
+	}
+
+	schema := SchemaOf(SchemaRow{})
+
+	intVal := int32(42)
+	data := []any{
+		&DataRow{
+			Data: map[string]DataNestedStruct{
+				"key1": {NestedInt32: &intVal},
+				"key2": {NestedInt32: nil},
+			},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[any](buf, schema)
+	_, err := writer.Write(data)
+	if err != nil {
+		t.Fatalf("error writing: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("error closing writer: %v", err)
+	}
+
+	rows, err := Read[SchemaRow](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("error reading: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	row := rows[0]
+	if len(row.Data) != 2 {
+		t.Fatalf("expected 2 map entries, got %d", len(row.Data))
+	}
+
+	if key1, ok := row.Data["key1"]; !ok {
+		t.Errorf("expected key1 to exist")
+	} else if key1.NestedInt32 != 42 {
+		t.Errorf("expected key1.NestedInt32 = 42, got %v", key1.NestedInt32)
+	}
+
+	if key2, ok := row.Data["key2"]; !ok {
+		t.Errorf("expected key2 to exist")
+	} else if key2.NestedInt32 != 0 {
+		t.Errorf("expected key2.NestedInt32 = 0 (nil value), got %v", key2.NestedInt32)
+	}
+}
