@@ -142,10 +142,13 @@ func testColumnChunkScan[Row generator[Row]](t *testing.T) {
 		// For now, dictionary buffers are allocated fresh per row group
 		// and there is one per run in this test.
 		// The remaining alloc consists of format.PageHeader, bufferedPage, FilePages, etc.
+		// Note: With Null[T] types for optional fields, PageHeader is slightly larger
+		// (~328 bytes) because it embeds values inline instead of using pointers,
+		// but this eliminates heap allocations during thrift decoding.
 		avgAllocPerPage := (allocPerRun - uint64(dictSize*runs)) / uint64(numPages)
 
-		if int(avgAllocPerPage) > 1000 {
-			t.Errorf("avg alloc per page should be under 1KB, got %d", avgAllocPerPage)
+		if int(avgAllocPerPage) > 1100 {
+			t.Errorf("avg alloc per page should be under 1.1KB, got %d", avgAllocPerPage)
 		}
 	})
 }

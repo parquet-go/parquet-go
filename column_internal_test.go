@@ -3,6 +3,7 @@ package parquet
 import (
 	"testing"
 
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -14,11 +15,6 @@ import (
 // The Parquet spec states the root's repetition_type "should not be specified",
 // but Apache Arrow writes files with the root set to REPEATED.
 func TestRootSchemaRepeatedType(t *testing.T) {
-	// Helper to create a pointer to a value
-	intPtr := func(v int32) *int32 { return &v }
-	typePtr := func(v format.Type) *format.Type { return &v }
-	repPtr := func(v format.FieldRepetitionType) *format.FieldRepetitionType { return &v }
-
 	// Create metadata simulating what Apache Arrow writes:
 	// Root schema element with RepetitionType = REPEATED
 	metadata := &format.FileMetaData{
@@ -27,14 +23,14 @@ func TestRootSchemaRepeatedType(t *testing.T) {
 			{
 				// Root element with REPEATED (like Apache Arrow writes)
 				Name:           "root",
-				NumChildren:    intPtr(1),
-				RepetitionType: repPtr(format.Repeated),
+				NumChildren:    thrift.New[int32](1),
+				RepetitionType: thrift.New(format.Repeated),
 			},
 			{
 				// Leaf column - a simple required INT64
 				Name: "value",
-				Type: typePtr(format.Int64),
-				// Required field (no RepetitionType pointer means nil/required)
+				Type: thrift.New(format.Int64),
+				// Required field (no RepetitionType set means required)
 			},
 		},
 		// No row groups needed for this test since we're just testing setLevels
@@ -75,22 +71,18 @@ func TestRootSchemaRepeatedType(t *testing.T) {
 // RepetitionType = REPEATED (ignored) but a child is OPTIONAL, the levels are
 // calculated correctly.
 func TestRootSchemaRepeatedTypeWithOptionalChild(t *testing.T) {
-	intPtr := func(v int32) *int32 { return &v }
-	typePtr := func(v format.Type) *format.Type { return &v }
-	repPtr := func(v format.FieldRepetitionType) *format.FieldRepetitionType { return &v }
-
 	metadata := &format.FileMetaData{
 		Version: 1,
 		Schema: []format.SchemaElement{
 			{
 				Name:           "root",
-				NumChildren:    intPtr(1),
-				RepetitionType: repPtr(format.Repeated), // Should be ignored
+				NumChildren:    thrift.New[int32](1),
+				RepetitionType: thrift.New(format.Repeated), // Should be ignored
 			},
 			{
 				Name:           "value",
-				Type:           typePtr(format.Int64),
-				RepetitionType: repPtr(format.Optional), // Optional field
+				Type:           thrift.New(format.Int64),
+				RepetitionType: thrift.New(format.Optional), // Optional field
 			},
 		},
 		RowGroups: []format.RowGroup{},
@@ -126,22 +118,18 @@ func TestRootSchemaRepeatedTypeWithOptionalChild(t *testing.T) {
 // RepetitionType = REPEATED (ignored) but a child is REPEATED, the levels are
 // calculated correctly.
 func TestRootSchemaRepeatedTypeWithRepeatedChild(t *testing.T) {
-	intPtr := func(v int32) *int32 { return &v }
-	typePtr := func(v format.Type) *format.Type { return &v }
-	repPtr := func(v format.FieldRepetitionType) *format.FieldRepetitionType { return &v }
-
 	metadata := &format.FileMetaData{
 		Version: 1,
 		Schema: []format.SchemaElement{
 			{
 				Name:           "root",
-				NumChildren:    intPtr(1),
-				RepetitionType: repPtr(format.Repeated), // Should be ignored
+				NumChildren:    thrift.New[int32](1),
+				RepetitionType: thrift.New(format.Repeated), // Should be ignored
 			},
 			{
 				Name:           "value",
-				Type:           typePtr(format.Int64),
-				RepetitionType: repPtr(format.Repeated), // Repeated field
+				Type:           thrift.New(format.Int64),
+				RepetitionType: thrift.New(format.Repeated), // Repeated field
 			},
 		},
 		RowGroups: []format.RowGroup{},
