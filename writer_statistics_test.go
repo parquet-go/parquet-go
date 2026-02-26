@@ -368,11 +368,12 @@ func TestSkipPageStatistics(t *testing.T) {
 		Blob json.RawMessage `parquet:"blob,json,zstd"`
 	}
 
+	// Lot of repetition, ensure it compresses well.
+	exampleJSON := []byte(`{"hellohello":"worldworldworldworldworldworldworldworldworldworldworldworld"}`)
+
 	var records []Record
 	for i := range 100 {
-		records = append(records, Record{
-			ID: i, Name: "Alice", Blob: []byte(`{"hello": "world"}`),
-		})
+		records = append(records, Record{ID: i, Name: "Alice", Blob: exampleJSON})
 	}
 
 	writeAndOpen := func(t *testing.T, opts ...WriterOption) *File {
@@ -482,21 +483,22 @@ func TestSkipPageStatistics(t *testing.T) {
 		}{
 			{
 				name:   "default",
-				expect: 7,
+				expect: 6,
 			},
 			{
 				name:   "no page bounds",
 				opts:   []WriterOption{SkipPageBounds("blob")},
-				expect: 5,
+				expect: 4,
 			},
 			{
 				name:   "no page stats",
 				opts:   []WriterOption{SkipPageStatistics("blob")},
-				expect: 3,
-			}, {
+				expect: 2,
+			},
+			{
 				name:   "no page stats and no page bounds",
 				opts:   []WriterOption{SkipPageBounds("blob"), SkipPageStatistics("blob")},
-				expect: 1,
+				expect: 0,
 			},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
@@ -511,8 +513,7 @@ func TestSkipPageStatistics(t *testing.T) {
 					t.Fatalf("read %d bytes, expected %d", read, f.Size())
 				}
 
-				n := bytes.Count(fileBytes, []byte(`{"hello": "world"}`))
-				if n != tt.expect {
+				if n := bytes.Count(fileBytes, exampleJSON); n != tt.expect {
 					t.Fatalf("expected %d uncompressed JSON values, got %d", tt.expect, n)
 				}
 			})
