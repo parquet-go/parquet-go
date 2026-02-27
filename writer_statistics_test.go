@@ -3,9 +3,12 @@ package parquet
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
+	"io"
 	"math/rand"
 	"testing"
 
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -354,6 +357,166 @@ func BenchmarkLevelHistogram(b *testing.B) {
 				levels,
 				maxLevel,
 			)
+		}
+	})
+}
+
+func TestSkipPageStatistics(t *testing.T) {
+	type Record struct {
+		ID   int             `parquet:"id"`
+		Name string          `parquet:"name"`
+		Blob json.RawMessage `parquet:"blob,json,zstd"`
+	}
+
+	// Lot of repetition, ensure it compresses well.
+	exampleJSON := []byte(`{"hellohello":"worldworldworldworldworldworldworldworldworldworldworldworld"}`)
+
+	var records []Record
+	for i := range 100 {
+		records = append(records, Record{ID: i, Name: "Alice", Blob: exampleJSON})
+	}
+
+	writeAndOpen := func(t *testing.T, opts ...WriterOption) *File {
+		t.Helper()
+		buf := new(bytes.Buffer)
+		w := NewWriter(buf, opts...)
+		for _, r := range records {
+			if err := w.Write(&r); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	columnStats := func(t *testing.T, f *File, colName string) format.Statistics {
+		t.Helper()
+		for _, col := range f.Metadata().RowGroups[0].Columns {
+			if col.MetaData.PathInSchema[0] == colName {
+				// Read the header from the file bytes directly.
+				section := io.NewSectionReader(f, col.MetaData.DataPageOffset, col.MetaData.TotalCompressedSize)
+				decoder := thrift.NewDecoder(new(thrift.CompactProtocol).NewReader(section))
+
+				var hrd format.PageHeader
+				if err := decoder.Decode(&hrd); err != nil {
+					t.Fatal(err)
+				}
+				if !hrd.DataPageHeaderV2.Valid {
+					t.Fatalf("column %q has invalid header", colName)
+				}
+				return hrd.DataPageHeaderV2.V.Statistics
+			}
+		}
+		t.Fatalf("column %q not found", colName)
+		return format.Statistics{}
+	}
+
+	hasPageStats := func(stats format.Statistics) bool {
+		return stats.MinValue != nil && stats.MaxValue != nil
+	}
+
+	t.Run("default has stats on all columns", func(t *testing.T) {
+		f := writeAndOpen(t)
+		for _, col := range []string{"id", "name", "blob"} {
+			if !hasPageStats(columnStats(t, f, col)) {
+				t.Errorf("expected page statistics on column %q by default", col)
+			}
+		}
+	})
+
+	t.Run("skip single column", func(t *testing.T) {
+		f := writeAndOpen(t, SkipPageStatistics("blob"))
+
+		if !hasPageStats(columnStats(t, f, "id")) {
+			t.Error("expected page statistics on column \"id\"")
+		}
+		if !hasPageStats(columnStats(t, f, "name")) {
+			t.Error("expected page statistics on column \"name\"")
+		}
+		if hasPageStats(columnStats(t, f, "blob")) {
+			t.Error("expected no page statistics on column \"blob\" (was in SkipPageStatistics)")
+		}
+	})
+
+	t.Run("skip multiple columns", func(t *testing.T) {
+		f := writeAndOpen(t,
+			SkipPageStatistics("name"),
+			SkipPageStatistics("blob"),
+		)
+
+		if !hasPageStats(columnStats(t, f, "id")) {
+			t.Error("expected page statistics on column \"id\"")
+		}
+		if hasPageStats(columnStats(t, f, "name")) {
+			t.Error("expected no page statistics on column \"name\"")
+		}
+		if hasPageStats(columnStats(t, f, "blob")) {
+			t.Error("expected no page statistics on column \"blob\"")
+		}
+	})
+
+	t.Run("DataPageStatistics false ignores skip list", func(t *testing.T) {
+		f := writeAndOpen(t,
+			DataPageStatistics(false),
+			SkipPageStatistics("blob"),
+		)
+
+		// With DataPageStatistics disabled globally, no column should have stats.
+		for _, col := range []string{"id", "name", "blob"} {
+			if hasPageStats(columnStats(t, f, col)) {
+				t.Errorf("expected no page statistics on column %q when DataPageStatistics is false", col)
+			}
+		}
+	})
+
+	t.Run("verify uncompressed JSON in file", func(t *testing.T) {
+		for _, tt := range []struct {
+			name   string
+			opts   []WriterOption
+			expect int
+		}{
+			{
+				name:   "default",
+				expect: 6,
+			},
+			{
+				name:   "no page bounds",
+				opts:   []WriterOption{SkipPageBounds("blob")},
+				expect: 4,
+			},
+			{
+				name:   "no page stats",
+				opts:   []WriterOption{SkipPageStatistics("blob")},
+				expect: 2,
+			},
+			{
+				name:   "no page stats and no page bounds",
+				opts:   []WriterOption{SkipPageBounds("blob"), SkipPageStatistics("blob")},
+				expect: 0,
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				f := writeAndOpen(t, tt.opts...)
+
+				fileBytes := make([]byte, f.Size())
+				read, err := f.ReadAt(fileBytes, 0)
+				if err != nil {
+					t.Fatalf("failed to read file: %v", err)
+				}
+				if int64(read) != f.Size() {
+					t.Fatalf("read %d bytes, expected %d", read, f.Size())
+				}
+
+				if n := bytes.Count(fileBytes, exampleJSON); n != tt.expect {
+					t.Fatalf("expected %d uncompressed JSON values, got %d", tt.expect, n)
+				}
+			})
 		}
 	})
 }
