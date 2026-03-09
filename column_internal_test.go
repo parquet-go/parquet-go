@@ -3,6 +3,8 @@ package parquet
 import (
 	"testing"
 
+	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -14,11 +16,6 @@ import (
 // The Parquet spec states the root's repetition_type "should not be specified",
 // but Apache Arrow writes files with the root set to REPEATED.
 func TestRootSchemaRepeatedType(t *testing.T) {
-	// Helper to create a pointer to a value
-	intPtr := func(v int32) *int32 { return &v }
-	typePtr := func(v format.Type) *format.Type { return &v }
-	repPtr := func(v format.FieldRepetitionType) *format.FieldRepetitionType { return &v }
-
 	// Create metadata simulating what Apache Arrow writes:
 	// Root schema element with RepetitionType = REPEATED
 	metadata := &format.FileMetaData{
@@ -27,14 +24,14 @@ func TestRootSchemaRepeatedType(t *testing.T) {
 			{
 				// Root element with REPEATED (like Apache Arrow writes)
 				Name:           "root",
-				NumChildren:    intPtr(1),
-				RepetitionType: repPtr(format.Repeated),
+				NumChildren:    thrift.New[int32](1),
+				RepetitionType: thrift.New(format.Repeated),
 			},
 			{
 				// Leaf column - a simple required INT64
 				Name: "value",
-				Type: typePtr(format.Int64),
-				// Required field (no RepetitionType pointer means nil/required)
+				Type: thrift.New(format.Int64),
+				// Required field (no RepetitionType set means required)
 			},
 		},
 		// No row groups needed for this test since we're just testing setLevels
@@ -75,22 +72,18 @@ func TestRootSchemaRepeatedType(t *testing.T) {
 // RepetitionType = REPEATED (ignored) but a child is OPTIONAL, the levels are
 // calculated correctly.
 func TestRootSchemaRepeatedTypeWithOptionalChild(t *testing.T) {
-	intPtr := func(v int32) *int32 { return &v }
-	typePtr := func(v format.Type) *format.Type { return &v }
-	repPtr := func(v format.FieldRepetitionType) *format.FieldRepetitionType { return &v }
-
 	metadata := &format.FileMetaData{
 		Version: 1,
 		Schema: []format.SchemaElement{
 			{
 				Name:           "root",
-				NumChildren:    intPtr(1),
-				RepetitionType: repPtr(format.Repeated), // Should be ignored
+				NumChildren:    thrift.New[int32](1),
+				RepetitionType: thrift.New(format.Repeated), // Should be ignored
 			},
 			{
 				Name:           "value",
-				Type:           typePtr(format.Int64),
-				RepetitionType: repPtr(format.Optional), // Optional field
+				Type:           thrift.New(format.Int64),
+				RepetitionType: thrift.New(format.Optional), // Optional field
 			},
 		},
 		RowGroups: []format.RowGroup{},
@@ -126,22 +119,18 @@ func TestRootSchemaRepeatedTypeWithOptionalChild(t *testing.T) {
 // RepetitionType = REPEATED (ignored) but a child is REPEATED, the levels are
 // calculated correctly.
 func TestRootSchemaRepeatedTypeWithRepeatedChild(t *testing.T) {
-	intPtr := func(v int32) *int32 { return &v }
-	typePtr := func(v format.Type) *format.Type { return &v }
-	repPtr := func(v format.FieldRepetitionType) *format.FieldRepetitionType { return &v }
-
 	metadata := &format.FileMetaData{
 		Version: 1,
 		Schema: []format.SchemaElement{
 			{
 				Name:           "root",
-				NumChildren:    intPtr(1),
-				RepetitionType: repPtr(format.Repeated), // Should be ignored
+				NumChildren:    thrift.New[int32](1),
+				RepetitionType: thrift.New(format.Repeated), // Should be ignored
 			},
 			{
 				Name:           "value",
-				Type:           typePtr(format.Int64),
-				RepetitionType: repPtr(format.Repeated), // Repeated field
+				Type:           thrift.New(format.Int64),
+				RepetitionType: thrift.New(format.Repeated), // Repeated field
 			},
 		},
 		RowGroups: []format.RowGroup{},
@@ -170,5 +159,73 @@ func TestRootSchemaRepeatedTypeWithRepeatedChild(t *testing.T) {
 	}
 	if leaf.maxDefinitionLevel != 1 {
 		t.Errorf("repeated leaf maxDefinitionLevel = %d, want 1", leaf.maxDefinitionLevel)
+	}
+}
+
+// TestGroupConvertedTypeFallback verifies that LIST and MAP types are correctly
+// inferred from ConvertedType when LogicalType is not set, as is the case for
+// files written by older parquet writers.
+func TestGroupConvertedTypeFallback(t *testing.T) {
+	tests := []struct {
+		name          string
+		convertedType deprecated.ConvertedType
+		wantType      Type
+	}{
+		{
+			name:          "list",
+			convertedType: deprecated.List,
+			wantType:      &listType{},
+		},
+		{
+			name:          "map",
+			convertedType: deprecated.Map,
+			wantType:      &mapType{},
+		},
+		{
+			name:          "map_key_value",
+			convertedType: deprecated.MapKeyValue,
+			wantType:      &groupType{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata := &format.FileMetaData{
+				Version: 1,
+				Schema: []format.SchemaElement{
+					{
+						Name:        "root",
+						NumChildren: thrift.New[int32](1),
+					},
+					{
+						Name:          tt.name,
+						NumChildren:   thrift.New[int32](1),
+						ConvertedType: thrift.New(tt.convertedType),
+					},
+					{
+						Name: "element",
+						Type: thrift.New(format.Int64),
+					},
+				},
+				RowGroups: []format.RowGroup{},
+			}
+
+			root, err := openColumns(nil, metadata, nil, nil)
+			if err != nil {
+				t.Fatalf("openColumns failed: %v", err)
+			}
+
+			if len(root.columns) != 1 {
+				t.Fatalf("expected 1 child column, got %d", len(root.columns))
+			}
+
+			group := root.columns[0]
+			gotType := group.Type()
+			wantLogical := tt.wantType.LogicalType()
+
+			if gotType.LogicalType() != wantLogical {
+				t.Errorf("group type LogicalType = %v, want %v", gotType.LogicalType(), wantLogical)
+			}
+		})
 	}
 }

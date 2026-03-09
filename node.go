@@ -12,6 +12,7 @@ import (
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -226,22 +227,16 @@ func (n *leafNode) Compression() compress.Codec { return nil }
 
 func (n *leafNode) GoType() reflect.Type { return goTypeOfLeaf(n) }
 
-var repetitionTypes = [...]format.FieldRepetitionType{
-	0: format.Required,
-	1: format.Optional,
-	2: format.Repeated,
-}
-
-func fieldRepetitionTypePtrOf(node Node) *format.FieldRepetitionType {
+func fieldRepetitionTypeNullOf(node Node) thrift.Null[format.FieldRepetitionType] {
 	switch {
 	case node.Required():
-		return &repetitionTypes[format.Required]
+		return thrift.New(format.Required)
 	case node.Optional():
-		return &repetitionTypes[format.Optional]
+		return thrift.New(format.Optional)
 	case node.Repeated():
-		return &repetitionTypes[format.Repeated]
+		return thrift.New(format.Repeated)
 	default:
-		return nil
+		return thrift.Null[format.FieldRepetitionType]{}
 	}
 }
 
@@ -323,7 +318,36 @@ func (f *groupField) Value(base reflect.Value) reflect.Value {
 			return reflect.ValueOf(nil)
 		}
 	}
-	return base.MapIndex(reflect.ValueOf(&f.name).Elem())
+	switch base.Kind() {
+	case reflect.Struct:
+		return groupFieldByName(base, f.name)
+	case reflect.Ptr:
+		if base.IsNil() {
+			base.Set(reflect.New(base.Type().Elem()))
+		}
+		return groupFieldByName(base.Elem(), f.name)
+	default:
+		return base.MapIndex(reflect.ValueOf(&f.name).Elem())
+	}
+}
+
+// groupFieldByName looks up a struct field by its parquet tag name,
+// falling back to matching the Go field name directly.
+func groupFieldByName(base reflect.Value, name string) reflect.Value {
+	t := base.Type()
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if tag := f.Tag.Get("parquet"); tag != "" {
+			fieldName, _ := split(tag)
+			if fieldName == name {
+				return base.Field(i)
+			}
+		}
+		if f.Name == name {
+			return base.Field(i)
+		}
+	}
+	return reflect.Value{}
 }
 
 func goTypeOf(node Node) reflect.Type {

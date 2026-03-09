@@ -1294,13 +1294,13 @@ message AddressBook {
 }
 
 
-Row group 0:  count: 2  387.00 B records  start: 4  total(compressed): 774 B total(uncompressed):697 B
+Row group 0:  count: 2  376.50 B records  start: 4  total(compressed): 753 B total(uncompressed):676 B
 --------------------------------------------------------------------------------
                       type      encodings count     avg size   nulls   min / max
 owner                 BINARY    Z         2         71.00 B    0       "A. Nonymous" / "Julien Le Dem"
 ownerPhoneNumbers     BINARY    G         3         81.00 B    1       "555 123 4567" / "555 666 1337"
 contacts.name         BINARY    _         3         70.67 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
-contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
+contacts.phoneNumber  BINARY    Z         3         52.00 B    1       "" / "555 987 6543"
 
 
 Column: owner
@@ -1326,7 +1326,7 @@ Column: contacts.name
 Column: contacts.phoneNumber
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       16.50 B    33 B                1       "555 987 6543" / "555 987 6543"
+  0-0    data  Z D  2       18.00 B    36 B                0       "" / "555 987 6543"
   0-1    data  Z D  1       17.00 B    17 B                1
 
 `,
@@ -1373,13 +1373,13 @@ message AddressBook {
 }
 
 
-Row group 0:  count: 2  380.50 B records  start: 4  total(compressed): 761 B total(uncompressed):684 B
+Row group 0:  count: 2  370.00 B records  start: 4  total(compressed): 740 B total(uncompressed):663 B
 --------------------------------------------------------------------------------
                       type      encodings count     avg size   nulls   min / max
 owner                 BINARY    Z         2         73.50 B    0       "A. Nonymous" / "Julien Le Dem"
 ownerPhoneNumbers     BINARY    G         3         78.67 B    1       "555 123 4567" / "555 666 1337"
 contacts.name         BINARY    _         3         68.67 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
-contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
+contacts.phoneNumber  BINARY    Z         3         50.33 B    1       "" / "555 987 6543"
 
 
 Column: owner
@@ -1405,7 +1405,7 @@ Column: contacts.name
 Column: contacts.phoneNumber
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ D  2       12.50 B    25 B       1        1       "555 987 6543" / "555 987 6543"
+  0-0    data  _ D  2       14.00 B    28 B       1        0       "" / "555 987 6543"
   0-1    data  _ D  1       9.00 B     9 B        1        1
 
 `,
@@ -3618,5 +3618,211 @@ func TestIssue456DataPageV2DictFallbackOptional(t *testing.T) {
 
 	if totalRead != rows {
 		t.Errorf("expected to read %d rows, got %d", rows, totalRead)
+	}
+}
+
+type sizeTestRow struct {
+	Name string `parquet:"name"`
+	Age  int64  `parquet:"age"`
+}
+
+func TestRowGroupWriterSize(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[sizeTestRow](buf)
+	rg := w.BeginRowGroup()
+
+	if size := rg.Size(); size != 0 {
+		t.Fatalf("expected size 0 before writing, got %d", size)
+	}
+
+	rows := make([]parquet.Row, 100)
+	for i := range rows {
+		rows[i] = parquet.Row{parquet.ValueOf(fmt.Sprintf("name-%d", i)).Level(0, 0, 0), parquet.ValueOf(int64(i)).Level(0, 0, 1)}
+	}
+
+	prevSize := int64(0)
+	for range 5 {
+		if _, err := rg.WriteRows(rows); err != nil {
+			t.Fatal(err)
+		}
+		size := rg.Size()
+		if size <= 0 {
+			t.Fatalf("expected size > 0 after writing, got %d", size)
+		}
+		if size <= prevSize {
+			t.Fatalf("expected size to increase monotonically, got %d <= %d", size, prevSize)
+		}
+		prevSize = size
+	}
+
+	if _, err := rg.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriterSize(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[sizeTestRow](buf)
+
+	rows := []sizeTestRow{
+		{Name: "Alice", Age: 30},
+		{Name: "Bob", Age: 25},
+	}
+
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	sizeBeforeFlush := w.Size()
+	if sizeBeforeFlush <= 0 {
+		t.Fatalf("expected size > 0 after writing, got %d", sizeBeforeFlush)
+	}
+
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	sizeAfterFlush := w.Size()
+	if sizeAfterFlush <= 0 {
+		t.Fatalf("expected size > 0 after flush, got %d", sizeAfterFlush)
+	}
+
+	// Write more rows
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	sizeAfterMoreWrites := w.Size()
+	if sizeAfterMoreWrites <= sizeAfterFlush {
+		t.Fatalf("expected size to increase after writing more rows, got %d <= %d", sizeAfterMoreWrites, sizeAfterFlush)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	actualFileSize := int64(buf.Len())
+	// The estimate doesn't include footer, so actual size should be >= estimate
+	// but they should be in the same ballpark.
+	if actualFileSize < sizeAfterFlush {
+		t.Logf("actual file size %d is less than estimate after flush %d (expected due to compression)", actualFileSize, sizeAfterFlush)
+	}
+}
+
+func TestGenericWriterSize(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[sizeTestRow](buf)
+
+	if size := w.Size(); size != 0 {
+		t.Fatalf("expected size 0 before writing, got %d", size)
+	}
+
+	rows := []sizeTestRow{
+		{Name: "Alice", Age: 30},
+		{Name: "Bob", Age: 25},
+		{Name: "Charlie", Age: 35},
+	}
+
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	size := w.Size()
+	if size <= 0 {
+		t.Fatalf("expected size > 0 after writing, got %d", size)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriterSizeWithCompression(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[sizeTestRow](buf,
+		parquet.Compression(&zstd.Codec{}),
+	)
+
+	// Write enough data that compression will make a difference
+	rows := make([]sizeTestRow, 1000)
+	for i := range rows {
+		rows[i] = sizeTestRow{Name: "repeated-name", Age: int64(i)}
+	}
+
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	estimateBeforeFlush := w.Size()
+
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	sizeAfterFlush := w.Size()
+
+	// The estimate before flush should be >= the actual flushed size,
+	// because the estimate includes uncompressed buffered data.
+	if estimateBeforeFlush < sizeAfterFlush {
+		t.Logf("estimate before flush (%d) < size after flush (%d)", estimateBeforeFlush, sizeAfterFlush)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentRowGroupWriterSize(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[sizeTestRow](buf)
+
+	rg1 := w.BeginRowGroup()
+	rg2 := w.BeginRowGroup()
+
+	rows := []parquet.Row{
+		{parquet.ValueOf("Alice").Level(0, 0, 0), parquet.ValueOf(int64(30)).Level(0, 0, 1)},
+		{parquet.ValueOf("Bob").Level(0, 0, 0), parquet.ValueOf(int64(25)).Level(0, 0, 1)},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 50 {
+			if _, err := rg1.WriteRows(rows); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 50 {
+			if _, err := rg2.WriteRows(rows); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	wg.Wait()
+
+	size1 := rg1.Size()
+	size2 := rg2.Size()
+	if size1 <= 0 {
+		t.Fatalf("expected rg1 size > 0, got %d", size1)
+	}
+	if size2 <= 0 {
+		t.Fatalf("expected rg2 size > 0, got %d", size2)
+	}
+
+	if _, err := rg1.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rg2.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

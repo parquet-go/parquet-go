@@ -1591,3 +1591,55 @@ func TestIssue445(t *testing.T) {
 		t.Errorf("data mismatch:\nwant: %+v\ngot:  %+v", input, output)
 	}
 }
+
+// TestIssue40MapValueNestedStruct reproduces the issue reported in
+// https://github.com/parquet-go/parquet-go/issues/40
+// where reading parquet data containing map[string]StructType using a schema
+// from NewSchema() panics with "reflect: call of reflect.Value.MapIndex on struct Value".
+func TestIssue40MapValueNestedStruct(t *testing.T) {
+	type NestedStruct struct {
+		Val string `parquet:"Val"`
+	}
+	type MapValue struct {
+		Nested NestedStruct `parquet:"Nested"`
+	}
+	type Message struct {
+		TestMap map[string]MapValue `parquet:"TestMap"`
+	}
+
+	schema := parquet.NewSchema("Message", parquet.Group{
+		"TestMap": parquet.Map(
+			parquet.String(),
+			parquet.Group{
+				"Nested": parquet.Group{
+					"Val": parquet.String(),
+				},
+			},
+		),
+	})
+
+	input := []Message{
+		{TestMap: map[string]MapValue{
+			"hello": {Nested: NestedStruct{Val: "world"}},
+			"foo":   {Nested: NestedStruct{Val: "bar"}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	writer := parquet.NewGenericWriter[Message](&buf, schema)
+	if _, err := writer.Write(input); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, size := bytes.NewReader(buf.Bytes()), int64(buf.Len())
+	output, err := parquet.Read[Message](data, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(input, output) {
+		t.Errorf("data mismatch:\nwant: %+v\ngot:  %+v", input, output)
+	}
+}

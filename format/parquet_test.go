@@ -2,6 +2,9 @@ package format_test
 
 import (
 	"bytes"
+	"encoding/binary"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -173,5 +176,182 @@ func TestWriteZeroRowGroupOrdinal(t *testing.T) {
 	// | 68  0 |  7  | Ordinal	     |   0   |
 	if !bytes.Equal(b, []byte{25, 12, 22, 0, 22, 0, 68, 0, 0}) {
 		t.Errorf("RowGroup{Ordinal:0} not found in serialized bytes: %v", b)
+	}
+}
+
+// testFiles contains parquet files ordered by footer complexity
+var testFiles = []string{
+	"list_columns.parquet",              // Simple baseline
+	"alltypes_tiny_pages_plain.parquet", // Multiple types
+	"file.parquet",                      // Medium nested complexity
+	"issue368.parquet",                  // Deep nesting
+	"trace.snappy.parquet",              // Complex maps+lists (~30 columns)
+	"nested_structs.rust.parquet",       // Wide schema, many parallel nested groups
+}
+
+// footerCache stores pre-loaded footer bytes for each test file
+var footerCache = make(map[string][]byte)
+
+func init() {
+	for _, name := range testFiles {
+		path := filepath.Join("..", "testdata", name)
+		data, err := extractFooterBytes(path)
+		if err != nil {
+			// Files might not exist in all test contexts
+			continue
+		}
+		footerCache[name] = data
+	}
+}
+
+// extractFooterBytes extracts the raw footer bytes from a parquet file.
+// This follows the pattern from file.go:102-115.
+func extractFooterBytes(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// Get file size
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	size := fi.Size()
+
+	// Read last 8 bytes (4-byte footer size + 4-byte magic "PAR1")
+	trailer := make([]byte, 8)
+	if _, err := f.ReadAt(trailer, size-8); err != nil {
+		return nil, err
+	}
+
+	// Validate magic
+	if string(trailer[4:]) != "PAR1" {
+		return nil, os.ErrInvalid
+	}
+
+	// Extract footer size and read footer data
+	footerSize := int64(binary.LittleEndian.Uint32(trailer[:4]))
+	footerData := make([]byte, footerSize)
+	if _, err := f.ReadAt(footerData, size-footerSize-8); err != nil {
+		return nil, err
+	}
+
+	return footerData, nil
+}
+
+// BenchmarkDecodeFooter benchmarks footer decoding with real parquet files.
+// This measures the CPU and memory cost of decoding FileMetaData from actual files.
+func BenchmarkDecodeFooter(b *testing.B) {
+	if len(footerCache) == 0 {
+		b.Skip("no test files available")
+	}
+
+	for _, name := range testFiles {
+		footerData, ok := footerCache[name]
+		if !ok {
+			continue
+		}
+
+		b.Run(name, func(b *testing.B) {
+			// Decode once to get metadata stats for reporting
+			var metadata format.FileMetaData
+			protocol := &thrift.CompactProtocol{}
+			if err := thrift.Unmarshal(protocol, footerData, &metadata); err != nil {
+				b.Fatal(err)
+			}
+
+			// Report custom metrics
+			schemaElements := len(metadata.Schema)
+			rowGroups := len(metadata.RowGroups)
+			columns := 0
+			for _, rg := range metadata.RowGroups {
+				columns += len(rg.Columns)
+			}
+
+			b.ReportMetric(float64(schemaElements), "schema_elements/op")
+			b.ReportMetric(float64(rowGroups), "row_groups/op")
+			b.ReportMetric(float64(columns), "columns/op")
+
+			b.SetBytes(int64(len(footerData)))
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				var decoded format.FileMetaData
+				if err := thrift.Unmarshal(protocol, footerData, &decoded); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkDecodeFooterLarge focuses on the largest/most complex footers
+// for detailed profiling. Use with -cpuprofile or -memprofile.
+func BenchmarkDecodeFooterLarge(b *testing.B) {
+	largeFiles := []string{
+		"trace.snappy.parquet",
+		"nested_structs.rust.parquet",
+	}
+
+	for _, name := range largeFiles {
+		footerData, ok := footerCache[name]
+		if !ok {
+			continue
+		}
+
+		b.Run(name, func(b *testing.B) {
+			protocol := &thrift.CompactProtocol{}
+			b.SetBytes(int64(len(footerData)))
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				var decoded format.FileMetaData
+				if err := thrift.Unmarshal(protocol, footerData, &decoded); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkDecodeFooterReuse benchmarks footer decoding with struct reuse.
+// This demonstrates the slice reuse optimization - reusing the same FileMetaData
+// struct across multiple decodes to reduce allocations.
+func BenchmarkDecodeFooterReuse(b *testing.B) {
+	largeFiles := []string{
+		"trace.snappy.parquet",
+		"nested_structs.rust.parquet",
+	}
+
+	for _, name := range largeFiles {
+		footerData, ok := footerCache[name]
+		if !ok {
+			continue
+		}
+
+		b.Run(name, func(b *testing.B) {
+			protocol := &thrift.CompactProtocol{}
+			var decoded format.FileMetaData
+
+			// Prime the struct with one decode to allocate slices
+			if err := thrift.Unmarshal(protocol, footerData, &decoded); err != nil {
+				b.Fatal(err)
+			}
+
+			b.SetBytes(int64(len(footerData)))
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				// Reuse the same struct - slices should be reused
+				if err := thrift.Unmarshal(protocol, footerData, &decoded); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
