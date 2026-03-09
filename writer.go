@@ -296,6 +296,12 @@ func (w *GenericWriter[T]) Schema() *Schema {
 	return w.base.Schema()
 }
 
+// Size returns an estimate of the current file size in bytes.
+// See Writer.Size for details.
+func (w *GenericWriter[T]) Size() int64 {
+	return w.base.Size()
+}
+
 func (w *GenericWriter[T]) ColumnWriters() []*ColumnWriter {
 	return w.base.ColumnWriters()
 }
@@ -574,6 +580,25 @@ func (w *Writer) ReadRowsFrom(rows RowReader) (written int64, err error) {
 // The returned value will be nil if no schema has yet been configured on w.
 func (w *Writer) Schema() *Schema { return w.schema }
 
+// Size returns an estimate of the current file size in bytes, including all
+// completed row groups and the current in-progress row group.
+//
+// The estimate includes bytes already written to the underlying writer plus
+// the estimated size of buffered data in the current row group. The buffered
+// data has not been compressed yet, so this is an upper-bound estimate.
+//
+// The size of the footer metadata is not included because it is variable and
+// typically small relative to the data.
+//
+// This method can be used to target a specific file size by calling Flush
+// when Size reaches a threshold.
+func (w *Writer) Size() int64 {
+	if w.writer == nil {
+		return 0
+	}
+	return w.writer.writer.offset + w.writer.currentRowGroup.Size()
+}
+
 // SetKeyValueMetadata sets a key/value pair in the Parquet file metadata.
 //
 // Keys are assumed to be unique, if the same key is repeated multiple times the
@@ -834,6 +859,26 @@ func (rg *ConcurrentRowGroupWriter) Flush() error {
 		}
 	}
 	return nil
+}
+
+// Size returns an estimate of the current row group size in bytes.
+//
+// The estimate sums encoded pages, buffered values not yet encoded, dictionary
+// pages, and bloom filters for each column. Because buffered values have not
+// been compressed, this is an upper-bound estimate.
+func (rg *ConcurrentRowGroupWriter) Size() int64 {
+	size := int64(0)
+	for _, c := range rg.columns {
+		size += c.columnChunk.MetaData.TotalCompressedSize
+		if c.columnBuffer != nil {
+			size += c.columnBuffer.Size()
+		}
+		if c.dictionary != nil {
+			size += c.dictionary.Size()
+		}
+		size += int64(len(c.filter))
+	}
+	return size
 }
 
 // Commit commits the row group to the parent writer, returning the number
