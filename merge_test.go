@@ -3163,3 +3163,143 @@ func TestMergeRowGroupsByteArrayUseAfterFree(t *testing.T) {
 		}
 	}
 }
+
+// readAllInt64Values reads all rows from a Rows reader and extracts the first
+// column's int64 values. Used by merge ordering and dedup tests.
+func readAllInt64Values(t *testing.T, rows parquet.Rows) []int64 {
+	t.Helper()
+	var values []int64
+	buf := make([]parquet.Row, 1)
+	for {
+		n, err := rows.ReadRows(buf)
+		if n > 0 {
+			values = append(values, buf[0][0].Int64())
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("ReadRows: %v", err)
+		}
+	}
+	return values
+}
+
+// TestMergeRowGroupsOverlappingSegments tests Bug 1: when MergeRowGroups has
+// both non-overlapping and overlapping segments, rows must still be correctly
+// sorted. Previously, multiRowGroup.Rows() would read column pages directly,
+// bypassing the heap merge in mergedRowGroup.Rows().
+func TestMergeRowGroupsOverlappingSegments(t *testing.T) {
+	type Record struct {
+		Value int64 `parquet:"value"`
+	}
+
+	sortingOptions := []parquet.RowGroupOption{
+		parquet.SortingRowGroupConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("value"),
+			),
+		),
+	}
+
+	// Group1: [1,2,3] - non-overlapping with Group2/Group3
+	// Group2: [4,6,8] - overlapping with Group3
+	// Group3: [5,7,9] - overlapping with Group2
+	// Expected segments: [Group1] + [mergedRowGroup(Group2, Group3)]
+	// Expected output: [1,2,3,4,5,6,7,8,9]
+	group1 := fileRowGroup(sortedRowGroup(sortingOptions, Record{1}, Record{2}, Record{3}))
+	group2 := fileRowGroup(sortedRowGroup(sortingOptions, Record{4}, Record{6}, Record{8}))
+	group3 := fileRowGroup(sortedRowGroup(sortingOptions, Record{5}, Record{7}, Record{9}))
+
+	merged, err := parquet.MergeRowGroups([]parquet.RowGroup{group1, group2, group3}, sortingOptions...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := merged.Rows()
+	defer rows.Close()
+
+	got := readAllInt64Values(t, rows)
+	expected := []int64{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	if !slices.Equal(got, expected) {
+		t.Errorf("got %v, want %v", got, expected)
+	}
+}
+
+// TestMergeRowGroupsDropDuplicatedRows tests Bug 2: DropDuplicatedRows option
+// must be honored by MergeRowGroups, not just SortingWriter.
+func TestMergeRowGroupsDropDuplicatedRows(t *testing.T) {
+	type Record struct {
+		Value int64 `parquet:"value"`
+	}
+
+	sortingOptions := []parquet.RowGroupOption{
+		parquet.SortingRowGroupConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("value"),
+			),
+			parquet.DropDuplicatedRows(true),
+		),
+	}
+
+	t.Run("two overlapping groups with duplicates", func(t *testing.T) {
+		group1 := fileRowGroup(sortedRowGroup(sortingOptions, Record{1}, Record{2}, Record{3}))
+		group2 := fileRowGroup(sortedRowGroup(sortingOptions, Record{2}, Record{3}, Record{4}))
+
+		merged, err := parquet.MergeRowGroups([]parquet.RowGroup{group1, group2}, sortingOptions...)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rows := merged.Rows()
+		defer rows.Close()
+
+		got := readAllInt64Values(t, rows)
+		expected := []int64{1, 2, 3, 4}
+		if !slices.Equal(got, expected) {
+			t.Errorf("got %v, want %v", got, expected)
+		}
+	})
+
+	t.Run("multi-segment with duplicates", func(t *testing.T) {
+		// Group1: [1,2] non-overlapping
+		// Group2: [3,4,5] overlapping with Group3
+		// Group3: [4,5,6] overlapping with Group2
+		// Expected: [1,2,3,4,5,6] (deduped)
+		group1 := fileRowGroup(sortedRowGroup(sortingOptions, Record{1}, Record{2}))
+		group2 := fileRowGroup(sortedRowGroup(sortingOptions, Record{3}, Record{4}, Record{5}))
+		group3 := fileRowGroup(sortedRowGroup(sortingOptions, Record{4}, Record{5}, Record{6}))
+
+		merged, err := parquet.MergeRowGroups([]parquet.RowGroup{group1, group2, group3}, sortingOptions...)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rows := merged.Rows()
+		defer rows.Close()
+
+		got := readAllInt64Values(t, rows)
+		expected := []int64{1, 2, 3, 4, 5, 6}
+		if !slices.Equal(got, expected) {
+			t.Errorf("got %v, want %v", got, expected)
+		}
+	})
+
+	t.Run("single group with duplicates", func(t *testing.T) {
+		group := fileRowGroup(sortedRowGroup(sortingOptions, Record{1}, Record{1}, Record{2}, Record{2}, Record{3}))
+
+		merged, err := parquet.MergeRowGroups([]parquet.RowGroup{group}, sortingOptions...)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rows := merged.Rows()
+		defer rows.Close()
+
+		got := readAllInt64Values(t, rows)
+		expected := []int64{1, 2, 3}
+		if !slices.Equal(got, expected) {
+			t.Errorf("got %v, want %v", got, expected)
+		}
+	})
+}
