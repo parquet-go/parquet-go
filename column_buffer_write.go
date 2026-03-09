@@ -54,9 +54,9 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplace
 	}
 
 	switch t.Kind() {
+	case reflect.Int, reflect.Uint:
+		return writeRowsFuncOfNativeInt(t, schema, path)
 	case reflect.Bool,
-		reflect.Int,
-		reflect.Uint,
 		reflect.Int32,
 		reflect.Uint32,
 		reflect.Int64,
@@ -153,6 +153,54 @@ func writeRowsFuncOfSmallInt(t reflect.Type, schema *Schema, path columnPath) wr
 type smallIntBuf struct{ values []int32 }
 
 var smallIntBufPool memory.Pool[smallIntBuf]
+
+func writeRowsFuncOfNativeInt(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+	column := schema.lazyLoadState().mapping.lookup(path)
+	columnIndex := column.columnIndex
+	if columnIndex < 0 {
+		panic("parquet: column not found: " + path.String())
+	}
+
+	// On 64-bit architectures, int/uint are 8 bytes. If the target column is
+	// 32-bit (e.g. via int(32) or uint(32) tags), we need to narrow each value.
+	if t.Size() > 4 && column.node.Type().Kind() == Int32 {
+		signed := t.Kind() == reflect.Int
+		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+			n := rows.Len()
+			if n == 0 {
+				columns[columnIndex].writeValues(levels, rows)
+				return
+			}
+
+			buf := smallIntBufPool.Get(
+				func() *smallIntBuf { return new(smallIntBuf) },
+				func(b *smallIntBuf) { b.values = b.values[:0] },
+			)
+			buf.values = slices.Grow(buf.values, n)[:n]
+			defer smallIntBufPool.Put(buf)
+
+			if signed {
+				a := rows.Int64Array()
+				for i := range n {
+					buf.values[i] = int32(a.Index(i))
+				}
+			} else {
+				a := rows.Uint64Array()
+				for i := range n {
+					buf.values[i] = int32(uint32(a.Index(i)))
+				}
+			}
+
+			narrowedArray := sparse.MakeInt32Array(buf.values).UnsafeArray()
+			columns[columnIndex].writeValues(levels, narrowedArray)
+		}
+	}
+
+	// Default: int/uint size matches column size, use direct path.
+	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+		columns[columnIndex].writeValues(levels, rows)
+	}
+}
 
 func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
 	// For interface types, we just increment the definition level for present
