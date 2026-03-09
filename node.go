@@ -499,20 +499,24 @@ func numLeafColumns(node Node, columnIndex int) int {
 
 func listElementOf(node Node) Node {
 	if !node.Leaf() {
-		if list := fieldByName(node, "list"); list != nil {
-			if elem := fieldByName(list, "element"); elem != nil {
-				return elem
-			}
-			// TODO: It should not be named "item", but some versions of pyarrow
-			//       and some versions of polars used that instead of "element".
-			//       https://issues.apache.org/jira/browse/ARROW-11497
-			//       https://github.com/pola-rs/polars/issues/17100
-			if elem := fieldByName(list, "item"); elem != nil {
-				return elem
+		// The spec says the outer group should be named "list" and the inner
+		// element should be named "element", but many implementations use
+		// different names (e.g. "bag"/"array_element", "list"/"item").
+		// Per the spec's backward compatibility rules, we should not enforce
+		// specific names when reading.
+		//
+		// A LIST node should have exactly one child (the repeated group),
+		// and that group should have exactly one child (the element).
+		if fields := node.Fields(); len(fields) == 1 {
+			repeatedGroup := fields[0]
+			if !repeatedGroup.Leaf() && repeatedGroup.Repeated() {
+				if elems := repeatedGroup.Fields(); len(elems) == 1 {
+					return elems[0]
+				}
 			}
 		}
 	}
-	panic("node with logical type LIST is not composed of a repeated .list.element")
+	panic("node with logical type LIST is not composed of a repeated group with a single element")
 }
 
 func mapKeyValueOf(node Node) Node {
