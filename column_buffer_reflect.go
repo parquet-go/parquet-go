@@ -590,14 +590,16 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 			switch {
 			case t.ConvertibleTo(reflect.TypeFor[map[string]string]()):
 				m := value.Convert(reflect.TypeFor[map[string]string]()).Interface().(map[string]string)
+				v := new(string)
 				for i := range writers {
 					w := &writers[i]
-					v, ok := m[w.fieldName]
+					s, ok := m[w.fieldName]
 					if !ok {
 						w.writeValue(columns, levels, reflect.Value{})
 						continue
 					}
-					w.writeValue(columns, levels, reflect.ValueOf(&v).Elem())
+					*v = s
+					w.writeValue(columns, levels, reflect.ValueOf(v).Elem())
 				}
 
 			case t.ConvertibleTo(reflect.TypeFor[map[string]any]()):
