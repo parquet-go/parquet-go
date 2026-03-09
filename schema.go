@@ -816,7 +816,6 @@ func parseIDArgs(args string) (int, error) {
 	return strconv.Atoi(args)
 }
 
-
 func parseTimestampArgs(args string) (unit TimeUnit, isUTCNormalized bool, err error) {
 	if !strings.HasPrefix(args, "(") || !strings.HasSuffix(args, ")") {
 		return nil, false, fmt.Errorf("malformed timestamp args: %s", args)
