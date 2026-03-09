@@ -1294,13 +1294,13 @@ message AddressBook {
 }
 
 
-Row group 0:  count: 2  387.00 B records  start: 4  total(compressed): 774 B total(uncompressed):697 B
+Row group 0:  count: 2  376.50 B records  start: 4  total(compressed): 753 B total(uncompressed):676 B
 --------------------------------------------------------------------------------
                       type      encodings count     avg size   nulls   min / max
 owner                 BINARY    Z         2         71.00 B    0       "A. Nonymous" / "Julien Le Dem"
 ownerPhoneNumbers     BINARY    G         3         81.00 B    1       "555 123 4567" / "555 666 1337"
 contacts.name         BINARY    _         3         70.67 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
-contacts.phoneNumber  BINARY    Z         3         59.00 B    2       "555 987 6543" / "555 987 6543"
+contacts.phoneNumber  BINARY    Z         3         52.00 B    1       "" / "555 987 6543"
 
 
 Column: owner
@@ -1326,7 +1326,7 @@ Column: contacts.name
 Column: contacts.phoneNumber
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  Z D  2       16.50 B    33 B                1       "555 987 6543" / "555 987 6543"
+  0-0    data  Z D  2       18.00 B    36 B                0       "" / "555 987 6543"
   0-1    data  Z D  1       17.00 B    17 B                1
 
 `,
@@ -1373,13 +1373,13 @@ message AddressBook {
 }
 
 
-Row group 0:  count: 2  380.50 B records  start: 4  total(compressed): 761 B total(uncompressed):684 B
+Row group 0:  count: 2  370.00 B records  start: 4  total(compressed): 740 B total(uncompressed):663 B
 --------------------------------------------------------------------------------
                       type      encodings count     avg size   nulls   min / max
 owner                 BINARY    Z         2         73.50 B    0       "A. Nonymous" / "Julien Le Dem"
 ownerPhoneNumbers     BINARY    G         3         78.67 B    1       "555 123 4567" / "555 666 1337"
 contacts.name         BINARY    _         3         68.67 B    1       "Chris Aniszczyk" / "Dmitriy Ryaboy"
-contacts.phoneNumber  BINARY    Z         3         57.33 B    2       "555 987 6543" / "555 987 6543"
+contacts.phoneNumber  BINARY    Z         3         50.33 B    1       "" / "555 987 6543"
 
 
 Column: owner
@@ -1405,7 +1405,7 @@ Column: contacts.name
 Column: contacts.phoneNumber
 --------------------------------------------------------------------------------
   page   type  enc  count   avg size   size       rows     nulls   min / max
-  0-0    data  _ D  2       12.50 B    25 B       1        1       "555 987 6543" / "555 987 6543"
+  0-0    data  _ D  2       14.00 B    28 B       1        0       "" / "555 987 6543"
   0-1    data  _ D  1       9.00 B     9 B        1        1
 
 `,

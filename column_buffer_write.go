@@ -143,6 +143,12 @@ func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, wr
 				}
 			}
 		}
+		// []byte: fall through to nullIndex (nil = null, non-nil = value)
+	case reflect.Pointer, reflect.Map:
+		// Fall through to nullIndex (nil = null, non-nil = value)
+	default:
+		// Value types (bool, int, float, string, struct, etc.) are never null
+		return writeOptional
 	}
 
 	nullIndex := nullIndexFuncOf(t)
@@ -401,11 +407,6 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagR
 			case f.Type == reflect.TypeFor[json.RawMessage]():
 				// json.RawMessage handles its own definition levels through
 				// writeRowsFuncOfJSONRawMessage -> writeValueFuncOf -> writeValueFuncOfOptional
-			case f.Type == reflect.TypeFor[time.Time]():
-				// time.Time is a struct but has IsZero() method,
-				// so it needs special handling.
-				// Don't use writeRowsFuncOfOptional which relies
-				// on bitmap batching.
 			default:
 				writeRows = writeRowsFuncOfOptional(f.Type, schema, columnPath, writeRows)
 			}
@@ -717,42 +718,15 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagRep
 		unit = lt.Timestamp.Unit
 	}
 
-	// Check if the column is optional
-	isOptional := col.Node.Optional()
-
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
 			writeRows(columns, levels, rows)
 			return
 		}
 
-		// If we're optional and the current definition level is already > 0,
-		// then we're in a pointer/nested context where writeRowsFuncOfPointer
-		// already handles optionality.
-		//
-		// Don't double-handle it here. For simple optional fields,
-		// definitionLevel starts at 0.
-		alreadyHandled := isOptional && levels.definitionLevel > 0
-
 		times := rows.TimeArray()
 		for i := range times.Len() {
 			t := times.Index(i)
-
-			// For optional fields, check if the value is zero
-			// (unless already handled by pointer wrapper).
-			elemLevels := levels
-			if isOptional && !alreadyHandled && t.IsZero() {
-				// Write as NULL (don't increment definition level).
-				empty := sparse.Array{}
-				writeRows(columns, elemLevels, empty)
-				continue
-			}
-
-			// For optional non-zero values, increment definition level
-			// (unless already handled).
-			if isOptional && !alreadyHandled {
-				elemLevels.definitionLevel++
-			}
 
 			var val int64
 			switch {
@@ -765,7 +739,7 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagRep
 			}
 
 			a := makeArray(reflectValueData(reflect.ValueOf(val)), 1, elemSize)
-			writeRows(columns, elemLevels, a)
+			writeRows(columns, levels, a)
 		}
 	}
 }

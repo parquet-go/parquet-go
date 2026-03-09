@@ -33,13 +33,13 @@ import (
 )
 
 // isNullValue determines if a reflect.Value represents a null value for parquet encoding.
-// This handles various types that can represent null including:
+// Only nil-able types can be null:
 // - Invalid reflect values
 // - Nil pointers/interfaces/slices/maps
 // - json.RawMessage containing "null"
 // - *jsonlite.Value with Kind == jsonlite.Null
-// - nil *structpb.Struct, *structpb.ListValue, *structpb.Value
-// - Zero values for value types
+// - *structpb.Value with NullValue kind
+// Value types (bool, int, float, string, struct, etc.) are never null.
 func isNullValue(value reflect.Value) bool {
 	switch value.Kind() {
 	case reflect.Invalid:
@@ -71,7 +71,7 @@ func isNullValue(value reflect.Value) bool {
 		return value.IsNil()
 
 	default:
-		return value.IsZero()
+		return false
 	}
 }
 
@@ -590,11 +590,14 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 			switch {
 			case t.ConvertibleTo(reflect.TypeFor[map[string]string]()):
 				m := value.Convert(reflect.TypeFor[map[string]string]()).Interface().(map[string]string)
-				v := new(string)
 				for i := range writers {
 					w := &writers[i]
-					*v = m[w.fieldName]
-					w.writeValue(columns, levels, reflect.ValueOf(v).Elem())
+					v, ok := m[w.fieldName]
+					if !ok {
+						w.writeValue(columns, levels, reflect.Value{})
+						continue
+					}
+					w.writeValue(columns, levels, reflect.ValueOf(&v).Elem())
 				}
 
 			case t.ConvertibleTo(reflect.TypeFor[map[string]any]()):
