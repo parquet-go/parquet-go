@@ -631,6 +631,139 @@ func TestIssue293(t *testing.T) {
 	}
 }
 
+func TestSortingWriterMaxRowsPerRowGroup(t *testing.T) {
+	type Row struct {
+		Value int32 `parquet:"value"`
+	}
+
+	tests := []struct {
+		name               string
+		totalRows          int
+		sortRowCount       int64
+		maxRowsPerRowGroup int64
+		dedupe             bool
+		expectedRowGroups  int
+		expectedTotalRows  int
+	}{
+		{
+			name:               "basic",
+			totalRows:          1000,
+			sortRowCount:       99,
+			maxRowsPerRowGroup: 250,
+			expectedRowGroups:  4,
+			expectedTotalRows:  1000,
+		},
+		{
+			name:               "maxRows < sortRowCount",
+			totalRows:          500,
+			sortRowCount:       200,
+			maxRowsPerRowGroup: 50,
+			expectedRowGroups:  10,
+			expectedTotalRows:  500,
+		},
+		{
+			name:               "maxRows > sortRowCount",
+			totalRows:          1000,
+			sortRowCount:       50,
+			maxRowsPerRowGroup: 300,
+			expectedRowGroups:  4,
+			expectedTotalRows:  1000,
+		},
+		{
+			name:               "with deduplication",
+			totalRows:          1000, // 500 unique values (i/2)
+			sortRowCount:       99,
+			maxRowsPerRowGroup: 200,
+			dedupe:             true,
+			expectedRowGroups:  3,
+			expectedTotalRows:  500,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := make([]Row, tt.totalRows)
+			if tt.dedupe {
+				for i := range rows {
+					rows[i].Value = int32(i / 2)
+				}
+			} else {
+				for i := range rows {
+					rows[i].Value = int32(i)
+				}
+			}
+
+			prng := rand.New(rand.NewSource(0))
+			prng.Shuffle(len(rows), func(i, j int) {
+				rows[i], rows[j] = rows[j], rows[i]
+			})
+
+			buffer := bytes.NewBuffer(nil)
+			options := []parquet.WriterOption{
+				parquet.MaxRowsPerRowGroup(tt.maxRowsPerRowGroup),
+				parquet.SortingWriterConfig(
+					parquet.SortingColumns(
+						parquet.Ascending("value"),
+					),
+					parquet.DropDuplicatedRows(tt.dedupe),
+				),
+			}
+
+			writer := parquet.NewSortingWriter[Row](buffer, tt.sortRowCount, options...)
+
+			if _, err := writer.Write(rows); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			f, err := parquet.OpenFile(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Verify number of row groups
+			rowGroups := f.RowGroups()
+			if len(rowGroups) != tt.expectedRowGroups {
+				t.Errorf("expected %d row groups, got %d", tt.expectedRowGroups, len(rowGroups))
+			}
+
+			// Verify each row group has at most MaxRowsPerRowGroup rows
+			totalRowCount := int64(0)
+			for i, rg := range rowGroups {
+				n := rg.NumRows()
+				if n > tt.maxRowsPerRowGroup {
+					t.Errorf("row group %d has %d rows, exceeds max %d", i, n, tt.maxRowsPerRowGroup)
+				}
+				totalRowCount += n
+			}
+
+			// Verify total row count
+			if totalRowCount != int64(tt.expectedTotalRows) {
+				t.Errorf("expected %d total rows, got %d", tt.expectedTotalRows, totalRowCount)
+			}
+
+			// Read all rows and verify they are globally sorted
+			read, err := parquet.Read[Row](bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if len(read) != tt.expectedTotalRows {
+				t.Fatalf("expected to read %d rows, got %d", tt.expectedTotalRows, len(read))
+			}
+
+			for i := 1; i < len(read); i++ {
+				if read[i].Value < read[i-1].Value {
+					t.Errorf("rows not sorted at index %d: %d < %d", i, read[i].Value, read[i-1].Value)
+					break
+				}
+			}
+		})
+	}
+}
+
 func TestEqualSortingColumns(t *testing.T) {
 	tests := []struct {
 		name     string
