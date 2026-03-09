@@ -36,7 +36,11 @@ const (
 func BenchmarkGenericWriter(b *testing.B) {
 	benchmarkGenericWriter[benchmarkRowType](b)
 	benchmarkGenericWriter[booleanColumn](b)
+	benchmarkGenericWriter[int8Column](b)
+	benchmarkGenericWriter[int16Column](b)
 	benchmarkGenericWriter[int32Column](b)
+	benchmarkGenericWriter[uint8Column](b)
+	benchmarkGenericWriter[uint16Column](b)
 	benchmarkGenericWriter[int64Column](b)
 	benchmarkGenericWriter[floatColumn](b)
 	benchmarkGenericWriter[doubleColumn](b)
@@ -3825,4 +3829,170 @@ func TestConcurrentRowGroupWriterSize(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestIssue28(t *testing.T) {
+	t.Run("roundtrip", func(t *testing.T) {
+		type Row struct {
+			I8  int8   `parquet:"i8"`
+			U8  uint8  `parquet:"u8"`
+			I16 int16  `parquet:"i16"`
+			U16 uint16 `parquet:"u16"`
+		}
+
+		rows := []Row{
+			{I8: 0, U8: 0, I16: 0, U16: 0},
+			{I8: 1, U8: 1, I16: 1, U16: 1},
+			{I8: -1, U8: 255, I16: -1, U16: 65535},
+			{I8: -128, U8: 0, I16: -32768, U16: 0},
+			{I8: 127, U8: 255, I16: 32767, U16: 65535},
+			{I8: 42, U8: 100, I16: 1000, U16: 50000},
+		}
+
+		buf := new(bytes.Buffer)
+		w := parquet.NewGenericWriter[Row](buf)
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := parquet.NewGenericReader[Row](f)
+		result := make([]Row, len(rows))
+		n, err := r.Read(result)
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatal(err)
+		}
+		if n != len(rows) {
+			t.Fatalf("expected %d rows, got %d", len(rows), n)
+		}
+		if !reflect.DeepEqual(rows, result) {
+			t.Fatalf("rows mismatch:\nwant: %+v\ngot:  %+v", rows, result)
+		}
+	})
+
+	t.Run("optional", func(t *testing.T) {
+		type Row struct {
+			I8  *int8   `parquet:"i8,optional"`
+			U16 *uint16 `parquet:"u16,optional"`
+		}
+
+		v1 := int8(42)
+		v2 := uint16(1000)
+		rows := []Row{
+			{I8: &v1, U16: &v2},
+			{I8: nil, U16: nil},
+			{I8: &v1, U16: nil},
+		}
+
+		buf := new(bytes.Buffer)
+		w := parquet.NewGenericWriter[Row](buf)
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := parquet.NewGenericReader[Row](f)
+		result := make([]Row, len(rows))
+		n, err := r.Read(result)
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatal(err)
+		}
+		if n != len(rows) {
+			t.Fatalf("expected %d rows, got %d", len(rows), n)
+		}
+		if !reflect.DeepEqual(rows, result) {
+			t.Fatalf("rows mismatch:\nwant: %+v\ngot:  %+v", rows, result)
+		}
+	})
+
+	t.Run("repeated", func(t *testing.T) {
+		type Row struct {
+			Values []int8 `parquet:"values"`
+		}
+
+		rows := []Row{
+			{Values: []int8{1, 2, 3}},
+			{Values: []int8{-128, 0, 127}},
+			{Values: []int8{}},
+		}
+
+		buf := new(bytes.Buffer)
+		w := parquet.NewGenericWriter[Row](buf)
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := parquet.NewGenericReader[Row](f)
+		result := make([]Row, len(rows))
+		n, err := r.Read(result)
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatal(err)
+		}
+		if n != len(rows) {
+			t.Fatalf("expected %d rows, got %d", len(rows), n)
+		}
+		if !reflect.DeepEqual(rows, result) {
+			t.Fatalf("rows mismatch:\nwant: %+v\ngot:  %+v", rows, result)
+		}
+	})
+
+	t.Run("dictionary", func(t *testing.T) {
+		type Row struct {
+			I8  int8   `parquet:"i8,dict"`
+			U16 uint16 `parquet:"u16,dict"`
+		}
+
+		rows := []Row{
+			{I8: 1, U16: 100},
+			{I8: 2, U16: 200},
+			{I8: 1, U16: 100},
+			{I8: 3, U16: 300},
+			{I8: 2, U16: 200},
+		}
+
+		buf := new(bytes.Buffer)
+		w := parquet.NewGenericWriter[Row](buf)
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := parquet.NewGenericReader[Row](f)
+		result := make([]Row, len(rows))
+		n, err := r.Read(result)
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatal(err)
+		}
+		if n != len(rows) {
+			t.Fatalf("expected %d rows, got %d", len(rows), n)
+		}
+		if !reflect.DeepEqual(rows, result) {
+			t.Fatalf("rows mismatch:\nwant: %+v\ngot:  %+v", rows, result)
+		}
+	})
 }

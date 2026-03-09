@@ -21,7 +21,11 @@ import (
 
 func TestGenericReader(t *testing.T) {
 	testGenericReader[booleanColumn](t)
+	testGenericReader[int8Column](t)
+	testGenericReader[int16Column](t)
 	testGenericReader[int32Column](t)
+	testGenericReader[uint8Column](t)
+	testGenericReader[uint16Column](t)
 	testGenericReader[int64Column](t)
 	testGenericReader[int96Column](t)
 	testGenericReader[floatColumn](t)
@@ -227,7 +231,11 @@ func testReadMinPageSize(readSize int, t *testing.T) {
 func BenchmarkGenericReader(b *testing.B) {
 	benchmarkGenericReader[benchmarkRowType](b)
 	benchmarkGenericReader[booleanColumn](b)
+	benchmarkGenericReader[int8Column](b)
+	benchmarkGenericReader[int16Column](b)
 	benchmarkGenericReader[int32Column](b)
+	benchmarkGenericReader[uint8Column](b)
+	benchmarkGenericReader[uint16Column](b)
 	benchmarkGenericReader[int64Column](b)
 	benchmarkGenericReader[floatColumn](b)
 	benchmarkGenericReader[doubleColumn](b)
@@ -318,8 +326,28 @@ var readerTests = []struct {
 	},
 
 	{
+		scenario: "INT8",
+		model:    int8Column{},
+	},
+
+	{
+		scenario: "INT16",
+		model:    int16Column{},
+	},
+
+	{
 		scenario: "INT32",
 		model:    int32Column{},
+	},
+
+	{
+		scenario: "UINT8",
+		model:    uint8Column{},
+	},
+
+	{
+		scenario: "UINT16",
+		model:    uint16Column{},
 	},
 
 	{

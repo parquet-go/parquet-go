@@ -623,12 +623,44 @@ func (row booleanColumn) generate(prng *rand.Rand) booleanColumn {
 	return booleanColumn{Value: prng.Int()%2 == 0}
 }
 
+type int8Column struct {
+	Value int8 `parquet:",delta"`
+}
+
+func (row int8Column) generate(prng *rand.Rand) int8Column {
+	return int8Column{Value: int8(prng.Intn(256) - 128)}
+}
+
+type int16Column struct {
+	Value int16 `parquet:",delta"`
+}
+
+func (row int16Column) generate(prng *rand.Rand) int16Column {
+	return int16Column{Value: int16(prng.Intn(65536) - 32768)}
+}
+
 type int32Column struct {
 	Value int32 `parquet:",delta"`
 }
 
 func (row int32Column) generate(prng *rand.Rand) int32Column {
 	return int32Column{Value: prng.Int31n(100)}
+}
+
+type uint8Column struct {
+	Value uint8 `parquet:",delta"`
+}
+
+func (row uint8Column) generate(prng *rand.Rand) uint8Column {
+	return uint8Column{Value: uint8(prng.Intn(256))}
+}
+
+type uint16Column struct {
+	Value uint16 `parquet:",delta"`
+}
+
+func (row uint16Column) generate(prng *rand.Rand) uint16Column {
+	return uint16Column{Value: uint16(prng.Intn(65536))}
 }
 
 type int64Column struct {

@@ -1010,7 +1010,8 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 
 			case "delta":
 				switch t.Kind() {
-				case reflect.Int, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint32, reflect.Uint64:
+				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+					reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 					setEncoding(&DeltaBinaryPacked)
 				case reflect.String:
 					setEncoding(&DeltaByteArray)
