@@ -493,8 +493,6 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 	keyValue := mapKeyValueOf(node)
 	keyValueType := keyValue.GoType()
 	keyValueElem := keyValueType.Elem()
-	keyType := keyValueElem.Field(0).Type
-	valueType := keyValueElem.Field(1).Type
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, schemaOf(keyValueElem))
 	zeroKeyValue := reflect.Zero(keyValueElem)
 
@@ -525,13 +523,24 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 			levels.repetitionDepth++
 			levels.definitionLevel++
 
-			elem := reflect.New(keyValueElem).Elem()
+			// Determine the key-value struct type once, using the first
+			// element to discover the actual key/value Go types.
+			var kvType reflect.Type
+			for mapKey, mapVal := range m.Range {
+				kvType = makeKeyValueType(keyValueElem, reflect.TypeOf(mapKey.Interface()), reflect.TypeOf(mapVal.Interface()))
+				break
+			}
+			if kvType == nil {
+				kvType = keyValueElem
+			}
+
+			elem := reflect.New(kvType).Elem()
 			k := elem.Field(0)
 			v := elem.Field(1)
 
 			for mapKey, mapVal := range m.Range {
-				k.Set(reflect.ValueOf(mapKey.Interface()).Convert(keyType))
-				v.Set(reflect.ValueOf(mapVal.Interface()).Convert(valueType))
+				k.Set(reflect.ValueOf(mapKey.Interface()).Convert(k.Type()))
+				v.Set(reflect.ValueOf(mapVal.Interface()).Convert(v.Type()))
 				writeValue(columns, levels, elem)
 				levels.repetitionLevel = levels.repetitionDepth
 			}
@@ -557,8 +566,8 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 		for it := mapValue.MapRange(); it.Next(); {
 			mapKey.SetIterKey(it)
 			mapElem.SetIterValue(it)
-			k.Set(mapKey.Convert(keyType))
-			v.Set(mapElem.Convert(valueType))
+			k.Set(mapKey.Convert(k.Type()))
+			v.Set(mapElem.Convert(v.Type()))
 			writeValue(columns, levels, elem)
 			levels.repetitionLevel = levels.repetitionDepth
 		}
