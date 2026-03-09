@@ -318,7 +318,36 @@ func (f *groupField) Value(base reflect.Value) reflect.Value {
 			return reflect.ValueOf(nil)
 		}
 	}
-	return base.MapIndex(reflect.ValueOf(&f.name).Elem())
+	switch base.Kind() {
+	case reflect.Struct:
+		return groupFieldByName(base, f.name)
+	case reflect.Ptr:
+		if base.IsNil() {
+			base.Set(reflect.New(base.Type().Elem()))
+		}
+		return groupFieldByName(base.Elem(), f.name)
+	default:
+		return base.MapIndex(reflect.ValueOf(&f.name).Elem())
+	}
+}
+
+// groupFieldByName looks up a struct field by its parquet tag name,
+// falling back to matching the Go field name directly.
+func groupFieldByName(base reflect.Value, name string) reflect.Value {
+	t := base.Type()
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if tag := f.Tag.Get("parquet"); tag != "" {
+			fieldName, _ := split(tag)
+			if fieldName == name {
+				return base.Field(i)
+			}
+		}
+		if f.Name == name {
+			return base.Field(i)
+		}
+	}
+	return reflect.Value{}
 }
 
 func goTypeOf(node Node) reflect.Type {

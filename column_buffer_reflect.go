@@ -550,7 +550,15 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 		mapKey := reflect.New(mapType.Key()).Elem()
 		mapElem := reflect.New(mapType.Elem()).Elem()
 
-		elem := reflect.New(keyValueElem).Elem()
+		kvType := keyValueElem
+		actualValType := mapType.Elem()
+		if actualValType != valueType && !actualValType.ConvertibleTo(valueType) {
+			kvType = reflect.StructOf([]reflect.StructField{
+				{Name: keyValueElem.Field(0).Name, Type: mapType.Key(), Tag: keyValueElem.Field(0).Tag},
+				{Name: keyValueElem.Field(1).Name, Type: actualValType, Tag: keyValueElem.Field(1).Tag},
+			})
+		}
+		elem := reflect.New(kvType).Elem()
 		k := elem.Field(0)
 		v := elem.Field(1)
 
