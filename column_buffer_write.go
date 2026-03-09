@@ -152,6 +152,10 @@ type smallIntBuf struct{ values []int32 }
 
 var smallIntBufPool memory.Pool[smallIntBuf]
 
+type wideIntBuf struct{ values []int64 }
+
+var wideIntBufPool memory.Pool[wideIntBuf]
+
 func writeRowsFuncOfInt(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := column.columnIndex
@@ -239,10 +243,6 @@ func writeRowsFuncOfInt(t reflect.Type, schema *Schema, path columnPath) writeRo
 		columns[columnIndex].writeValues(levels, rows)
 	}
 }
-
-type wideIntBuf struct{ values []int64 }
-
-var wideIntBufPool memory.Pool[wideIntBuf]
 
 func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
 	// For interface types, we just increment the definition level for present
