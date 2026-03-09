@@ -105,7 +105,7 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 	var genWriteErr error
 	if t != nil {
 		if columnName, ok := validateColumns(dereference(t)); !ok {
-			genWriteErr = fmt.Errorf("caonnot write %v: it has columns with the same parquet column name %q", t, columnName)
+			genWriteErr = fmt.Errorf("cannot write %v: it has columns with the same parquet column name %q", t, columnName)
 		}
 	}
 
@@ -1987,7 +1987,7 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	}
 	if isCompressed(c.compression) {
 		if err := buf.compress(c.compression); err != nil {
-			return fmt.Errorf("copmressing parquet dictionary page: %w", err)
+			return fmt.Errorf("compressing parquet dictionary page: %w", err)
 		}
 	}
 

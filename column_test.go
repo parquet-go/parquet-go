@@ -179,7 +179,7 @@ func checkColumnChunkColumnIndex(columnChunk parquet.ColumnChunk) error {
 
 		nullCount := columnIndex.NullCount(pagesRead)
 		if numNulls != nullCount {
-			return fmt.Errorf("number of null values mimatch: index=%d page=%d", nullCount, numNulls)
+			return fmt.Errorf("number of null values mismatch: index=%d page=%d", nullCount, numNulls)
 		}
 
 		nullPage := columnIndex.NullPage(pagesRead)
