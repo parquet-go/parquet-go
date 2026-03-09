@@ -550,7 +550,7 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 		mapKey := reflect.New(mapType.Key()).Elem()
 		mapElem := reflect.New(mapType.Elem()).Elem()
 
-		elem := reflect.New(keyValueElem).Elem()
+		elem := reflect.New(makeKeyValueType(keyValueElem, mapType.Key(), mapType.Elem())).Elem()
 		k := elem.Field(0)
 		v := elem.Field(1)
 
