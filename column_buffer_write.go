@@ -54,13 +54,11 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplace
 	}
 
 	switch t.Kind() {
+	case reflect.Int, reflect.Uint,
+		reflect.Int32, reflect.Uint32,
+		reflect.Int64, reflect.Uint64:
+		return writeRowsFuncOfInt(t, schema, path)
 	case reflect.Bool,
-		reflect.Int,
-		reflect.Uint,
-		reflect.Int32,
-		reflect.Uint32,
-		reflect.Int64,
-		reflect.Uint64,
 		reflect.Float32,
 		reflect.Float64,
 		reflect.String:
@@ -153,6 +151,98 @@ func writeRowsFuncOfSmallInt(t reflect.Type, schema *Schema, path columnPath) wr
 type smallIntBuf struct{ values []int32 }
 
 var smallIntBufPool memory.Pool[smallIntBuf]
+
+type wideIntBuf struct{ values []int64 }
+
+var wideIntBufPool memory.Pool[wideIntBuf]
+
+func writeRowsFuncOfInt(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+	column := schema.lazyLoadState().mapping.lookup(path)
+	columnIndex := column.columnIndex
+	if columnIndex < 0 {
+		panic("parquet: column not found: " + path.String())
+	}
+
+	goSize := t.Size()
+	colKind := column.node.Type().Kind()
+
+	// When the Go type size doesn't match the column's physical type size,
+	// we need to convert values element-by-element. This happens when tags
+	// like int(32) or uint(32) override the default column bit width.
+	// For example: uint64 with int(32) tag, or int with int(32) on 64-bit.
+	if goSize > 4 && colKind == Int32 {
+		// 8-byte Go type → 4-byte column: narrow
+		signed := t.Kind() == reflect.Int || t.Kind() == reflect.Int64
+		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+			n := rows.Len()
+			if n == 0 {
+				columns[columnIndex].writeValues(levels, rows)
+				return
+			}
+
+			buf := smallIntBufPool.Get(
+				func() *smallIntBuf { return new(smallIntBuf) },
+				func(b *smallIntBuf) { b.values = b.values[:0] },
+			)
+			buf.values = slices.Grow(buf.values, n)[:n]
+			defer smallIntBufPool.Put(buf)
+
+			if signed {
+				a := rows.Int64Array()
+				for i := range n {
+					buf.values[i] = int32(a.Index(i))
+				}
+			} else {
+				a := rows.Uint64Array()
+				for i := range n {
+					buf.values[i] = int32(uint32(a.Index(i)))
+				}
+			}
+
+			narrowedArray := sparse.MakeInt32Array(buf.values).UnsafeArray()
+			columns[columnIndex].writeValues(levels, narrowedArray)
+		}
+	}
+
+	if goSize <= 4 && colKind == Int64 {
+		// 4-byte Go type → 8-byte column: widen
+		signed := t.Kind() == reflect.Int || t.Kind() == reflect.Int32
+		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+			n := rows.Len()
+			if n == 0 {
+				columns[columnIndex].writeValues(levels, rows)
+				return
+			}
+
+			buf := wideIntBufPool.Get(
+				func() *wideIntBuf { return new(wideIntBuf) },
+				func(b *wideIntBuf) { b.values = b.values[:0] },
+			)
+			buf.values = slices.Grow(buf.values, n)[:n]
+			defer wideIntBufPool.Put(buf)
+
+			if signed {
+				a := rows.Int32Array()
+				for i := range n {
+					buf.values[i] = int64(a.Index(i))
+				}
+			} else {
+				a := rows.Uint32Array()
+				for i := range n {
+					buf.values[i] = int64(a.Index(i))
+				}
+			}
+
+			widenedArray := sparse.MakeInt64Array(buf.values).UnsafeArray()
+			columns[columnIndex].writeValues(levels, widenedArray)
+		}
+	}
+
+	// Default: Go type size matches column physical type size.
+	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+		columns[columnIndex].writeValues(levels, rows)
+	}
+}
 
 func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
 	// For interface types, we just increment the definition level for present

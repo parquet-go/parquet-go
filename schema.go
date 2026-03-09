@@ -118,6 +118,8 @@ func (v *onceValue[T]) load(f func() *T) *T {
 //	split        | for float32 and float64 types, use the BYTE_STREAM_SPLIT encoding
 //	geometry     | for []byte types, use the GEOMETRY logical type; use geometry(crs) to set the CRS
 //	geography    | for []byte types, use the GEOGRAPHY logical type; use geography(crs:algorithm) to set the CRS and edge algorithm
+//	int(n)       | for integer types, use the parquet INT logical type with the given bit width (8, 16, 32, or 64)
+//	uint(n)      | for integer types, use the parquet UINT logical type with the given bit width (8, 16, 32, or 64)
 //	id(n)        | where n is int denoting a column field id. Example id(2) for a column with field id of 2
 //
 // When "optional" is used on a bare slice (without the "list" tag), it applies to the
@@ -1215,6 +1217,48 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					default:
 						throwInvalidTag(t, name, option)
 					}
+				}
+
+			case "int":
+				bitWidth, err := parseIntBitWidthArgs(args)
+				if err != nil {
+					throwInvalidTag(t, name, option+args)
+				}
+				kind := t.Kind()
+				if kind == reflect.Ptr {
+					kind = t.Elem().Kind()
+				}
+				switch kind {
+				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+					reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+					if t.Kind() == reflect.Ptr {
+						setNode(Optional(Int(bitWidth)))
+					} else {
+						setNode(Int(bitWidth))
+					}
+				default:
+					throwInvalidTag(t, name, option)
+				}
+
+			case "uint":
+				bitWidth, err := parseIntBitWidthArgs(args)
+				if err != nil {
+					throwInvalidTag(t, name, option+args)
+				}
+				kind := t.Kind()
+				if kind == reflect.Ptr {
+					kind = t.Elem().Kind()
+				}
+				switch kind {
+				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+					reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+					if t.Kind() == reflect.Ptr {
+						setNode(Optional(Uint(bitWidth)))
+					} else {
+						setNode(Uint(bitWidth))
+					}
+				default:
+					throwInvalidTag(t, name, option)
 				}
 
 			case "id":

@@ -404,6 +404,78 @@ func TestSchemaOf(t *testing.T) {
 	required int32 u16 (INT(16,false));
 }`,
 		},
+
+		// int(n) / uint(n) tags
+		{
+			value: new(struct {
+				I8  int `parquet:"i8,int(8)"`
+				I16 int `parquet:"i16,int(16)"`
+				I32 int `parquet:"i32,int(32)"`
+				I64 int `parquet:"i64,int(64)"`
+			}),
+			print: `message {
+	required int32 i8 (INT(8,true));
+	required int32 i16 (INT(16,true));
+	required int32 i32 (INT(32,true));
+	required int64 i64 (INT(64,true));
+}`,
+		},
+		{
+			value: new(struct {
+				U8  uint `parquet:"u8,uint(8)"`
+				U16 uint `parquet:"u16,uint(16)"`
+				U32 uint `parquet:"u32,uint(32)"`
+				U64 uint `parquet:"u64,uint(64)"`
+			}),
+			print: `message {
+	required int32 u8 (INT(8,false));
+	required int32 u16 (INT(16,false));
+	required int32 u32 (INT(32,false));
+	required int64 u64 (INT(64,false));
+}`,
+		},
+
+		// Override: int32 field with uint(16) tag
+		{
+			value: new(struct {
+				V int32 `parquet:"v,uint(16)"`
+			}),
+			print: `message {
+	required int32 v (INT(16,false));
+}`,
+		},
+
+		// Override: uint64 field with int(32) tag
+		{
+			value: new(struct {
+				V uint64 `parquet:"v,int(32)"`
+			}),
+			print: `message {
+	required int32 v (INT(32,true));
+}`,
+		},
+
+		// Optional pointer with int tag
+		{
+			value: new(struct {
+				V *int32 `parquet:"v,int(16)"`
+			}),
+			print: `message {
+	optional int32 v (INT(16,true));
+}`,
+		},
+
+		// Native small types with explicit tags
+		{
+			value: new(struct {
+				I8  int8   `parquet:"i8,int(8)"`
+				U16 uint16 `parquet:"u16,uint(16)"`
+			}),
+			print: `message {
+	required int32 i8 (INT(8,true));
+	required int32 u16 (INT(16,false));
+}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -515,6 +587,44 @@ func TestInvalidSchemaOf(t *testing.T) {
 				Timestamp time.Time `parquet:",timestamp(millisecond:utc:local)"`
 			}),
 			panic: `timestamp(millisecond:utc:local) is an invalid parquet tag: Timestamp time.Time [timestamp(millisecond:utc:local)]`,
+		},
+
+		// int(n) / uint(n) invalid tags
+		{
+			value: new(struct {
+				V int `parquet:",int(24)"`
+			}),
+			panic: `int(24) is an invalid parquet tag: V int [int(24)]`,
+		},
+		{
+			value: new(struct {
+				V int `parquet:",int(128)"`
+			}),
+			panic: `int(128) is an invalid parquet tag: V int [int(128)]`,
+		},
+		{
+			value: new(struct {
+				V float32 `parquet:",int(32)"`
+			}),
+			panic: `int is an invalid parquet tag: V float32 [int]`,
+		},
+		{
+			value: new(struct {
+				V string `parquet:",uint(16)"`
+			}),
+			panic: `uint is an invalid parquet tag: V string [uint]`,
+		},
+		{
+			value: new(struct {
+				V int `parquet:",int(abc)"`
+			}),
+			panic: `int(abc) is an invalid parquet tag: V int [int(abc)]`,
+		},
+		{
+			value: new(struct {
+				V int `parquet:",int"`
+			}),
+			panic: `int() is an invalid parquet tag: V int [int()]`,
 		},
 	}
 
