@@ -366,6 +366,13 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		c.typ = &listType{}
 	} else if lt.Valid && lt.V.Variant != nil {
 		c.typ = &variantType{}
+	} else if ct := c.schema.ConvertedType; ct.Valid {
+		switch ct.V {
+		case deprecated.Map:
+			c.typ = &mapType{}
+		case deprecated.List:
+			c.typ = &listType{}
+		}
 	}
 	c.columns = make([]*Column, numChildren)
 
