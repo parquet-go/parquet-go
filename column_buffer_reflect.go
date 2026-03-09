@@ -330,6 +330,8 @@ func writeValueFuncOf(columnIndex int16, node Node) (int16, writeValueFunc) {
 		return writeValueFuncOfList(columnIndex, node)
 	case isMap(node):
 		return writeValueFuncOfMap(columnIndex, node)
+	case isVariant(node):
+		return writeValueFuncOfVariant(columnIndex, node)
 	default:
 		return writeValueFuncOfRequired(columnIndex, node)
 	}
