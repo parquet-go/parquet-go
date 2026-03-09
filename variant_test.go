@@ -107,10 +107,10 @@ func TestShreddedVariantPrimitive(t *testing.T) {
 	})
 
 	records := []Record{
-		{ID: 1, Data: "hello"},         // Should be shredded (string matches typed_value)
-		{ID: 2, Data: int32(42)},       // Should NOT be shredded (int32 doesn't match string)
-		{ID: 3, Data: "world"},         // Should be shredded
-		{ID: 4, Data: nil},            // Null
+		{ID: 1, Data: "hello"},   // Should be shredded (string matches typed_value)
+		{ID: 2, Data: int32(42)}, // Should NOT be shredded (int32 doesn't match string)
+		{ID: 3, Data: "world"},   // Should be shredded
+		{ID: 4, Data: nil},       // Null
 	}
 
 	buf := new(bytes.Buffer)
@@ -173,9 +173,9 @@ func TestShreddedVariantInt(t *testing.T) {
 	})
 
 	records := []Record{
-		{ID: 1, Data: int32(100)},      // Should be shredded
-		{ID: 2, Data: "hello"},         // Should NOT be shredded
-		{ID: 3, Data: int32(-50)},      // Should be shredded
+		{ID: 1, Data: int32(100)}, // Should be shredded
+		{ID: 2, Data: "hello"},    // Should NOT be shredded
+		{ID: 3, Data: int32(-50)}, // Should be shredded
 	}
 
 	buf := new(bytes.Buffer)
@@ -234,7 +234,7 @@ func TestShreddedVariantObject(t *testing.T) {
 
 	records := []Record{
 		{ID: 1, Data: map[string]any{"name": "Alice", "age": int32(30)}}, // All fields match: fully shredded
-		{ID: 2, Data: "just a string"},                                    // Type mismatch: stored in value column
+		{ID: 2, Data: "just a string"},                                   // Type mismatch: stored in value column
 		{ID: 3, Data: map[string]any{"name": "Bob", "age": int32(25)}},   // Fully shredded
 	}
 
