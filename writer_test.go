@@ -3641,7 +3641,7 @@ func TestRowGroupWriterSize(t *testing.T) {
 	}
 
 	prevSize := int64(0)
-	for batch := 0; batch < 5; batch++ {
+	for range 5 {
 		if _, err := rg.WriteRows(rows); err != nil {
 			t.Fatal(err)
 		}
@@ -3791,7 +3791,7 @@ func TestConcurrentRowGroupWriterSize(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			if _, err := rg1.WriteRows(rows); err != nil {
 				t.Error(err)
 			}
@@ -3799,7 +3799,7 @@ func TestConcurrentRowGroupWriterSize(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			if _, err := rg2.WriteRows(rows); err != nil {
 				t.Error(err)
 			}
