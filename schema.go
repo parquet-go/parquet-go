@@ -120,8 +120,10 @@ func (v *onceValue[T]) load(f func() *T) *T {
 //	geography    | for []byte types, use the GEOGRAPHY logical type; use geography(crs:algorithm) to set the CRS and edge algorithm
 //	id(n)        | where n is int denoting a column field id. Example id(2) for a column with field id of 2
 //
-// When "optional" is used on a slice with the "list" tag, it applies to the list
-// elements, not to the list itself.
+// When "optional" is used on a bare slice (without the "list" tag), it applies to the
+// repeated elements, not the slice itself. When combined with the "list" tag, "optional"
+// applies to the list as a whole; use the parquet-element tag to make list elements
+// optional (e.g. parquet-element:",optional").
 //
 // # The date logical type is an int32 value of the number of days since the unix epoch
 //
