@@ -1010,6 +1010,9 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 			case "json":
 				setNode(JSON())
 
+			case "variant":
+				setNode(Variant())
+
 			case "delta":
 				switch t.Kind() {
 				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
