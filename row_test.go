@@ -316,8 +316,8 @@ func TestDeconstructionReconstruction(t *testing.T) {
 				// User.Details
 				1: {parquet.ValueOf("Luke").Level(0, 2, 0)},
 				2: {parquet.ValueOf("Skywalker").Level(0, 2, 0)},
-				3: {parquet.ValueOf(nil).Level(0, 2, 0)},
-				4: {parquet.ValueOf(nil).Level(0, 2, 0)},
+				3: {parquet.ValueOf(int64(0)).Level(0, 3, 0)},
+				4: {parquet.ValueOf(float64(0)).Level(0, 3, 0)},
 
 				5: { // User.Friends.ID
 					parquet.ValueOf(uuid.MustParse("1B76F8D0-82C6-403F-A104-DCDA69207220")).Level(0, 2, 0),
@@ -338,15 +338,15 @@ func TestDeconstructionReconstruction(t *testing.T) {
 				},
 
 				8: { // User.Friends.Details.Person.Age
-					parquet.ValueOf(nil).Level(0, 4, 0),
-					parquet.ValueOf(nil).Level(1, 4, 0),
-					parquet.ValueOf(nil).Level(1, 4, 0),
+					parquet.ValueOf(int64(0)).Level(0, 5, 0),
+					parquet.ValueOf(int64(0)).Level(1, 5, 0),
+					parquet.ValueOf(int64(0)).Level(1, 5, 0),
 				},
 
 				9: { // User.Friends.Details.Person.Weight
-					parquet.ValueOf(nil).Level(0, 4, 0),
-					parquet.ValueOf(nil).Level(1, 4, 0),
-					parquet.ValueOf(nil).Level(1, 4, 0),
+					parquet.ValueOf(float64(0)).Level(0, 5, 0),
+					parquet.ValueOf(float64(0)).Level(1, 5, 0),
+					parquet.ValueOf(float64(0)).Level(1, 5, 0),
 				},
 			},
 		},
@@ -509,7 +509,7 @@ func TestDeconstructionReconstruction(t *testing.T) {
 				},
 				3: { // AddressBook.contacts.phoneNumber
 					parquet.ValueOf("555 987 6543").Level(0, 2, 0),
-					parquet.ValueOf(nil).Level(1, 1, 0),
+					parquet.ValueOf("").Level(1, 2, 0),
 				},
 			},
 		},

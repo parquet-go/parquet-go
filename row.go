@@ -434,7 +434,7 @@ func deconstructFuncOfOptional(columnIndex int16, node Node) (int16, deconstruct
 	columnIndex, deconstruct := deconstructFuncOf(columnIndex, Required(node))
 	return columnIndex, func(columns [][]Value, levels columnLevels, value reflect.Value) {
 		if value.IsValid() {
-			if value.IsZero() {
+			if isNullValue(value) {
 				value = reflect.Value{}
 			} else {
 				if value.Kind() == reflect.Ptr {
