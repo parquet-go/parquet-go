@@ -389,6 +389,21 @@ func TestSchemaOf(t *testing.T) {
 	}
 }`,
 		},
+
+		{
+			value: new(struct {
+				I8  int8   `parquet:"i8"`
+				U8  uint8  `parquet:"u8"`
+				I16 int16  `parquet:"i16"`
+				U16 uint16 `parquet:"u16"`
+			}),
+			print: `message {
+	required int32 i8 (INT(8,true));
+	required int32 u8 (INT(8,false));
+	required int32 i16 (INT(16,true));
+	required int32 u16 (INT(16,false));
+}`,
+		},
 	}
 
 	for _, test := range tests {
