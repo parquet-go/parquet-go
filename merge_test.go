@@ -3303,3 +3303,45 @@ func TestMergeRowGroupsDropDuplicatedRows(t *testing.T) {
 		}
 	})
 }
+
+// TestMergeRowGroupsMultipleSequentialOverlappingSegments tests that chained
+// overlaps are correctly merged into a single segment. Group1 overlaps Group2,
+// Group2 overlaps Group3, but Group1 does not directly overlap Group3. Without
+// extending currentMax in overlappingRowGroups, Group3 would be incorrectly
+// treated as a separate non-overlapping segment.
+func TestMergeRowGroupsMultipleSequentialOverlappingSegments(t *testing.T) {
+	type Record struct {
+		Value int64 `parquet:"value"`
+	}
+
+	sortingOptions := []parquet.RowGroupOption{
+		parquet.SortingRowGroupConfig(
+			parquet.SortingColumns(
+				parquet.Ascending("value"),
+			),
+		),
+	}
+
+	// Group1: [1,3,5]  - overlaps Group2 (max=5, Group2 min=4)
+	// Group2: [4,6,12] - overlaps Group3 (max=12, Group3 min=10)
+	// Group3: [10,15,20]
+	// All three should be merged into one segment.
+	// Expected output: [1,3,4,5,6,10,12,15,20]
+	group1 := fileRowGroup(sortedRowGroup(sortingOptions, Record{1}, Record{3}, Record{5}))
+	group2 := fileRowGroup(sortedRowGroup(sortingOptions, Record{4}, Record{6}, Record{12}))
+	group3 := fileRowGroup(sortedRowGroup(sortingOptions, Record{10}, Record{15}, Record{20}))
+
+	merged, err := parquet.MergeRowGroups([]parquet.RowGroup{group1, group2, group3}, sortingOptions...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := merged.Rows()
+	defer rows.Close()
+
+	got := readAllInt64Values(t, rows)
+	expected := []int64{1, 3, 4, 5, 6, 10, 12, 15, 20}
+	if !slices.Equal(got, expected) {
+		t.Errorf("got %v, want %v", got, expected)
+	}
+}

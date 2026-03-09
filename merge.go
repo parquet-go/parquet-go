@@ -166,10 +166,10 @@ func overlappingRowGroups(rowGroups []RowGroup, schema *Schema, sorting []Sortin
 		currentMax := rowGroupRanges[0].maxRow
 
 		for _, rr := range rowGroupRanges[1:] {
-			if cmp := compare(rr.minRow, currentMax); cmp <= 0 {
+			if compare(rr.minRow, currentMax) <= 0 {
 				// Overlapping - add to current segment and extend max if necessary
 				currentSegment = append(currentSegment, rr.rowGroup)
-				if cmp > 0 {
+				if compare(rr.maxRow, currentMax) > 0 {
 					currentMax = rr.maxRow
 				}
 			} else {
