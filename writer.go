@@ -747,12 +747,7 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 			}),
 			writeDeprecatedStatistics: config.DeprecatedDataPageStatistics,
 			encodings:                 make([]format.Encoding, 0, 3),
-			// Data pages in version 2 can omit compression when dictionary
-			// encoding is employed; only the dictionary page needs to be
-			// compressed, the data pages are encoded with the hybrid
-			// RLE/Bit-Pack encoding which doesn't benefit from an extra
-			// compression layer.
-			isCompressed:       isCompressed(compression) && (dataPageType != format.DataPageV2 || dictionary == nil),
+			isCompressed: isCompressed(compression),
 			dictionaryMaxBytes: config.DictionaryMaxBytes,
 		}
 
