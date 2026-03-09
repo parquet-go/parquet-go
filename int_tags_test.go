@@ -159,6 +159,30 @@ func TestNativeIntWithSmallerBitWidth(t *testing.T) {
 		})
 	})
 
+	t.Run("int32 with int(64) widening", func(t *testing.T) {
+		type Row struct {
+			Value int32 `parquet:"value,int(64)"`
+		}
+		testRoundTrip(t, []Row{
+			{Value: 0},
+			{Value: 1},
+			{Value: -1},
+			{Value: 2147483647},
+			{Value: -2147483648},
+		})
+	})
+
+	t.Run("uint32 with uint(64) widening", func(t *testing.T) {
+		type Row struct {
+			Value uint32 `parquet:"value,uint(64)"`
+		}
+		testRoundTrip(t, []Row{
+			{Value: 0},
+			{Value: 1},
+			{Value: 4294967295},
+		})
+	})
+
 	t.Run("int with int(32) and delta encoding", func(t *testing.T) {
 		type Row struct {
 			Value int `parquet:"value,int(32),delta"`
