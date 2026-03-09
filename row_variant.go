@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/parquet-go/parquet-go/variant"
+	"maps"
 )
 
 // variantMarshalOrNull marshals a reflect.Value to variant binary. If the
@@ -799,12 +800,8 @@ func mergeVariantObjects(typed, unshredded any) any {
 	unshreddedMap, uOk := unshredded.(map[string]any)
 	if tOk && uOk {
 		result := make(map[string]any, len(typedMap)+len(unshreddedMap))
-		for k, v := range unshreddedMap {
-			result[k] = v
-		}
-		for k, v := range typedMap {
-			result[k] = v
-		}
+		maps.Copy(result, unshreddedMap)
+		maps.Copy(result, typedMap)
 		return result
 	}
 	if tOk {
