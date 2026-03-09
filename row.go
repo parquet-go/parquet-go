@@ -483,6 +483,20 @@ func deconstructFuncOfList(columnIndex int16, node Node) (int16, deconstructFunc
 	return deconstructFuncOf(columnIndex, Repeated(listElementOf(node)))
 }
 
+// makeKeyValueType returns a key-value struct type for use with actual map
+// key/value types. If the schema's synthetic value type is already convertible
+// to actualVal, keyValueElem is returned unchanged.
+func makeKeyValueType(keyValueElem reflect.Type, actualKey, actualVal reflect.Type) reflect.Type {
+	schemaVal := keyValueElem.Field(1).Type
+	if actualVal == schemaVal || actualVal.ConvertibleTo(schemaVal) {
+		return keyValueElem
+	}
+	return reflect.StructOf([]reflect.StructField{
+		{Name: keyValueElem.Field(0).Name, Type: actualKey, Tag: keyValueElem.Field(0).Tag},
+		{Name: keyValueElem.Field(1).Name, Type: actualVal, Tag: keyValueElem.Field(1).Tag},
+	})
+}
+
 //go:noinline
 func deconstructFuncOfMap(columnIndex int16, node Node) (int16, deconstructFunc) {
 	keyValue := mapKeyValueOf(node)
@@ -500,15 +514,7 @@ func deconstructFuncOfMap(columnIndex int16, node Node) (int16, deconstructFunc)
 		levels.repetitionDepth++
 		levels.definitionLevel++
 
-		kvType := keyValueElem
-		actualValType := mapValue.Type().Elem()
-		if actualValType != valueType && !actualValType.ConvertibleTo(valueType) {
-			kvType = reflect.StructOf([]reflect.StructField{
-				{Name: keyValueElem.Field(0).Name, Type: mapValue.Type().Key(), Tag: keyValueElem.Field(0).Tag},
-				{Name: keyValueElem.Field(1).Name, Type: actualValType, Tag: keyValueElem.Field(1).Tag},
-			})
-		}
-		elem := reflect.New(kvType).Elem()
+		elem := reflect.New(makeKeyValueType(keyValueElem, mapValue.Type().Key(), mapValue.Type().Elem())).Elem()
 		k := elem.Field(0)
 		v := elem.Field(1)
 
@@ -862,19 +868,11 @@ func reconstructFuncOfMap(columnIndex int16, node Node) (int16, reconstructFunc)
 			value = m // track map instead of any for read[any]()
 		}
 
-		// When the target map has concrete (non-interface) value types, the
-		// synthetic key-value struct from the schema may not be convertible to
-		// the actual Go types (e.g., named struct vs anonymous struct). Build
-		// a key-value struct using actual types so reconstruction works and
-		// Convert calls become no-ops.
-		kvType := keyValueElem
-		if !valueIsList && v.Kind() != reflect.Interface && !keyValueElem.Field(1).Type.ConvertibleTo(v) {
-			kvType = reflect.StructOf([]reflect.StructField{
-				{Name: keyValueElem.Field(0).Name, Type: k, Tag: keyValueElem.Field(0).Tag},
-				{Name: keyValueElem.Field(1).Name, Type: v, Tag: keyValueElem.Field(1).Tag},
-			})
+		actualVal := v
+		if valueIsList || v.Kind() == reflect.Interface {
+			actualVal = keyValueElem.Field(1).Type
 		}
-		elem := reflect.New(kvType).Elem()
+		elem := reflect.New(makeKeyValueType(keyValueElem, k, actualVal)).Elem()
 		for range n {
 			for j, column := range values {
 				column = column[:cap(column)]
