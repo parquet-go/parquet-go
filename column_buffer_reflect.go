@@ -320,7 +320,7 @@ func writeDuration(col ColumnBuffer, levels columnLevels, d time.Duration, node 
 // writeValueFuncOf constructs a function that writes reflect.Values to column buffers.
 // It follows the deconstructFuncOf pattern, recursively building functions for the schema tree.
 // Returns (nextColumnIndex, writeFunc).
-func writeValueFuncOf(columnIndex int16, node Node) (int16, writeValueFunc) {
+func writeValueFuncOf(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	switch {
 	case node.Optional():
 		return writeValueFuncOfOptional(columnIndex, node)
@@ -335,7 +335,7 @@ func writeValueFuncOf(columnIndex int16, node Node) (int16, writeValueFunc) {
 	}
 }
 
-func writeValueFuncOfOptional(columnIndex int16, node Node) (int16, writeValueFunc) {
+func writeValueFuncOfOptional(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 		if isNullValue(value) {
@@ -347,7 +347,7 @@ func writeValueFuncOfOptional(columnIndex int16, node Node) (int16, writeValueFu
 	}
 }
 
-func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFunc) {
+func writeValueFuncOfRepeated(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 	writeRepatedValue:
@@ -476,7 +476,7 @@ func writeValueFuncOfRepeated(columnIndex int16, node Node) (int16, writeValueFu
 	}
 }
 
-func writeValueFuncOfRequired(columnIndex int16, node Node) (int16, writeValueFunc) {
+func writeValueFuncOfRequired(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	switch {
 	case node.Leaf():
 		return writeValueFuncOfLeaf(columnIndex, node)
@@ -485,11 +485,11 @@ func writeValueFuncOfRequired(columnIndex int16, node Node) (int16, writeValueFu
 	}
 }
 
-func writeValueFuncOfList(columnIndex int16, node Node) (int16, writeValueFunc) {
+func writeValueFuncOfList(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	return writeValueFuncOf(columnIndex, Repeated(listElementOf(node)))
 }
 
-func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
+func writeValueFuncOfMap(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	keyValue := mapKeyValueOf(node)
 	keyValueType := keyValue.GoType()
 	keyValueElem := keyValueType.Elem()
@@ -576,7 +576,7 @@ func writeValueFuncOfMap(columnIndex int16, node Node) (int16, writeValueFunc) {
 
 var structFieldsCache atomic.Value // map[reflect.Type]map[string][]int
 
-func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc) {
+func writeValueFuncOfGroup(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	fields := node.Fields()
 	writers := make([]fieldWriter, len(fields))
 	for i, field := range fields {
@@ -712,12 +712,9 @@ func writeValueFuncOfGroup(columnIndex int16, node Node) (int16, writeValueFunc)
 	}
 }
 
-func writeValueFuncOfLeaf(columnIndex int16, node Node) (int16, writeValueFunc) {
-	if columnIndex < 0 {
-		panic("writeValueFuncOfLeaf called with invalid columnIndex -1 (empty group)")
-	}
+func writeValueFuncOfLeaf(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	if columnIndex > MaxColumnIndex {
-		panic("row cannot be written because it has more than 127 columns")
+		panic("row cannot be written because it has too many columns")
 	}
 	return columnIndex + 1, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 		col := columns[columnIndex]
