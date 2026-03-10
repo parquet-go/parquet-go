@@ -476,6 +476,26 @@ func TestSchemaOf(t *testing.T) {
 	required int32 u16 (INT(16,false));
 }`,
 		},
+
+		// Optional pointer with date tag (*int32)
+		{
+			value: new(struct {
+				Date *int32 `parquet:"date,date"`
+			}),
+			print: `message {
+	optional int32 date (DATE);
+}`,
+		},
+
+		// Optional pointer with timestamp tag (*int64)
+		{
+			value: new(struct {
+				Timestamp *int64 `parquet:"timestamp,timestamp"`
+			}),
+			print: `message {
+	optional int64 timestamp (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
+}`,
+		},
 	}
 
 	for _, test := range tests {
