@@ -102,7 +102,7 @@ func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) wr
 func writeRowsFuncOfSmallInt(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := column.columnIndex
-	if columnIndex < 0 {
+	if columnIndex == math.MaxUint16 {
 		panic("parquet: column not found: " + path.String())
 	}
 
@@ -160,7 +160,7 @@ var wideIntBufPool memory.Pool[wideIntBuf]
 func writeRowsFuncOfInt(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := column.columnIndex
-	if columnIndex < 0 {
+	if columnIndex == math.MaxUint16 {
 		panic("parquet: column not found: " + path.String())
 	}
 
@@ -819,7 +819,7 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 	}
 
 	columnIndex := findColumnIndex(schema, schema, path)
-	if columnIndex < 0 {
+	if columnIndex == math.MaxUint16 {
 		// Empty group - return no-op function
 		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 			// No-op: empty group has no columns to write

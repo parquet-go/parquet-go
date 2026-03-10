@@ -440,7 +440,7 @@ func Convert(to, from Node) (conv Conversion, err error) {
 		// Determine sourceIndex: use the source column index (which may be a
 		// sibling's index if the column is missing but has a sibling).
 		// For missing columns without siblings, sourceColumn.columnIndex will
-		// be -1 (from the initial lookup returning an empty leafColumn).
+		// be math.MaxUint16 (from the initial lookup returning an empty leafColumn).
 		sourceIndex := int(sourceColumn.columnIndex)
 		// Only set to -1 if truly missing AND no sibling was found
 		if isMissingColumn && sourceColumn.node == nil {

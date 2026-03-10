@@ -150,3 +150,31 @@ func TestZeroValue(t *testing.T) {
 		t.Errorf("byte array not zero value: got=%#v", v.ByteArray())
 	}
 }
+
+func TestValueColumnIndexUint16Range(t *testing.T) {
+	tests := []struct {
+		name        string
+		columnIndex int
+	}{
+		{"zero", 0},
+		{"below old int16 max", 32766},
+		{"at old int16 max", 32767},
+		{"above old int16 max", 32768},
+		{"near uint16 max", parquet.MaxColumnIndex},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := parquet.Int32Value(42).Level(0, 0, tt.columnIndex)
+			if got := v.Column(); got != tt.columnIndex {
+				t.Errorf("Column() = %d, want %d", got, tt.columnIndex)
+			}
+		})
+	}
+
+	// Verify zero-value has Column() == -1 (no column assigned)
+	var zero parquet.Value
+	if got := zero.Column(); got != -1 {
+		t.Errorf("zero Value.Column() = %d, want -1", got)
+	}
+}
