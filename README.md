@@ -84,6 +84,58 @@ For the full reference of supported tags, type constraints, and examples, see
 the [`SchemaOf`](https://pkg.go.dev/github.com/parquet-go/parquet-go#SchemaOf)
 documentation.
 
+### Variant Types
+
+The library supports the [Parquet VARIANT logical type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#variant)
+for storing semi-structured data (JSON-like values) in a columnar format.
+
+Since there is no `variant` struct tag, schemas with variant columns must be
+built programmatically using `parquet.Variant()` (unshredded) or
+`parquet.ShreddedVariant()` (shredded), and passed explicitly to writers and
+readers.
+
+An unshredded variant is a group with two byte array fields: `metadata`
+(describes the type/structure) and `value` (the encoded data). A Go struct
+whose fields match this layout can be used for reading and writing:
+
+```go
+type VariantData struct {
+    Metadata []byte `parquet:"metadata"`
+    Value    []byte `parquet:"value"`
+}
+
+type Event struct {
+    ID   int64       `parquet:"id"`
+    Data VariantData `parquet:"data"`
+}
+
+schema := parquet.NewSchema("Event", parquet.Group{
+    "id":   parquet.Int(64),
+    "data": parquet.Variant(),
+})
+
+writer := parquet.NewGenericWriter[Event](output, schema)
+// ... write events ...
+writer.Close()
+
+reader := parquet.NewGenericReader[Event](bytes.NewReader(buf.Bytes()), schema)
+// ... read events ...
+reader.Close()
+```
+
+For shredded variants (which store typed columns alongside the raw value for
+faster queries), use `parquet.ShreddedVariant()`:
+
+```go
+shreddedType, err := parquet.ShreddedVariant(parquet.String())
+schema := parquet.NewSchema("Record", parquet.Group{
+    "data": shreddedType,
+})
+```
+
+For more examples, see the `ExampleVariant` and `ExampleShreddedVariant`
+functions in `example_variant_test.go`.
+
 ### Writing Parquet Files: [parquet.GenericWriter[T]](https://pkg.go.dev/github.com/parquet-go/parquet-go#GenericWriter)
 
 A parquet file is a collection of rows sharing the same schema, arranged in
