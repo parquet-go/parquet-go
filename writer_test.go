@@ -1824,7 +1824,7 @@ func TestDeferredBloomFilter(t *testing.T) {
 		parquet.DeferredBloomFilters(true),
 		parquet.MaxRowsPerRowGroup(5), // Ensure we have multiple groups.
 	)
-	for i := range 50 {
+	for i := range 20 {
 		err := w.Write(&testStruct{A: i})
 		if err != nil {
 			t.Fatal(err)
@@ -1839,6 +1839,7 @@ func TestDeferredBloomFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Validate file structure.
 	bloomFiltersStart, dataPagesEnd := int64(math.MaxInt64), int64(math.MinInt64)
 	for _, rg := range f.Metadata().RowGroups {
 		bloomFilterOffset := rg.Columns[0].MetaData.BloomFilterOffset
@@ -1849,6 +1850,15 @@ func TestDeferredBloomFilter(t *testing.T) {
 	}
 	if bloomFiltersStart != dataPagesEnd {
 		t.Fatalf("expected bloom filters to be written after data pages: %d != %d", bloomFiltersStart, dataPagesEnd)
+	}
+
+	// Validate bloom filter contents.
+	ok, err := f.RowGroups()[0].ColumnChunks()[0].BloomFilter().Check(parquet.ValueOf(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Error("bloom filter should have contained '3'")
 	}
 }
 
