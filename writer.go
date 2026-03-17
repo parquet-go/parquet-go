@@ -1158,6 +1158,9 @@ func (w *writer) writeDeferredBloomFilters() error {
 		c.MetaData.BloomFilterLength = int32(bloomFilterLength)
 		bf.reset()
 	}
+	// Clear here to ensure a re-used closed writer doesn't double return buffers.
+	w.deferredBloomFilters = w.deferredBloomFilters[:0]
+	w.deferredBloomFilterSize = 0
 	return nil
 }
 
