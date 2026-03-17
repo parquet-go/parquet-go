@@ -596,7 +596,7 @@ func (w *Writer) Size() int64 {
 	if w.writer == nil {
 		return 0
 	}
-	return w.writer.writer.offset + w.writer.currentRowGroup.Size()
+	return w.writer.writer.offset + w.writer.currentRowGroup.Size() + w.writer.deferredBloomFilterSize
 }
 
 // SetKeyValueMetadata sets a key/value pair in the Parquet file metadata.
@@ -979,8 +979,18 @@ type writer struct {
 	offsetIndexes  [][]format.OffsetIndex
 	sortingColumns []format.SortingColumn
 
+	deferredBloomFilters    []deferredBloomFilter
+	deferredBloomFilterSize int64
+
 	fileMetaData format.FileMetaData
 	footer       [8]byte
+}
+
+type deferredBloomFilter struct {
+	rowGroup int
+	column   int
+	buf      io.ReadWriteSeeker
+	reset    func()
 }
 
 func newWriter(output io.Writer, config *WriterConfig) *writer {
@@ -1067,6 +1077,11 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 }
 
 func (w *writer) reset(writer io.Writer) {
+	for _, bf := range w.deferredBloomFilters {
+		bf.reset()
+	}
+	w.deferredBloomFilters = w.deferredBloomFilters[:0]
+	w.deferredBloomFilterSize = 0
 	if w.buffer == nil {
 		w.writer.Reset(writer)
 	} else {
@@ -1102,6 +1117,9 @@ func (w *writer) close() error {
 	if err := w.flush(); err != nil {
 		return err
 	}
+	if err := w.writeDeferredBloomFilters(); err != nil {
+		return err
+	}
 	if err := w.writeFileFooter(); err != nil {
 		return err
 	}
@@ -1123,6 +1141,22 @@ func (w *writer) writeFileHeader() error {
 	if w.writer.offset == 0 {
 		_, err := w.writer.WriteString("PAR1")
 		return err
+	}
+	return nil
+}
+
+func (w *writer) writeDeferredBloomFilters() error {
+	for _, bf := range w.deferredBloomFilters {
+		c := &w.rowGroups[bf.rowGroup].Columns[bf.column]
+		bloomFilterOffset := w.writer.offset
+		c.MetaData.BloomFilterOffset = bloomFilterOffset
+		if _, err := w.writer.ReadFrom(bf.buf); err != nil {
+			bf.reset()
+			return err
+		}
+		bloomFilterLength := w.writer.offset - bloomFilterOffset
+		c.MetaData.BloomFilterLength = int32(bloomFilterLength)
+		bf.reset()
 	}
 	return nil
 }
@@ -1275,16 +1309,45 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		}
 	}
 
-	for _, c := range rg.columns {
-		if len(c.filter) > 0 {
-			bloomFilterOffset := w.writer.offset
-			c.columnChunk.MetaData.BloomFilterOffset = bloomFilterOffset
-			if err := c.writeBloomFilter(&w.writer); err != nil {
+	for i, c := range rg.columns {
+		if len(c.filter) == 0 {
+			continue
+		}
+
+		if rg.config.DeferredBloomFilters {
+			buf := rg.config.DeferredBloomFiltersBuffer.GetBuffer()
+			reset := func() { rg.config.DeferredBloomFiltersBuffer.PutBuffer(buf) }
+
+			if err := c.writeBloomFilter(buf); err != nil {
+				reset()
 				return 0, err
 			}
-			bloomFilterLength := w.writer.offset - bloomFilterOffset
-			c.columnChunk.MetaData.BloomFilterLength = int32(bloomFilterLength)
+			size, err := buf.Seek(0, io.SeekCurrent)
+			if err != nil {
+				reset()
+				return 0, err
+			}
+			if _, err := buf.Seek(0, io.SeekStart); err != nil {
+				reset()
+				return 0, err
+			}
+			w.deferredBloomFilterSize += size
+			w.deferredBloomFilters = append(w.deferredBloomFilters, deferredBloomFilter{
+				rowGroup: rowGroupIndex,
+				column:   i,
+				buf:      buf,
+				reset:    reset,
+			})
+			continue
 		}
+
+		bloomFilterOffset := w.writer.offset
+		c.columnChunk.MetaData.BloomFilterOffset = bloomFilterOffset
+		if err := c.writeBloomFilter(&w.writer); err != nil {
+			return 0, err
+		}
+		bloomFilterLength := w.writer.offset - bloomFilterOffset
+		c.columnChunk.MetaData.BloomFilterLength = int32(bloomFilterLength)
 	}
 
 	totalByteSize := int64(0)

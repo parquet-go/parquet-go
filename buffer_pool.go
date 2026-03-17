@@ -113,8 +113,9 @@ func (buf *errorBuffer) WriteTo(io.Writer) (int64, error)  { return 0, buf.err }
 func (buf *errorBuffer) Seek(int64, int) (int64, error)    { return 0, buf.err }
 
 var (
-	defaultColumnBufferPool  = memoryBufferPool{size: defaultChunkSize}
-	defaultSortingBufferPool = memoryBufferPool{size: defaultChunkSize}
+	defaultColumnBufferPool         = memoryBufferPool{size: defaultChunkSize}
+	defaultSortingBufferPool        = memoryBufferPool{size: defaultChunkSize}
+	defaultDeferredBloomFiltersPool = memoryBufferPool{size: defaultChunkSize}
 
 	_ io.ReaderFrom = (*errorBuffer)(nil)
 	_ io.WriterTo   = (*errorBuffer)(nil)
