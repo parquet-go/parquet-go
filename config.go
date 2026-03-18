@@ -693,16 +693,16 @@ func BloomFilters(filters ...BloomFilterColumn) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.BloomFilters = filters })
 }
 
-// DeferBloomFiltersWithBuffer creates a configuration option which delays the writing
-// of Bloom filters until the end of the file. This can be beneficial for files
-// read from remote storage, as an optimistic read can capture the file footer
-// along with the bloom filters.
+// DeferBloomFiltersWithBuffer creates a configuration option which delays the
+// writing of bloom filters until the end of the file. This can be beneficial for
+// files read from remote storage, as an optimistic read can capture the file
+// footer along with the bloom filters.
 //
 // When this option is enabled, the accumulated bloom filters need to be retained
 // until the file is closed; it is therefore required to provide a buffer when
 // using this option.
 //
-// Defaults to false; bloom filters are written immediately after each row group.
+// Defaults to nil; bloom filters are written immediately after each row group.
 func DeferBloomFiltersWithBuffer(buffer BufferPool) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.DeferredBloomFiltersBuffer = buffer })
 }
