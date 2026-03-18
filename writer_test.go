@@ -1821,7 +1821,7 @@ func TestDeferredBloomFilter(t *testing.T) {
 		b,
 		schema,
 		parquet.BloomFilters(parquet.SplitBlockFilter(10, "a")),
-		parquet.DeferredBloomFilters(true),
+		parquet.DeferBloomFiltersWithBuffer(parquet.NewBufferPool()),
 		parquet.MaxRowsPerRowGroup(5), // Ensure we have multiple groups.
 	)
 	for i := range 20 {

@@ -34,7 +34,6 @@ const (
 	DefaultSkipBloomFilters     = false
 	DefaultMaxRowsPerRowGroup   = math.MaxInt64
 	DefaultReadMode             = ReadModeSync
-	DefaultDeferredBloomFilter  = false
 )
 
 const (
@@ -226,7 +225,6 @@ type WriterConfig struct {
 	KeyValueMetadata             map[string]string
 	Schema                       *Schema
 	BloomFilters                 []BloomFilterColumn
-	DeferredBloomFilters         bool
 	DeferredBloomFiltersBuffer   BufferPool
 	Compression                  compress.Codec
 	Sorting                      SortingConfig
@@ -253,8 +251,6 @@ func DefaultWriterConfig() *WriterConfig {
 		Sorting: SortingConfig{
 			SortingBuffers: &defaultSortingBufferPool,
 		},
-		DeferredBloomFilters:       DefaultDeferredBloomFilter,
-		DeferredBloomFiltersBuffer: &defaultDeferredBloomFiltersPool,
 	}
 }
 
@@ -307,7 +303,6 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		KeyValueMetadata:             keyValueMetadata,
 		Schema:                       coalesceSchema(c.Schema, config.Schema),
 		BloomFilters:                 coalesceSlices(c.BloomFilters, config.BloomFilters),
-		DeferredBloomFilters:         coalesceBool(c.DeferredBloomFilters, config.DeferredBloomFilters),
 		DeferredBloomFiltersBuffer:   coalesceBufferPool(c.DeferredBloomFiltersBuffer, config.DeferredBloomFiltersBuffer),
 		Compression:                  coalesceCompression(c.Compression, config.Compression),
 		Sorting:                      coalesceSortingConfig(c.Sorting, config.Sorting),
@@ -698,24 +693,17 @@ func BloomFilters(filters ...BloomFilterColumn) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.BloomFilters = filters })
 }
 
-// DeferredBloomFilters creates a configuration option which delays the writing
+// DeferBloomFiltersWithBuffer creates a configuration option which delays the writing
 // of Bloom filters until the end of the file. This can be beneficial for files
 // read from remote storage, as an optimistic read can capture the file footer
 // along with the bloom filters.
 //
 // When this option is enabled, the accumulated bloom filters need to be retained
-// until the file is closed, see DeferredBloomFiltersBuffer for memory management
-// options.
-func DeferredBloomFilters(deferBlooms bool) WriterOption {
-	return writerOption(func(config *WriterConfig) { config.DeferredBloomFilters = deferBlooms })
-}
-
-// DeferredBloomFiltersBuffer creates a configuration option to customize the
-// buffer pool used when retaining deferred bloom filters during file creation. This can be used to
-// provide on-disk buffers as swap space to manage memory usage during file creation.
+// until the file is closed; it is therefore required to provide a buffer when
+// using this option.
 //
-// Defaults to using in-memory buffers.
-func DeferredBloomFiltersBuffer(buffer BufferPool) WriterOption {
+// Defaults to false; bloom filters are written immediately after each row group.
+func DeferBloomFiltersWithBuffer(buffer BufferPool) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.DeferredBloomFiltersBuffer = buffer })
 }
 
