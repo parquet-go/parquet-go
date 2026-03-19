@@ -225,6 +225,7 @@ type WriterConfig struct {
 	KeyValueMetadata             map[string]string
 	Schema                       *Schema
 	BloomFilters                 []BloomFilterColumn
+	DeferredBloomFiltersBuffers  BufferPool
 	Compression                  compress.Codec
 	Sorting                      SortingConfig
 	SkipPageBounds               [][]string
@@ -302,6 +303,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		KeyValueMetadata:             keyValueMetadata,
 		Schema:                       coalesceSchema(c.Schema, config.Schema),
 		BloomFilters:                 coalesceSlices(c.BloomFilters, config.BloomFilters),
+		DeferredBloomFiltersBuffers:  coalesceBufferPool(c.DeferredBloomFiltersBuffers, config.DeferredBloomFiltersBuffers),
 		Compression:                  coalesceCompression(c.Compression, config.Compression),
 		Sorting:                      coalesceSortingConfig(c.Sorting, config.Sorting),
 		SkipPageBounds:               coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
@@ -689,6 +691,20 @@ func KeyValueMetadata(key, value string) WriterOption {
 func BloomFilters(filters ...BloomFilterColumn) WriterOption {
 	filters = slices.Clone(filters)
 	return writerOption(func(config *WriterConfig) { config.BloomFilters = filters })
+}
+
+// DeferBloomFiltersWithBuffers creates a configuration option which delays the
+// writing of bloom filters until the end of the file. This can be beneficial for
+// files read from remote storage with a custom reader, as an optimistic read can
+// capture the file footer along with the bloom filters in a single request.
+//
+// When this option is enabled, the accumulated bloom filters need to be retained
+// until the file is closed; it is therefore required to provide a buffer when
+// using this option.
+//
+// Defaults to nil; bloom filters are written immediately after each row group.
+func DeferBloomFiltersWithBuffers(buffer BufferPool) WriterOption {
+	return writerOption(func(config *WriterConfig) { config.DeferredBloomFiltersBuffers = buffer })
 }
 
 // Compression creates a configuration option which sets the default compression
