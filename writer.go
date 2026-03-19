@@ -1317,9 +1317,9 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 			continue
 		}
 
-		if rg.config.DeferredBloomFiltersBuffer != nil {
-			buf := rg.config.DeferredBloomFiltersBuffer.GetBuffer()
-			reset := func() { rg.config.DeferredBloomFiltersBuffer.PutBuffer(buf) }
+		if rg.config.DeferredBloomFiltersBuffers != nil {
+			buf := rg.config.DeferredBloomFiltersBuffers.GetBuffer()
+			reset := func() { rg.config.DeferredBloomFiltersBuffers.PutBuffer(buf) }
 
 			if err := c.writeBloomFilter(buf); err != nil {
 				reset()

@@ -225,7 +225,7 @@ type WriterConfig struct {
 	KeyValueMetadata             map[string]string
 	Schema                       *Schema
 	BloomFilters                 []BloomFilterColumn
-	DeferredBloomFiltersBuffer   BufferPool
+	DeferredBloomFiltersBuffers  BufferPool
 	Compression                  compress.Codec
 	Sorting                      SortingConfig
 	SkipPageBounds               [][]string
@@ -303,7 +303,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		KeyValueMetadata:             keyValueMetadata,
 		Schema:                       coalesceSchema(c.Schema, config.Schema),
 		BloomFilters:                 coalesceSlices(c.BloomFilters, config.BloomFilters),
-		DeferredBloomFiltersBuffer:   coalesceBufferPool(c.DeferredBloomFiltersBuffer, config.DeferredBloomFiltersBuffer),
+		DeferredBloomFiltersBuffers:  coalesceBufferPool(c.DeferredBloomFiltersBuffers, config.DeferredBloomFiltersBuffers),
 		Compression:                  coalesceCompression(c.Compression, config.Compression),
 		Sorting:                      coalesceSortingConfig(c.Sorting, config.Sorting),
 		SkipPageBounds:               coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
@@ -693,7 +693,7 @@ func BloomFilters(filters ...BloomFilterColumn) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.BloomFilters = filters })
 }
 
-// DeferBloomFiltersWithBuffer creates a configuration option which delays the
+// DeferBloomFiltersWithBuffers creates a configuration option which delays the
 // writing of bloom filters until the end of the file. This can be beneficial for
 // files read from remote storage, as an optimistic read can capture the file
 // footer along with the bloom filters.
@@ -703,8 +703,8 @@ func BloomFilters(filters ...BloomFilterColumn) WriterOption {
 // using this option.
 //
 // Defaults to nil; bloom filters are written immediately after each row group.
-func DeferBloomFiltersWithBuffer(buffer BufferPool) WriterOption {
-	return writerOption(func(config *WriterConfig) { config.DeferredBloomFiltersBuffer = buffer })
+func DeferBloomFiltersWithBuffers(buffer BufferPool) WriterOption {
+	return writerOption(func(config *WriterConfig) { config.DeferredBloomFiltersBuffers = buffer })
 }
 
 // Compression creates a configuration option which sets the default compression
