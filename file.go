@@ -141,7 +141,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	f.rowGroups = makeRowGroups(rowGroups)
 
 	if !c.SkipBloomFilters {
-		section := io.NewSectionReader(r, 0, size)
+		section := io.NewSectionReader(f.reader, 0, size)
 		rbuf, rbufpool := getBufioReader(section, c.ReadBufferSize)
 		defer putBufioReader(rbuf, rbufpool)
 
