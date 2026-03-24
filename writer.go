@@ -1146,21 +1146,24 @@ func (w *writer) writeFileHeader() error {
 }
 
 func (w *writer) writeDeferredBloomFilters() error {
+	defer func() {
+		// Reset here to ensure a re-used closed writer doesn't double return buffers.
+		for _, bf := range w.deferredBloomFilters {
+			bf.reset()
+		}
+		w.deferredBloomFilters = w.deferredBloomFilters[:0]
+		w.deferredBloomFilterSize = 0
+	}()
 	for _, bf := range w.deferredBloomFilters {
 		c := &w.rowGroups[bf.rowGroup].Columns[bf.column]
 		bloomFilterOffset := w.writer.offset
 		c.MetaData.BloomFilterOffset = bloomFilterOffset
 		if _, err := w.writer.ReadFrom(bf.buf); err != nil {
-			bf.reset()
 			return err
 		}
 		bloomFilterLength := w.writer.offset - bloomFilterOffset
 		c.MetaData.BloomFilterLength = int32(bloomFilterLength)
-		bf.reset()
 	}
-	// Clear here to ensure a re-used closed writer doesn't double return buffers.
-	w.deferredBloomFilters = w.deferredBloomFilters[:0]
-	w.deferredBloomFilterSize = 0
 	return nil
 }
 
