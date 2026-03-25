@@ -1035,6 +1035,15 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 		}
 	} else {
 		pages := index.index.PageLocations
+		if len(pages) == 0 {
+			// A 0-row row group may still carry an OffsetIndex with no
+			// page locations. Seeking to row 0 is valid in this case;
+			// the subsequent ReadPage will return io.EOF.
+			if rowIndex == 0 {
+				return nil
+			}
+			return ErrSeekOutOfRange
+		}
 		target := sort.Search(len(pages), func(i int) bool {
 			return pages[i].FirstRowIndex > rowIndex
 		}) - 1
