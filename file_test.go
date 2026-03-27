@@ -321,6 +321,54 @@ func TestOpenFileOptimisticRead(t *testing.T) {
 	}
 }
 
+func TestOpenFileOptimisticReadWithLazyBloomLoading(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "data_index_bloom_encoding_stats.parquet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	s, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		OptimisticRead       bool
+		LazyLoadBloomFilters bool
+		ExpectedReads        int64
+	}{
+		{false, true, 6},
+		{true, true, 2},
+		{true, false, 1},
+	} {
+		r := &measuredReaderAt{reader: f}
+		pf, err := parquet.OpenFile(r, s.Size(),
+			parquet.OptimisticRead(tt.OptimisticRead),
+			parquet.SkipMagicBytes(true),
+			parquet.ReadBufferSize(int(s.Size())),
+			parquet.LazyLoadBloomFilters(tt.LazyLoadBloomFilters),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, rg := range pf.RowGroups() {
+			for _, cc := range rg.ColumnChunks() {
+				if bf := cc.BloomFilter(); bf != nil {
+					_, err := bf.Check(parquet.NullValue())
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+
+		if reads := r.reads.Load(); reads != tt.ExpectedReads {
+			t.Errorf("expected %d read, got %d", tt.ExpectedReads, reads)
+		}
+	}
+}
+
 func TestIssue229(t *testing.T) {
 	// https://github.com/grafana/tempo/blob/5cae77c9cf8da51e0db7c5556b19d305130ea9c4/tempodb/encoding/vparquet2/schema.go
 	type Attribute struct {
