@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"math/rand"
 	"os"
@@ -1805,6 +1806,59 @@ func TestBloomFilterForDict(t *testing.T) {
 	}
 	if !ok {
 		t.Error("bloom filter should have contained 'test'")
+	}
+}
+
+func TestDeferredBloomFilter(t *testing.T) {
+	type testStruct struct {
+		A int `parquet:"a"`
+	}
+
+	schema := parquet.SchemaOf(&testStruct{})
+
+	b := bytes.NewBuffer(nil)
+	w := parquet.NewWriter(
+		b,
+		schema,
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "a")),
+		parquet.DeferBloomFiltersWithBuffers(parquet.NewBufferPool()),
+		parquet.MaxRowsPerRowGroup(5), // Ensure we have multiple groups.
+	)
+	for i := range 20 {
+		err := w.Write(&testStruct{A: i})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := parquet.OpenFile(bytes.NewReader(b.Bytes()), int64(b.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Validate file structure.
+	bloomFiltersStart, dataPagesEnd := int64(math.MaxInt64), int64(math.MinInt64)
+	for _, rg := range f.Metadata().RowGroups {
+		bloomFilterOffset := rg.Columns[0].MetaData.BloomFilterOffset
+		bloomFiltersStart = min(bloomFiltersStart, bloomFilterOffset)
+
+		dataPageOffset := rg.Columns[0].MetaData.DataPageOffset + rg.Columns[0].MetaData.TotalCompressedSize
+		dataPagesEnd = max(dataPagesEnd, dataPageOffset)
+	}
+	if bloomFiltersStart != dataPagesEnd {
+		t.Fatalf("expected bloom filters to be written after data pages: %d != %d", bloomFiltersStart, dataPagesEnd)
+	}
+
+	// Validate bloom filter contents.
+	ok, err := f.RowGroups()[0].ColumnChunks()[0].BloomFilter().Check(parquet.ValueOf(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Error("bloom filter should have contained '3'")
 	}
 }
 
