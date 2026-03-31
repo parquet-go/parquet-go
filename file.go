@@ -174,16 +174,15 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 						cast.SetBloomFilterSection(bloomFilterOffset, bloomFilterLength)
 					}
 
-					if c.LazyLoadBloomFilters {
-						cc.bloomFilter.Store(newBloomFilter(f, offset, &header))
-					} else {
-						// Eagerly load bloom filter into memory
+					if c.PrefetchBloomFilters {
 						bloomData := make([]byte, header.NumBytes)
 						if _, err := io.ReadFull(rbuf, bloomData); err != nil {
 							return nil, fmt.Errorf("reading bloom filter data: %w", err)
 						}
-						// Create bloom filter using in-memory data
+						// Create bloom filter using in-memory data.
 						cc.bloomFilter.Store(newBloomFilter(bytes.NewReader(bloomData), 0, &header))
+					} else {
+						cc.bloomFilter.Store(newBloomFilter(f, offset, &header))
 					}
 				}
 			}

@@ -321,7 +321,7 @@ func TestOpenFileOptimisticRead(t *testing.T) {
 	}
 }
 
-func TestOpenFileOptimisticReadWithLazyBloomLoading(t *testing.T) {
+func TestOpenFileOptimisticReadWithPrefetchBloomFilters(t *testing.T) {
 	f, err := os.Open(filepath.Join("testdata", "data_index_bloom_encoding_stats.parquet"))
 	if err != nil {
 		t.Fatal(err)
@@ -334,19 +334,19 @@ func TestOpenFileOptimisticReadWithLazyBloomLoading(t *testing.T) {
 
 	for _, tt := range []struct {
 		OptimisticRead       bool
-		LazyLoadBloomFilters bool
+		PrefetchBloomFilters bool
 		ExpectedReads        int64
 	}{
-		{false, true, 6},
-		{true, true, 2},
-		{true, false, 1},
+		{false, false, 6},
+		{true, false, 2},
+		{true, true, 1},
 	} {
 		r := &measuredReaderAt{reader: f}
 		pf, err := parquet.OpenFile(r, s.Size(),
 			parquet.OptimisticRead(tt.OptimisticRead),
 			parquet.SkipMagicBytes(true),
 			parquet.ReadBufferSize(int(s.Size())),
-			parquet.LazyLoadBloomFilters(tt.LazyLoadBloomFilters),
+			parquet.PrefetchBloomFilters(tt.PrefetchBloomFilters),
 		)
 		if err != nil {
 			t.Fatal(err)

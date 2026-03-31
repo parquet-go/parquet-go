@@ -32,7 +32,7 @@ const (
 	DefaultSkipMagicBytes       = false
 	DefaultSkipPageIndex        = false
 	DefaultSkipBloomFilters     = false
-	DefaultLazyLoadBloomFilters = true
+	DefaultPrefetchBloomFilters = false
 	DefaultMaxRowsPerRowGroup   = math.MaxInt64
 	DefaultReadMode             = ReadModeSync
 )
@@ -99,7 +99,7 @@ type FileConfig struct {
 	SkipMagicBytes       bool
 	SkipPageIndex        bool
 	SkipBloomFilters     bool
-	LazyLoadBloomFilters bool
+	PrefetchBloomFilters bool
 	OptimisticRead       bool
 	ReadBufferSize       int
 	ReadMode             ReadMode
@@ -113,7 +113,7 @@ func DefaultFileConfig() *FileConfig {
 		SkipMagicBytes:       DefaultSkipMagicBytes,
 		SkipPageIndex:        DefaultSkipPageIndex,
 		SkipBloomFilters:     DefaultSkipBloomFilters,
-		LazyLoadBloomFilters: DefaultLazyLoadBloomFilters,
+		PrefetchBloomFilters: DefaultPrefetchBloomFilters,
 		ReadBufferSize:       defaultReadBufferSize,
 		ReadMode:             DefaultReadMode,
 		Schema:               nil,
@@ -144,7 +144,7 @@ func (c *FileConfig) ConfigureFile(config *FileConfig) {
 		SkipMagicBytes:       c.SkipMagicBytes,
 		SkipPageIndex:        c.SkipPageIndex,
 		SkipBloomFilters:     c.SkipBloomFilters,
-		LazyLoadBloomFilters: c.LazyLoadBloomFilters,
+		PrefetchBloomFilters: c.PrefetchBloomFilters,
 		ReadBufferSize:       coalesceInt(c.ReadBufferSize, config.ReadBufferSize),
 		ReadMode:             ReadMode(coalesceInt(int(c.ReadMode), int(config.ReadMode))),
 		Schema:               coalesceSchema(c.Schema, config.Schema),
@@ -506,15 +506,15 @@ func SkipBloomFilters(skip bool) FileOption {
 	return fileOption(func(config *FileConfig) { config.SkipBloomFilters = skip })
 }
 
-// LazyLoadBloomFilters is a file configuration option that controls whether the
+// PrefetchBloomFilters is a file configuration option that controls whether the
 // bloom filter contents are loaded into memory when a file is opened. By
 // default, only the headers are parsed, requiring further reads to the file to
-// probe the filter. Disabling this option when using OptimisticRead can be
-// useful when reading from remote storage, reducing network round trips.
+// probe the filter. Using this option with OptimisticRead can be useful when
+// reading from remote storage, reducing network round trips.
 //
-// Defaults to true.
-func LazyLoadBloomFilters(lazyLoad bool) FileOption {
-	return fileOption(func(config *FileConfig) { config.LazyLoadBloomFilters = lazyLoad })
+// Defaults to false.
+func PrefetchBloomFilters(prefetch bool) FileOption {
+	return fileOption(func(config *FileConfig) { config.PrefetchBloomFilters = prefetch })
 }
 
 // OptimisticRead configures a file to optimistically perform larger buffered
