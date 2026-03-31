@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -141,7 +142,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	f.rowGroups = makeRowGroups(rowGroups)
 
 	if !c.SkipBloomFilters {
-		section := io.NewSectionReader(r, 0, size)
+		section := io.NewSectionReader(f.reader, 0, size)
 		rbuf, rbufpool := getBufioReader(section, c.ReadBufferSize)
 		defer putBufioReader(rbuf, rbufpool)
 
@@ -153,9 +154,9 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 			g := &rowGroups[i]
 
 			for j := range g.columns {
-				c := g.columns[j].(*FileColumnChunk)
+				cc := g.columns[j].(*FileColumnChunk)
 
-				if offset := c.chunk.MetaData.BloomFilterOffset; offset > 0 {
+				if offset := cc.chunk.MetaData.BloomFilterOffset; offset > 0 {
 					section.Seek(offset, io.SeekStart)
 					rbuf.Reset(section)
 
@@ -168,12 +169,21 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 					offset -= int64(rbuf.Buffered())
 
 					if cast, ok := r.(interface{ SetBloomFilterSection(offset, length int64) }); ok {
-						bloomFilterOffset := c.chunk.MetaData.BloomFilterOffset
+						bloomFilterOffset := cc.chunk.MetaData.BloomFilterOffset
 						bloomFilterLength := (offset - bloomFilterOffset) + int64(header.NumBytes)
 						cast.SetBloomFilterSection(bloomFilterOffset, bloomFilterLength)
 					}
 
-					c.bloomFilter.Store(newBloomFilter(r, offset, &header))
+					if c.PrefetchBloomFilters {
+						bloomData := make([]byte, header.NumBytes)
+						if _, err := io.ReadFull(rbuf, bloomData); err != nil {
+							return nil, fmt.Errorf("reading bloom filter data: %w", err)
+						}
+						// Create bloom filter using in-memory data.
+						cc.bloomFilter.Store(newBloomFilter(bytes.NewReader(bloomData), 0, &header))
+					} else {
+						cc.bloomFilter.Store(newBloomFilter(f, offset, &header))
+					}
 				}
 			}
 		}
