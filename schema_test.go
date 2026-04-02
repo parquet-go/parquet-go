@@ -374,6 +374,16 @@ func TestSchemaOf(t *testing.T) {
 }`,
 		},
 
+		// Test that explicit parquet tag name takes precedence over protobuf tag name when go field name matches parquet name
+		{
+			value: new(struct {
+				MyKey int64 `protobuf:"varint,1,opt,name=my_key,proto3" parquet:"MyKey"` // Index into string table
+			}),
+			print: `message {
+	required int64 MyKey (INT(64,true));
+}`,
+		},
+
 		// Test protobuf tags with nested structs
 		{
 			value: new(struct {
