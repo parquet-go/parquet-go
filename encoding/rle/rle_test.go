@@ -68,3 +68,28 @@ func benchmarkEncodeInt32IndexEqual8Contiguous(b *testing.B, f func([][8]int32) 
 	}
 	b.SetBytes(32 * int64(len(words)))
 }
+
+func TestDecodeInt32LargeRun(t *testing.T) {
+	enc := &Encoding{BitWidth: 1}
+	count := 16_777_217 // one more than old maxSupportedValueCount
+	src := make([]int32, count)
+	for i := range src {
+		src[i] = 1
+	}
+	encoded, err := enc.EncodeInt32(nil, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := enc.DecodeInt32(make([]int32, count), encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != count {
+		t.Fatalf("expected %d values, got %d", count, len(decoded))
+	}
+	for i, v := range decoded {
+		if v != 1 {
+			t.Fatalf("value at index %d: expected 1, got %d", i, v)
+		}
+	}
+}
