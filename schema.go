@@ -1039,7 +1039,11 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 				}
 
 			case "split":
-				switch t.Kind() {
+				kind := t.Kind()
+				if kind == reflect.Ptr {
+					kind = t.Elem().Kind()
+				}
+				switch kind {
 				case reflect.Float32, reflect.Float64:
 					setEncoding(&ByteStreamSplit)
 				default:
