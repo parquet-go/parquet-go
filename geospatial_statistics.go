@@ -13,14 +13,16 @@ import (
 // geospatialBBoxAccumulator accumulates a bounding box across all non-null WKB
 // values written to a GEOMETRY or GEOGRAPHY column within one row group.
 type geospatialBBoxAccumulator struct {
-	hasValues   bool
-	xMin, xMax  float64
-	yMin, yMax  float64
-	hasZ        bool
-	zMin, zMax  float64
-	hasM        bool
-	mMin, mMax  float64
-	geomTypeSet map[int32]struct{}
+	hasValues    bool // true once a non-empty geometry extends the bbox
+	hasGeomTypes bool // true once any non-null geometry (including empty) is seen
+	parseError   bool // true if any WKB value failed to parse; suppresses stats output
+	xMin, xMax   float64
+	yMin, yMax   float64
+	hasZ         bool
+	zMin, zMax   float64
+	hasM         bool
+	mMin, mMax   float64
+	geomTypeSet  map[int32]struct{}
 }
 
 func newGeospatialBBoxAccumulator() *geospatialBBoxAccumulator {
@@ -31,6 +33,8 @@ func newGeospatialBBoxAccumulator() *geospatialBBoxAccumulator {
 
 func (a *geospatialBBoxAccumulator) reset() {
 	a.hasValues = false
+	a.hasGeomTypes = false
+	a.parseError = false
 	a.xMin, a.xMax = math.Inf(1), math.Inf(-1)
 	a.yMin, a.yMax = math.Inf(1), math.Inf(-1)
 	a.hasZ = false
@@ -44,6 +48,14 @@ func (a *geospatialBBoxAccumulator) updateFromGeom(g geom.T) {
 	if g == nil {
 		return
 	}
+
+	// Always record the type code: empty geometries are still non-null values
+	// with a defined WKB type and must appear in GeoSpatialTypes.
+	if code := wkbGeomTypeCode(g); code != 0 {
+		a.geomTypeSet[code] = struct{}{}
+		a.hasGeomTypes = true
+	}
+
 	bounds := g.Bounds()
 	if bounds == nil || bounds.IsEmpty() {
 		return
@@ -100,7 +112,6 @@ func (a *geospatialBBoxAccumulator) updateFromGeom(g geom.T) {
 	}
 
 	a.hasValues = true
-	a.geomTypeSet[wkbGeomTypeCode(g)] = struct{}{}
 }
 
 func (a *geospatialBBoxAccumulator) accumulatePage(page Page) {
@@ -114,7 +125,10 @@ func (a *geospatialBBoxAccumulator) accumulatePage(page Page) {
 			}
 			g, parseErr := wkb.Unmarshal(v.ByteArray())
 			if parseErr != nil {
-				continue
+				// A non-null value that cannot be parsed makes the stats
+				// unreliable for this chunk; suppress them entirely.
+				a.parseError = true
+				return
 			}
 			a.updateFromGeom(g)
 		}
@@ -125,23 +139,10 @@ func (a *geospatialBBoxAccumulator) accumulatePage(page Page) {
 }
 
 func (a *geospatialBBoxAccumulator) toGeospatialStatistics() format.GeospatialStatistics {
-	if !a.hasValues {
+	// Suppress stats entirely if a WKB parse error occurred: the accumulated
+	// data would describe only a subset of the column chunk values.
+	if a.parseError || !a.hasGeomTypes {
 		return format.GeospatialStatistics{}
-	}
-
-	bbox := format.BoundingBox{
-		XMin: a.xMin,
-		XMax: a.xMax,
-		YMin: a.yMin,
-		YMax: a.yMax,
-	}
-	if a.hasZ {
-		bbox.ZMin = ethrift.New(a.zMin)
-		bbox.ZMax = ethrift.New(a.zMax)
-	}
-	if a.hasM {
-		bbox.MMin = ethrift.New(a.mMin)
-		bbox.MMax = ethrift.New(a.mMax)
 	}
 
 	geomTypes := make([]int32, 0, len(a.geomTypeSet))
@@ -150,10 +151,30 @@ func (a *geospatialBBoxAccumulator) toGeospatialStatistics() format.GeospatialSt
 	}
 	slices.Sort(geomTypes)
 
-	return format.GeospatialStatistics{
-		BBox:            bbox,
+	stats := format.GeospatialStatistics{
 		GeoSpatialTypes: geomTypes,
 	}
+
+	// BBox is only meaningful when at least one non-empty geometry was seen.
+	if a.hasValues {
+		bbox := format.BoundingBox{
+			XMin: a.xMin,
+			XMax: a.xMax,
+			YMin: a.yMin,
+			YMax: a.yMax,
+		}
+		if a.hasZ {
+			bbox.ZMin = ethrift.New(a.zMin)
+			bbox.ZMax = ethrift.New(a.zMax)
+		}
+		if a.hasM {
+			bbox.MMin = ethrift.New(a.mMin)
+			bbox.MMax = ethrift.New(a.mMax)
+		}
+		stats.BBox = bbox
+	}
+
+	return stats
 }
 
 // wkbGeomTypeCode returns the OGC WKB geometry type code for g.
