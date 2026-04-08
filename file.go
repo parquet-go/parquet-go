@@ -457,19 +457,24 @@ func (f *File) decryptAllColumnMetadata() error {
 				var err error
 				key, err = f.decryption.Keys.ColumnKey(colKey.PathInSchema, colKey.KeyMetadata)
 				if err != nil {
-					return fmt.Errorf("resolving column key for column metadata: %w", err)
+					// Key not available for this column — leave MetaData blank.
+					// The caller may still read other columns whose keys are
+					// available; this column will be inaccessible if touched.
+					continue
 				}
 			default:
 				continue
 			}
-			aad := makeAAD(f.aadPrefix, f.fileUnique, columnMetaDataModule, int16(rgIdx), int16(colIdx))
+			// Use rg.Ordinal (not the slice index) to match the AAD used by
+			// the writer and the rest of the read path (pages, bloom filters).
+			aad := makeAAD(f.aadPrefix, f.fileUnique, columnMetaDataModule, rg.Ordinal, int16(colIdx))
 			plain, err := decryptModule(key, aad, chunk.EncryptedColumnMetadata)
 			if err != nil {
-				return fmt.Errorf("decrypting column metadata: rowGroup=%d col=%d: %w", rgIdx, colIdx, err)
+				return fmt.Errorf("decrypting column metadata: rowGroup=%d col=%d: %w", rg.Ordinal, colIdx, err)
 			}
 			compact := thrift.CompactProtocol{}
 			if err := thrift.Unmarshal(&compact, plain, &chunk.MetaData); err != nil {
-				return fmt.Errorf("decoding column metadata: rowGroup=%d col=%d: %w", rgIdx, colIdx, err)
+				return fmt.Errorf("decoding column metadata: rowGroup=%d col=%d: %w", rg.Ordinal, colIdx, err)
 			}
 		}
 	}
