@@ -755,6 +755,10 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 			dictionaryMaxBytes: config.DictionaryMaxBytes,
 		}
 
+		if lt := leaf.node.Type().LogicalType(); lt != nil && (lt.Geometry != nil || lt.Geography != nil) {
+			c.geospatialAccumulator = newGeospatialBBoxAccumulator()
+		}
+
 		if dictionary != nil {
 			c.header.dict.Type = format.DictionaryPage
 			c.header.dict.DictionaryPageHeader.Valid = true
@@ -1566,6 +1570,8 @@ type ColumnWriter struct {
 	definitionLevelHistogram      []int64
 	pageRepetitionLevelHistograms []int64
 	pageDefinitionLevelHistograms []int64
+
+	geospatialAccumulator *geospatialBBoxAccumulator
 }
 
 func (c *ColumnWriter) reset() {
@@ -1603,6 +1609,10 @@ func (c *ColumnWriter) reset() {
 	c.columnChunk.MetaData.DataPageOffset = 0
 	c.columnChunk.MetaData.DictionaryPageOffset = 0
 	c.columnChunk.MetaData.Statistics = format.Statistics{}
+	c.columnChunk.MetaData.GeospatialStatistics = format.GeospatialStatistics{}
+	if c.geospatialAccumulator != nil {
+		c.geospatialAccumulator.reset()
+	}
 	c.columnChunk.MetaData.EncodingStats = c.columnChunk.MetaData.EncodingStats[:0]
 	c.columnChunk.MetaData.BloomFilterOffset = 0
 	c.offsetIndex.PageLocations = c.offsetIndex.PageLocations[:0]
@@ -2149,6 +2159,11 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 					c.columnChunk.MetaData.Statistics.Min = c.columnChunk.MetaData.Statistics.MinValue
 				}
 			}
+		}
+
+		if c.geospatialAccumulator != nil {
+			c.geospatialAccumulator.accumulatePage(page)
+			c.columnChunk.MetaData.GeospatialStatistics = c.geospatialAccumulator.toGeospatialStatistics()
 		}
 
 		c.offsetIndex.PageLocations = append(c.offsetIndex.PageLocations, format.PageLocation{
