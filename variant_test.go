@@ -461,6 +461,192 @@ func TestVariantSchemaEvolution(t *testing.T) {
 	})
 }
 
+// TestVariantRawStructPassthrough verifies that a struct with Metadata and Value
+// []byte fields can be used to pass pre-encoded variant bytes through the write
+// and read pipeline without re-encoding. (Codex review P1 fix)
+func TestVariantRawStructPassthrough(t *testing.T) {
+	type VariantData struct {
+		Metadata []byte `parquet:"metadata"`
+		Value    []byte `parquet:"value"`
+	}
+	type Event struct {
+		ID   int64       `parquet:"id"`
+		Data VariantData `parquet:"data"`
+	}
+
+	schema := parquet.NewSchema("Event", parquet.Group{
+		"id":   parquet.Int(64),
+		"data": parquet.Variant(),
+	})
+
+	// Pre-encode variant metadata+value (variant null encoding)
+	meta := []byte{0x01, 0x00, 0x00}
+	val := []byte{0x00} // variant null
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Event](buf, schema)
+	_, err := writer.Write([]Event{
+		{ID: 1, Data: VariantData{Metadata: meta, Value: val}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := parquet.NewGenericReader[Event](bytes.NewReader(buf.Bytes()), schema)
+	defer reader.Close()
+
+	events := make([]Event, 1)
+	n, err := reader.Read(events)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("read %d events, want 1", n)
+	}
+
+	if !reflect.DeepEqual(events[0].Data.Metadata, meta) {
+		t.Errorf("metadata = %v, want %v", events[0].Data.Metadata, meta)
+	}
+	if !reflect.DeepEqual(events[0].Data.Value, val) {
+		t.Errorf("value = %v, want %v", events[0].Data.Value, val)
+	}
+}
+
+// TestShreddedVariantNestedObjectFallback verifies that nested objects in per-field
+// fallback values retain their metadata dictionary and can be decoded correctly.
+// (Codex review P2 fix — metadata for per-field shredded fallback values)
+func TestShreddedVariantNestedObjectFallback(t *testing.T) {
+	// Schema has typed_value for "name" (string) and "age" (int32).
+	// Writing a record where "name" has a nested object (not string) forces
+	// it to fall back to the value column.
+	shreddedNode, err := parquet.ShreddedVariant(parquet.Group{
+		"name": parquet.String(),
+		"age":  parquet.Leaf(parquet.Int32Type),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type Record struct {
+		ID   int32 `parquet:"id"`
+		Data any   `parquet:"data"`
+	}
+
+	schema := parquet.NewSchema("test", parquet.Group{
+		"id":   parquet.Leaf(parquet.Int32Type),
+		"data": shreddedNode,
+	})
+
+	// "name" field is a nested object instead of string — can't be shredded into
+	// the String typed_value column, so it falls back to per-field value column.
+	records := []Record{
+		{ID: 1, Data: map[string]any{
+			"name": map[string]any{"first": "Alice", "last": "Smith"},
+			"age":  int32(30),
+		}},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), schema)
+	defer reader.Close()
+
+	readRecords := make([]Record, 1)
+	n, err := reader.Read(readRecords)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("read %d records, want 1", n)
+	}
+
+	m, ok := readRecords[0].Data.(map[string]any)
+	if !ok {
+		t.Fatalf("Data = %v (%T), want map[string]any", readRecords[0].Data, readRecords[0].Data)
+	}
+
+	// age should be shredded and reconstructed as int32
+	if m["age"] != int32(30) {
+		t.Errorf("age = %v (%T), want int32(30)", m["age"], m["age"])
+	}
+
+	// name should be a nested map reconstructed from per-field fallback
+	nameMap, ok := m["name"].(map[string]any)
+	if !ok {
+		t.Fatalf("name = %v (%T), want map[string]any", m["name"], m["name"])
+	}
+	if nameMap["first"] != "Alice" {
+		t.Errorf("name.first = %v, want Alice", nameMap["first"])
+	}
+	if nameMap["last"] != "Smith" {
+		t.Errorf("name.last = %v, want Smith", nameMap["last"])
+	}
+}
+
+// TestShreddedVariantBinaryTypedValue verifies that []byte values shredded into
+// a plain ByteArray typed_value column are reconstructed as []byte, not string.
+// (Codex review P2 fix — ByteArray vs String reconstruction)
+func TestShreddedVariantBinaryTypedValue(t *testing.T) {
+	// Use plain ByteArray (no STRING annotation) as typed_value
+	shreddedNode, err := parquet.ShreddedVariant(parquet.Leaf(parquet.ByteArrayType))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type Record struct {
+		Data any `parquet:"data"`
+	}
+
+	schema := parquet.NewSchema("test", parquet.Group{
+		"data": shreddedNode,
+	})
+
+	input := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	records := []Record{
+		{Data: input},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), schema)
+	defer reader.Close()
+
+	readRecords := make([]Record, 1)
+	n, err := reader.Read(readRecords)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("read %d records, want 1", n)
+	}
+
+	// Should come back as []byte, not string
+	result, ok := readRecords[0].Data.([]byte)
+	if !ok {
+		t.Fatalf("Data = %v (%T), want []byte", readRecords[0].Data, readRecords[0].Data)
+	}
+	if !reflect.DeepEqual(result, input) {
+		t.Errorf("Data = %v, want %v", result, input)
+	}
+}
+
 func TestVariantSchemaTag(t *testing.T) {
 	type Record struct {
 		Data any `parquet:"data,variant"`

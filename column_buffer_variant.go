@@ -137,8 +137,9 @@ func writeShreddedObject(columns []ColumnBuffer, levels columnLevels, startColum
 		} else if exists && fieldVal != nil {
 			valueLevels := levels
 			valueLevels.definitionLevel++
-			_, val, _ := variant.Marshal(fieldVal)
-			columns[valueCol].writeByteArray(valueLevels, val)
+			metadata, val, _ := variant.Marshal(fieldVal)
+			combined := encodeFieldVariant(metadata, val)
+			columns[valueCol].writeByteArray(valueLevels, combined)
 			for c := typedValueCol; c < typedValueCol+typedCount; c++ {
 				columns[c].writeNull(levels)
 			}

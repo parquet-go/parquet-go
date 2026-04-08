@@ -89,48 +89,44 @@ documentation.
 The library supports the [Parquet VARIANT logical type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#variant)
 for storing semi-structured data (JSON-like values) in a columnar format.
 
-Since there is no `variant` struct tag, schemas with variant columns must be
-built programmatically using `parquet.Variant()` (unshredded) or
-`parquet.ShreddedVariant()` (shredded), and passed explicitly to writers and
-readers.
-
-An unshredded variant is a group with two byte array fields: `metadata`
-(describes the type/structure) and `value` (the encoded data). A Go struct
-whose fields match this layout can be used for reading and writing:
+The simplest way to use variants is with the `variant` struct tag, which
+automatically marshals and unmarshals Go values to/from the variant binary
+format:
 
 ```go
-type VariantData struct {
-    Metadata []byte `parquet:"metadata"`
-    Value    []byte `parquet:"value"`
-}
-
 type Event struct {
-    ID   int64       `parquet:"id"`
-    Data VariantData `parquet:"data"`
+    ID   int64 `parquet:"id"`
+    Data any   `parquet:"data,variant"`
 }
 
-schema := parquet.NewSchema("Event", parquet.Group{
-    "id":   parquet.Int(64),
-    "data": parquet.Variant(),
+writer := parquet.NewGenericWriter[Event](output)
+writer.Write([]Event{
+    {ID: 1, Data: "hello"},
+    {ID: 2, Data: int32(42)},
+    {ID: 3, Data: map[string]any{"key": "value"}},
 })
-
-writer := parquet.NewGenericWriter[Event](output, schema)
-// ... write events ...
 writer.Close()
-
-reader := parquet.NewGenericReader[Event](bytes.NewReader(buf.Bytes()), schema)
-// ... read events ...
-reader.Close()
 ```
 
 For shredded variants (which store typed columns alongside the raw value for
-faster queries), use `parquet.ShreddedVariant()`:
+faster queries), build a schema with `parquet.ShreddedVariant()`:
 
 ```go
 shreddedType, err := parquet.ShreddedVariant(parquet.String())
 schema := parquet.NewSchema("Record", parquet.Group{
     "data": shreddedType,
 })
+writer := parquet.NewGenericWriter[Record](output, schema)
+```
+
+For low-level access to raw variant bytes, use a struct with `Metadata` and
+`Value` []byte fields:
+
+```go
+type VariantData struct {
+    Metadata []byte `parquet:"metadata"`
+    Value    []byte `parquet:"value"`
+}
 ```
 
 For more examples, see the `ExampleVariant` and `ExampleShreddedVariant`

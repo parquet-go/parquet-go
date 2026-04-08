@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"encoding/binary"
 	"fmt"
 	"maps"
 	"reflect"
@@ -11,7 +12,12 @@ import (
 
 // variantMarshalOrNull marshals a reflect.Value to variant binary. If the
 // value is nil/invalid/null, it returns the variant encoding of null.
+// If the value is a raw variant struct (with metadata and value []byte fields),
+// the pre-encoded bytes are extracted directly.
 func variantMarshalOrNull(value reflect.Value) (metadata, val []byte) {
+	if m, v, ok := extractRawVariantStruct(value); ok {
+		return m, v
+	}
 	var goVal any
 	if value.IsValid() && !isNullValue(value) {
 		v := value
@@ -30,6 +36,42 @@ func variantMarshalOrNull(value reflect.Value) (metadata, val []byte) {
 		panic(fmt.Sprintf("variant marshal: %v", err))
 	}
 	return metadata, val
+}
+
+// extractRawVariantStruct checks if the value is a struct with "metadata" and
+// "value" []byte fields (matching the unshredded variant group layout). If so,
+// it extracts the raw bytes directly, supporting passthrough of pre-encoded
+// variant data.
+func extractRawVariantStruct(value reflect.Value) (metadata, val []byte, ok bool) {
+	if !value.IsValid() || isNullValue(value) {
+		return nil, nil, false
+	}
+	v := value
+	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return nil, nil, false
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return nil, nil, false
+	}
+	t := v.Type()
+	metaField, hasMetadata := t.FieldByName("Metadata")
+	valField, hasValue := t.FieldByName("Value")
+	if !hasMetadata || !hasValue {
+		return nil, nil, false
+	}
+	byteSliceType := reflect.TypeOf([]byte(nil))
+	if metaField.Type != byteSliceType || valField.Type != byteSliceType {
+		return nil, nil, false
+	}
+	m := v.FieldByName("Metadata").Bytes()
+	va := v.FieldByName("Value").Bytes()
+	if m == nil && va == nil {
+		return nil, nil, false
+	}
+	return m, va, true
 }
 
 // isUnshreddedVariant returns true if the variant node has only metadata and value
@@ -362,12 +404,13 @@ func (m *shreddedMatcher) shredObject(columns [][]Value, levels columnLevels, st
 			typedLevels.definitionLevel++
 			f.matcher.shred(columns, typedLevels, typedValueCol, fieldVal)
 		} else if exists && fieldVal != nil {
-			// Value doesn't match typed schema: write variant to field's value
+			// Value doesn't match typed schema: write variant to field's value.
+			// Encode metadata+value together so nested objects can be decoded later.
 			valueLevels := levels
 			valueLevels.definitionLevel++
 			metadata, val, _ := variant.Marshal(fieldVal)
-			_ = metadata // Field-level metadata is embedded in value
-			valValue := makeValueByteArray(ByteArray, unsafe.SliceData(val), len(val))
+			combined := encodeFieldVariant(metadata, val)
+			valValue := makeValueByteArray(ByteArray, unsafe.SliceData(combined), len(combined))
 			valValue.repetitionLevel = valueLevels.repetitionLevel
 			valValue.definitionLevel = valueLevels.definitionLevel
 			valValue.columnIndex = ^valueCol
@@ -381,6 +424,30 @@ func (m *shreddedMatcher) shredObject(columns [][]Value, levels columnLevels, st
 
 		col = nextFieldCol
 	}
+}
+
+// encodeFieldVariant encodes metadata and value bytes together for per-field
+// fallback storage. Format: 4-byte LE metadata length + metadata + value.
+// This ensures nested objects retain their metadata dictionary for decoding.
+func encodeFieldVariant(metadata, value []byte) []byte {
+	mLen := len(metadata)
+	buf := make([]byte, 4+mLen+len(value))
+	binary.LittleEndian.PutUint32(buf, uint32(mLen))
+	copy(buf[4:], metadata)
+	copy(buf[4+mLen:], value)
+	return buf
+}
+
+// decodeFieldVariant splits per-field variant bytes back into metadata and value.
+func decodeFieldVariant(data []byte) (metadata, value []byte, ok bool) {
+	if len(data) < 4 {
+		return nil, data, false
+	}
+	mLen := int(binary.LittleEndian.Uint32(data))
+	if 4+mLen > len(data) {
+		return nil, data, false
+	}
+	return data[4 : 4+mLen], data[4+mLen:], true
 }
 
 func countMatcherColumns(m *shreddedMatcher) uint16 {
@@ -509,6 +576,12 @@ func reconstructFuncOfUnshreddedVariant(columnIndex uint16, node Node) (uint16, 
 		metaBytes := metaVal.ByteArray()
 		valBytes := valVal.ByteArray()
 
+		// If the target is a raw variant struct (Metadata/Value []byte fields),
+		// copy the raw bytes directly without decoding.
+		if setRawVariantStruct(value, metaBytes, valBytes) {
+			return nil
+		}
+
 		goVal, err := variant.Unmarshal(metaBytes, valBytes)
 		if err != nil {
 			return fmt.Errorf("variant unmarshal: %w", err)
@@ -617,6 +690,35 @@ func hasNonNullInColumns(columns [][]Value) bool {
 	return false
 }
 
+// setRawVariantStruct checks if the target value is a struct with Metadata and
+// Value []byte fields. If so, it copies the raw bytes directly and returns true.
+func setRawVariantStruct(value reflect.Value, metadata, val []byte) bool {
+	v := value
+	for v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return false
+	}
+	t := v.Type()
+	byteSliceType := reflect.TypeOf([]byte(nil))
+	metaField, hasMetadata := t.FieldByName("Metadata")
+	valField, hasValue := t.FieldByName("Value")
+	if !hasMetadata || !hasValue || metaField.Type != byteSliceType || valField.Type != byteSliceType {
+		return false
+	}
+	metaCopy := make([]byte, len(metadata))
+	copy(metaCopy, metadata)
+	valCopy := make([]byte, len(val))
+	copy(valCopy, val)
+	v.FieldByName("Metadata").SetBytes(metaCopy)
+	v.FieldByName("Value").SetBytes(valCopy)
+	return true
+}
+
 func setVariantGoValue(value reflect.Value, goVal any) error {
 	if goVal == nil {
 		value.Set(reflect.Zero(value.Type()))
@@ -639,6 +741,7 @@ func setVariantGoValue(value reflect.Value, goVal any) error {
 type shreddedExtractor struct {
 	isPrimitive bool
 	kind        Kind
+	isString    bool // true if ByteArray with STRING logical type
 
 	isGroup bool
 	fields  []shreddedFieldExtractor
@@ -651,9 +754,16 @@ type shreddedFieldExtractor struct {
 
 func buildShreddedExtractor(node Node) shreddedExtractor {
 	if node.Leaf() {
+		kind := node.Type().Kind()
+		isStr := false
+		if kind == ByteArray {
+			lt := node.Type().LogicalType()
+			isStr = lt != nil && lt.UTF8 != nil
+		}
 		return shreddedExtractor{
 			isPrimitive: true,
-			kind:        node.Type().Kind(),
+			kind:        kind,
+			isString:    isStr,
 		}
 	}
 
@@ -689,7 +799,7 @@ func (e *shreddedExtractor) extract(columns [][]Value) any {
 		if len(columns) == 0 || len(columns[0]) == 0 || columns[0][0].IsNull() {
 			return nil
 		}
-		return parquetValueToGo(columns[0][0], e.kind)
+		return parquetValueToGo(columns[0][0], e.kind, e.isString)
 	}
 	if e.isGroup {
 		return e.extractObject(columns)
@@ -720,14 +830,14 @@ func (e *shreddedExtractor) extractObject(columns [][]Value) any {
 				result[f.name] = val
 			}
 		} else if hasValue {
-			// Field stored as unshredded variant
-			valBytes := columns[valueCol][0].ByteArray()
-			// For field-level values, the value is variant-encoded without separate metadata
-			// We need to decode with an empty metadata (no field names needed for leaf values)
-			m := variant.Metadata{}
-			v, err := variant.Decode(m, valBytes)
-			if err == nil {
-				result[f.name] = v.GoValue()
+			// Field stored as unshredded variant with metadata+value encoded together.
+			data := columns[valueCol][0].ByteArray()
+			metaBytes, valBytes, ok := decodeFieldVariant(data)
+			if ok {
+				goVal, err := variant.Unmarshal(metaBytes, valBytes)
+				if err == nil && goVal != nil {
+					result[f.name] = goVal
+				}
 			}
 		}
 
@@ -763,7 +873,7 @@ func hasNonNullInRange(columns [][]Value, start, end int) bool {
 	return false
 }
 
-func parquetValueToGo(v Value, kind Kind) any {
+func parquetValueToGo(v Value, kind Kind, isString bool) any {
 	switch kind {
 	case Boolean:
 		return v.Boolean()
@@ -776,7 +886,13 @@ func parquetValueToGo(v Value, kind Kind) any {
 	case Double:
 		return v.Double()
 	case ByteArray:
-		return string(v.ByteArray())
+		b := v.ByteArray()
+		if isString {
+			return string(b)
+		}
+		dst := make([]byte, len(b))
+		copy(dst, b)
+		return dst
 	case FixedLenByteArray:
 		b := v.ByteArray()
 		if len(b) == 16 {
