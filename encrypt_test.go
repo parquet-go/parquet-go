@@ -3,6 +3,7 @@ package parquet_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -26,6 +27,25 @@ func (s *staticKeyRetriever) ColumnKey(path []string, _ []byte) ([]byte, error) 
 		return key, nil
 	}
 	return s.footerKey, nil
+}
+
+// partialKeyRetriever is a test-only KeyRetriever that returns an error for
+// column keys not present in its map (simulates partial key access).
+type partialKeyRetriever struct {
+	footerKey  []byte
+	columnKeys map[string][]byte
+}
+
+func (p *partialKeyRetriever) FooterKey(_ []byte) ([]byte, error) {
+	return p.footerKey, nil
+}
+
+func (p *partialKeyRetriever) ColumnKey(path []string, _ []byte) ([]byte, error) {
+	k := strings.Join(path, ".")
+	if key, ok := p.columnKeys[k]; ok {
+		return key, nil
+	}
+	return nil, fmt.Errorf("no key for column %q", k)
 }
 
 // encryptionTestRow is a simple row type used across encryption tests.
@@ -456,4 +476,70 @@ func TestEncryptionBloomFilter(t *testing.T) {
 	if absent {
 		t.Error("bloom filter should not report 'dave' as present")
 	}
+}
+
+// TestEncryptionPartialColumnKeysOpenFile verifies that OpenFile succeeds even
+// when the caller only provides keys for a subset of per-column-encrypted
+// columns.  The bug: decryptAllColumnMetadata returned an error on the first
+// missing column key, blocking reads of columns whose keys were available.
+func TestEncryptionPartialColumnKeysOpenFile(t *testing.T) {
+	footerKey := aes128Key(0xA1)
+	nameKey := aes128Key(0xA2)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey: footerKey,
+		ColumnKeys: map[string][]byte{
+			"name": nameKey,
+		},
+		EncryptedFooter: false,
+		FileIdentifier:  []byte{81, 82, 83, 84, 85, 86, 87, 88},
+	}
+	data := writeEncrypted(t, testRows, cfg)
+
+	// Open with only the footer key — name column key is missing.
+	// Before the fix this would return an error from decryptAllColumnMetadata.
+	partial := &partialKeyRetriever{
+		footerKey:  footerKey,
+		columnKeys: map[string][]byte{}, // no column keys provided
+	}
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(partial))
+	if err != nil {
+		t.Fatalf("OpenFile with partial keys should succeed, got: %v", err)
+	}
+
+	// The "value" column (uses footer key) should still be readable.
+	rgs := f.RowGroups()
+	if len(rgs) == 0 {
+		t.Fatal("expected at least one row group")
+	}
+}
+
+// TestEncryptionMultipleRowGroupsOrdinals verifies that encrypted files with
+// multiple row groups (ordinals > 0) round-trip correctly.  The bug:
+// decryptAllColumnMetadata used the slice index instead of rg.Ordinal in the
+// AAD, causing authentication failures for row groups with ordinal != index.
+func TestEncryptionMultipleRowGroupsOrdinals(t *testing.T) {
+	footerKey := aes128Key(0xB1)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: false,
+		FileIdentifier:  []byte{89, 90, 91, 92, 93, 94, 95, 96},
+	}
+
+	// Write three separate row groups (MaxRowsPerRowGroup=1 forces one per row).
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[encryptionTestRow](&buf,
+		parquet.WithEncryption(cfg),
+		parquet.MaxRowsPerRowGroup(1),
+	)
+	if _, err := w.Write(testRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+
+	keys := &staticKeyRetriever{footerKey: footerKey}
+	got := readDecrypted(t, data, keys)
+	assertRowsEqual(t, testRows, got)
 }
