@@ -469,6 +469,8 @@ func schemaElementTypeOf(s *format.SchemaElement) Type {
 			return (*bsonType)(lt.Bson)
 		case lt.UUID != nil:
 			return (*uuidType)(lt.UUID)
+		case lt.Interval != nil:
+			return (*intervalType)(lt.Interval)
 		case lt.Geometry != nil:
 			return (*geometryType)(lt.Geometry)
 		case lt.Geography != nil:
@@ -552,7 +554,7 @@ func schemaElementTypeOf(s *format.SchemaElement) Type {
 		case deprecated.Bson:
 			return &bsonType{}
 		case deprecated.Interval:
-			// TODO
+			return &intervalType{}
 		}
 	}
 
