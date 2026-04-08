@@ -1040,12 +1040,20 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 
 			case "split":
 				kind := t.Kind()
+				baseType := t
 				if kind == reflect.Ptr {
 					kind = t.Elem().Kind()
+					baseType = t.Elem()
 				}
 				switch kind {
-				case reflect.Float32, reflect.Float64:
+				case reflect.Float32, reflect.Float64, reflect.Int32, reflect.Int64:
 					setEncoding(&ByteStreamSplit)
+				case reflect.Array:
+					if baseType.Elem().Kind() == reflect.Uint8 {
+						setEncoding(&ByteStreamSplit)
+					} else {
+						throwInvalidTag(t, name, option)
+					}
 				default:
 					throwInvalidTag(t, name, option)
 				}
