@@ -354,6 +354,15 @@ func makeValue(k Kind, lt *format.LogicalType, v reflect.Value) Value {
 			if v.Type().Elem().Kind() == reflect.Uint8 {
 				return makeValueBytes(k, v.Bytes())
 			}
+		case reflect.Struct:
+			if lt != nil && lt.Interval != nil {
+				iv := v.Interface().(Interval)
+				buf := make([]byte, 12)
+				binary.LittleEndian.PutUint32(buf[0:4], iv.Months)
+				binary.LittleEndian.PutUint32(buf[4:8], iv.Days)
+				binary.LittleEndian.PutUint32(buf[8:12], iv.Milliseconds)
+				return makeValueByteArray(k, unsafe.SliceData(buf), 12)
+			}
 		}
 	}
 

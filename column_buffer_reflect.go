@@ -868,6 +868,9 @@ func writeValueFuncOfLeaf(columnIndex uint16, node Node) (uint16, writeValueFunc
 			case deprecated.Int96:
 				col.writeInt96(levels, v)
 				return
+			case Interval:
+				writeInterval(col, levels, v)
+				return
 			}
 		}
 
@@ -934,6 +937,14 @@ func writeUUID(col ColumnBuffer, levels columnLevels, str string, typ Type) {
 	buf.Append(parsedUUID[:]...)
 	col.writeByteArray(levels, buf.Slice())
 	buf.Reset()
+}
+
+func writeInterval(col ColumnBuffer, levels columnLevels, iv Interval) {
+	var buf [12]byte
+	binary.LittleEndian.PutUint32(buf[0:4], iv.Months)
+	binary.LittleEndian.PutUint32(buf[4:8], iv.Days)
+	binary.LittleEndian.PutUint32(buf[8:12], iv.Milliseconds)
+	col.writeByteArray(levels, buf[:])
 }
 
 func decimalValue(col ColumnBuffer, levels columnLevels, typ Type, value reflect.Value, scale int32) {

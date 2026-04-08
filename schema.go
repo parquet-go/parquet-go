@@ -1039,11 +1039,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 				}
 
 			case "split":
-				kind := t.Kind()
-				if kind == reflect.Ptr {
-					kind = t.Elem().Kind()
-				}
-				switch kind {
+				switch t.Kind() {
 				case reflect.Float32, reflect.Float64:
 					setEncoding(&ByteStreamSplit)
 				default:
@@ -1126,13 +1122,10 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 				case reflect.Int32:
 					setNode(Date())
 				case reflect.Ptr:
-					elem := t.Elem()
-					switch {
-					case elem == reflect.TypeFor[time.Time]():
+					// Support *time.Time with date tag
+					if t.Elem() == reflect.TypeFor[time.Time]() {
 						setNode(Optional(Date()))
-					case elem.Kind() == reflect.Int32:
-						setNode(Optional(Date()))
-					default:
+					} else {
 						throwInvalidTag(t, name, option)
 					}
 				default:
@@ -1202,21 +1195,15 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					}
 					setNode(TimestampAdjusted(timeUnit, adjusted))
 				case reflect.Ptr:
-					elem := t.Elem()
-					switch {
-					case elem == reflect.TypeFor[time.Time]():
+					// Support *time.Time with timestamp tags
+					if t.Elem() == reflect.TypeFor[time.Time]() {
 						timeUnit, adjusted, err := parseTimestampArgs(args)
 						if err != nil {
 							throwInvalidTag(t, name, option+args)
 						}
+						// Wrap in Optional for schema correctness (nil pointers = NULL values)
 						setNode(Optional(TimestampAdjusted(timeUnit, adjusted)))
-					case elem.Kind() == reflect.Int64:
-						timeUnit, adjusted, err := parseTimestampArgs(args)
-						if err != nil {
-							throwInvalidTag(t, name, option+args)
-						}
-						setNode(Optional(TimestampAdjusted(timeUnit, adjusted)))
-					default:
+					} else {
 						throwInvalidTag(t, name, option)
 					}
 				default:
@@ -1230,6 +1217,16 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					default:
 						throwInvalidTag(t, name, option)
 					}
+				}
+
+			case "interval":
+				switch {
+				case t == reflect.TypeOf(Interval{}):
+					setNode(IntervalNode())
+				case t.Kind() == reflect.Array && t.Elem().Kind() == reflect.Uint8 && t.Len() == 12:
+					setNode(IntervalNode())
+				default:
+					throwInvalidTag(t, name, option)
 				}
 
 			case "int":
