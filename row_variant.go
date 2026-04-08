@@ -230,21 +230,22 @@ func writeNullLeaves(columns [][]Value, start, end uint16, levels columnLevels) 
 
 // shreddedMatcher determines if a Go value can be shredded into a typed_value
 // column and performs the shredding.
+//
+// A matcher is one of three kinds:
+//   - primitive: typ is set (leaf column)
+//   - group: fields is set (object with per-field matchers)
+//   - unsupported: neither (e.g., LIST — values go to the fallback column)
+//
+// leafCount is always set to the number of leaf columns occupied.
 type shreddedMatcher struct {
-	// For primitive typed_value (leaf node): the parquet type of the column.
-	isPrimitive bool
-	typ         Type
-
-	// For group typed_value (object node)
-	isGroup bool
-	fields  []shreddedFieldMatcher
-
-	// leafCount is the number of leaf columns this matcher's typed_value occupies.
-	// Used to correctly advance column offsets even for unsupported types (e.g., LIST).
+	typ       Type                   // non-nil for primitive typed_value (leaf node)
+	fields    []shreddedFieldMatcher // non-nil for group typed_value (object node)
 	leafCount uint16
 }
 
-func (m *shreddedMatcher) kind() Kind { return m.typ.Kind() }
+func (m *shreddedMatcher) isPrimitive() bool { return m.typ != nil }
+func (m *shreddedMatcher) isGroup() bool     { return len(m.fields) > 0 }
+func (m *shreddedMatcher) kind() Kind        { return m.typ.Kind() }
 func (m *shreddedMatcher) isString() bool {
 	lt := m.typ.LogicalType()
 	return lt != nil && lt.UTF8 != nil
@@ -262,9 +263,8 @@ type shreddedFieldMatcher struct {
 func buildShreddedMatcher(node Node) shreddedMatcher {
 	if node.Leaf() {
 		return shreddedMatcher{
-			isPrimitive: true,
-			typ:         node.Type(),
-			leafCount:   1,
+			typ:       node.Type(),
+			leafCount: 1,
 		}
 	}
 
@@ -288,7 +288,6 @@ func buildShreddedMatcher(node Node) shreddedMatcher {
 
 	if len(matchers) > 0 {
 		return shreddedMatcher{
-			isGroup:   true,
 			fields:    matchers,
 			leafCount: countMatcherLeaves(matchers),
 		}
@@ -306,10 +305,10 @@ func (m *shreddedMatcher) canShred(v any) bool {
 	if v == nil {
 		return false
 	}
-	if m.isPrimitive {
+	if m.isPrimitive() {
 		return canShredPrimitive(v, m)
 	}
-	if m.isGroup {
+	if m.isGroup() {
 		return canShredObject(v, m.fields)
 	}
 	return false
@@ -392,7 +391,7 @@ func canShredObject(v any, fields []shreddedFieldMatcher) bool {
 }
 
 func (m *shreddedMatcher) shred(columns [][]Value, levels columnLevels, startColumn uint16, v any) {
-	if m.isPrimitive {
+	if m.isPrimitive() {
 		col := startColumn
 		pv := goValueToParquetValue(v, m.kind())
 		pv.repetitionLevel = levels.repetitionLevel
@@ -401,7 +400,7 @@ func (m *shreddedMatcher) shred(columns [][]Value, levels columnLevels, startCol
 		columns[col] = append(columns[col], pv)
 		return
 	}
-	if m.isGroup {
+	if m.isGroup() {
 		m.shredObject(columns, levels, startColumn, v)
 	}
 }
@@ -484,7 +483,7 @@ func decodeFieldVariant(data []byte) (metadata, value []byte, ok bool) {
 // countMatcherColumns returns the total number of leaf columns for a matcher,
 // including the value column for each field in a group.
 func countMatcherColumns(m *shreddedMatcher) uint16 {
-	if m.isGroup {
+	if m.isGroup() {
 		return countMatcherLeaves(m.fields)
 	}
 	return m.leafCount
@@ -790,16 +789,17 @@ func setVariantGoValue(value reflect.Value, goVal any) error {
 }
 
 // shreddedExtractor reconstructs Go values from typed_value columns.
+// Same three-kind structure as shreddedMatcher: primitive (typ set),
+// group (fields set), or unsupported (neither).
 type shreddedExtractor struct {
-	isPrimitive bool
-	typ         Type // parquet type of the leaf column
-
-	isGroup   bool
-	fields    []shreddedFieldExtractor
-	leafCount int // number of leaf columns for this extractor's typed_value
+	typ       Type                     // non-nil for primitive (leaf column)
+	fields    []shreddedFieldExtractor // non-nil for group (object)
+	leafCount int
 }
 
-func (e *shreddedExtractor) kind() Kind { return e.typ.Kind() }
+func (e *shreddedExtractor) isPrimitive() bool { return e.typ != nil }
+func (e *shreddedExtractor) isGroup() bool     { return len(e.fields) > 0 }
+func (e *shreddedExtractor) kind() Kind        { return e.typ.Kind() }
 func (e *shreddedExtractor) isString() bool {
 	lt := e.typ.LogicalType()
 	return lt != nil && lt.UTF8 != nil
@@ -817,9 +817,8 @@ type shreddedFieldExtractor struct {
 func buildShreddedExtractor(node Node) shreddedExtractor {
 	if node.Leaf() {
 		return shreddedExtractor{
-			isPrimitive: true,
-			typ:         node.Type(),
-			leafCount:   1,
+			typ:       node.Type(),
+			leafCount: 1,
 		}
 	}
 
@@ -844,7 +843,6 @@ func buildShreddedExtractor(node Node) shreddedExtractor {
 			leaves += f.extractor.leafCount + 1 // typed_value leaves + value column
 		}
 		return shreddedExtractor{
-			isGroup:   true,
 			fields:    extractors,
 			leafCount: leaves,
 		}
@@ -858,13 +856,13 @@ func buildShreddedExtractor(node Node) shreddedExtractor {
 }
 
 func (e *shreddedExtractor) extract(columns [][]Value) any {
-	if e.isPrimitive {
+	if e.isPrimitive() {
 		if len(columns) == 0 || len(columns[0]) == 0 || columns[0][0].IsNull() {
 			return nil
 		}
 		return parquetValueToGo(columns[0][0], e)
 	}
-	if e.isGroup {
+	if e.isGroup() {
 		return e.extractObject(columns)
 	}
 	return nil

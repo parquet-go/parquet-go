@@ -84,7 +84,7 @@ func writeValueFuncOfShreddedVariant(columnIndex uint16, node Node) (uint16, wri
 
 // writeShredded writes a shredded value to the column buffers.
 func writeShredded(columns []ColumnBuffer, levels columnLevels, startColumn uint16, m *shreddedMatcher, v any) {
-	if m.isPrimitive {
+	if m.isPrimitive() {
 		pv := goValueToParquetValue(v, m.kind())
 		col := columns[startColumn]
 		switch m.kind() {
@@ -105,7 +105,7 @@ func writeShredded(columns []ColumnBuffer, levels columnLevels, startColumn uint
 		}
 		return
 	}
-	if m.isGroup {
+	if m.isGroup() {
 		writeShreddedObject(columns, levels, startColumn, m, v)
 	}
 }
