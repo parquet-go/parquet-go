@@ -1240,6 +1240,16 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					}
 				}
 
+			case "interval":
+				switch {
+				case t == reflect.TypeOf(Interval{}):
+					setNode(IntervalNode())
+				case t.Kind() == reflect.Array && t.Elem().Kind() == reflect.Uint8 && t.Len() == 12:
+					setNode(IntervalNode())
+				default:
+					throwInvalidTag(t, name, option)
+				}
+
 			case "int":
 				bitWidth, err := parseIntBitWidthArgs(args)
 				if err != nil {

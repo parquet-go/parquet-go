@@ -552,7 +552,7 @@ func schemaElementTypeOf(s *format.SchemaElement) Type {
 		case deprecated.Bson:
 			return &bsonType{}
 		case deprecated.Interval:
-			// TODO
+			return &intervalType{}
 		}
 	}
 
