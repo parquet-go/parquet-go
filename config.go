@@ -970,7 +970,6 @@ func coalesceSortingConfig(c1, c2 SortingConfig) SortingConfig {
 	}
 }
 
-
 func validatePositiveInt(optionName string, optionValue int) error {
 	if optionValue > 0 {
 		return nil
