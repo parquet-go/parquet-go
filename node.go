@@ -483,6 +483,11 @@ func isMap(node Node) bool {
 	return logicalType != nil && logicalType.Map != nil
 }
 
+func isVariant(node Node) bool {
+	logicalType := node.Type().LogicalType()
+	return logicalType != nil && logicalType.Variant != nil
+}
+
 func numLeafColumnsOf(node Node) uint16 {
 	return makeColumnIndex(numLeafColumns(node, 0))
 }

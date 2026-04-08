@@ -424,6 +424,8 @@ func deconstructFuncOf(columnIndex uint16, node Node) (uint16, deconstructFunc) 
 		return deconstructFuncOfList(columnIndex, node)
 	case isMap(node):
 		return deconstructFuncOfMap(columnIndex, node)
+	case isVariant(node):
+		return deconstructFuncOfVariant(columnIndex, node)
 	default:
 		return deconstructFuncOfRequired(columnIndex, node)
 	}
@@ -586,6 +588,8 @@ func reconstructFuncOf(columnIndex uint16, node Node) (uint16, reconstructFunc) 
 		return reconstructFuncOfList(columnIndex, node)
 	case isMap(node):
 		return reconstructFuncOfMap(columnIndex, node)
+	case isVariant(node):
+		return reconstructFuncOfVariant(columnIndex, node)
 	default:
 		return reconstructFuncOfRequired(columnIndex, node)
 	}
