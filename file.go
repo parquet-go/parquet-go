@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -437,6 +438,14 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 // openColumns and schema construction see the full encoding/compression info.
 // This must be called before openColumns.
 func (f *File) decryptAllColumnMetadata() error {
+	// Normalize ordinals before using them in AADs.  Files from writers that
+	// omit the optional Ordinal field have all zeros; validateRowGroupOrdinals
+	// back-fills sequential values so rg.Ordinal is guaranteed to equal the
+	// slice index — matching exactly what the writer embedded in every AAD.
+	if err := validateRowGroupOrdinals(f.metadata.RowGroups); err != nil {
+		return err
+	}
+
 	for rgIdx := range f.metadata.RowGroups {
 		rg := &f.metadata.RowGroups[rgIdx]
 		for colIdx := range rg.Columns {
@@ -457,16 +466,19 @@ func (f *File) decryptAllColumnMetadata() error {
 				var err error
 				key, err = f.decryption.Keys.ColumnKey(colKey.PathInSchema, colKey.KeyMetadata)
 				if err != nil {
-					// Key not available for this column — leave MetaData blank.
-					// The caller may still read other columns whose keys are
-					// available; this column will be inaccessible if touched.
-					continue
+					// Only treat an explicit ErrKeyNotFound as non-fatal: the
+					// caller intentionally omitted this column's key.  Any other
+					// error (KMS failure, bad metadata, …) is propagated so the
+					// caller sees the real problem instead of silent zero data.
+					if errors.Is(err, ErrKeyNotFound) {
+						continue
+					}
+					return fmt.Errorf("resolving column key for column metadata: %w", err)
 				}
 			default:
 				continue
 			}
-			// Use rg.Ordinal (not the slice index) to match the AAD used by
-			// the writer and the rest of the read path (pages, bloom filters).
+			// rg.Ordinal is reliable here because validateRowGroupOrdinals ran above.
 			aad := makeAAD(f.aadPrefix, f.fileUnique, columnMetaDataModule, rg.Ordinal, int16(colIdx))
 			plain, err := decryptModule(key, aad, chunk.EncryptedColumnMetadata)
 			if err != nil {
