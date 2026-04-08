@@ -1,11 +1,14 @@
 package parquet
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/bloom"
 	"github.com/parquet-go/parquet-go/bloom/xxhash"
+	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
@@ -60,19 +63,35 @@ func (v Value) hash(h bloom.Hash) uint64 {
 	}
 }
 
-func newBloomFilter(file io.ReaderAt, offset int64, header *format.BloomFilterHeader) *FileBloomFilter {
-	if header.Algorithm.Block != nil {
-		if header.Hash.XxHash != nil {
-			if header.Compression.Uncompressed != nil {
-				return &FileBloomFilter{
-					SectionReader: *io.NewSectionReader(file, offset, int64(header.NumBytes)),
-					hash:          bloom.XXH64{},
-					check:         bloom.CheckSplitBlock,
-				}
-			}
-		}
+func newBloomFilter(file io.ReaderAt, offset int64, header *format.BloomFilterHeader) (*FileBloomFilter, error) {
+	if header.Algorithm.Block == nil || header.Hash.XxHash == nil {
+		return nil, nil
 	}
-	return nil
+	switch {
+	case header.Compression.Uncompressed != nil:
+		return &FileBloomFilter{
+			SectionReader: *io.NewSectionReader(file, offset, int64(header.NumBytes)),
+			hash:          bloom.XXH64{},
+			check:         bloom.CheckSplitBlock,
+		}, nil
+	case header.Compression.GZip != nil:
+		compressed := make([]byte, header.NumBytes)
+		if _, err := file.ReadAt(compressed, offset); err != nil {
+			return nil, fmt.Errorf("reading compressed bloom filter: %w", err)
+		}
+		decompressed, err := LookupCompressionCodec(format.Gzip).Decode(nil, compressed)
+		if err != nil {
+			return nil, fmt.Errorf("decompressing bloom filter: %w", err)
+		}
+		r := bytes.NewReader(decompressed)
+		return &FileBloomFilter{
+			SectionReader: *io.NewSectionReader(r, 0, int64(len(decompressed))),
+			hash:          bloom.XXH64{},
+			check:         bloom.CheckSplitBlock,
+		}, nil
+	default:
+		return nil, nil
+	}
 }
 
 // The BloomFilterColumn interface is a declarative representation of bloom filters
@@ -122,12 +141,12 @@ func (f splitBlockFilter) Size(numValues int64) int {
 	return bloom.BlockSize * bloom.NumSplitBlocksOf(numValues, f.bitsPerValue)
 }
 
-// Creates a header from the given bloom filter.
+// Creates a header from the given bloom filter and compression codec.
 //
 // For now there is only one type of filter supported, but we provide this
 // function to suggest a model for extending the implementation if new filters
 // are added to the parquet specs.
-func bloomFilterHeader(filter BloomFilterColumn) (header format.BloomFilterHeader) {
+func bloomFilterHeader(filter BloomFilterColumn, codec compress.Codec) (header format.BloomFilterHeader) {
 	switch filter.(type) {
 	case splitBlockFilter:
 		header.Algorithm.Block = &format.SplitBlockAlgorithm{}
@@ -136,7 +155,11 @@ func bloomFilterHeader(filter BloomFilterColumn) (header format.BloomFilterHeade
 	case bloom.XXH64:
 		header.Hash.XxHash = &format.XxHash{}
 	}
-	header.Compression.Uncompressed = &format.BloomFilterUncompressed{}
+	if codec != nil && codec.CompressionCodec() == format.Gzip {
+		header.Compression.GZip = &format.BloomFilterGzip{}
+	} else {
+		header.Compression.Uncompressed = &format.BloomFilterUncompressed{}
+	}
 	return header
 }
 

@@ -180,9 +180,17 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 							return nil, fmt.Errorf("reading bloom filter data: %w", err)
 						}
 						// Create bloom filter using in-memory data.
-						cc.bloomFilter.Store(newBloomFilter(bytes.NewReader(bloomData), 0, &header))
+						bf, err := newBloomFilter(bytes.NewReader(bloomData), 0, &header)
+						if err != nil {
+							return nil, fmt.Errorf("reading bloom filter: %w", err)
+						}
+						cc.bloomFilter.Store(bf)
 					} else {
-						cc.bloomFilter.Store(newBloomFilter(f, offset, &header))
+						bf, err := newBloomFilter(f, offset, &header)
+						if err != nil {
+							return nil, fmt.Errorf("reading bloom filter: %w", err)
+						}
+						cc.bloomFilter.Store(bf)
 					}
 				}
 			}
@@ -728,7 +736,10 @@ func (c *FileColumnChunk) readBloomFilter(reader io.ReaderAt) (*FileBloomFilter,
 	}
 
 	offset, _ = section.Seek(0, io.SeekCurrent)
-	filter := newBloomFilter(reader, offset, &header)
+	filter, err := newBloomFilter(reader, offset, &header)
+	if err != nil {
+		return nil, fmt.Errorf("reading bloom filter: %w", err)
+	}
 
 	if !c.bloomFilter.CompareAndSwap(nil, filter) {
 		return c.bloomFilter.Load(), nil

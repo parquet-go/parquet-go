@@ -803,8 +803,10 @@ type BloomFilterHash struct { // union
 
 // The compression used in the Bloom filter.
 type BloomFilterUncompressed struct{}
+type BloomFilterGzip struct{}
 type BloomFilterCompression struct { // union
 	Uncompressed *BloomFilterUncompressed `thrift:"1"`
+	GZip         *BloomFilterGzip         `thrift:"2"`
 }
 
 // Bloom filter header is stored at beginning of Bloom filter data of each column
