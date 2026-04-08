@@ -81,13 +81,22 @@ func (e *Encoding) DecodeInt64(dst []int64, src []byte) ([]int64, error) {
 }
 
 func (e *Encoding) EncodeFixedLenByteArray(dst []byte, src []byte, size int) ([]byte, error) {
+	if size <= 0 || size > encoding.MaxFixedLenByteArraySize {
+		return dst[:0], encoding.Error(e, encoding.ErrInvalidArgument)
+	}
+	if (len(src) % size) != 0 {
+		return dst[:0], encoding.ErrEncodeInvalidInputSize(e, "FIXED_LEN_BYTE_ARRAY", len(src))
+	}
 	dst = resize(dst, len(src))
 	encodeFixedLenByteArray(dst, src, size)
 	return dst, nil
 }
 
 func (e *Encoding) DecodeFixedLenByteArray(dst []byte, src []byte, size int) ([]byte, error) {
-	if size > 0 && (len(src)%size) != 0 {
+	if size <= 0 || size > encoding.MaxFixedLenByteArraySize {
+		return dst, encoding.Error(e, encoding.ErrInvalidArgument)
+	}
+	if (len(src) % size) != 0 {
 		return dst, encoding.ErrDecodeInvalidInputSize(e, "FIXED_LEN_BYTE_ARRAY", len(src))
 	}
 	dst = resize(dst, len(src))
