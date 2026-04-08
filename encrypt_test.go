@@ -232,6 +232,80 @@ func TestEncryptionPlaintextFooterColumnMetadataHidden(t *testing.T) {
 	assertRowsEqual(t, testRows, got)
 }
 
+// TestEncryptionPlaintextFooterRowGroupSizes verifies that TotalByteSize and
+// TotalCompressedSize in the file metadata are non-zero in plaintext-footer
+// encrypted mode.  The bug: MetaData was zeroed before sizes were accumulated.
+func TestEncryptionPlaintextFooterRowGroupSizes(t *testing.T) {
+	footerKey := aes128Key(0x12)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: false,
+		FileIdentifier:  []byte{65, 66, 67, 68, 69, 70, 71, 72},
+	}
+	data := writeEncrypted(t, testRows, cfg)
+
+	keys := &staticKeyRetriever{footerKey: footerKey}
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(keys))
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+
+	for i, rg := range f.Metadata().RowGroups {
+		if rg.TotalByteSize == 0 {
+			t.Errorf("rowGroup=%d: TotalByteSize=0, expected non-zero", i)
+		}
+		if rg.TotalCompressedSize == 0 {
+			t.Errorf("rowGroup=%d: TotalCompressedSize=0, expected non-zero", i)
+		}
+	}
+}
+
+// TestEncryptionPlaintextFooterColumnEncoding verifies that Column.Encoding()
+// and Column.Compression() are correctly populated when opening a
+// plaintext-footer encrypted file.  The bug: openColumns ran before column
+// metadata was decrypted, so it cached nil encoding/compression.
+func TestEncryptionPlaintextFooterColumnEncoding(t *testing.T) {
+	footerKey := aes128Key(0x13)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: false,
+		FileIdentifier:  []byte{73, 74, 75, 76, 77, 78, 79, 80},
+	}
+
+	// Write with non-default (Snappy) compression so we can detect it on read.
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[encryptionTestRow](&buf,
+		parquet.WithEncryption(cfg),
+		parquet.Compression(&parquet.Snappy),
+	)
+	if _, err := w.Write(testRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+
+	keys := &staticKeyRetriever{footerKey: footerKey}
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(keys))
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+
+	// The root column's leaf compression should be Snappy, not nil.
+	for _, rg := range f.RowGroups() {
+		for _, cc := range rg.ColumnChunks() {
+			if cc.NumValues() == 0 {
+				t.Errorf("col=%d: NumValues=0 after decryption, column metadata was not restored", cc.Column())
+			}
+		}
+	}
+
+	// Full round-trip must also succeed.
+	got := readDecrypted(t, data, keys)
+	assertRowsEqual(t, testRows, got)
+}
+
 // TestEncryptionCTRAlgorithmRejected verifies that requesting AES_GCM_CTR_V1
 // (not yet implemented) causes the writer to panic immediately rather than
 // silently emitting a GCM-encrypted file labelled as CTR.
