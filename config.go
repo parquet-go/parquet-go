@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"math"
@@ -145,9 +146,9 @@ func (c *FileConfig) ConfigureFile(config *FileConfig) {
 		SkipPageIndex:        c.SkipPageIndex,
 		SkipBloomFilters:     c.SkipBloomFilters,
 		PrefetchBloomFilters: c.PrefetchBloomFilters,
-		ReadBufferSize:       coalesceInt(c.ReadBufferSize, config.ReadBufferSize),
-		ReadMode:             ReadMode(coalesceInt(int(c.ReadMode), int(config.ReadMode))),
-		Schema:               coalesceSchema(c.Schema, config.Schema),
+		ReadBufferSize:       cmp.Or(c.ReadBufferSize, config.ReadBufferSize),
+		ReadMode:             ReadMode(cmp.Or(int(c.ReadMode), int(config.ReadMode))),
+		Schema:               cmp.Or(c.Schema, config.Schema),
 	}
 }
 
@@ -198,8 +199,8 @@ func (c *ReaderConfig) Apply(options ...ReaderOption) {
 // ConfigureReader applies configuration options from c to config.
 func (c *ReaderConfig) ConfigureReader(config *ReaderConfig) {
 	*config = ReaderConfig{
-		Schema:       coalesceSchema(c.Schema, config.Schema),
-		SchemaConfig: coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
+		Schema:       cmp.Or(c.Schema, config.Schema),
+		SchemaConfig: cmp.Or(c.SchemaConfig, config.SchemaConfig),
 	}
 }
 
@@ -296,26 +297,26 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 	}
 
 	*config = WriterConfig{
-		CreatedBy:                    coalesceString(c.CreatedBy, config.CreatedBy),
-		ColumnPageBuffers:            coalesceBufferPool(c.ColumnPageBuffers, config.ColumnPageBuffers),
-		ColumnIndexSizeLimit:         coalesceColumnIndexLimit(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
-		PageBufferSize:               coalesceInt(c.PageBufferSize, config.PageBufferSize),
-		WriteBufferSize:              coalesceInt(c.WriteBufferSize, config.WriteBufferSize),
-		DataPageVersion:              coalesceInt(c.DataPageVersion, config.DataPageVersion),
-		DataPageStatistics:           coalesceBool(c.DataPageStatistics, config.DataPageStatistics),
-		DeprecatedDataPageStatistics: coalesceBool(c.DeprecatedDataPageStatistics, config.DeprecatedDataPageStatistics),
-		MaxRowsPerRowGroup:           coalesceInt64(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
+		CreatedBy:                    cmp.Or(c.CreatedBy, config.CreatedBy),
+		ColumnPageBuffers:            cmp.Or(c.ColumnPageBuffers, config.ColumnPageBuffers),
+		ColumnIndexSizeLimit:         coalesceFunc(c.ColumnIndexSizeLimit, config.ColumnIndexSizeLimit),
+		PageBufferSize:               cmp.Or(c.PageBufferSize, config.PageBufferSize),
+		WriteBufferSize:              cmp.Or(c.WriteBufferSize, config.WriteBufferSize),
+		DataPageVersion:              cmp.Or(c.DataPageVersion, config.DataPageVersion),
+		DataPageStatistics:           c.DataPageStatistics || config.DataPageStatistics,
+		DeprecatedDataPageStatistics: c.DeprecatedDataPageStatistics || config.DeprecatedDataPageStatistics,
+		MaxRowsPerRowGroup:           cmp.Or(c.MaxRowsPerRowGroup, config.MaxRowsPerRowGroup),
 		KeyValueMetadata:             keyValueMetadata,
-		Schema:                       coalesceSchema(c.Schema, config.Schema),
+		Schema:                       cmp.Or(c.Schema, config.Schema),
 		BloomFilters:                 coalesceSlices(c.BloomFilters, config.BloomFilters),
-		DeferredBloomFiltersBuffers:  coalesceBufferPool(c.DeferredBloomFiltersBuffers, config.DeferredBloomFiltersBuffers),
-		BloomFilterCompression:       coalesceCompression(c.BloomFilterCompression, config.BloomFilterCompression),
-		Compression:                  coalesceCompression(c.Compression, config.Compression),
+		DeferredBloomFiltersBuffers:  cmp.Or(c.DeferredBloomFiltersBuffers, config.DeferredBloomFiltersBuffers),
+		BloomFilterCompression:       cmp.Or(c.BloomFilterCompression, config.BloomFilterCompression),
+		Compression:                  cmp.Or(c.Compression, config.Compression),
 		Sorting:                      coalesceSortingConfig(c.Sorting, config.Sorting),
 		SkipPageBounds:               coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
 		SkipPageStatistics:           coalesceSlices(c.SkipPageStatistics, config.SkipPageStatistics),
 		Encodings:                    encodings,
-		SchemaConfig:                 coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
+		SchemaConfig:                 cmp.Or(c.SchemaConfig, config.SchemaConfig),
 	}
 }
 
@@ -383,8 +384,8 @@ func (c *RowGroupConfig) Apply(options ...RowGroupOption) {
 
 func (c *RowGroupConfig) ConfigureRowGroup(config *RowGroupConfig) {
 	*config = RowGroupConfig{
-		ColumnBufferCapacity: coalesceInt(c.ColumnBufferCapacity, config.ColumnBufferCapacity),
-		Schema:               coalesceSchema(c.Schema, config.Schema),
+		ColumnBufferCapacity: cmp.Or(c.ColumnBufferCapacity, config.ColumnBufferCapacity),
+		Schema:               cmp.Or(c.Schema, config.Schema),
 		Sorting:              coalesceSortingConfig(c.Sorting, config.Sorting),
 	}
 }
@@ -875,7 +876,7 @@ type SchemaConfig struct {
 }
 
 func (c *SchemaConfig) ConfigureSchema(config *SchemaConfig) {
-	config.StructTags = coalesceStructTags(c.StructTags, config.StructTags)
+	config.StructTags = coalesceSlices(c.StructTags, config.StructTags)
 }
 
 func (c *SchemaConfig) ConfigureReader(config *ReaderConfig) {
@@ -947,31 +948,6 @@ type sortingOption func(*SortingConfig)
 
 func (opt sortingOption) ConfigureSorting(config *SortingConfig) { opt(config) }
 
-func coalesceBool(i1, i2 bool) bool {
-	return i1 || i2
-}
-
-func coalesceInt(i1, i2 int) int {
-	if i1 != 0 {
-		return i1
-	}
-	return i2
-}
-
-func coalesceInt64(i1, i2 int64) int64 {
-	if i1 != 0 {
-		return i1
-	}
-	return i2
-}
-
-func coalesceString(s1, s2 string) string {
-	if s1 != "" {
-		return s1
-	}
-	return s2
-}
-
 func coalesceSlices[T any](s1, s2 []T) []T {
 	if s1 != nil {
 		return s1
@@ -979,54 +955,19 @@ func coalesceSlices[T any](s1, s2 []T) []T {
 	return s2
 }
 
-func coalesceColumnIndexLimit(f1, f2 func([]string) int) func([]string) int {
+func coalesceFunc[F ~func(I) O, I, O any](f1, f2 F) F {
 	if f1 != nil {
 		return f1
 	}
 	return f2
-}
-
-func coalesceBufferPool(p1, p2 BufferPool) BufferPool {
-	if p1 != nil {
-		return p1
-	}
-	return p2
-}
-
-func coalesceSchema(s1, s2 *Schema) *Schema {
-	if s1 != nil {
-		return s1
-	}
-	return s2
 }
 
 func coalesceSortingConfig(c1, c2 SortingConfig) SortingConfig {
 	return SortingConfig{
-		SortingBuffers:     coalesceBufferPool(c1.SortingBuffers, c2.SortingBuffers),
+		SortingBuffers:     cmp.Or(c1.SortingBuffers, c2.SortingBuffers),
 		SortingColumns:     coalesceSlices(c1.SortingColumns, c2.SortingColumns),
 		DropDuplicatedRows: c1.DropDuplicatedRows,
 	}
-}
-
-func coalesceCompression(c1, c2 compress.Codec) compress.Codec {
-	if c1 != nil {
-		return c1
-	}
-	return c2
-}
-
-func coalesceSchemaConfig(f1, f2 *SchemaConfig) *SchemaConfig {
-	if f1 != nil {
-		return f1
-	}
-	return f2
-}
-
-func coalesceStructTags(s1, s2 []StructTagOption) []StructTagOption {
-	if len(s1) > 0 {
-		return s1
-	}
-	return s2
 }
 
 func validatePositiveInt(optionName string, optionValue int) error {
