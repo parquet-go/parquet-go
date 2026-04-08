@@ -104,6 +104,7 @@ type FileConfig struct {
 	ReadBufferSize       int
 	ReadMode             ReadMode
 	Schema               *Schema
+	Decryption           *DecryptionConfig
 }
 
 // DefaultFileConfig returns a new FileConfig value initialized with the
@@ -148,6 +149,7 @@ func (c *FileConfig) ConfigureFile(config *FileConfig) {
 		ReadBufferSize:       coalesceInt(c.ReadBufferSize, config.ReadBufferSize),
 		ReadMode:             ReadMode(coalesceInt(int(c.ReadMode), int(config.ReadMode))),
 		Schema:               coalesceSchema(c.Schema, config.Schema),
+		Decryption:           coalesceDecryption(c.Decryption, config.Decryption),
 	}
 }
 
@@ -236,6 +238,7 @@ type WriterConfig struct {
 	Encodings                    map[Kind]encoding.Encoding
 	DictionaryMaxBytes           int64
 	SchemaConfig                 *SchemaConfig
+	Encryption                   *EncryptionConfig
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -312,6 +315,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		SkipPageStatistics:           coalesceSlices(c.SkipPageStatistics, config.SkipPageStatistics),
 		Encodings:                    encodings,
 		SchemaConfig:                 coalesceSchemaConfig(c.SchemaConfig, config.SchemaConfig),
+		Encryption:                   coalesceEncryption(c.Encryption, config.Encryption),
 	}
 }
 
@@ -995,6 +999,20 @@ func coalesceSchemaConfig(f1, f2 *SchemaConfig) *SchemaConfig {
 		return f1
 	}
 	return f2
+}
+
+func coalesceDecryption(d1, d2 *DecryptionConfig) *DecryptionConfig {
+	if d1 != nil {
+		return d1
+	}
+	return d2
+}
+
+func coalesceEncryption(e1, e2 *EncryptionConfig) *EncryptionConfig {
+	if e1 != nil {
+		return e1
+	}
+	return e2
 }
 
 func coalesceStructTags(s1, s2 []StructTagOption) []StructTagOption {

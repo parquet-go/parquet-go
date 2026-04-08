@@ -981,6 +981,8 @@ type writer struct {
 
 	fileMetaData format.FileMetaData
 	footer       [8]byte
+
+	encryption *fileEncryptionState // nil when encryption is disabled
 }
 
 func newWriter(output io.Writer, config *WriterConfig) *writer {
@@ -1062,7 +1064,31 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 		w.columnOrders[i] = *c.columnType.ColumnOrder()
 	}
 
-	copy(w.footer[4:], "PAR1")
+	if config.Encryption != nil {
+		enc, err := newFileEncryptionState(config.Encryption)
+		if err != nil {
+			// newWriter has no error return; panic here mirrors any other init failure in this function.
+			panic("parquet: " + err.Error())
+		}
+		w.encryption = enc
+		// Configure each column with its encryption key and state.
+		// Row group ordinal starts at 0; it is updated after each row group is committed.
+		for i, c := range w.currentRowGroup.columns {
+			path := columnPathString(c.columnPath)
+			c.encKey = enc.columnKeyFor(path)
+			c.columnOrdinal = int16(i)
+			c.rowGroupOrdinal = 0
+			c.fileUnique = enc.fileUnique
+			c.aadPrefix = enc.cfg.AadPrefix
+		}
+		if config.Encryption.EncryptedFooter {
+			copy(w.footer[4:], "PARE")
+		} else {
+			copy(w.footer[4:], "PAR1")
+		}
+	} else {
+		copy(w.footer[4:], "PAR1")
+	}
 	return w
 }
 
@@ -1121,7 +1147,11 @@ func (w *writer) writeFileHeader() error {
 		return io.ErrClosedPipe
 	}
 	if w.writer.offset == 0 {
-		_, err := w.writer.WriteString("PAR1")
+		magic := "PAR1"
+		if w.encryption != nil && w.encryption.cfg.EncryptedFooter {
+			magic = "PARE"
+		}
+		_, err := w.writer.WriteString(magic)
 		return err
 	}
 	return nil
@@ -1189,6 +1219,78 @@ func (w *writer) writeFileFooter() error {
 		ColumnOrders:     w.columnOrders,
 	}
 
+	if w.encryption != nil {
+		enc := w.encryption
+		algo := format.EncryptionAlgorithm{
+			AesGcmV1: &format.AesGcmV1{
+				AadFileUnique: enc.fileUnique,
+				AadPrefix:     enc.cfg.AadPrefix,
+			},
+		}
+
+		if enc.cfg.EncryptedFooter {
+			// Encrypted footer mode: write FileCryptoMetaData + encrypted footer + size + "PARE".
+			// Thrift-encode the FileMetaData into a buffer, then encrypt it.
+			var footerBuf bytes.Buffer
+			footerEncoder := thrift.NewEncoder(protocol.NewWriter(&footerBuf))
+			if err := footerEncoder.Encode(&w.fileMetaData); err != nil {
+				return err
+			}
+			footerAAD := makeAAD(enc.cfg.AadPrefix, enc.fileUnique, footerModule)
+			encFooter, err := encryptModule(enc.cfg.FooterKey, footerAAD, footerBuf.Bytes())
+			if err != nil {
+				return fmt.Errorf("encrypting footer: %w", err)
+			}
+
+			// Capture offset before writing FileCryptoMetaData so we can compute total size.
+			startOffset := w.writer.offset
+
+			// Write FileCryptoMetaData (plaintext, thrift).
+			cryptoMeta := format.FileCryptoMetaData{EncryptionAlgorithm: algo}
+			if err := encoder.Encode(&cryptoMeta); err != nil {
+				return err
+			}
+			// Write encrypted footer envelope.
+			if _, err := w.writer.Write(encFooter); err != nil {
+				return err
+			}
+			// Footer size = FileCryptoMetaData bytes + encrypted footer bytes.
+			footerLen := w.writer.offset - startOffset
+			binary.LittleEndian.PutUint32(w.footer[:4], uint32(footerLen))
+			_, err = w.writer.Write(w.footer[:])
+			return err
+		}
+
+		// Plaintext footer mode: write FileMetaData with EncryptionAlgorithm set,
+		// then append a 28-byte signature (nonce || GCM tag).
+		w.fileMetaData.EncryptionAlgorithm = algo
+
+		var footerBuf bytes.Buffer
+		footerEncoder := thrift.NewEncoder(protocol.NewWriter(&footerBuf))
+		if err := footerEncoder.Encode(&w.fileMetaData); err != nil {
+			return err
+		}
+		footerBytes := footerBuf.Bytes()
+
+		// Write the plaintext footer to the file.
+		if _, err := w.writer.Write(footerBytes); err != nil {
+			return err
+		}
+		// Compute and append the 28-byte signature.
+		footerAAD := makeAAD(enc.cfg.AadPrefix, enc.fileUnique, footerModule)
+		sig, err := signFooter(enc.cfg.FooterKey, footerAAD, footerBytes)
+		if err != nil {
+			return fmt.Errorf("signing footer: %w", err)
+		}
+		if _, err := w.writer.Write(sig); err != nil {
+			return err
+		}
+		// Footer length = len(footerBytes) + len(sig).
+		binary.LittleEndian.PutUint32(w.footer[:4], uint32(len(footerBytes)+len(sig)))
+		_, err = w.writer.Write(w.footer[:])
+		return err
+	}
+
 	length := w.writer.offset
 	if err := encoder.Encode(&w.fileMetaData); err != nil {
 		return err
@@ -1220,7 +1322,21 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 
 	defer func() {
 		rg.reset()
+		// After reset, update the row group ordinal for the next row group.
+		if w.encryption != nil {
+			nextOrdinal := int16(len(w.rowGroups))
+			for _, c := range rg.columns {
+				c.rowGroupOrdinal = nextOrdinal
+			}
+		}
 	}()
+
+	// Ensure all columns use the correct row group ordinal before flushing final pages.
+	if w.encryption != nil {
+		for _, c := range rg.columns {
+			c.rowGroupOrdinal = int16(rowGroupIndex)
+		}
+	}
 
 	for _, c := range rg.columns {
 		if err := c.Flush(); err != nil {
@@ -1284,6 +1400,25 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 			}
 			bloomFilterLength := w.writer.offset - bloomFilterOffset
 			c.columnChunk.MetaData.BloomFilterLength = int32(bloomFilterLength)
+		}
+	}
+
+	// Set ColumnCryptoMetaData on each column chunk when encryption is active.
+	if w.encryption != nil {
+		for _, c := range rg.columns {
+			path := columnPathString(c.columnPath)
+			_, hasColumnKey := w.encryption.cfg.ColumnKeys[path]
+			if !hasColumnKey {
+				c.columnChunk.CryptoMetadata = format.ColumnCryptoMetaData{
+					EncryptionWithFooterKey: &format.EncryptionWithFooterKey{},
+				}
+			} else {
+				c.columnChunk.CryptoMetadata = format.ColumnCryptoMetaData{
+					EncryptionWithColumnKey: &format.EncryptionWithColumnKey{
+						PathInSchema: c.columnPath,
+					},
+				}
+			}
 		}
 	}
 
@@ -1560,6 +1695,13 @@ type ColumnWriter struct {
 	offsetIndex        *format.OffsetIndex
 	hasSwitchedToPlain bool  // Tracks if dictionary encoding was switched to PLAIN
 	dictionaryMaxBytes int64 // Per-column dictionary size limit
+
+	// Encryption state; nil encKey means column is not encrypted.
+	encKey          []byte
+	rowGroupOrdinal int16
+	columnOrdinal   int16
+	fileUnique      []byte
+	aadPrefix       []byte
 
 	totalUnencodedByteArrayBytes  int64
 	repetitionLevelHistogram      []int64
@@ -1850,9 +1992,34 @@ func (c *ColumnWriter) writeValues(values []Value) (numValues int, err error) {
 }
 
 func (c *ColumnWriter) writeBloomFilter(w io.Writer) error {
-	e := thrift.NewEncoder(c.header.protocol.NewWriter(w))
 	h := bloomFilterHeader(c.columnFilter)
 	h.NumBytes = int32(len(c.filter))
+
+	if c.encKey != nil {
+		// Encode the bloom filter header to a temp buffer, then encrypt both modules.
+		var hdrBuf bytes.Buffer
+		e := thrift.NewEncoder(c.header.protocol.NewWriter(&hdrBuf))
+		if err := e.Encode(&h); err != nil {
+			return err
+		}
+		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, bloomFilterHdrModule, c.rowGroupOrdinal, c.columnOrdinal)
+		encHdr, err := encryptModule(c.encKey, hdrAAD, hdrBuf.Bytes())
+		if err != nil {
+			return fmt.Errorf("encrypting bloom filter header: %w", err)
+		}
+		bitsAAD := makeAAD(c.aadPrefix, c.fileUnique, bloomFilterBitsModule, c.rowGroupOrdinal, c.columnOrdinal)
+		encBits, err := encryptModule(c.encKey, bitsAAD, c.filter)
+		if err != nil {
+			return fmt.Errorf("encrypting bloom filter bitset: %w", err)
+		}
+		if _, err := w.Write(encHdr); err != nil {
+			return err
+		}
+		_, err = w.Write(encBits)
+		return err
+	}
+
+	e := thrift.NewEncoder(c.header.protocol.NewWriter(w))
 	if err := e.Encode(&h); err != nil {
 		return err
 	}
@@ -1945,7 +2112,39 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 		return 0, err
 	}
 
-	size := int64(c.header.buffer.Len()) +
+	plainHeaderLen := int32(c.header.buffer.Len())
+
+	if c.encKey != nil {
+		pageOrd := int16(c.numPages)
+		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrd)
+		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
+		if err != nil {
+			return 0, fmt.Errorf("encrypting data page header: %w", err)
+		}
+		body := make([]byte, 0, len(buf.repetitions)+len(buf.definitions)+len(buf.page))
+		body = append(body, buf.repetitions...)
+		body = append(body, buf.definitions...)
+		body = append(body, buf.page...)
+		bodyAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageBodyModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrd)
+		encBody, err := encryptModule(c.encKey, bodyAAD, body)
+		if err != nil {
+			return 0, fmt.Errorf("encrypting data page body: %w", err)
+		}
+		encSize := int64(len(encHdr) + len(encBody))
+		err = c.writePageTo(encSize, func(output io.Writer) (int64, error) {
+			n1, _ := output.Write(encHdr)
+			n2, werr := output.Write(encBody)
+			return int64(n1 + n2), werr
+		})
+		if err != nil {
+			return 0, err
+		}
+		c.recordPageStats(plainHeaderLen, &c.header.page, page)
+		c.patchEncryptedCompressedSize(encSize, plainHeaderLen, c.header.page.CompressedPageSize)
+		return numValues, nil
+	}
+
+	size := int64(plainHeaderLen) +
 		int64(len(buf.repetitions)) +
 		int64(len(buf.definitions)) +
 		int64(len(buf.page))
@@ -1969,7 +2168,7 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 		return 0, err
 	}
 
-	c.recordPageStats(int32(c.header.buffer.Len()), &c.header.page, page)
+	c.recordPageStats(plainHeaderLen, &c.header.page, page)
 	return numValues, nil
 }
 
@@ -2007,6 +2206,30 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	if err := c.header.encoder.Encode(&c.header.dict); err != nil {
 		return err
 	}
+
+	if c.encKey != nil {
+		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, 0)
+		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
+		if err != nil {
+			return fmt.Errorf("encrypting dictionary page header: %w", err)
+		}
+		bodyAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageBodyModule, c.rowGroupOrdinal, c.columnOrdinal, 0)
+		encBody, err := encryptModule(c.encKey, bodyAAD, buf.page)
+		if err != nil {
+			return fmt.Errorf("encrypting dictionary page body: %w", err)
+		}
+		if _, err := output.Write(encHdr); err != nil {
+			return err
+		}
+		if _, err := output.Write(encBody); err != nil {
+			return err
+		}
+		plainHeaderLen := int32(c.header.buffer.Len())
+		c.recordPageStats(plainHeaderLen, &c.header.dict, nil)
+		c.patchEncryptedCompressedSize(int64(len(encHdr)+len(encBody)), plainHeaderLen, c.header.dict.CompressedPageSize)
+		return nil
+	}
+
 	if _, err := output.Write(c.header.buffer.Bytes()); err != nil {
 		return err
 	}
@@ -2015,6 +2238,17 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	}
 	c.recordPageStats(int32(c.header.buffer.Len()), &c.header.dict, nil)
 	return nil
+}
+
+// patchEncryptedCompressedSize adjusts the last PageLocation and TotalCompressedSize after
+// recordPageStats to reflect the actual encrypted size on disk instead of the plaintext size.
+func (c *ColumnWriter) patchEncryptedCompressedSize(encSize int64, plainHeaderLen, plainBodyLen int32) {
+	plainTotal := int64(plainHeaderLen) + int64(plainBodyLen)
+	delta := encSize - plainTotal
+	c.columnChunk.MetaData.TotalCompressedSize += delta
+	if n := len(c.offsetIndex.PageLocations); n > 0 {
+		c.offsetIndex.PageLocations[n-1].CompressedPageSize = int32(encSize)
+	}
 }
 
 func (c *ColumnWriter) writePageToFilter(page Page) (err error) {
