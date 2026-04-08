@@ -355,7 +355,7 @@ func makeValue(k Kind, lt *format.LogicalType, v reflect.Value) Value {
 				return makeValueBytes(k, v.Bytes())
 			}
 		case reflect.Struct:
-			if lt != nil && lt.Interval != nil {
+			if v.Type() == reflect.TypeOf(Interval{}) {
 				iv := v.Interface().(Interval)
 				buf := make([]byte, 12)
 				binary.LittleEndian.PutUint32(buf[0:4], iv.Months)

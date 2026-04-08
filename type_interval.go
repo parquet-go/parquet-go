@@ -26,13 +26,12 @@ type Interval struct {
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
 func IntervalNode() Node { return Leaf(&intervalType{}) }
 
-var intervalLogicalType = format.LogicalType{
-	Interval: new(format.IntervalType),
-}
+// intervalType implements the INTERVAL logical type. INTERVAL has no formal
+// LogicalType entry in the Parquet Thrift spec (field 9 is reserved but
+// undefined); it is expressed solely via ConvertedType = 21 (deprecated.Interval).
+type intervalType struct{}
 
-type intervalType format.IntervalType
-
-func (t *intervalType) String() string { return (*format.IntervalType)(t).String() }
+func (t *intervalType) String() string { return "INTERVAL" }
 
 func (t *intervalType) Kind() Kind { return fixedLenByteArrayType{length: 12}.Kind() }
 
@@ -58,7 +57,7 @@ func (t *intervalType) PhysicalType() *format.Type {
 	return fixedLenByteArrayType{length: 12}.PhysicalType()
 }
 
-func (t *intervalType) LogicalType() *format.LogicalType { return &intervalLogicalType }
+func (t *intervalType) LogicalType() *format.LogicalType { return nil }
 
 func (t *intervalType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Interval]

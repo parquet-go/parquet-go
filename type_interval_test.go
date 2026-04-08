@@ -18,11 +18,10 @@ func TestIntervalNodeType(t *testing.T) {
 	if got, want := typ.Length(), 12; got != want {
 		t.Errorf("Length: got %v, want %v", got, want)
 	}
-	if lt := typ.LogicalType(); lt == nil || lt.Interval == nil {
-		t.Error("LogicalType.Interval is nil")
-	}
-	if got, want := typ.LogicalType().String(), "INTERVAL"; got != want {
-		t.Errorf("LogicalType.String: got %q, want %q", got, want)
+	// INTERVAL has no formal LogicalType in the Parquet spec (field 9 is reserved);
+	// it is expressed solely via ConvertedType = 21.
+	if lt := typ.LogicalType(); lt != nil {
+		t.Errorf("LogicalType: expected nil, got %v", lt)
 	}
 	ct := typ.ConvertedType()
 	if ct == nil {

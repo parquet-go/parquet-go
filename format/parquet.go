@@ -165,23 +165,21 @@ type Statistics struct {
 }
 
 // Empty structs to use as logical type annotations.
-type StringType struct{}   // allowed for BINARY, must be encoded with UTF-8
-type UUIDType struct{}     // allowed for FIXED[16], must encode raw UUID bytes
-type MapType struct{}      // see LogicalTypes.md
-type ListType struct{}     // see LogicalTypes.md
-type EnumType struct{}     // allowed for BINARY, must be encoded with UTF-8
-type DateType struct{}     // allowed for INT32
-type Float16Type struct{}  // allowed for FIXED[2], must encoded raw FLOAT16 bytes
-type IntervalType struct{} // allowed for FIXED[12], stores months/days/millis as 3x uint32 LE
+type StringType struct{}  // allowed for BINARY, must be encoded with UTF-8
+type UUIDType struct{}    // allowed for FIXED[16], must encode raw UUID bytes
+type MapType struct{}     // see LogicalTypes.md
+type ListType struct{}    // see LogicalTypes.md
+type EnumType struct{}    // allowed for BINARY, must be encoded with UTF-8
+type DateType struct{}    // allowed for INT32
+type Float16Type struct{} // allowed for FIXED[2], must encoded raw FLOAT16 bytes
 
-func (*StringType) String() string   { return "STRING" }
-func (*UUIDType) String() string     { return "UUID" }
-func (*MapType) String() string      { return "MAP" }
-func (*ListType) String() string     { return "LIST" }
-func (*EnumType) String() string     { return "ENUM" }
-func (*DateType) String() string     { return "DATE" }
-func (*Float16Type) String() string  { return "FLOAT16" }
-func (*IntervalType) String() string { return "INTERVAL" }
+func (*StringType) String() string  { return "STRING" }
+func (*UUIDType) String() string    { return "UUID" }
+func (*MapType) String() string     { return "MAP" }
+func (*ListType) String() string    { return "LIST" }
+func (*EnumType) String() string    { return "ENUM" }
+func (*DateType) String() string    { return "DATE" }
+func (*Float16Type) String() string { return "FLOAT16" }
 
 // Logical type to annotate a column that is always null.
 //
@@ -427,7 +425,7 @@ type LogicalType struct { // union
 	// use ConvertedType TimestampMillis for Timestamp{IsAdjustedToUTC: *, Unit: Millis}
 	Timestamp *TimestampType `thrift:"8"`
 
-	Interval  *IntervalType  `thrift:"9"`  // use ConvertedType Interval
+	// 9: reserved for Interval
 	Integer   *IntType       `thrift:"10"` // use ConvertedType Int* or Uint*
 	Unknown   *NullType      `thrift:"11"` // no compatible ConvertedType
 	Json      *JsonType      `thrift:"12"` // use ConvertedType JSON
@@ -457,8 +455,6 @@ func (t *LogicalType) String() string {
 		return t.Time.String()
 	case t.Timestamp != nil:
 		return t.Timestamp.String()
-	case t.Interval != nil:
-		return t.Interval.String()
 	case t.Integer != nil:
 		return t.Integer.String()
 	case t.Unknown != nil:
