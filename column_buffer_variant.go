@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/parquet-go/parquet-go/variant"
@@ -134,7 +135,10 @@ func writeShreddedObject(columns []ColumnBuffer, levels columnLevels, startColum
 		} else if exists && fieldVal != nil {
 			valueLevels := levels
 			valueLevels.definitionLevel++
-			metadata, val, _ := variant.Marshal(fieldVal)
+			metadata, val, err := variant.Marshal(fieldVal)
+			if err != nil {
+				panic(fmt.Sprintf("variant marshal field %q: %v", f.name, err))
+			}
 			combined := encodeFieldVariant(metadata, val)
 			columns[valueCol].writeByteArray(valueLevels, combined)
 			for c := typedValueCol; c < typedValueCol+typedCount; c++ {

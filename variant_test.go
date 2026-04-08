@@ -935,6 +935,106 @@ func TestShreddedVariantUUID(t *testing.T) {
 	}
 }
 
+// TestShreddedVariantRawStructFallbackRead verifies that a raw variant struct
+// (Metadata/Value []byte) can read shredded data where values fell back to the
+// value column (type mismatch). Previously this panicked because the decoded Go
+// value was assigned to the struct. (Codex review P1)
+func TestShreddedVariantRawStructFallbackRead(t *testing.T) {
+	type VariantData struct {
+		Metadata []byte `parquet:"metadata"`
+		Value    []byte `parquet:"value"`
+	}
+	type Record struct {
+		ID   int32       `parquet:"id"`
+		Data VariantData `parquet:"data"`
+	}
+
+	shreddedNode, err := parquet.ShreddedVariant(parquet.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := parquet.NewSchema("test", parquet.Group{
+		"id":   parquet.Leaf(parquet.Int32Type),
+		"data": shreddedNode,
+	})
+
+	// Write using any-typed records so variant encoding works
+	type WriteRecord struct {
+		ID   int32 `parquet:"id"`
+		Data any   `parquet:"data"`
+	}
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[WriteRecord](buf, schema)
+	_, err = writer.Write([]WriteRecord{
+		{ID: 1, Data: int32(42)}, // type mismatch with String → stored in value column
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read using raw struct — must not panic
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), schema)
+	defer reader.Close()
+
+	records := make([]Record, 1)
+	n, err := reader.Read(records)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("read %d records, want 1", n)
+	}
+	if records[0].ID != 1 {
+		t.Errorf("ID = %d, want 1", records[0].ID)
+	}
+	// Raw bytes should be non-empty (metadata + value were written)
+	if len(records[0].Data.Metadata) == 0 {
+		t.Error("expected non-empty metadata bytes")
+	}
+	if len(records[0].Data.Value) == 0 {
+		t.Error("expected non-empty value bytes")
+	}
+}
+
+// TestVariantSetNonAssignableTarget verifies that reading variant data into a
+// concrete Go type that can't hold the decoded value returns an error instead
+// of panicking. (Codex review P2)
+func TestVariantSetNonAssignableTarget(t *testing.T) {
+	type Record struct {
+		Data string `parquet:"data,variant"`
+	}
+
+	// Write a map — decoded as map[string]any which is not assignable to string
+	type WriteRecord struct {
+		Data any `parquet:"data,variant"`
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[WriteRecord](buf)
+	_, err := writer.Write([]WriteRecord{
+		{Data: map[string]any{"key": "val"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	records := make([]Record, 1)
+	_, err = reader.Read(records)
+	// Should get an error, not a panic
+	if err == nil {
+		t.Fatal("expected error when reading map variant into string field, got nil")
+	}
+}
+
 func TestVariantSchemaTag(t *testing.T) {
 	type Record struct {
 		Data any `parquet:"data,variant"`

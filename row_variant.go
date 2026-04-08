@@ -438,7 +438,10 @@ func (m *shreddedMatcher) shredObject(columns [][]Value, levels columnLevels, st
 			// Encode metadata+value together so nested objects can be decoded later.
 			valueLevels := levels
 			valueLevels.definitionLevel++
-			metadata, val, _ := variant.Marshal(fieldVal)
+			metadata, val, err := variant.Marshal(fieldVal)
+			if err != nil {
+				panic(fmt.Sprintf("variant marshal field %q: %v", f.name, err))
+			}
 			combined := encodeFieldVariant(metadata, val)
 			valValue := makeValueByteArray(ByteArray, unsafe.SliceData(combined), len(combined))
 			valValue.repetitionLevel = valueLevels.repetitionLevel
@@ -701,6 +704,9 @@ func reconstructFuncOfShreddedVariant(columnIndex uint16, node Node) (uint16, re
 				return nil
 			}
 			metaBytes := metaVal.ByteArray()
+			if setRawVariantStruct(value, metaBytes, valBytes) {
+				return nil
+			}
 			goVal, err := variant.Unmarshal(metaBytes, valBytes)
 			if err != nil {
 				return fmt.Errorf("variant unmarshal: %w", err)
@@ -783,7 +789,7 @@ func setVariantGoValue(value reflect.Value, goVal any) error {
 	} else if goValue.Type().ConvertibleTo(value.Type()) {
 		value.Set(goValue.Convert(value.Type()))
 	} else {
-		value.Set(goValue)
+		return fmt.Errorf("variant: cannot assign %T to %s", goVal, value.Type())
 	}
 	return nil
 }
