@@ -231,11 +231,9 @@ func writeNullLeaves(columns [][]Value, start, end uint16, levels columnLevels) 
 // shreddedMatcher determines if a Go value can be shredded into a typed_value
 // column and performs the shredding.
 type shreddedMatcher struct {
-	// For primitive typed_value (leaf node)
+	// For primitive typed_value (leaf node): the parquet type of the column.
 	isPrimitive bool
-	kind        Kind
-	isString    bool // true if ByteArray with STRING logical type
-	isUUID      bool // true if FixedLenByteArray with UUID logical type
+	typ         Type
 
 	// For group typed_value (object node)
 	isGroup bool
@@ -246,6 +244,16 @@ type shreddedMatcher struct {
 	leafCount uint16
 }
 
+func (m *shreddedMatcher) kind() Kind { return m.typ.Kind() }
+func (m *shreddedMatcher) isString() bool {
+	lt := m.typ.LogicalType()
+	return lt != nil && lt.UTF8 != nil
+}
+func (m *shreddedMatcher) isUUID() bool {
+	lt := m.typ.LogicalType()
+	return lt != nil && lt.UUID != nil
+}
+
 type shreddedFieldMatcher struct {
 	name    string
 	matcher shreddedMatcher
@@ -253,21 +261,9 @@ type shreddedFieldMatcher struct {
 
 func buildShreddedMatcher(node Node) shreddedMatcher {
 	if node.Leaf() {
-		kind := node.Type().Kind()
-		isStr := false
-		isUID := false
-		lt := node.Type().LogicalType()
-		if kind == ByteArray && lt != nil && lt.UTF8 != nil {
-			isStr = true
-		}
-		if kind == FixedLenByteArray && lt != nil && lt.UUID != nil {
-			isUID = true
-		}
 		return shreddedMatcher{
 			isPrimitive: true,
-			kind:        kind,
-			isString:    isStr,
-			isUUID:      isUID,
+			typ:         node.Type(),
 			leafCount:   1,
 		}
 	}
@@ -320,9 +316,9 @@ func (m *shreddedMatcher) canShred(v any) bool {
 }
 
 func canShredPrimitive(v any, m *shreddedMatcher) bool {
-	switch m.kind {
+	switch m.kind() {
 	case ByteArray:
-		if m.isString {
+		if m.isString() {
 			switch v.(type) {
 			case string:
 				return true
@@ -359,7 +355,7 @@ func canShredPrimitive(v any, m *shreddedMatcher) bool {
 			return true
 		}
 	case FixedLenByteArray:
-		if m.isUUID {
+		if m.isUUID() {
 			switch v.(type) {
 			case uuid.UUID, [16]byte:
 				return true
@@ -398,7 +394,7 @@ func canShredObject(v any, fields []shreddedFieldMatcher) bool {
 func (m *shreddedMatcher) shred(columns [][]Value, levels columnLevels, startColumn uint16, v any) {
 	if m.isPrimitive {
 		col := startColumn
-		pv := goValueToParquetValue(v, m.kind)
+		pv := goValueToParquetValue(v, m.kind())
 		pv.repetitionLevel = levels.repetitionLevel
 		pv.definitionLevel = levels.definitionLevel
 		pv.columnIndex = ^col
@@ -796,13 +792,21 @@ func setVariantGoValue(value reflect.Value, goVal any) error {
 // shreddedExtractor reconstructs Go values from typed_value columns.
 type shreddedExtractor struct {
 	isPrimitive bool
-	kind        Kind
-	isString    bool // true if ByteArray with STRING logical type
-	isUUID      bool // true if FixedLenByteArray with UUID logical type
+	typ         Type // parquet type of the leaf column
 
 	isGroup   bool
 	fields    []shreddedFieldExtractor
 	leafCount int // number of leaf columns for this extractor's typed_value
+}
+
+func (e *shreddedExtractor) kind() Kind { return e.typ.Kind() }
+func (e *shreddedExtractor) isString() bool {
+	lt := e.typ.LogicalType()
+	return lt != nil && lt.UTF8 != nil
+}
+func (e *shreddedExtractor) isUUID() bool {
+	lt := e.typ.LogicalType()
+	return lt != nil && lt.UUID != nil
 }
 
 type shreddedFieldExtractor struct {
@@ -812,21 +816,9 @@ type shreddedFieldExtractor struct {
 
 func buildShreddedExtractor(node Node) shreddedExtractor {
 	if node.Leaf() {
-		kind := node.Type().Kind()
-		isStr := false
-		isUID := false
-		lt := node.Type().LogicalType()
-		if kind == ByteArray && lt != nil && lt.UTF8 != nil {
-			isStr = true
-		}
-		if kind == FixedLenByteArray && lt != nil && lt.UUID != nil {
-			isUID = true
-		}
 		return shreddedExtractor{
 			isPrimitive: true,
-			kind:        kind,
-			isString:    isStr,
-			isUUID:      isUID,
+			typ:         node.Type(),
 			leafCount:   1,
 		}
 	}
@@ -928,7 +920,7 @@ func hasNonNullInRange(columns [][]Value, start, end int) bool {
 }
 
 func parquetValueToGo(v Value, e *shreddedExtractor) any {
-	switch e.kind {
+	switch e.kind() {
 	case Boolean:
 		return v.Boolean()
 	case Int32:
@@ -941,7 +933,7 @@ func parquetValueToGo(v Value, e *shreddedExtractor) any {
 		return v.Double()
 	case ByteArray:
 		b := v.ByteArray()
-		if e.isString {
+		if e.isString() {
 			return string(b)
 		}
 		dst := make([]byte, len(b))
@@ -949,7 +941,7 @@ func parquetValueToGo(v Value, e *shreddedExtractor) any {
 		return dst
 	case FixedLenByteArray:
 		b := v.ByteArray()
-		if e.isUUID && len(b) == 16 {
+		if e.isUUID() && len(b) == 16 {
 			return uuid.UUID(b)
 		}
 		if len(b) == 16 {
