@@ -1406,6 +1406,17 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		}
 	}
 
+	// Accumulate row-group byte sizes before any MetaData zeroing below.
+	totalByteSize := int64(0)
+	totalCompressedSize := int64(0)
+
+	for i := range rg.columnChunk {
+		c := &rg.columnChunk[i].MetaData
+		sortPageEncodingStats(c.EncodingStats)
+		totalByteSize += int64(c.TotalUncompressedSize)
+		totalCompressedSize += int64(c.TotalCompressedSize)
+	}
+
 	// Set ColumnCryptoMetaData on each column chunk when encryption is active.
 	if w.encryption != nil {
 		for i, c := range rg.columns {
@@ -1444,16 +1455,6 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 				c.columnChunk.MetaData = format.ColumnMetaData{}
 			}
 		}
-	}
-
-	totalByteSize := int64(0)
-	totalCompressedSize := int64(0)
-
-	for i := range rg.columnChunk {
-		c := &rg.columnChunk[i].MetaData
-		sortPageEncodingStats(c.EncodingStats)
-		totalByteSize += int64(c.TotalUncompressedSize)
-		totalCompressedSize += int64(c.TotalCompressedSize)
 	}
 
 	var reuseRowGroup *format.RowGroup = nil

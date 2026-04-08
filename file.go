@@ -222,6 +222,15 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		}
 	}
 
+	// In plaintext-footer mode with encryption, column metadata is stored as
+	// EncryptedColumnMetadata. Decrypt it into MetaData before openColumns
+	// runs, so that encoding/compression are visible to schema construction.
+	if f.decryption != nil {
+		if err := f.decryptAllColumnMetadata(); err != nil {
+			return nil, err
+		}
+	}
+
 	if f.root, err = openColumns(f, &f.metadata, f.columnIndexes, f.offsetIndexes); err != nil {
 		return nil, fmt.Errorf("opening columns of parquet file: %w", err)
 	}
@@ -423,6 +432,50 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 	return columnIndexes, offsetIndexes, nil
 }
 
+// decryptAllColumnMetadata decrypts EncryptedColumnMetadata for every column
+// chunk in every row group, restoring ColumnChunk.MetaData so that
+// openColumns and schema construction see the full encoding/compression info.
+// This must be called before openColumns.
+func (f *File) decryptAllColumnMetadata() error {
+	for rgIdx := range f.metadata.RowGroups {
+		rg := &f.metadata.RowGroups[rgIdx]
+		for colIdx := range rg.Columns {
+			chunk := &rg.Columns[colIdx]
+			if len(chunk.EncryptedColumnMetadata) == 0 {
+				continue
+			}
+			var key []byte
+			switch {
+			case chunk.CryptoMetadata.EncryptionWithFooterKey != nil:
+				var err error
+				key, err = f.decryption.Keys.FooterKey(nil)
+				if err != nil {
+					return fmt.Errorf("resolving footer key for column metadata: %w", err)
+				}
+			case chunk.CryptoMetadata.EncryptionWithColumnKey != nil:
+				colKey := chunk.CryptoMetadata.EncryptionWithColumnKey
+				var err error
+				key, err = f.decryption.Keys.ColumnKey(colKey.PathInSchema, colKey.KeyMetadata)
+				if err != nil {
+					return fmt.Errorf("resolving column key for column metadata: %w", err)
+				}
+			default:
+				continue
+			}
+			aad := makeAAD(f.aadPrefix, f.fileUnique, columnMetaDataModule, int16(rgIdx), int16(colIdx))
+			plain, err := decryptModule(key, aad, chunk.EncryptedColumnMetadata)
+			if err != nil {
+				return fmt.Errorf("decrypting column metadata: rowGroup=%d col=%d: %w", rgIdx, colIdx, err)
+			}
+			compact := thrift.CompactProtocol{}
+			if err := thrift.Unmarshal(&compact, plain, &chunk.MetaData); err != nil {
+				return fmt.Errorf("decoding column metadata: rowGroup=%d col=%d: %w", rgIdx, colIdx, err)
+			}
+		}
+	}
+	return nil
+}
+
 // NumRows returns the number of rows in the file.
 func (f *File) NumRows() int64 { return f.metadata.NumRows }
 
@@ -515,7 +568,7 @@ type FileRowGroup struct {
 	sorting  []SortingColumn
 }
 
-func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowGroup) error {
+func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowGroup) {
 	g.file = file
 	g.rowGroup = rowGroup
 	g.columns = make([]ColumnChunk, len(rowGroup.Columns))
@@ -548,20 +601,6 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 					fileColumnChunks[i].decryptionKey = key
 				}
 			}
-
-			// In plaintext-footer mode the column metadata is encrypted inline.
-			// Decrypt it now so that all subsequent code can access MetaData normally.
-			if len(chunk.EncryptedColumnMetadata) > 0 && fileColumnChunks[i].decryptionKey != nil {
-				aad := makeAAD(file.aadPrefix, file.fileUnique, columnMetaDataModule, rowGroup.Ordinal, int16(i))
-				plainMeta, err := decryptModule(fileColumnChunks[i].decryptionKey, aad, chunk.EncryptedColumnMetadata)
-				if err != nil {
-					return fmt.Errorf("decrypting column metadata: rowGroup=%d col=%d: %w", rowGroup.Ordinal, i, err)
-				}
-				compact := thrift.CompactProtocol{}
-				if err := thrift.Unmarshal(&compact, plainMeta, &chunk.MetaData); err != nil {
-					return fmt.Errorf("decoding encrypted column metadata: rowGroup=%d col=%d: %w", rowGroup.Ordinal, i, err)
-				}
-			}
 		}
 
 		if file.hasIndexes() {
@@ -584,7 +623,6 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 			nullsFirst: rowGroup.SortingColumns[i].NullsFirst,
 		}
 	}
-	return nil
 }
 
 // File returns the file that this row group belongs to.

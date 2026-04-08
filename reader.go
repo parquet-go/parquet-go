@@ -665,9 +665,7 @@ func makeFileRowGroups(file *File, columns []*Column) ([]FileRowGroup, error) {
 
 	fileRowGroups := make([]FileRowGroup, len(rowGroups))
 	for i := range fileRowGroups {
-		if err := fileRowGroups[i].init(file, columns, &rowGroups[i]); err != nil {
-			return nil, err
-		}
+		fileRowGroups[i].init(file, columns, &rowGroups[i])
 	}
 	return fileRowGroups, nil
 }
