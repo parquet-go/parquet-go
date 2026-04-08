@@ -610,6 +610,15 @@ func reconstructFuncOfUnshreddedVariant(columnIndex uint16, node Node) (uint16, 
 			return nil
 		}
 
+		// Handle empty value bytes gracefully. This can happen when reading
+		// data that was written with a shredded schema using an unshredded
+		// schema — the typed_value columns are dropped by the conversion and
+		// the value column becomes a zero-length byte array.
+		if len(valBytes) == 0 {
+			value.Set(reflect.Zero(value.Type()))
+			return nil
+		}
+
 		goVal, err := variant.Unmarshal(metaBytes, valBytes)
 		if err != nil {
 			return fmt.Errorf("variant unmarshal: %w", err)
@@ -677,6 +686,10 @@ func reconstructFuncOfShreddedVariant(columnIndex uint16, node Node) (uint16, re
 		if hasValue && !hasTypedValue {
 			// Unshredded value
 			valBytes := valCol[0].ByteArray()
+			if len(valBytes) == 0 {
+				value.Set(reflect.Zero(value.Type()))
+				return nil
+			}
 			metaBytes := metaVal.ByteArray()
 			goVal, err := variant.Unmarshal(metaBytes, valBytes)
 			if err != nil {

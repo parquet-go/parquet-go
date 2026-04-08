@@ -459,6 +459,65 @@ func TestVariantSchemaEvolution(t *testing.T) {
 			t.Errorf("record 2: Data = %v, want nil", readRecords[2].Data)
 		}
 	})
+
+	t.Run("write shredded, read unshredded does not panic", func(t *testing.T) {
+		// Write with ShreddedVariant(String()) — some values are shredded into
+		// typed_value. Read with unshredded Variant() — typed_value columns are
+		// dropped by the conversion. Values that were only in typed_value become
+		// nil (data loss), but the read must not panic or return errors.
+		writeNode, err := parquet.ShreddedVariant(parquet.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSchema := parquet.NewSchema("test", parquet.Group{
+			"id":   parquet.Leaf(parquet.Int32Type),
+			"data": writeNode,
+		})
+
+		records := []Record{
+			{ID: 1, Data: "hello"},   // Shredded into typed_value
+			{ID: 2, Data: int32(42)}, // In value column (type mismatch)
+		}
+
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Record](buf, writeSchema)
+		if _, err := writer.Write(records); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		readSchema := parquet.NewSchema("test", parquet.Group{
+			"id":   parquet.Leaf(parquet.Int32Type),
+			"data": parquet.Variant(),
+		})
+
+		reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), readSchema)
+		defer reader.Close()
+
+		readRecords := make([]Record, len(records))
+		n, err := reader.Read(readRecords)
+		if err != nil && err != io.EOF {
+			t.Fatalf("read: %v", err)
+		}
+		if n != len(records) {
+			t.Fatalf("read %d records, want %d", n, len(records))
+		}
+
+		// Record 0 was shredded — typed_value columns are dropped by conversion,
+		// so the data is lost. The value should be nil, not a panic.
+		if readRecords[0].Data != nil {
+			// If reconstruction happens to preserve it, that's even better,
+			// but nil is acceptable for this lossy conversion.
+			t.Logf("record 0: Data = %v (%T) — preserved despite lossy conversion", readRecords[0].Data, readRecords[0].Data)
+		}
+
+		// Record 1 was in the value column — should survive the conversion.
+		if v, ok := readRecords[1].Data.(int32); !ok || v != 42 {
+			t.Errorf("record 1: Data = %v (%T), want int32(42)", readRecords[1].Data, readRecords[1].Data)
+		}
+	})
 }
 
 // TestVariantRawStructPassthrough verifies that a struct with Metadata and Value
