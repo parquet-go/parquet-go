@@ -192,6 +192,46 @@ func TestEncryptionFooterSignatureTamper(t *testing.T) {
 	}
 }
 
+// TestEncryptionPlaintextFooterColumnMetadataHidden verifies that in
+// plaintext-footer mode, column metadata (page offsets, statistics) is
+// NOT present in plaintext form in the footer — it should be encrypted
+// inline as EncryptedColumnMetadata so that unauthenticated readers
+// cannot read sensitive metadata.
+func TestEncryptionPlaintextFooterColumnMetadataHidden(t *testing.T) {
+	footerKey := aes128Key(0xAA)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: false, // plaintext-footer mode
+		FileIdentifier:  []byte{57, 58, 59, 60, 61, 62, 63, 64},
+	}
+	data := writeEncrypted(t, testRows, cfg)
+
+	// Open the file WITHOUT a decryption key and attempt to read row groups.
+	// The plaintext footer must not expose column metadata — if MetaData is
+	// present in plaintext the unauthenticated reader could use data offsets.
+	fPlain, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		// A signed-footer file opened without keys: error is expected
+		// only if the implementation verifies signatures on open.
+		// Either way, if open succeeds the metadata must be hidden.
+		return
+	}
+	rgs := fPlain.RowGroups()
+	for i, rg := range rgs {
+		for j, cc := range rg.ColumnChunks() {
+			if cc.NumValues() != 0 {
+				t.Errorf("rowGroup=%d col=%d: NumValues=%d but column metadata should be hidden without decryption key",
+					i, j, cc.NumValues())
+			}
+		}
+	}
+
+	// With the correct key the round-trip must still work.
+	keys := &staticKeyRetriever{footerKey: footerKey}
+	got := readDecrypted(t, data, keys)
+	assertRowsEqual(t, testRows, got)
+}
+
 // TestEncryptionCTRAlgorithmRejected verifies that requesting AES_GCM_CTR_V1
 // (not yet implemented) causes the writer to panic immediately rather than
 // silently emitting a GCM-encrypted file labelled as CTR.
