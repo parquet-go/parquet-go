@@ -747,8 +747,8 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 			}),
 			writeDeprecatedStatistics: config.DeprecatedDataPageStatistics,
 			encodings:                 make([]format.Encoding, 0, 3),
-			isCompressed: isCompressed(compression),
-			dictionaryMaxBytes: config.DictionaryMaxBytes,
+			isCompressed:              isCompressed(compression),
+			dictionaryMaxBytes:        config.DictionaryMaxBytes,
 		}
 
 		if lt := leaf.node.Type().LogicalType(); lt != nil && (lt.Geometry != nil || lt.Geography != nil) {
