@@ -233,10 +233,15 @@ type shreddedMatcher struct {
 	// For primitive typed_value (leaf node)
 	isPrimitive bool
 	kind        Kind
+	isString    bool // true if ByteArray with STRING logical type
 
 	// For group typed_value (object node)
 	isGroup bool
 	fields  []shreddedFieldMatcher
+
+	// leafCount is the number of leaf columns this matcher's typed_value occupies.
+	// Used to correctly advance column offsets even for unsupported types (e.g., LIST).
+	leafCount uint16
 }
 
 type shreddedFieldMatcher struct {
@@ -246,9 +251,17 @@ type shreddedFieldMatcher struct {
 
 func buildShreddedMatcher(node Node) shreddedMatcher {
 	if node.Leaf() {
+		kind := node.Type().Kind()
+		isStr := false
+		if kind == ByteArray {
+			lt := node.Type().LogicalType()
+			isStr = lt != nil && lt.UTF8 != nil
+		}
 		return shreddedMatcher{
 			isPrimitive: true,
-			kind:        node.Type().Kind(),
+			kind:        kind,
+			isString:    isStr,
+			leafCount:   1,
 		}
 	}
 
@@ -272,14 +285,18 @@ func buildShreddedMatcher(node Node) shreddedMatcher {
 
 	if len(matchers) > 0 {
 		return shreddedMatcher{
-			isGroup: true,
-			fields:  matchers,
+			isGroup:   true,
+			fields:    matchers,
+			leafCount: countMatcherLeaves(matchers),
 		}
 	}
 
 	// Unsupported typed_value structure (e.g., LIST). Return a matcher
 	// that never shreds so values always go to the value column.
-	return shreddedMatcher{}
+	// Still compute leaf count so column offsets are correct.
+	return shreddedMatcher{
+		leafCount: numLeafColumnsOf(node),
+	}
 }
 
 func (m *shreddedMatcher) canShred(v any) bool {
@@ -287,7 +304,7 @@ func (m *shreddedMatcher) canShred(v any) bool {
 		return false
 	}
 	if m.isPrimitive {
-		return canShredPrimitive(v, m.kind)
+		return canShredPrimitive(v, m.kind, m.isString)
 	}
 	if m.isGroup {
 		return canShredObject(v, m.fields)
@@ -295,12 +312,21 @@ func (m *shreddedMatcher) canShred(v any) bool {
 	return false
 }
 
-func canShredPrimitive(v any, kind Kind) bool {
+func canShredPrimitive(v any, kind Kind, isString bool) bool {
 	switch kind {
 	case ByteArray:
-		switch v.(type) {
-		case string, []byte:
-			return true
+		if isString {
+			// STRING typed_value: only shred string values
+			switch v.(type) {
+			case string:
+				return true
+			}
+		} else {
+			// Plain BYTE_ARRAY typed_value: only shred []byte values
+			switch v.(type) {
+			case []byte:
+				return true
+			}
 		}
 	case Int32:
 		switch v.(type) {
@@ -384,10 +410,7 @@ func (m *shreddedMatcher) shredObject(columns [][]Value, levels columnLevels, st
 		// Within each field's sub-group, fields are sorted alphabetically:
 		// typed_value comes before value.
 		typedValueCol := col
-		typedCount := uint16(1)
-		if f.matcher.isGroup {
-			typedCount = countMatcherColumns(&f.matcher)
-		}
+		typedCount := f.matcher.leafCount
 		valueCol := col + typedCount
 		nextFieldCol := valueCol + 1
 
@@ -450,18 +473,23 @@ func decodeFieldVariant(data []byte) (metadata, value []byte, ok bool) {
 	return data[4 : 4+mLen], data[4+mLen:], true
 }
 
+// countMatcherColumns returns the total number of leaf columns for a matcher,
+// including the value column for each field in a group.
 func countMatcherColumns(m *shreddedMatcher) uint16 {
-	if m.isPrimitive {
-		return 1
-	}
 	if m.isGroup {
-		var count uint16
-		for _, f := range m.fields {
-			count += 1 + countMatcherColumns(&f.matcher) // value + typed_value
-		}
-		return count
+		return countMatcherLeaves(m.fields)
 	}
-	return 1
+	return m.leafCount
+}
+
+// countMatcherLeaves sums the leaf columns for a list of field matchers.
+// Each field contributes its typed_value leaf count plus one value column.
+func countMatcherLeaves(fields []shreddedFieldMatcher) uint16 {
+	var count uint16
+	for _, f := range fields {
+		count += f.matcher.leafCount + 1 // typed_value leaves + value column
+	}
+	return count
 }
 
 func goValueToParquetValue(v any, kind Kind) Value {
@@ -743,8 +771,9 @@ type shreddedExtractor struct {
 	kind        Kind
 	isString    bool // true if ByteArray with STRING logical type
 
-	isGroup bool
-	fields  []shreddedFieldExtractor
+	isGroup   bool
+	fields    []shreddedFieldExtractor
+	leafCount int // number of leaf columns for this extractor's typed_value
 }
 
 type shreddedFieldExtractor struct {
@@ -764,6 +793,7 @@ func buildShreddedExtractor(node Node) shreddedExtractor {
 			isPrimitive: true,
 			kind:        kind,
 			isString:    isStr,
+			leafCount:   1,
 		}
 	}
 
@@ -783,15 +813,22 @@ func buildShreddedExtractor(node Node) shreddedExtractor {
 	}
 
 	if len(extractors) > 0 {
+		leaves := 0
+		for _, f := range extractors {
+			leaves += f.extractor.leafCount + 1 // typed_value leaves + value column
+		}
 		return shreddedExtractor{
-			isGroup: true,
-			fields:  extractors,
+			isGroup:   true,
+			fields:    extractors,
+			leafCount: leaves,
 		}
 	}
 
 	// Unsupported typed_value structure (e.g., LIST). Return an extractor
 	// that always returns nil so values are read from the value column.
-	return shreddedExtractor{}
+	return shreddedExtractor{
+		leafCount: int(numLeafColumnsOf(node)),
+	}
 }
 
 func (e *shreddedExtractor) extract(columns [][]Value) any {
@@ -814,10 +851,7 @@ func (e *shreddedExtractor) extractObject(columns [][]Value) any {
 		// Within each field's sub-group, fields are sorted alphabetically:
 		// typed_value comes before value.
 		typedStart := col
-		typedCount := 1
-		if f.extractor.isGroup {
-			typedCount = int(countExtractorColumns(&f.extractor))
-		}
+		typedCount := f.extractor.leafCount
 		valueCol := col + typedCount
 		nextFieldCol := valueCol + 1
 
@@ -848,20 +882,6 @@ func (e *shreddedExtractor) extractObject(columns [][]Value) any {
 		return nil
 	}
 	return result
-}
-
-func countExtractorColumns(e *shreddedExtractor) int {
-	if e.isPrimitive {
-		return 1
-	}
-	if e.isGroup {
-		count := 0
-		for _, f := range e.fields {
-			count += 1 + countExtractorColumns(&f.extractor)
-		}
-		return count
-	}
-	return 1
 }
 
 func hasNonNullInRange(columns [][]Value, start, end int) bool {

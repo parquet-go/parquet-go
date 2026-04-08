@@ -121,10 +121,7 @@ func writeShreddedObject(columns []ColumnBuffer, levels columnLevels, startColum
 		// Within each field's sub-group, fields are sorted alphabetically:
 		// typed_value comes before value.
 		typedValueCol := col
-		typedCount := uint16(1)
-		if f.matcher.isGroup {
-			typedCount = countMatcherColumns(&f.matcher)
-		}
+		typedCount := f.matcher.leafCount
 		valueCol := col + typedCount
 		nextFieldCol := valueCol + 1
 

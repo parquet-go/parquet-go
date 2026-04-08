@@ -647,6 +647,169 @@ func TestShreddedVariantBinaryTypedValue(t *testing.T) {
 	}
 }
 
+// TestShreddedVariantObjectWithListField verifies that a shredded variant group
+// containing a LIST field correctly counts leaf columns, so fields after the LIST
+// are written/read from the correct column positions. (Codex review P1 — LIST column counting)
+func TestShreddedVariantObjectWithListField(t *testing.T) {
+	// Schema: ShreddedVariant(Group{"tags": List(String()), "name": String()})
+	// The LIST field "tags" spans multiple leaf columns, and "name" must still
+	// be written/read at the correct offset.
+	shreddedNode, err := parquet.ShreddedVariant(parquet.Group{
+		"tags": parquet.List(parquet.String()),
+		"name": parquet.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type Record struct {
+		ID   int32 `parquet:"id"`
+		Data any   `parquet:"data"`
+	}
+
+	schema := parquet.NewSchema("test", parquet.Group{
+		"id":   parquet.Leaf(parquet.Int32Type),
+		"data": shreddedNode,
+	})
+
+	// Write a string value — can't be shredded into the object typed_value,
+	// so it goes to the value column. The key test: this must not panic or
+	// corrupt data due to incorrect column counting for the LIST field.
+	records := []Record{
+		{ID: 1, Data: "hello"},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), schema)
+	defer reader.Close()
+
+	readRecords := make([]Record, 1)
+	n, err := reader.Read(readRecords)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("read %d records, want 1", n)
+	}
+
+	if s, ok := readRecords[0].Data.(string); !ok || s != "hello" {
+		t.Errorf("Data = %v (%T), want string %q", readRecords[0].Data, readRecords[0].Data, "hello")
+	}
+}
+
+// TestShreddedVariantStringVsBinaryShredding verifies that STRING typed_value
+// columns only shred string values, and plain ByteArray typed_value columns
+// only shred []byte values. (Codex review P2 — STRING vs BINARY)
+func TestShreddedVariantStringVsBinaryShredding(t *testing.T) {
+	t.Run("string into STRING typed_value", func(t *testing.T) {
+		shreddedNode, _ := parquet.ShreddedVariant(parquet.String())
+		type Record struct {
+			Data any `parquet:"data"`
+		}
+		schema := parquet.NewSchema("test", parquet.Group{"data": shreddedNode})
+
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Record](buf, schema)
+		_, _ = writer.Write([]Record{{Data: "hello"}})
+		_ = writer.Close()
+
+		reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), schema)
+		defer reader.Close()
+		recs := make([]Record, 1)
+		reader.Read(recs)
+
+		// string input → STRING typed_value → string output
+		if s, ok := recs[0].Data.(string); !ok || s != "hello" {
+			t.Errorf("got %v (%T), want string %q", recs[0].Data, recs[0].Data, "hello")
+		}
+	})
+
+	t.Run("bytes into STRING typed_value falls back", func(t *testing.T) {
+		shreddedNode, _ := parquet.ShreddedVariant(parquet.String())
+		type Record struct {
+			Data any `parquet:"data"`
+		}
+		schema := parquet.NewSchema("test", parquet.Group{"data": shreddedNode})
+
+		input := []byte{0xDE, 0xAD}
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Record](buf, schema)
+		_, _ = writer.Write([]Record{{Data: input}})
+		_ = writer.Close()
+
+		reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), schema)
+		defer reader.Close()
+		recs := make([]Record, 1)
+		reader.Read(recs)
+
+		// []byte into STRING typed_value should NOT be shredded — falls back to
+		// value column and round-trips through variant encoding as []byte
+		if b, ok := recs[0].Data.([]byte); !ok {
+			t.Errorf("got %v (%T), want []byte", recs[0].Data, recs[0].Data)
+		} else if !reflect.DeepEqual(b, input) {
+			t.Errorf("got %v, want %v", b, input)
+		}
+	})
+
+	t.Run("bytes into ByteArray typed_value", func(t *testing.T) {
+		shreddedNode, _ := parquet.ShreddedVariant(parquet.Leaf(parquet.ByteArrayType))
+		type Record struct {
+			Data any `parquet:"data"`
+		}
+		schema := parquet.NewSchema("test", parquet.Group{"data": shreddedNode})
+
+		input := []byte{0xCA, 0xFE}
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Record](buf, schema)
+		_, _ = writer.Write([]Record{{Data: input}})
+		_ = writer.Close()
+
+		reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), schema)
+		defer reader.Close()
+		recs := make([]Record, 1)
+		reader.Read(recs)
+
+		// []byte into plain ByteArray typed_value → []byte output
+		if b, ok := recs[0].Data.([]byte); !ok {
+			t.Errorf("got %v (%T), want []byte", recs[0].Data, recs[0].Data)
+		} else if !reflect.DeepEqual(b, input) {
+			t.Errorf("got %v, want %v", b, input)
+		}
+	})
+
+	t.Run("string into ByteArray typed_value falls back", func(t *testing.T) {
+		shreddedNode, _ := parquet.ShreddedVariant(parquet.Leaf(parquet.ByteArrayType))
+		type Record struct {
+			Data any `parquet:"data"`
+		}
+		schema := parquet.NewSchema("test", parquet.Group{"data": shreddedNode})
+
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Record](buf, schema)
+		_, _ = writer.Write([]Record{{Data: "hello"}})
+		_ = writer.Close()
+
+		reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), schema)
+		defer reader.Close()
+		recs := make([]Record, 1)
+		reader.Read(recs)
+
+		// string into plain ByteArray typed_value should NOT be shredded —
+		// falls back to value column and round-trips as string
+		if s, ok := recs[0].Data.(string); !ok || s != "hello" {
+			t.Errorf("got %v (%T), want string %q", recs[0].Data, recs[0].Data, "hello")
+		}
+	})
+}
+
 func TestVariantSchemaTag(t *testing.T) {
 	type Record struct {
 		Data any `parquet:"data,variant"`
