@@ -1039,9 +1039,21 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 				}
 
 			case "split":
-				switch t.Kind() {
-				case reflect.Float32, reflect.Float64:
+				kind := t.Kind()
+				baseType := t
+				if kind == reflect.Ptr {
+					kind = t.Elem().Kind()
+					baseType = t.Elem()
+				}
+				switch kind {
+				case reflect.Float32, reflect.Float64, reflect.Int32, reflect.Int64:
 					setEncoding(&ByteStreamSplit)
+				case reflect.Array:
+					if baseType.Elem().Kind() == reflect.Uint8 {
+						setEncoding(&ByteStreamSplit)
+					} else {
+						throwInvalidTag(t, name, option)
+					}
 				default:
 					throwInvalidTag(t, name, option)
 				}
@@ -1226,6 +1238,16 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					default:
 						throwInvalidTag(t, name, option)
 					}
+				}
+
+			case "interval":
+				switch {
+				case t == reflect.TypeOf(Interval{}):
+					setNode(IntervalNode())
+				case t.Kind() == reflect.Array && t.Elem().Kind() == reflect.Uint8 && t.Len() == 12:
+					setNode(IntervalNode())
+				default:
+					throwInvalidTag(t, name, option)
 				}
 
 			case "int":

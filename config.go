@@ -32,6 +32,7 @@ const (
 	DefaultSkipMagicBytes       = false
 	DefaultSkipPageIndex        = false
 	DefaultSkipBloomFilters     = false
+	DefaultPrefetchBloomFilters = false
 	DefaultMaxRowsPerRowGroup   = math.MaxInt64
 	DefaultReadMode             = ReadModeSync
 )
@@ -95,25 +96,27 @@ func formatCreatedBy(application, version, build string) string {
 //		ReadMode:         ReadModeAsync,
 //	})
 type FileConfig struct {
-	SkipMagicBytes   bool
-	SkipPageIndex    bool
-	SkipBloomFilters bool
-	OptimisticRead   bool
-	ReadBufferSize   int
-	ReadMode         ReadMode
-	Schema           *Schema
+	SkipMagicBytes       bool
+	SkipPageIndex        bool
+	SkipBloomFilters     bool
+	PrefetchBloomFilters bool
+	OptimisticRead       bool
+	ReadBufferSize       int
+	ReadMode             ReadMode
+	Schema               *Schema
 }
 
 // DefaultFileConfig returns a new FileConfig value initialized with the
 // default file configuration.
 func DefaultFileConfig() *FileConfig {
 	return &FileConfig{
-		SkipMagicBytes:   DefaultSkipMagicBytes,
-		SkipPageIndex:    DefaultSkipPageIndex,
-		SkipBloomFilters: DefaultSkipBloomFilters,
-		ReadBufferSize:   defaultReadBufferSize,
-		ReadMode:         DefaultReadMode,
-		Schema:           nil,
+		SkipMagicBytes:       DefaultSkipMagicBytes,
+		SkipPageIndex:        DefaultSkipPageIndex,
+		SkipBloomFilters:     DefaultSkipBloomFilters,
+		PrefetchBloomFilters: DefaultPrefetchBloomFilters,
+		ReadBufferSize:       defaultReadBufferSize,
+		ReadMode:             DefaultReadMode,
+		Schema:               nil,
 	}
 }
 
@@ -138,12 +141,13 @@ func (c *FileConfig) Apply(options ...FileOption) {
 // ConfigureFile applies configuration options from c to config.
 func (c *FileConfig) ConfigureFile(config *FileConfig) {
 	*config = FileConfig{
-		SkipMagicBytes:   c.SkipMagicBytes,
-		SkipPageIndex:    c.SkipPageIndex,
-		SkipBloomFilters: c.SkipBloomFilters,
-		ReadBufferSize:   coalesceInt(c.ReadBufferSize, config.ReadBufferSize),
-		ReadMode:         ReadMode(coalesceInt(int(c.ReadMode), int(config.ReadMode))),
-		Schema:           coalesceSchema(c.Schema, config.Schema),
+		SkipMagicBytes:       c.SkipMagicBytes,
+		SkipPageIndex:        c.SkipPageIndex,
+		SkipBloomFilters:     c.SkipBloomFilters,
+		PrefetchBloomFilters: c.PrefetchBloomFilters,
+		ReadBufferSize:       coalesceInt(c.ReadBufferSize, config.ReadBufferSize),
+		ReadMode:             ReadMode(coalesceInt(int(c.ReadMode), int(config.ReadMode))),
+		Schema:               coalesceSchema(c.Schema, config.Schema),
 	}
 }
 
@@ -226,6 +230,7 @@ type WriterConfig struct {
 	Schema                       *Schema
 	BloomFilters                 []BloomFilterColumn
 	DeferredBloomFiltersBuffers  BufferPool
+	BloomFilterCompression       compress.Codec
 	Compression                  compress.Codec
 	Sorting                      SortingConfig
 	SkipPageBounds               [][]string
@@ -304,6 +309,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		Schema:                       coalesceSchema(c.Schema, config.Schema),
 		BloomFilters:                 coalesceSlices(c.BloomFilters, config.BloomFilters),
 		DeferredBloomFiltersBuffers:  coalesceBufferPool(c.DeferredBloomFiltersBuffers, config.DeferredBloomFiltersBuffers),
+		BloomFilterCompression:       coalesceCompression(c.BloomFilterCompression, config.BloomFilterCompression),
 		Compression:                  coalesceCompression(c.Compression, config.Compression),
 		Sorting:                      coalesceSortingConfig(c.Sorting, config.Sorting),
 		SkipPageBounds:               coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
@@ -495,13 +501,24 @@ func SkipPageIndex(skip bool) FileOption {
 }
 
 // SkipBloomFilters is a file configuration option which prevents automatically
-// reading the bloom filters when opening a parquet file, when set to true.
-// This is useful as an optimization when programs know that they will not need
-// to consume the bloom filters.
+// reading the bloom filter headers when opening a parquet file, when set to
+// true. This is useful as an optimization when programs know that they will not
+// need to consume the bloom filters.
 //
 // Defaults to false.
 func SkipBloomFilters(skip bool) FileOption {
 	return fileOption(func(config *FileConfig) { config.SkipBloomFilters = skip })
+}
+
+// PrefetchBloomFilters is a file configuration option that controls whether the
+// bloom filter contents are loaded into memory when a file is opened. By
+// default, only the headers are parsed, requiring further reads to the file to
+// probe the filter. Using this option with OptimisticRead can be useful when
+// reading from remote storage, reducing network round trips.
+//
+// Defaults to false.
+func PrefetchBloomFilters(prefetch bool) FileOption {
+	return fileOption(func(config *FileConfig) { config.PrefetchBloomFilters = prefetch })
 }
 
 // OptimisticRead configures a file to optimistically perform larger buffered
@@ -705,6 +722,13 @@ func BloomFilters(filters ...BloomFilterColumn) WriterOption {
 // Defaults to nil; bloom filters are written immediately after each row group.
 func DeferBloomFiltersWithBuffers(buffer BufferPool) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.DeferredBloomFiltersBuffers = buffer })
+}
+
+// BloomFilterCompression creates a configuration option which sets the
+// compression codec used when writing bloom filters. The default is
+// uncompressed for backward compatibility.
+func BloomFilterCompression(codec compress.Codec) WriterOption {
+	return writerOption(func(config *WriterConfig) { config.BloomFilterCompression = codec })
 }
 
 // Compression creates a configuration option which sets the default compression
