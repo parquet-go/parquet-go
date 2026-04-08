@@ -1856,12 +1856,19 @@ func (c *ColumnWriter) writeBloomFilter(w io.Writer) error {
 	h := bloomFilterHeader(c.columnFilter, c.bloomFilterCompression)
 
 	filterBytes := c.filter
-	if isCompressed(c.bloomFilterCompression) {
-		compressed, err := c.bloomFilterCompression.Encode(nil, filterBytes)
-		if err != nil {
-			return fmt.Errorf("compressing bloom filter: %w", err)
+	if c.bloomFilterCompression != nil {
+		switch c.bloomFilterCompression.CompressionCodec() {
+		case format.Uncompressed:
+			// no-op
+		case format.Gzip:
+			compressed, err := c.bloomFilterCompression.Encode(nil, filterBytes)
+			if err != nil {
+				return fmt.Errorf("compressing bloom filter: %w", err)
+			}
+			filterBytes = compressed
+		default:
+			return fmt.Errorf("unsupported bloom filter compression codec: %s", c.bloomFilterCompression)
 		}
-		filterBytes = compressed
 	}
 
 	h.NumBytes = int32(len(filterBytes))

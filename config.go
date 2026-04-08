@@ -307,6 +307,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		KeyValueMetadata:             keyValueMetadata,
 		Schema:                       coalesceSchema(c.Schema, config.Schema),
 		BloomFilters:                 coalesceSlices(c.BloomFilters, config.BloomFilters),
+		BloomFilterCompression:       coalesceCompression(c.BloomFilterCompression, config.BloomFilterCompression),
 		Compression:                  coalesceCompression(c.Compression, config.Compression),
 		Sorting:                      coalesceSortingConfig(c.Sorting, config.Sorting),
 		SkipPageBounds:               coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
