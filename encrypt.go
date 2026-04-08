@@ -115,6 +115,9 @@ type fileEncryptionState struct {
 }
 
 func newFileEncryptionState(cfg *EncryptionConfig) (*fileEncryptionState, error) {
+	if cfg.Algorithm == AES_GCM_CTR_V1 {
+		return nil, fmt.Errorf("parquet encryption: AES_GCM_CTR_V1 is not yet implemented; use AES_GCM_V1")
+	}
 	s := &fileEncryptionState{cfg: cfg}
 	if len(cfg.FileIdentifier) > 0 {
 		s.fileUnique = cfg.FileIdentifier

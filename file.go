@@ -251,6 +251,13 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 				cc := g.columns[j].(*FileColumnChunk)
 
 				if offset := cc.chunk.MetaData.BloomFilterOffset; offset > 0 {
+					// Encrypted columns cannot be decoded here because the bloom
+					// filter bytes on disk are AES-GCM envelopes, not plain
+					// thrift.  Defer loading to the lazy readBloomFilter path.
+					if cc.decryptionKey != nil {
+						continue
+					}
+
 					section.Seek(offset, io.SeekStart)
 					rbuf.Reset(section)
 
@@ -836,16 +843,34 @@ func (c *FileColumnChunk) readBloomFilter(reader io.ReaderAt) (*FileBloomFilter,
 	rbuf, rbufpool := getBufioReader(section, 1024)
 	defer putBufioReader(rbuf, rbufpool)
 
-	header := format.BloomFilterHeader{}
-	compact := thrift.CompactProtocol{}
-	decoder := thrift.NewDecoder(compact.NewReader(rbuf))
+	var header format.BloomFilterHeader
+	var filter *FileBloomFilter
 
-	if err := decoder.Decode(&header); err != nil {
-		return nil, fmt.Errorf("decoding bloom filter header: %w", err)
+	if c.decryptionKey != nil {
+		hdrAAD := makeAAD(c.file.aadPrefix, c.file.fileUnique, bloomFilterHdrModule, c.rowGroupOrdinal, c.columnOrdinal)
+		hdrPlain, err := readDecryptedEnvelopeFrom(rbuf, c.decryptionKey, hdrAAD)
+		if err != nil {
+			return nil, fmt.Errorf("decrypting bloom filter header: %w", err)
+		}
+		compact := thrift.CompactProtocol{}
+		if err := thrift.NewDecoder(compact.NewReaderFromBytes(hdrPlain)).Decode(&header); err != nil {
+			return nil, fmt.Errorf("decoding encrypted bloom filter header: %w", err)
+		}
+		bitsAAD := makeAAD(c.file.aadPrefix, c.file.fileUnique, bloomFilterBitsModule, c.rowGroupOrdinal, c.columnOrdinal)
+		bitsPlain, err := readDecryptedEnvelopeFrom(rbuf, c.decryptionKey, bitsAAD)
+		if err != nil {
+			return nil, fmt.Errorf("decrypting bloom filter bitset: %w", err)
+		}
+		filter = newBloomFilterFromBytes(&header, bitsPlain)
+	} else {
+		compact := thrift.CompactProtocol{}
+		decoder := thrift.NewDecoder(compact.NewReader(rbuf))
+		if err := decoder.Decode(&header); err != nil {
+			return nil, fmt.Errorf("decoding bloom filter header: %w", err)
+		}
+		offset, _ = section.Seek(0, io.SeekCurrent)
+		filter = newBloomFilter(reader, offset, &header)
 	}
-
-	offset, _ = section.Seek(0, io.SeekCurrent)
-	filter := newBloomFilter(reader, offset, &header)
 
 	if !c.bloomFilter.CompareAndSwap(nil, filter) {
 		return c.bloomFilter.Load(), nil
@@ -1293,6 +1318,10 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 		if f.dictOffset > 0 {
 			f.index = 1
 		}
+		if f.dec != nil {
+			f.dec.dataPageOrd = 0
+			f.dec.dictPagePending = false
+		}
 	} else {
 		pages := index.index.PageLocations
 		target := sort.Search(len(pages), func(i int) bool {
@@ -1316,6 +1345,11 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 		}
 
 		f.index = target
+		// Sync decryption ordinal so the next readEncryptedPage uses the correct AAD.
+		if f.dec != nil {
+			f.dec.dataPageOrd = int16(target)
+			f.dec.dictPagePending = false
+		}
 
 		// if the target page is within the unread portion of the current buffer, just skip/discard some bytes
 		var pos int64
@@ -1343,10 +1377,6 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 	}
 
 	f.rbuf.Reset(&f.section)
-	// Any seek moves us past (or to) a data page, not the dict page.
-	if f.dec != nil {
-		f.dec.dictPagePending = false
-	}
 	return nil
 }
 

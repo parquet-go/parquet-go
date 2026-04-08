@@ -1876,6 +1876,50 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 		}
 	}()
 
+	// For encrypted columns the page buffer contains AES-GCM envelopes, not
+	// plain thrift.  Decrypt each page before decoding it.
+	if c.encKey != nil {
+		for pageOrd := range int16(c.numPages) {
+			hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrd)
+			hdrPlain, err := readDecryptedEnvelopeFrom(pageReader, c.encKey, hdrAAD)
+			if err != nil {
+				return err
+			}
+			header := new(format.PageHeader)
+			pr := c.header.protocol.NewReaderFromBytes(hdrPlain)
+			if err := thrift.NewDecoder(pr).Decode(header); err != nil {
+				return fmt.Errorf("bloom filter: decoding encrypted page header: %w", err)
+			}
+			bodyAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageBodyModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrd)
+			bodyPlain, err := readDecryptedEnvelopeFrom(pageReader, c.encKey, bodyAAD)
+			if err != nil {
+				return err
+			}
+			if pbuf != nil {
+				pbuf.unref()
+			}
+			pbuf = buffers.get(len(bodyPlain))
+			copy(pbuf.data.Slice(), bodyPlain)
+			pbuf.ref()
+
+			var page Page
+			switch header.Type {
+			case format.DataPage:
+				page, err = column.decodeDataPageV1(DataPageHeaderV1{&header.DataPageHeader.V}, pbuf, nil, header.UncompressedPageSize)
+			case format.DataPageV2:
+				page, err = column.decodeDataPageV2(DataPageHeaderV2{&header.DataPageHeaderV2.V}, pbuf, nil, header.UncompressedPageSize)
+			}
+			if page != nil {
+				err = c.writePageToFilter(page)
+				Release(page)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	decoder := thrift.NewDecoder(c.header.protocol.NewReader(pageReader))
 
 	for range c.numPages {
