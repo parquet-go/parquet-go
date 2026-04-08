@@ -345,6 +345,122 @@ func TestShreddedVariantTypeMismatchFallback(t *testing.T) {
 	}
 }
 
+// TestVariantSchemaEvolution tests reading variant data written with one schema
+// using a different schema, verifying that the conversion pipeline handles
+// variant columns correctly at the leaf level.
+func TestVariantSchemaEvolution(t *testing.T) {
+	type Record struct {
+		ID   int32 `parquet:"id"`
+		Data any   `parquet:"data"`
+	}
+
+	t.Run("write shredded, read with extra typed_value columns", func(t *testing.T) {
+		// Write with ShreddedVariant(String()), read with ShreddedVariant(Group{name, age})
+		writeNode, err := parquet.ShreddedVariant(parquet.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSchema := parquet.NewSchema("test", parquet.Group{
+			"id":   parquet.Leaf(parquet.Int32Type),
+			"data": writeNode,
+		})
+
+		records := []Record{
+			{ID: 1, Data: "hello"},   // Shredded into String typed_value
+			{ID: 2, Data: int32(42)}, // Not shredded, stored in value column
+		}
+
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Record](buf, writeSchema)
+		if _, err := writer.Write(records); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Read with a different shredded schema that has additional typed_value fields.
+		// The extra columns should appear as null/missing, and existing data should be preserved.
+		readNode, err := parquet.ShreddedVariant(parquet.Group{
+			"name": parquet.String(),
+			"age":  parquet.Leaf(parquet.Int32Type),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		readSchema := parquet.NewSchema("test", parquet.Group{
+			"id":   parquet.Leaf(parquet.Int32Type),
+			"data": readNode,
+		})
+
+		reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), readSchema)
+		defer reader.Close()
+
+		readRecords := make([]Record, len(records))
+		n, err := reader.Read(readRecords)
+		if err != nil && err != io.EOF {
+			t.Fatalf("read: %v", err)
+		}
+		if n != len(records) {
+			t.Fatalf("read %d records, want %d", n, len(records))
+		}
+
+		if readRecords[0].ID != 1 {
+			t.Errorf("record 0: ID = %d, want 1", readRecords[0].ID)
+		}
+		if readRecords[1].ID != 2 {
+			t.Errorf("record 1: ID = %d, want 2", readRecords[1].ID)
+		}
+	})
+
+	t.Run("write unshredded, read unshredded with different wrapper", func(t *testing.T) {
+		// Both unshredded: same leaf structure (metadata + value as ByteArray),
+		// conversion should preserve data.
+		writeSchema := parquet.NewSchema("test", parquet.Group{
+			"id":   parquet.Leaf(parquet.Int32Type),
+			"data": parquet.Variant(),
+		})
+
+		records := []Record{
+			{ID: 1, Data: "hello"},
+			{ID: 2, Data: int32(42)},
+			{ID: 3, Data: nil},
+		}
+
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Record](buf, writeSchema)
+		if _, err := writer.Write(records); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Read with the same unshredded schema.
+		reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), writeSchema)
+		defer reader.Close()
+
+		readRecords := make([]Record, len(records))
+		n, err := reader.Read(readRecords)
+		if err != nil && err != io.EOF {
+			t.Fatalf("read: %v", err)
+		}
+		if n != len(records) {
+			t.Fatalf("read %d records, want %d", n, len(records))
+		}
+
+		if s, ok := readRecords[0].Data.(string); !ok || s != "hello" {
+			t.Errorf("record 0: Data = %v (%T), want string %q", readRecords[0].Data, readRecords[0].Data, "hello")
+		}
+		if v, ok := readRecords[1].Data.(int32); !ok || v != 42 {
+			t.Errorf("record 1: Data = %v (%T), want int32(42)", readRecords[1].Data, readRecords[1].Data)
+		}
+		if readRecords[2].Data != nil {
+			t.Errorf("record 2: Data = %v, want nil", readRecords[2].Data)
+		}
+	})
+}
+
 func TestVariantSchemaTag(t *testing.T) {
 	type Record struct {
 		Data any `parquet:"data,variant"`
