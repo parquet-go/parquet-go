@@ -69,3 +69,64 @@ func TestEncodeFixedLenByteArray(t *testing.T) {
 		}
 	}
 }
+
+// TestEncodeFixedLenByteArrayInvalidSize verifies that size<=0 and size>max
+// are rejected with an error rather than panicking (P2 from code review).
+func TestEncodeFixedLenByteArrayInvalidSize(t *testing.T) {
+	enc := new(bytestreamsplit.Encoding)
+	src := make([]byte, 8)
+
+	for _, size := range []int{-1, 0} {
+		if _, err := enc.EncodeFixedLenByteArray(nil, src, size); err == nil {
+			t.Errorf("EncodeFixedLenByteArray with size=%d: expected error, got nil", size)
+		}
+		if _, err := enc.DecodeFixedLenByteArray(nil, src, size); err == nil {
+			t.Errorf("DecodeFixedLenByteArray with size=%d: expected error, got nil", size)
+		}
+	}
+}
+
+// TestEncodeFixedLenByteArrayStreamLayout verifies the exact encoded byte layout
+// required by the Parquet BYTE_STREAM_SPLIT spec: stream s occupies buf[s*n:(s+1)*n]
+// and contains byte s of each element in order.
+// This also confirms endian-neutral treatment of 4- and 8-byte arrays: the bytes
+// of each element must be preserved as-is, not reinterpreted as float/double.
+func TestEncodeFixedLenByteArrayStreamLayout(t *testing.T) {
+	enc := new(bytestreamsplit.Encoding)
+
+	for _, size := range []int{4, 8} {
+		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
+			// Two elements with distinct, non-zero bytes in every position.
+			const n = 2
+			src := make([]byte, n*size)
+			for i := range src {
+				src[i] = byte(i + 1)
+			}
+
+			buf, err := enc.EncodeFixedLenByteArray(nil, src, size)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+
+			// Per spec: stream s is at buf[s*n : (s+1)*n].
+			// buf[s*n + i] must equal src[i*size + s] (byte s of element i).
+			for s := range size {
+				for i := range n {
+					got := buf[s*n+i]
+					want := src[i*size+s]
+					if got != want {
+						t.Errorf("buf[stream=%d][elem=%d]: got %#x, want %#x", s, i, got, want)
+					}
+				}
+			}
+
+			decoded, err := enc.DecodeFixedLenByteArray(nil, buf, size)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !bytes.Equal(src, decoded) {
+				t.Fatalf("roundtrip mismatch:\n  src=%v\n  got=%v", src, decoded)
+			}
+		})
+	}
+}
