@@ -191,3 +191,155 @@ func TestEncryptionFooterSignatureTamper(t *testing.T) {
 		t.Fatal("expected error opening file with corrupted footer, got nil")
 	}
 }
+
+// TestEncryptionCTRAlgorithmRejected verifies that requesting AES_GCM_CTR_V1
+// (not yet implemented) causes the writer to panic immediately rather than
+// silently emitting a GCM-encrypted file labelled as CTR.
+func TestEncryptionCTRAlgorithmRejected(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic when AES_GCM_CTR_V1 is requested, got none")
+		}
+	}()
+	cfg := &parquet.EncryptionConfig{
+		FooterKey: aes128Key(0x11),
+		Algorithm: parquet.AES_GCM_CTR_V1,
+	}
+	var buf bytes.Buffer
+	_ = parquet.NewGenericWriter[encryptionTestRow](&buf, parquet.WithEncryption(cfg))
+}
+
+// TestEncryptionSeekToRow verifies that SeekToRow works correctly on encrypted
+// columns with an offset index.  The bug: dataPageOrd was not updated after a
+// seek, so the AAD for subsequent page reads used the wrong page ordinal,
+// causing AES-GCM authentication failures.
+func TestEncryptionSeekToRow(t *testing.T) {
+	footerKey := aes128Key(0xAB)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: true,
+		FileIdentifier:  []byte{41, 42, 43, 44, 45, 46, 47, 48},
+	}
+
+	// Write enough rows to span multiple pages (force small page buffer).
+	const numRows = 200
+	rows := make([]encryptionTestRow, numRows)
+	for i := range rows {
+		rows[i] = encryptionTestRow{Name: strings.Repeat("x", 20), Value: int64(i)}
+	}
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[encryptionTestRow](&buf,
+		parquet.WithEncryption(cfg),
+		parquet.PageBufferSize(512), // small pages → many pages per column
+	)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data := buf.Bytes()
+	keys := &staticKeyRetriever{footerKey: footerKey}
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(keys))
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+
+	// Seek forward into the file (not page 0) and read a single row.
+	const targetRow = 150
+	r := parquet.NewGenericReader[encryptionTestRow](f)
+	defer r.Close()
+
+	if err := r.SeekToRow(targetRow); err != nil {
+		t.Fatalf("SeekToRow(%d): %v", targetRow, err)
+	}
+	result := make([]encryptionTestRow, 1)
+	if n, err := r.Read(result); n != 1 || (err != nil && !errors.Is(err, io.EOF)) {
+		t.Fatalf("Read after seek: n=%d err=%v", n, err)
+	}
+	if result[0].Value != int64(targetRow) {
+		t.Errorf("SeekToRow(%d): got row with Value=%d, want %d", targetRow, result[0].Value, targetRow)
+	}
+}
+
+// TestEncryptionBloomFilter verifies that bloom filters written on encrypted
+// columns can be loaded and queried after decryption.  The bug: the read path
+// tried to thrift-decode the encrypted bloom filter header as plaintext,
+// causing an error whenever SkipBloomFilters=false (the default).
+func TestEncryptionBloomFilter(t *testing.T) {
+	footerKey := aes128Key(0xBC)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: true,
+		FileIdentifier:  []byte{49, 50, 51, 52, 53, 54, 55, 56},
+	}
+
+	rows := []encryptionTestRow{
+		{Name: "alice", Value: 1},
+		{Name: "bob", Value: 2},
+		{Name: "carol", Value: 3},
+	}
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[encryptionTestRow](&buf,
+		parquet.WithEncryption(cfg),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "name")),
+	)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data := buf.Bytes()
+	keys := &staticKeyRetriever{footerKey: footerKey}
+	// Opening the file pre-loads bloom filters by default (SkipBloomFilters=false).
+	// Before the fix this would fail when trying to thrift-decode the encrypted header.
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(keys))
+	if err != nil {
+		t.Fatalf("open file with encrypted bloom filter: %v", err)
+	}
+
+	rgs := f.RowGroups()
+	if len(rgs) == 0 {
+		t.Fatal("no row groups")
+	}
+	chunks := rgs[0].ColumnChunks()
+
+	// Find the "name" column (index 0, alphabetical order).
+	var nameChunk parquet.ColumnChunk
+	for _, cc := range chunks {
+		if cc.Column() == 0 {
+			nameChunk = cc
+			break
+		}
+	}
+	if nameChunk == nil {
+		t.Fatal("could not find name column chunk")
+	}
+
+	bf := nameChunk.BloomFilter()
+	if bf == nil {
+		t.Fatal("expected bloom filter on name column, got nil")
+	}
+
+	// "alice" should be present; "dave" should not.
+	present, err := bf.Check(parquet.ValueOf("alice"))
+	if err != nil {
+		t.Fatalf("bloom filter Check(alice): %v", err)
+	}
+	if !present {
+		t.Error("bloom filter should report 'alice' as present")
+	}
+
+	absent, err := bf.Check(parquet.ValueOf("dave"))
+	if err != nil {
+		t.Fatalf("bloom filter Check(dave): %v", err)
+	}
+	if absent {
+		t.Error("bloom filter should not report 'dave' as present")
+	}
+}
