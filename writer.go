@@ -687,7 +687,10 @@ func (w *writerFileView) Root() *Column {
 func (w *writerFileView) RowGroups() []RowGroup {
 	columns := makeLeafColumns(w.Root())
 	file := &File{metadata: w.writer.fileMetaData, schema: w.schema}
-	fileRowGroups := makeFileRowGroups(file, columns)
+	fileRowGroups, err := makeFileRowGroups(file, columns)
+	if err != nil {
+		return nil
+	}
 	return makeRowGroups(fileRowGroups)
 }
 
@@ -1405,7 +1408,7 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 
 	// Set ColumnCryptoMetaData on each column chunk when encryption is active.
 	if w.encryption != nil {
-		for _, c := range rg.columns {
+		for i, c := range rg.columns {
 			path := columnPathString(c.columnPath)
 			_, hasColumnKey := w.encryption.cfg.ColumnKeys[path]
 			if !hasColumnKey {
@@ -1418,6 +1421,27 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 						PathInSchema: c.columnPath,
 					},
 				}
+			}
+
+			// In plaintext-footer mode, encrypt the column metadata and store it
+			// inline in EncryptedColumnMetadata, removing the plaintext MetaData so
+			// that sensitive statistics/offsets are not exposed in the footer.
+			if !w.encryption.cfg.EncryptedFooter {
+				enc := w.encryption
+				var metaBuf bytes.Buffer
+				metaProto := new(thrift.CompactProtocol)
+				metaEnc := thrift.NewEncoder(metaProto.NewWriter(&metaBuf))
+				if err := metaEnc.Encode(&c.columnChunk.MetaData); err != nil {
+					return 0, fmt.Errorf("encoding column metadata for encryption: %w", err)
+				}
+				key := enc.columnKeyFor(path)
+				aad := makeAAD(enc.cfg.AadPrefix, enc.fileUnique, columnMetaDataModule, int16(rowGroupIndex), int16(i))
+				encMeta, err := encryptModule(key, aad, metaBuf.Bytes())
+				if err != nil {
+					return 0, fmt.Errorf("encrypting column metadata: %w", err)
+				}
+				c.columnChunk.EncryptedColumnMetadata = encMeta
+				c.columnChunk.MetaData = format.ColumnMetaData{}
 			}
 		}
 	}

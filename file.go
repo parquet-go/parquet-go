@@ -232,7 +232,10 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		f.schema = NewSchema(f.root.Name(), f.root)
 	}
 	columns := makeLeafColumns(f.root)
-	rowGroups := makeFileRowGroups(f, columns)
+	rowGroups, err := makeFileRowGroups(f, columns)
+	if err != nil {
+		return nil, err
+	}
 	f.rowGroups = makeRowGroups(rowGroups)
 
 	if !c.SkipBloomFilters {
@@ -512,7 +515,7 @@ type FileRowGroup struct {
 	sorting  []SortingColumn
 }
 
-func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowGroup) {
+func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowGroup) error {
 	g.file = file
 	g.rowGroup = rowGroup
 	g.columns = make([]ColumnChunk, len(rowGroup.Columns))
@@ -545,6 +548,20 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 					fileColumnChunks[i].decryptionKey = key
 				}
 			}
+
+			// In plaintext-footer mode the column metadata is encrypted inline.
+			// Decrypt it now so that all subsequent code can access MetaData normally.
+			if len(chunk.EncryptedColumnMetadata) > 0 && fileColumnChunks[i].decryptionKey != nil {
+				aad := makeAAD(file.aadPrefix, file.fileUnique, columnMetaDataModule, rowGroup.Ordinal, int16(i))
+				plainMeta, err := decryptModule(fileColumnChunks[i].decryptionKey, aad, chunk.EncryptedColumnMetadata)
+				if err != nil {
+					return fmt.Errorf("decrypting column metadata: rowGroup=%d col=%d: %w", rowGroup.Ordinal, i, err)
+				}
+				compact := thrift.CompactProtocol{}
+				if err := thrift.Unmarshal(&compact, plainMeta, &chunk.MetaData); err != nil {
+					return fmt.Errorf("decoding encrypted column metadata: rowGroup=%d col=%d: %w", rowGroup.Ordinal, i, err)
+				}
+			}
 		}
 
 		if file.hasIndexes() {
@@ -567,6 +584,7 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 			nullsFirst: rowGroup.SortingColumns[i].NullsFirst,
 		}
 	}
+	return nil
 }
 
 // File returns the file that this row group belongs to.

@@ -643,7 +643,10 @@ func (r *readerFileView) RowGroups() []RowGroup {
 		return nil
 	}
 	columns := makeLeafColumns(r.Root())
-	fileRowGroups := makeFileRowGroups(file, columns)
+	fileRowGroups, err := makeFileRowGroups(file, columns)
+	if err != nil {
+		return nil
+	}
 	return makeRowGroups(fileRowGroups)
 }
 
@@ -653,19 +656,20 @@ func makeLeafColumns(root *Column) []*Column {
 	return columns
 }
 
-func makeFileRowGroups(file *File, columns []*Column) []FileRowGroup {
+func makeFileRowGroups(file *File, columns []*Column) ([]FileRowGroup, error) {
 	rowGroups := file.metadata.RowGroups
 
-	err := validateRowGroupOrdinals(rowGroups)
-	if err != nil {
-		return nil
+	if err := validateRowGroupOrdinals(rowGroups); err != nil {
+		return nil, err
 	}
 
 	fileRowGroups := make([]FileRowGroup, len(rowGroups))
 	for i := range fileRowGroups {
-		fileRowGroups[i].init(file, columns, &rowGroups[i])
+		if err := fileRowGroups[i].init(file, columns, &rowGroups[i]); err != nil {
+			return nil, err
+		}
 	}
-	return fileRowGroups
+	return fileRowGroups, nil
 }
 
 func makeRowGroups(fileRowGroups []FileRowGroup) []RowGroup {
