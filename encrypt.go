@@ -87,6 +87,15 @@ type KeyRetriever interface {
 	// ColumnKey returns the AES key for an encrypted column.
 	// path is the column's path in the schema; keyMetadata is the optional bytes
 	// stored in EncryptionWithColumnKey.KeyMetadata (may be nil).
+	//
+	// To signal that a particular column's key is intentionally unavailable
+	// (e.g. the caller only holds keys for a subset of columns), return an
+	// error that wraps ErrKeyNotFound:
+	//
+	//	return nil, fmt.Errorf("no key for %v: %w", path, parquet.ErrKeyNotFound)
+	//
+	// OpenFile treats ErrKeyNotFound as non-fatal and leaves that column
+	// inaccessible; any other non-nil error is propagated as a hard failure.
 	ColumnKey(path []string, keyMetadata []byte) ([]byte, error)
 }
 
