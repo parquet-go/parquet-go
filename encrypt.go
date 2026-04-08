@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -66,6 +67,14 @@ type EncryptionConfig struct {
 	// If nil, 8 random bytes are generated when the writer is created.
 	FileIdentifier []byte
 }
+
+// ErrKeyNotFound is the sentinel error that a KeyRetriever should return (or
+// wrap with %w) when the caller intentionally does not have access to a
+// particular column key.  OpenFile treats this as a non-fatal signal and
+// leaves that column inaccessible rather than aborting the open.  Any other
+// error from ColumnKey is treated as a hard failure and propagated to the
+// caller.
+var ErrKeyNotFound = errors.New("parquet: encryption key not found")
 
 // KeyRetriever resolves AES keys from the metadata bytes stored in the file.
 // Implement this interface to supply keys when opening an encrypted parquet file.

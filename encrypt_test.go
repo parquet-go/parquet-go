@@ -45,7 +45,22 @@ func (p *partialKeyRetriever) ColumnKey(path []string, _ []byte) ([]byte, error)
 	if key, ok := p.columnKeys[k]; ok {
 		return key, nil
 	}
-	return nil, fmt.Errorf("no key for column %q", k)
+	return nil, fmt.Errorf("no key for column %q: %w", k, parquet.ErrKeyNotFound)
+}
+
+// hardErrorKeyRetriever returns a caller-supplied hard error for every column
+// key lookup (simulates a transient KMS failure or similar real error).
+type hardErrorKeyRetriever struct {
+	footerKey []byte
+	colErr    error
+}
+
+func (h *hardErrorKeyRetriever) FooterKey(_ []byte) ([]byte, error) {
+	return h.footerKey, nil
+}
+
+func (h *hardErrorKeyRetriever) ColumnKey(_ []string, _ []byte) ([]byte, error) {
+	return nil, h.colErr
 }
 
 // encryptionTestRow is a simple row type used across encryption tests.
@@ -513,10 +528,42 @@ func TestEncryptionPartialColumnKeysOpenFile(t *testing.T) {
 	}
 }
 
+// TestEncryptionRealColumnKeyErrorSurfaced verifies that a non-ErrKeyNotFound
+// error from ColumnKey is returned by OpenFile rather than silently swallowed.
+// The bug: all ColumnKey errors were treated as "key missing" and suppressed,
+// hiding real failures such as KMS errors or malformed key metadata.
+func TestEncryptionRealColumnKeyErrorSurfaced(t *testing.T) {
+	footerKey := aes128Key(0xA3)
+	nameKey := aes128Key(0xA4)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey: footerKey,
+		ColumnKeys: map[string][]byte{
+			"name": nameKey,
+		},
+		EncryptedFooter: false,
+		FileIdentifier:  []byte{97, 98, 99, 100, 101, 102, 103, 104},
+	}
+	data := writeEncrypted(t, testRows, cfg)
+
+	// Retriever that returns a hard (non-ErrKeyNotFound) error for "name".
+	hardErr := fmt.Errorf("KMS unavailable")
+	badRetriever := &hardErrorKeyRetriever{
+		footerKey: footerKey,
+		colErr:    hardErr,
+	}
+	_, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(badRetriever))
+	if err == nil {
+		t.Fatal("expected OpenFile to surface the KMS error, got nil")
+	}
+	if !strings.Contains(err.Error(), "KMS unavailable") {
+		t.Errorf("expected error to contain 'KMS unavailable', got: %v", err)
+	}
+}
+
 // TestEncryptionMultipleRowGroupsOrdinals verifies that encrypted files with
 // multiple row groups (ordinals > 0) round-trip correctly.  The bug:
-// decryptAllColumnMetadata used the slice index instead of rg.Ordinal in the
-// AAD, causing authentication failures for row groups with ordinal != index.
+// decryptAllColumnMetadata used rg.Ordinal before ordinals were normalized,
+// causing authentication failures for files that omit the optional field.
 func TestEncryptionMultipleRowGroupsOrdinals(t *testing.T) {
 	footerKey := aes128Key(0xB1)
 	cfg := &parquet.EncryptionConfig{
