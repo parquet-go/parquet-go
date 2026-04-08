@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"unsafe"
 
+	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go/variant"
 )
 
@@ -234,6 +235,7 @@ type shreddedMatcher struct {
 	isPrimitive bool
 	kind        Kind
 	isString    bool // true if ByteArray with STRING logical type
+	isUUID      bool // true if FixedLenByteArray with UUID logical type
 
 	// For group typed_value (object node)
 	isGroup bool
@@ -253,14 +255,19 @@ func buildShreddedMatcher(node Node) shreddedMatcher {
 	if node.Leaf() {
 		kind := node.Type().Kind()
 		isStr := false
-		if kind == ByteArray {
-			lt := node.Type().LogicalType()
-			isStr = lt != nil && lt.UTF8 != nil
+		isUID := false
+		lt := node.Type().LogicalType()
+		if kind == ByteArray && lt != nil && lt.UTF8 != nil {
+			isStr = true
+		}
+		if kind == FixedLenByteArray && lt != nil && lt.UUID != nil {
+			isUID = true
 		}
 		return shreddedMatcher{
 			isPrimitive: true,
 			kind:        kind,
 			isString:    isStr,
+			isUUID:      isUID,
 			leafCount:   1,
 		}
 	}
@@ -304,7 +311,7 @@ func (m *shreddedMatcher) canShred(v any) bool {
 		return false
 	}
 	if m.isPrimitive {
-		return canShredPrimitive(v, m.kind, m.isString)
+		return canShredPrimitive(v, m)
 	}
 	if m.isGroup {
 		return canShredObject(v, m.fields)
@@ -312,17 +319,15 @@ func (m *shreddedMatcher) canShred(v any) bool {
 	return false
 }
 
-func canShredPrimitive(v any, kind Kind, isString bool) bool {
-	switch kind {
+func canShredPrimitive(v any, m *shreddedMatcher) bool {
+	switch m.kind {
 	case ByteArray:
-		if isString {
-			// STRING typed_value: only shred string values
+		if m.isString {
 			switch v.(type) {
 			case string:
 				return true
 			}
 		} else {
-			// Plain BYTE_ARRAY typed_value: only shred []byte values
 			switch v.(type) {
 			case []byte:
 				return true
@@ -354,9 +359,16 @@ func canShredPrimitive(v any, kind Kind, isString bool) bool {
 			return true
 		}
 	case FixedLenByteArray:
-		switch v.(type) {
-		case [16]byte:
-			return true
+		if m.isUUID {
+			switch v.(type) {
+			case uuid.UUID, [16]byte:
+				return true
+			}
+		} else {
+			switch v.(type) {
+			case [16]byte:
+				return true
+			}
 		}
 	}
 	return false
@@ -554,6 +566,9 @@ func goValueToParquetValue(v any, kind Kind) Value {
 		}
 	case FixedLenByteArray:
 		switch val := v.(type) {
+		case uuid.UUID:
+			b := [16]byte(val)
+			return FixedLenByteArrayValue(b[:])
 		case [16]byte:
 			return FixedLenByteArrayValue(val[:])
 		default:
@@ -783,6 +798,7 @@ type shreddedExtractor struct {
 	isPrimitive bool
 	kind        Kind
 	isString    bool // true if ByteArray with STRING logical type
+	isUUID      bool // true if FixedLenByteArray with UUID logical type
 
 	isGroup   bool
 	fields    []shreddedFieldExtractor
@@ -798,14 +814,19 @@ func buildShreddedExtractor(node Node) shreddedExtractor {
 	if node.Leaf() {
 		kind := node.Type().Kind()
 		isStr := false
-		if kind == ByteArray {
-			lt := node.Type().LogicalType()
-			isStr = lt != nil && lt.UTF8 != nil
+		isUID := false
+		lt := node.Type().LogicalType()
+		if kind == ByteArray && lt != nil && lt.UTF8 != nil {
+			isStr = true
+		}
+		if kind == FixedLenByteArray && lt != nil && lt.UUID != nil {
+			isUID = true
 		}
 		return shreddedExtractor{
 			isPrimitive: true,
 			kind:        kind,
 			isString:    isStr,
+			isUUID:      isUID,
 			leafCount:   1,
 		}
 	}
@@ -849,7 +870,7 @@ func (e *shreddedExtractor) extract(columns [][]Value) any {
 		if len(columns) == 0 || len(columns[0]) == 0 || columns[0][0].IsNull() {
 			return nil
 		}
-		return parquetValueToGo(columns[0][0], e.kind, e.isString)
+		return parquetValueToGo(columns[0][0], e)
 	}
 	if e.isGroup {
 		return e.extractObject(columns)
@@ -906,8 +927,8 @@ func hasNonNullInRange(columns [][]Value, start, end int) bool {
 	return false
 }
 
-func parquetValueToGo(v Value, kind Kind, isString bool) any {
-	switch kind {
+func parquetValueToGo(v Value, e *shreddedExtractor) any {
+	switch e.kind {
 	case Boolean:
 		return v.Boolean()
 	case Int32:
@@ -920,7 +941,7 @@ func parquetValueToGo(v Value, kind Kind, isString bool) any {
 		return v.Double()
 	case ByteArray:
 		b := v.ByteArray()
-		if isString {
+		if e.isString {
 			return string(b)
 		}
 		dst := make([]byte, len(b))
@@ -928,12 +949,17 @@ func parquetValueToGo(v Value, kind Kind, isString bool) any {
 		return dst
 	case FixedLenByteArray:
 		b := v.ByteArray()
+		if e.isUUID && len(b) == 16 {
+			return uuid.UUID(b)
+		}
 		if len(b) == 16 {
 			var u [16]byte
 			copy(u[:], b)
 			return u
 		}
-		return b
+		dst := make([]byte, len(b))
+		copy(dst, b)
+		return dst
 	default:
 		return nil
 	}

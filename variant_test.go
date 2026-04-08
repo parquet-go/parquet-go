@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
 )
 
@@ -867,6 +868,71 @@ func TestShreddedVariantStringVsBinaryShredding(t *testing.T) {
 			t.Errorf("got %v (%T), want string %q", recs[0].Data, recs[0].Data, "hello")
 		}
 	})
+}
+
+// TestShreddedVariantUUID verifies that uuid.UUID values are correctly shredded
+// into UUID-annotated FixedLenByteArray typed_value columns and reconstructed
+// as uuid.UUID on read.
+func TestShreddedVariantUUID(t *testing.T) {
+	shreddedNode, err := parquet.ShreddedVariant(parquet.UUID())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type Record struct {
+		Data any `parquet:"data"`
+	}
+
+	schema := parquet.NewSchema("test", parquet.Group{
+		"data": shreddedNode,
+	})
+
+	id := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
+	records := []Record{
+		{Data: id},           // uuid.UUID — should be shredded
+		{Data: "not a uuid"}, // string — should NOT be shredded (type mismatch)
+		{Data: [16]byte(id)}, // [16]byte — should also be shredded
+	}
+
+	buf := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()), schema)
+	defer reader.Close()
+
+	readRecords := make([]Record, len(records))
+	n, err := reader.Read(readRecords)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != len(records) {
+		t.Fatalf("read %d records, want %d", n, len(records))
+	}
+
+	// Record 0: uuid.UUID input → shredded → uuid.UUID output
+	if u, ok := readRecords[0].Data.(uuid.UUID); !ok {
+		t.Errorf("record 0: got %v (%T), want uuid.UUID", readRecords[0].Data, readRecords[0].Data)
+	} else if u != id {
+		t.Errorf("record 0: got %v, want %v", u, id)
+	}
+
+	// Record 1: string — falls back to value column
+	if s, ok := readRecords[1].Data.(string); !ok || s != "not a uuid" {
+		t.Errorf("record 1: got %v (%T), want string %q", readRecords[1].Data, readRecords[1].Data, "not a uuid")
+	}
+
+	// Record 2: [16]byte input → shredded into UUID column → uuid.UUID output
+	if u, ok := readRecords[2].Data.(uuid.UUID); !ok {
+		t.Errorf("record 2: got %v (%T), want uuid.UUID", readRecords[2].Data, readRecords[2].Data)
+	} else if u != id {
+		t.Errorf("record 2: got %v, want %v", u, id)
+	}
 }
 
 func TestVariantSchemaTag(t *testing.T) {
