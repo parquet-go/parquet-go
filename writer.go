@@ -726,18 +726,19 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 		}
 
 		c := &ColumnWriter{
-			pool:               config.ColumnPageBuffers,
-			columnPath:         leaf.path,
-			columnType:         columnType,
-			originalType:       columnType,
-			columnIndex:        columnType.NewColumnIndexer(config.ColumnIndexSizeLimit(leaf.path)),
-			columnFilter:       searchBloomFilterColumn(config.BloomFilters, leaf.path),
-			compression:        compression,
-			dictionary:         dictionary,
-			maxRepetitionLevel: leaf.maxRepetitionLevel,
-			maxDefinitionLevel: leaf.maxDefinitionLevel,
-			bufferIndex:        int32(leaf.columnIndex),
-			bufferSize:         int32(float64(config.PageBufferSize) * 0.98),
+			pool:                   config.ColumnPageBuffers,
+			columnPath:             leaf.path,
+			columnType:             columnType,
+			originalType:           columnType,
+			columnIndex:            columnType.NewColumnIndexer(config.ColumnIndexSizeLimit(leaf.path)),
+			columnFilter:           searchBloomFilterColumn(config.BloomFilters, leaf.path),
+			compression:            compression,
+			bloomFilterCompression: config.BloomFilterCompression,
+			dictionary:             dictionary,
+			maxRepetitionLevel:     leaf.maxRepetitionLevel,
+			maxDefinitionLevel:     leaf.maxDefinitionLevel,
+			bufferIndex:            int32(leaf.columnIndex),
+			bufferSize:             int32(float64(config.PageBufferSize) * 0.98),
 			writePageStats: config.DataPageStatistics && !slices.ContainsFunc(config.SkipPageStatistics, func(skip []string) bool {
 				return columnPath(skip).equal(leaf.path)
 			}),
@@ -1526,18 +1527,19 @@ type ColumnWriter struct {
 	pageBuffer io.ReadWriteSeeker
 	numPages   int
 
-	columnPath           columnPath
-	columnType           Type
-	originalType         Type // Original type before any encoding changes
-	columnIndex          ColumnIndexer
-	columnBuffer         ColumnBuffer
-	plainColumnBuffer    ColumnBuffer // Retained plain buffer for fallback after lazy creation
-	originalColumnBuffer ColumnBuffer // Original buffer to restore after row group flush
-	columnFilter         BloomFilterColumn
-	encoding             encoding.Encoding
-	originalEncoding     encoding.Encoding // Original encoding before any changes
-	compression          compress.Codec
-	dictionary           Dictionary
+	columnPath             columnPath
+	columnType             Type
+	originalType           Type // Original type before any encoding changes
+	columnIndex            ColumnIndexer
+	columnBuffer           ColumnBuffer
+	plainColumnBuffer      ColumnBuffer // Retained plain buffer for fallback after lazy creation
+	originalColumnBuffer   ColumnBuffer // Original buffer to restore after row group flush
+	columnFilter           BloomFilterColumn
+	encoding               encoding.Encoding
+	originalEncoding       encoding.Encoding // Original encoding before any changes
+	compression            compress.Codec
+	bloomFilterCompression compress.Codec
+	dictionary             Dictionary
 
 	maxRepetitionLevel byte
 	maxDefinitionLevel byte
@@ -1861,12 +1863,29 @@ func (c *ColumnWriter) writeValues(values []Value) (numValues int, err error) {
 
 func (c *ColumnWriter) writeBloomFilter(w io.Writer) error {
 	e := thrift.NewEncoder(c.header.protocol.NewWriter(w))
-	h := bloomFilterHeader(c.columnFilter)
-	h.NumBytes = int32(len(c.filter))
+	h := bloomFilterHeader(c.columnFilter, c.bloomFilterCompression)
+
+	filterBytes := c.filter
+	if c.bloomFilterCompression != nil {
+		switch c.bloomFilterCompression.CompressionCodec() {
+		case format.Uncompressed:
+			// no-op
+		case format.Gzip:
+			compressed, err := c.bloomFilterCompression.Encode(nil, filterBytes)
+			if err != nil {
+				return fmt.Errorf("compressing bloom filter: %w", err)
+			}
+			filterBytes = compressed
+		default:
+			return fmt.Errorf("unsupported bloom filter compression codec: %s", c.bloomFilterCompression)
+		}
+	}
+
+	h.NumBytes = int32(len(filterBytes))
 	if err := e.Encode(&h); err != nil {
 		return err
 	}
-	_, err := w.Write(c.filter)
+	_, err := w.Write(filterBytes)
 	return err
 }
 

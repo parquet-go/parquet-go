@@ -229,6 +229,7 @@ type WriterConfig struct {
 	KeyValueMetadata             map[string]string
 	Schema                       *Schema
 	BloomFilters                 []BloomFilterColumn
+	BloomFilterCompression       compress.Codec
 	Compression                  compress.Codec
 	Sorting                      SortingConfig
 	SkipPageBounds               [][]string
@@ -306,6 +307,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		KeyValueMetadata:             keyValueMetadata,
 		Schema:                       coalesceSchema(c.Schema, config.Schema),
 		BloomFilters:                 coalesceSlices(c.BloomFilters, config.BloomFilters),
+		BloomFilterCompression:       coalesceCompression(c.BloomFilterCompression, config.BloomFilterCompression),
 		Compression:                  coalesceCompression(c.Compression, config.Compression),
 		Sorting:                      coalesceSortingConfig(c.Sorting, config.Sorting),
 		SkipPageBounds:               coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
@@ -704,6 +706,13 @@ func KeyValueMetadata(key, value string) WriterOption {
 func BloomFilters(filters ...BloomFilterColumn) WriterOption {
 	filters = slices.Clone(filters)
 	return writerOption(func(config *WriterConfig) { config.BloomFilters = filters })
+}
+
+// BloomFilterCompression creates a configuration option which sets the
+// compression codec used when writing bloom filters. The default is
+// uncompressed for backward compatibility.
+func BloomFilterCompression(codec compress.Codec) WriterOption {
+	return writerOption(func(config *WriterConfig) { config.BloomFilterCompression = codec })
 }
 
 // Compression creates a configuration option which sets the default compression
