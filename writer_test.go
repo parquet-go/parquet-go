@@ -26,6 +26,8 @@ import (
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/compress/zstd"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/encoding/thrift"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 const (
@@ -1152,7 +1154,7 @@ Column: last_name
 `,
 	},
 
-	{ // same as the previous test but uses page v2 where data pages aren't compressed
+	{
 		scenario: "page v2 with dictionary encoding",
 		version:  v2,
 		rows: []any{
@@ -1171,10 +1173,10 @@ message firstAndLastName {
 }
 
 
-Row group 0:  count: 3  111.67 B records  start: 4  total(compressed): 335 B total(uncompressed):320 B
+Row group 0:  count: 3  114.67 B records  start: 4  total(compressed): 344 B total(uncompressed):320 B
 --------------------------------------------------------------------------------
             type      encodings count     avg size   nulls   min / max
-first_name  BINARY    Z _ R     3         37.33 B    0       "Han" / "Luke"
+first_name  BINARY    Z _ R     3         40.33 B    0       "Han" / "Luke"
 last_name   BINARY    Z   D     3         74.33 B    0       "Skywalker" / "Solo"
 
 
@@ -1222,10 +1224,10 @@ message timeseries {
 }
 
 
-Row group 0:  count: 10  123.70 B records  start: 4  total(compressed): 1.208 kB total(uncompressed):1.331 kB
+Row group 0:  count: 10  128.70 B records  start: 4  total(compressed): 1.257 kB total(uncompressed):1.331 kB
 --------------------------------------------------------------------------------
            type      encodings count     avg size   nulls   min / max
-name       BINARY    G _ R     10        29.40 B    0       "http_request_total" / "http_request_total"
+name       BINARY    G _ R     10        34.40 B    0       "http_request_total" / "http_request_total"
 timestamp  INT64     G   D     10        47.50 B    0       "1639444033" / "1639444144"
 value      DOUBLE    G   _     10        46.80 B    0       "-0.0" / "100.0"
 
@@ -3995,4 +3997,96 @@ func TestIssue28(t *testing.T) {
 			t.Fatalf("rows mismatch:\nwant: %+v\ngot:  %+v", rows, result)
 		}
 	})
+}
+
+// TestIssue472DataPageV2DictCompression verifies that DataPageV2 data pages
+// with dictionary encoding are compressed when a compression codec is set.
+// Some readers (e.g., parquet.net) don't check the per-page IsCompressed field
+// and assume all pages are compressed based on the column metadata's codec.
+func TestIssue472DataPageV2DictCompression(t *testing.T) {
+	type record struct {
+		Name string `parquet:"name,dict,zstd"`
+	}
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[record](buf,
+		parquet.DataPageVersion(2),
+		parquet.PageBufferSize(256),
+	)
+
+	// Write enough rows so dictionary encoding stays active and data pages are generated.
+	records := make([]record, 100)
+	for i := range records {
+		records[i] = record{Name: fmt.Sprintf("value-%03d", i%10)}
+	}
+	if _, err := w.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	// Open the file and inspect raw page headers.
+	data := buf.Bytes()
+	pf, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("failed to open file: %v", err)
+	}
+
+	meta := pf.Metadata()
+	for rgIdx, rg := range meta.RowGroups {
+		for colIdx, col := range rg.Columns {
+			// Determine where pages start in the file.
+			offset := col.MetaData.DataPageOffset
+			if col.MetaData.DictionaryPageOffset != 0 {
+				offset = col.MetaData.DictionaryPageOffset
+			}
+			end := offset + col.MetaData.TotalCompressedSize
+
+			// Decode page headers from the raw bytes.
+			r := bytes.NewReader(data[offset:end])
+			var protocol thrift.CompactProtocol
+			decoder := thrift.NewDecoder(protocol.NewReader(r))
+
+			for r.Len() > 0 {
+				var header format.PageHeader
+				if err := decoder.Decode(&header); err != nil {
+					break
+				}
+
+				if header.DataPageHeaderV2.Valid {
+					v2 := header.DataPageHeaderV2.V
+					if !v2.IsCompressed.Valid || !v2.IsCompressed.V {
+						t.Errorf("row group %d, column %d: DataPageHeaderV2 IsCompressed should be true, got valid=%v value=%v",
+							rgIdx, colIdx, v2.IsCompressed.Valid, v2.IsCompressed.V)
+					}
+				}
+
+				// Skip past page data to get to the next header.
+				pageSize := int(header.CompressedPageSize)
+				skip := make([]byte, pageSize)
+				if _, err := io.ReadFull(r, skip); err != nil {
+					break
+				}
+			}
+		}
+	}
+
+	// Verify data integrity: read back all rows.
+	reader := parquet.NewGenericReader[record](bytes.NewReader(data))
+	defer reader.Close()
+
+	readBack := make([]record, 100)
+	n, err := reader.Read(readBack)
+	if err != nil && err != io.EOF {
+		t.Fatalf("failed to read back: %v", err)
+	}
+	if n != len(records) {
+		t.Fatalf("expected %d rows, got %d", len(records), n)
+	}
+	for i, r := range readBack {
+		if r != records[i] {
+			t.Errorf("row %d: got %v, want %v", i, r, records[i])
+		}
+	}
 }
