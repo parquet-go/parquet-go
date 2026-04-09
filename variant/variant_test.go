@@ -361,3 +361,52 @@ func mapsEqual(a, b any) bool {
 
 	return a == b
 }
+
+// TestPrimitiveTypeWireValues pins primitive type header bytes against the spec.
+// Objects and arrays are excluded — their headers encode structural metadata,
+// not a fixed type_info. See TestObjectRoundTrip and TestArrayRoundTrip.
+func TestPrimitiveTypeWireValues(t *testing.T) {
+	tests := []struct {
+		name          string
+		val           Value
+		wantTypeInfo  byte // bits [7:2] of the header byte per spec
+		wantBasicType byte // bits [1:0] of the header byte per spec
+	}{
+		{"null", Null(), 0, 0},
+		{"true", Bool(true), 1, 0},
+		{"false", Bool(false), 2, 0},
+		{"int8", Int8(1), 3, 0},
+		{"int16", Int16(1), 4, 0},
+		{"int32", Int32(1), 5, 0},
+		{"int64", Int64(1), 6, 0},
+		{"double", Double(1.0), 7, 0},
+		{"decimal4", Decimal4(1, 0), 8, 0},
+		{"decimal8", Decimal8(1, 0), 9, 0},
+		{"date", Date(1), 11, 0},
+		{"float", Float(1.0), 14, 0},
+		{"binary", Binary([]byte{1}), 15, 0},
+		{"string_short", String("hi"), 2, 1},                    // short string: basic_type=1, type_info=len(2)
+		{"string_long", String(strings.Repeat("x", 64)), 16, 0}, // long string: basic_type=0, type_info=16
+		{"uuid", UUID([16]byte{}), 20, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var b MetadataBuilder
+			encoded := Encode(&b, tt.val)
+			if len(encoded) == 0 {
+				t.Fatal("encoded value is empty")
+			}
+			header := encoded[0]
+			gotBasicType := header & 0x03
+			gotTypeInfo := (header >> 2) & 0x3F
+
+			if gotBasicType != tt.wantBasicType {
+				t.Errorf("basic_type: got %d, want %d", gotBasicType, tt.wantBasicType)
+			}
+			if gotTypeInfo != tt.wantTypeInfo {
+				t.Errorf("type_info: got %d, want %d (header=0x%02x)", gotTypeInfo, tt.wantTypeInfo, header)
+			}
+		})
+	}
+}
