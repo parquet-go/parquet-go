@@ -22,17 +22,17 @@ const (
 	PrimitiveInt16        PrimitiveType = 4
 	PrimitiveInt32        PrimitiveType = 5
 	PrimitiveInt64        PrimitiveType = 6
-	PrimitiveFloat        PrimitiveType = 7
-	PrimitiveDouble       PrimitiveType = 8
-	PrimitiveDecimal4     PrimitiveType = 9
-	PrimitiveDecimal8     PrimitiveType = 10
-	PrimitiveDecimal16    PrimitiveType = 11
-	PrimitiveDate         PrimitiveType = 12
-	PrimitiveTimestamp    PrimitiveType = 13
-	PrimitiveTimestampNTZ PrimitiveType = 14
-	PrimitiveTime         PrimitiveType = 15
-	PrimitiveBinary       PrimitiveType = 16
-	PrimitiveString       PrimitiveType = 17
+	PrimitiveDouble       PrimitiveType = 7
+	PrimitiveDecimal4     PrimitiveType = 8
+	PrimitiveDecimal8     PrimitiveType = 9
+	PrimitiveDecimal16    PrimitiveType = 10
+	PrimitiveDate         PrimitiveType = 11
+	PrimitiveTimestamp    PrimitiveType = 12
+	PrimitiveTimestampNTZ PrimitiveType = 13
+	PrimitiveFloat        PrimitiveType = 14
+	PrimitiveBinary       PrimitiveType = 15
+	PrimitiveString       PrimitiveType = 16
+	PrimitiveTime         PrimitiveType = 17
 	PrimitiveUUID         PrimitiveType = 20
 )
 
