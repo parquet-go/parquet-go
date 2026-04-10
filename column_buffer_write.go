@@ -68,6 +68,15 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplace
 		return writeRowsFuncOfSmallInt(t, schema, path)
 	case reflect.Slice:
 		if t.Elem().Kind() == reflect.Uint8 {
+			// When the column physical type is FIXED_LEN_BYTE_ARRAY (e.g. the
+			// field carries a decimal(...) tag), the optimized direct-memory
+			// path would read the slice header bytes instead of the slice
+			// contents. Dispatch to a dedicated writer that indirects through
+			// the slice header. See issue #508.
+			column := schema.lazyLoadState().mapping.lookup(path)
+			if column.node.Type().Kind() == FixedLenByteArray {
+				return writeRowsFuncOfByteSlice(t, schema, path)
+			}
 			return writeRowsFuncOfRequired(t, schema, path)
 		} else {
 			return writeRowsFuncOfSlice(t, schema, path, tagReplacements)
@@ -400,6 +409,53 @@ func writeRowsFuncOfArray(t reflect.Type, schema *Schema, path columnPath) write
 		panic(fmt.Sprintf("cannot convert Go values of type "+typeNameOf(t)+" to FIXED_LEN_BYTE_ARRAY(%d)", columnLen))
 	}
 	return writeRowsFuncOfRequired(t, schema, path)
+}
+
+type byteSliceBuf struct{ values []byte }
+
+var byteSliceBufPool memory.Pool[byteSliceBuf]
+
+// writeRowsFuncOfByteSlice handles writing []byte Go fields into a
+// FIXED_LEN_BYTE_ARRAY column. The optimized path used for other []byte
+// columns treats each sparse.Array element as raw bytes, but for a slice
+// field that element is a slice header. This function reads each slice via
+// rows.StringArray() (string and []byte share the ptr/len header layout),
+// copies the referenced bytes into a contiguous scratch buffer, and forwards
+// the buffer as a flat sparse.Array so the column buffer's existing write
+// path sees real fixed-size elements.
+func writeRowsFuncOfByteSlice(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+	column := schema.lazyLoadState().mapping.lookup(path)
+	columnIndex := column.columnIndex
+	if columnIndex == math.MaxUint16 {
+		panic("parquet: column not found: " + path.String())
+	}
+	size := column.node.Type().Length()
+	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
+		n := rows.Len()
+		if n == 0 {
+			columns[columnIndex].writeValues(levels, rows)
+			return
+		}
+
+		buf := byteSliceBufPool.Get(
+			func() *byteSliceBuf { return new(byteSliceBuf) },
+			func(b *byteSliceBuf) { b.values = b.values[:0] },
+		)
+		buf.values = slices.Grow(buf.values, n*size)[:n*size]
+		defer byteSliceBufPool.Put(buf)
+
+		stringArray := rows.StringArray()
+		for i := range n {
+			s := stringArray.Index(i)
+			if len(s) != size {
+				panic(fmt.Sprintf("cannot write byte slice of length %d to FIXED_LEN_BYTE_ARRAY(%d) column", len(s), size))
+			}
+			copy(buf.values[i*size:], s)
+		}
+
+		flatArray := sparse.UnsafeArray(unsafe.Pointer(&buf.values[0]), n, uintptr(size))
+		columns[columnIndex].writeValues(levels, flatArray)
+	}
 }
 
 func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
