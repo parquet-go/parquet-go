@@ -236,6 +236,7 @@ type WriterConfig struct {
 	Sorting                      SortingConfig
 	SkipPageBounds               [][]string
 	SkipPageStatistics           [][]string
+	EnablePageStatistics         [][]string
 	Encodings                    map[Kind]encoding.Encoding
 	DictionaryMaxBytes           int64
 	SchemaConfig                 *SchemaConfig
@@ -315,6 +316,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		Sorting:                      coalesceSortingConfig(c.Sorting, config.Sorting),
 		SkipPageBounds:               coalesceSlices(c.SkipPageBounds, config.SkipPageBounds),
 		SkipPageStatistics:           coalesceSlices(c.SkipPageStatistics, config.SkipPageStatistics),
+		EnablePageStatistics:         coalesceSlices(c.EnablePageStatistics, config.EnablePageStatistics),
 		Encodings:                    encodings,
 		SchemaConfig:                 cmp.Or(c.SchemaConfig, config.SchemaConfig),
 	}
@@ -763,6 +765,14 @@ func SkipPageBounds(path ...string) WriterOption {
 // This option is additive, it may be used multiple times to skip multiple columns.
 func SkipPageStatistics(path ...string) WriterOption {
 	return writerOption(func(config *WriterConfig) { config.SkipPageStatistics = append(config.SkipPageStatistics, path) })
+}
+
+// EnablePageStatistics creates a configuration option which enables page
+// statistics on the column at the given path. This is useful when
+// DataPageStatistics has been set to false globally, but statistics are still
+// desired for specific columns.
+func EnablePageStatistics(path ...string) WriterOption {
+	return writerOption(func(config *WriterConfig) { config.EnablePageStatistics = append(config.EnablePageStatistics, path) })
 }
 
 // DefaultEncodingFor creates a configuration option which sets the default encoding

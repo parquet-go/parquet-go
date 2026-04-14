@@ -739,9 +739,11 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 			maxDefinitionLevel:     leaf.maxDefinitionLevel,
 			bufferIndex:            int32(leaf.columnIndex),
 			bufferSize:             int32(float64(config.PageBufferSize) * 0.98),
-			writePageStats: config.DataPageStatistics && !slices.ContainsFunc(config.SkipPageStatistics, func(skip []string) bool {
+			writePageStats: (config.DataPageStatistics && !slices.ContainsFunc(config.SkipPageStatistics, func(skip []string) bool {
 				return columnPath(skip).equal(leaf.path)
-			}),
+			})) || (!config.DataPageStatistics && slices.ContainsFunc(config.EnablePageStatistics, func(enable []string) bool {
+				return columnPath(enable).equal(leaf.path)
+			})),
 			writePageBounds: !slices.ContainsFunc(config.SkipPageBounds, func(skip []string) bool {
 				return columnPath(skip).equal(leaf.path)
 			}),
