@@ -1040,6 +1040,7 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 			// page locations. Seeking to row 0 is valid in this case;
 			// the subsequent ReadPage will return io.EOF.
 			if rowIndex == 0 {
+				f.skip = 0
 				return nil
 			}
 			return ErrSeekOutOfRange

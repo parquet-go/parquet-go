@@ -46,6 +46,42 @@ func TestFilePagesSeekToRowEmptyOffsetIndex(t *testing.T) {
 	}
 }
 
+// TestFilePagesSeekToRowEmptyOffsetIndexResetsSkip verifies that SeekToRow(0)
+// on an empty offset index resets f.skip to 0. This matters when a prior seek
+// set skip to a non-zero value (e.g., on a different column in the same row
+// group); without the reset, ReadPage could try to slice into an empty page
+// using the stale skip value.
+func TestFilePagesSeekToRowEmptyOffsetIndexResetsSkip(t *testing.T) {
+	chunk := &FileColumnChunk{
+		file: &File{config: DefaultFileConfig()},
+		chunk: &format.ColumnChunk{
+			MetaData: format.ColumnMetaData{
+				DataPageOffset:      0,
+				TotalCompressedSize: 0,
+			},
+		},
+	}
+	chunk.offsetIndex.Store(&FileOffsetIndex{
+		index: &format.OffsetIndex{
+			PageLocations: []format.PageLocation{},
+		},
+	})
+
+	var fp FilePages
+	fp.chunk = chunk
+	fp.section = *io.NewSectionReader(emptyReaderAt{}, 0, 0)
+
+	// Simulate a stale skip from a prior seek.
+	fp.skip = 42
+
+	if err := fp.SeekToRow(0); err != nil {
+		t.Fatalf("SeekToRow(0): got %v, want nil", err)
+	}
+	if fp.skip != 0 {
+		t.Fatalf("after SeekToRow(0): skip = %d, want 0", fp.skip)
+	}
+}
+
 type emptyReaderAt struct{}
 
 func (emptyReaderAt) ReadAt(p []byte, off int64) (int, error) { return 0, io.EOF }
