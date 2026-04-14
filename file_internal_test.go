@@ -200,17 +200,17 @@ func injectEmptyRowGroup(t *testing.T, data []byte) []byte {
 	for i := range numCols {
 		emptyColumns[i] = format.ColumnChunk{
 			MetaData: format.ColumnMetaData{
-				Type:      srcRG.Columns[i].MetaData.Type,
-				Encoding: srcRG.Columns[i].MetaData.Encoding,
+				Type:         srcRG.Columns[i].MetaData.Type,
+				Encoding:     srcRG.Columns[i].MetaData.Encoding,
 				PathInSchema: srcRG.Columns[i].MetaData.PathInSchema,
-				Codec:     srcRG.Columns[i].MetaData.Codec,
+				Codec:        srcRG.Columns[i].MetaData.Codec,
 				// Point data offset at the start of the first row group's data
 				// (a valid offset in the file). No data will actually be read
 				// for a 0-row row group.
-				DataPageOffset:      srcRG.Columns[i].MetaData.DataPageOffset,
-				TotalCompressedSize: 0,
+				DataPageOffset:        srcRG.Columns[i].MetaData.DataPageOffset,
+				TotalCompressedSize:   0,
 				TotalUncompressedSize: 0,
-				NumValues:           0,
+				NumValues:             0,
 			},
 		}
 	}
