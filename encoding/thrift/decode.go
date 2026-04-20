@@ -604,7 +604,14 @@ func skip(r Reader, t Type) error {
 	var err error
 	switch t {
 	case TRUE, FALSE:
-		_, err = r.ReadBool()
+		// When CoalesceBoolFields is advertised, boolean field values are encoded in the field
+		// type (TRUE/FALSE) with no additional data bytes. ReadBool() would
+		// consume a byte that belongs to the next field, misaligning the reader.
+		// So, only read a byte for protocols that don't coalesce bool fields.
+		// Related test file: binary_min_val_exact.parquet
+		if r.Protocol().Features()&CoalesceBoolFields == 0 {
+			_, err = r.ReadBool()
+		}
 	case I8:
 		_, err = r.ReadInt8()
 	case I16:
