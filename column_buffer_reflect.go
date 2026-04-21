@@ -489,8 +489,7 @@ func writeValueFuncOfRequired(columnIndex uint16, node Node) (uint16, writeValue
 
 func writeValueFuncOfList(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	elem := listElementOf(node)
-	// Preserve optionality of list elements when writing via reflect paths
-	// (e.g. GenericWriter[any] with []*T list elements).
+	// Preserve optionality of list elements when writing via reflection paths.
 	if elem.Optional() {
 		return writeValueFuncOfRepeated(columnIndex, elem)
 	}
