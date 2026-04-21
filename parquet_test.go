@@ -1675,3 +1675,44 @@ func TestIssue40MapValueNestedStruct(t *testing.T) {
 		t.Errorf("data mismatch:\nwant: %+v\ngot:  %+v", input, output)
 	}
 }
+
+func TestReconstructOptionalListElementsAndMapValues(t *testing.T) {
+	type Data struct {
+		RequiredListElements        []int32             `parquet:"required_elements,list"`
+		OptionalListElements        []*int32            `parquet:"optional_elements,list"`
+		RequiredMapValues           map[string]int32    `parquet:"required_map"`
+		OptionalMapValues           map[string]*int32   `parquet:"optional_map"`
+		MapWithOptionalListElements map[string][]*int32 `parquet:"map_with_optional_list_elements" parquet-value:",list"`
+	}
+
+	int1 := int32(1)
+	input := []Data{
+		{
+			RequiredListElements: []int32{1, 2, 3},
+			OptionalListElements: []*int32{&int1, nil, nil},
+			RequiredMapValues:    map[string]int32{"a": 1, "b": 2, "c": 3},
+			OptionalMapValues:    map[string]*int32{"a": &int1, "b": nil, "c": nil},
+			MapWithOptionalListElements: map[string][]*int32{
+				"a": {&int1, nil, nil},
+				"b": {nil, &int1, nil},
+				"c": {nil, nil, &int1},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := parquet.Write(&buf, input); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+
+	data, size := bytes.NewReader(buf.Bytes()), int64(buf.Len())
+
+	output, err := parquet.Read[Data](data, size)
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	if !reflect.DeepEqual(input, output) {
+		t.Errorf("data mismatch:\nwant: %+v\ngot:  %+v", input, output)
+	}
+}
