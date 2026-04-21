@@ -325,7 +325,7 @@ func writeValueFuncOf(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	case node.Optional():
 		return writeValueFuncOfOptional(columnIndex, node)
 	case node.Repeated():
-		return writeValueFuncOfRepeated(columnIndex, node)
+		return writeValueFuncOfRepeated(columnIndex, Required(node))
 	case isList(node):
 		return writeValueFuncOfList(columnIndex, node)
 	case isMap(node):
@@ -350,7 +350,7 @@ func writeValueFuncOfOptional(columnIndex uint16, node Node) (uint16, writeValue
 }
 
 func writeValueFuncOfRepeated(columnIndex uint16, node Node) (uint16, writeValueFunc) {
-	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
+	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, node)
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 	writeRepatedValue:
 		if !value.IsValid() {
@@ -488,7 +488,12 @@ func writeValueFuncOfRequired(columnIndex uint16, node Node) (uint16, writeValue
 }
 
 func writeValueFuncOfList(columnIndex uint16, node Node) (uint16, writeValueFunc) {
-	return writeValueFuncOf(columnIndex, Repeated(listElementOf(node)))
+	elem := listElementOf(node)
+	// Preserve optionality of list elements when writing via reflection paths.
+	if elem.Optional() {
+		return writeValueFuncOfRepeated(columnIndex, elem)
+	}
+	return writeValueFuncOf(columnIndex, Repeated(elem))
 }
 
 func writeValueFuncOfMap(columnIndex uint16, node Node) (uint16, writeValueFunc) {
