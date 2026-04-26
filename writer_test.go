@@ -3464,6 +3464,124 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 	}
 }
 
+// TestIssue508ByteSliceDecimalReadWrite reproduces issue #508: when a Go
+// struct field is declared as []byte with a decimal(...) tag that resolves to
+// FIXED_LEN_BYTE_ARRAY, the optimized GenericWriter path used to copy the
+// slice header bytes instead of the slice contents. This test round-trips
+// multiple rows with distinct values through GenericWriter and asserts both
+// the required and optional columns contain the exact input bytes. Multiple
+// rows are important: a single-row test would miss off-by-one errors in the
+// byte-buffer indexing of the fix.
+func TestIssue508ByteSliceDecimalReadWrite(t *testing.T) {
+	type Row struct {
+		Bet []byte `parquet:"bet_amount,decimal(8:29)"`
+		Opt []byte `parquet:"total_bet_amount,optional,decimal(8:29)"`
+	}
+
+	// Encode `value` big-endian into a fresh 13-byte fixed-length buffer.
+	encode := func(value uint32) []byte {
+		b := make([]byte, 13)
+		b[9] = byte(value >> 24)
+		b[10] = byte(value >> 16)
+		b[11] = byte(value >> 8)
+		b[12] = byte(value)
+		return b
+	}
+
+	rows := []Row{
+		{Bet: encode(200000000), Opt: encode(200000000)},
+		{Bet: encode(1), Opt: encode(2)},
+		{Bet: encode(0xdeadbeef), Opt: encode(0xcafef00d)},
+	}
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[Row](&buf)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatalf("unable to write: %s", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("unable to close writer: %s", err)
+	}
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("unable to open file: %s", err)
+	}
+
+	for _, col := range []string{"bet_amount", "total_bet_amount"} {
+		leaf, ok := f.Schema().Lookup(col)
+		if !ok {
+			t.Fatalf("column %q not found in schema", col)
+		}
+		if got, want := leaf.Node.Type().Kind(), parquet.FixedLenByteArray; got != want {
+			t.Fatalf("column %q: expected physical type %v, got %v", col, want, got)
+		}
+		if got, want := leaf.Node.Type().Length(), 13; got != want {
+			t.Fatalf("column %q: expected length %d, got %d", col, want, got)
+		}
+	}
+
+	// Use the raw row reader so we can assert on the exact bytes stored in
+	// the parquet file, bypassing the decimal->*big.Float reconstruct path
+	// which does not support []byte destinations.
+	reader := f.RowGroups()[0].Rows()
+	defer reader.Close()
+
+	rowBuf := make([]parquet.Row, len(rows))
+	n, err := reader.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
+		t.Fatalf("unable to read rows: %s", err)
+	}
+	if n != len(rows) {
+		t.Fatalf("expected %d rows, got %d", len(rows), n)
+	}
+
+	for i, got := range rowBuf {
+		if len(got) != 2 {
+			t.Fatalf("row %d: expected 2 column values, got %d", i, len(got))
+		}
+		if !bytes.Equal(got[0].ByteArray(), rows[i].Bet) {
+			t.Errorf("row %d bet_amount: got %x, want %x", i, got[0].ByteArray(), rows[i].Bet)
+		}
+		if !bytes.Equal(got[1].ByteArray(), rows[i].Opt) {
+			t.Errorf("row %d total_bet_amount: got %x, want %x", i, got[1].ByteArray(), rows[i].Opt)
+		}
+	}
+}
+
+// TestIssue508ByteSliceDecimalWrongLength asserts that writing a []byte value
+// whose length does not match the FIXED_LEN_BYTE_ARRAY size fails with a
+// clear error instead of silently truncating or corrupting the output. Before
+// the fix, wrong-length input was copied as slice-header bytes and produced
+// plausible-looking but incorrect column data.
+func TestIssue508ByteSliceDecimalWrongLength(t *testing.T) {
+	type Row struct {
+		Bet []byte `parquet:"bet_amount,decimal(8:29)"`
+	}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on wrong-length []byte value, got none")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			if e, isErr := r.(error); isErr {
+				msg = e.Error()
+			}
+		}
+		if !strings.Contains(msg, "FIXED_LEN_BYTE_ARRAY(13)") {
+			t.Fatalf("unexpected panic message: %v", r)
+		}
+	}()
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[Row](&buf)
+	// 5 bytes instead of the required 13 — must fail loudly.
+	_, _ = w.Write([]Row{{Bet: []byte{1, 2, 3, 4, 5}}})
+	_ = w.Close()
+}
+
 func TestWriteOptionalJSONRawMessage(t *testing.T) {
 	type Row struct {
 		Buf json.RawMessage `parquet:"buf,json,optional"`
