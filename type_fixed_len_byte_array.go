@@ -98,6 +98,11 @@ func (t fixedLenByteArrayType) AssignValue(dst reflect.Value, src Value) error {
 		}
 	}
 
+	if t.isUUID && len(v) == 16 {
+		dst.Set(reflect.ValueOf(uuid.UUID(v).String()))
+		return nil
+	}
+
 	val := reflect.ValueOf(copyBytes(v))
 	dst.Set(val)
 	return nil
