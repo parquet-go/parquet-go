@@ -4144,3 +4144,46 @@ func TestIssue472DataPageV2DictCompression(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteOptionalListWithGenericWriterReflectionPath(t *testing.T) {
+	type Row struct {
+		OptionalList []*string `parquet:"optional_list,list"`
+	}
+
+	var (
+		numRows      = 50
+		expectedRows = make([]Row, 0, numRows)
+		inputs       = make([]any, 0, numRows)
+	)
+
+	for i := range numRows {
+		var row Row
+		if i%2 == 0 {
+			row = Row{OptionalList: []*string{nil}}
+		} else {
+			value := fmt.Sprintf("value_%d", i)
+			row = Row{OptionalList: []*string{&value}}
+		}
+		expectedRows = append(expectedRows, row)
+		inputs = append(inputs, row)
+	}
+
+	var buf bytes.Buffer
+	writer := parquet.NewGenericWriter[any](&buf, parquet.SchemaOf(Row{}))
+	if _, err := writer.Write(inputs); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+	data, size := bytes.NewReader(buf.Bytes()), int64(buf.Len())
+
+	output, err := parquet.Read[Row](data, size)
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	if !reflect.DeepEqual(expectedRows, output) {
+		t.Errorf("data mismatch:\nwant: %+v\ngot:  %+v", expectedRows, output)
+	}
+}
