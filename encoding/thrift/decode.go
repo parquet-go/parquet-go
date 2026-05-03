@@ -632,6 +632,14 @@ func skip(r Reader, t Type) error {
 		err = skipMap(r)
 	case STRUCT:
 		err = skipStruct(r)
+	case UUID:
+		// UUID is 16 bytes (fixed size) in compact protocol. ReadFloat64 is
+		// used because it reads exactly 8 raw bytes in compact encoding,
+		// unlike ReadInt64 which reads a variable-length zigzag varint.
+		_, err = r.ReadFloat64()
+		if err == nil {
+			_, err = r.ReadFloat64()
+		}
 	default:
 		return fmt.Errorf("skipping unsupported thrift type %d", t)
 	}
