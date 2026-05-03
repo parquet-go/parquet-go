@@ -25,14 +25,14 @@ func TestSkipUUIDField(t *testing.T) {
 	//   field 6 (I32) = 99
 	//   STOP
 	data := []byte{
-		0x15,       // field 1, delta=1, type=I32(5)
-		0x54,       // zigzag(42) = 84
-		0x4D,       // field 5, delta=4, type=UUID(13)
+		0x15, // field 1, delta=1, type=I32(5)
+		0x54, // zigzag(42) = 84
+		0x4D, // field 5, delta=4, type=UUID(13)
 		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
 		0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
 		0x15,       // field 6, delta=1, type=I32(5)
 		0xC6, 0x01, // zigzag(99) = 198
-		0x00,       // STOP
+		0x00, // STOP
 	}
 
 	type S struct {
