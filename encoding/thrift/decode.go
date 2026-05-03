@@ -633,8 +633,9 @@ func skip(r Reader, t Type) error {
 	case STRUCT:
 		err = skipStruct(r)
 	case UUID:
-		// UUID is 16 bytes in compact protocol. Read via the reader's own
-		// methods to correctly advance the stream position for all reader types.
+		// UUID is 16 bytes (fixed size) in compact protocol. ReadFloat64 is
+		// used because it reads exactly 8 raw bytes in compact encoding,
+		// unlike ReadInt64 which reads a variable-length zigzag varint.
 		_, err = r.ReadFloat64()
 		if err == nil {
 			_, err = r.ReadFloat64()
