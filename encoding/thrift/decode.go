@@ -604,6 +604,17 @@ func skip(r Reader, t Type) error {
 	var err error
 	switch t {
 	case TRUE, FALSE:
+		// In the compact protocol, bool struct field values are encoded inline
+		// in the field type byte (TRUE=1, FALSE=2), so there are no body bytes
+		// to consume here. Calling ReadBool() in that case would incorrectly
+		// consume the next byte (which belongs to the following field header)
+		// and corrupt the stream.
+		//
+		// In the binary protocol there is a value byte to read, so fall through
+		// to ReadBool when the protocol does not coalesce bool fields.
+		if r.Protocol().Features()&CoalesceBoolFields != 0 {
+			return nil
+		}
 		_, err = r.ReadBool()
 	case I8:
 		_, err = r.ReadInt8()
