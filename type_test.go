@@ -590,6 +590,72 @@ func TestIssue155(t *testing.T) {
 	}
 }
 
+// TestIssue45 reproduces https://github.com/parquet-go/parquet-go/issues/45
+// Issue #45: using *int32 with date tag or *int64 with timestamp tag causes a panic.
+func TestIssue45(t *testing.T) {
+	type Record struct {
+		ID        int32  `parquet:"id"`
+		Date      *int32 `parquet:"date,date"`
+		Timestamp *int64 `parquet:"timestamp,timestamp(microsecond)"`
+	}
+
+	// This should not panic - pointer types should support date/timestamp tags
+	schema := parquet.SchemaOf(Record{})
+	if schema == nil {
+		t.Fatal("schema should not be nil")
+	}
+	t.Logf("Schema: %s", schema)
+
+	// Test writing and reading
+	buffer := new(bytes.Buffer)
+	dateVal := int32(19735)       // 2024-01-10 (days since epoch)
+	tsVal := int64(1704844800000) // some microsecond timestamp
+
+	writer := parquet.NewGenericWriter[Record](buffer, schema)
+	_, err := writer.Write([]Record{
+		{ID: 1, Date: &dateVal, Timestamp: &tsVal},
+		{ID: 2, Date: nil, Timestamp: nil}, // NULL values
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back
+	reader := parquet.NewGenericReader[Record](bytes.NewReader(buffer.Bytes()))
+	rows := make([]Record, 2)
+	n, err := reader.Read(rows)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("expected 2 rows, got %d", n)
+	}
+
+	// Verify first row has values
+	if rows[0].Date == nil {
+		t.Error("expected first row to have non-nil Date")
+	} else if *rows[0].Date != dateVal {
+		t.Errorf("date mismatch: got %d, want %d", *rows[0].Date, dateVal)
+	}
+	if rows[0].Timestamp == nil {
+		t.Error("expected first row to have non-nil Timestamp")
+	} else if *rows[0].Timestamp != tsVal {
+		t.Errorf("timestamp mismatch: got %d, want %d", *rows[0].Timestamp, tsVal)
+	}
+
+	// Verify second row has NULLs
+	if rows[1].Date != nil {
+		t.Errorf("expected second row to have nil Date, got %d", *rows[1].Date)
+	}
+	if rows[1].Timestamp != nil {
+		t.Errorf("expected second row to have nil Timestamp, got %d", *rows[1].Timestamp)
+	}
+}
+
 // TestIssue326 reproduces https://github.com/parquet-go/parquet-go/issues/326
 // Issue #326: using *time.Time (pointer) with timestamp(millisecond) tag causes a panic.
 func TestIssue326(t *testing.T) {

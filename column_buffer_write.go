@@ -3,6 +3,7 @@ package parquet
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/bits"
 	"reflect"
 	"slices"
@@ -90,7 +91,7 @@ func writeRowsFuncOf(t reflect.Type, schema *Schema, path columnPath, tagReplace
 func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := column.columnIndex
-	if columnIndex < 0 {
+	if columnIndex == math.MaxUint16 {
 		panic("parquet: column not found: " + path.String())
 	}
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
@@ -101,7 +102,7 @@ func writeRowsFuncOfRequired(t reflect.Type, schema *Schema, path columnPath) wr
 func writeRowsFuncOfSmallInt(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := column.columnIndex
-	if columnIndex < 0 {
+	if columnIndex == math.MaxUint16 {
 		panic("parquet: column not found: " + path.String())
 	}
 
@@ -159,7 +160,7 @@ var wideIntBufPool memory.Pool[wideIntBuf]
 func writeRowsFuncOfInt(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	column := schema.lazyLoadState().mapping.lookup(path)
 	columnIndex := column.columnIndex
-	if columnIndex < 0 {
+	if columnIndex == math.MaxUint16 {
 		panic("parquet: column not found: " + path.String())
 	}
 
@@ -584,7 +585,7 @@ func writeRowsFuncOfInterface(t reflect.Type, schema *Schema, path columnPath) w
 	}
 
 	columnIndex := findColumnIndex(schema, node, path)
-	if columnIndex < 0 {
+	if columnIndex == math.MaxUint16 {
 		// Empty group node (e.g., from interface{} in map[string]any).
 		// Return a no-op function since there are no columns to write.
 		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
@@ -723,9 +724,9 @@ var stringArrayPool memory.Pool[stringArray]
 // For group nodes, recursively finds the first leaf column.
 // Returns -1 for empty group nodes (groups with no fields), which can occur
 // when using interface{} types in maps (e.g., map[string]any).
-func findColumnIndex(schema *Schema, node Node, path columnPath) int16 {
+func findColumnIndex(schema *Schema, node Node, path columnPath) uint16 {
 	col := schema.lazyLoadState().mapping.lookup(path)
-	if col.columnIndex >= 0 {
+	if col.columnIndex <= MaxColumnIndex {
 		return col.columnIndex
 	}
 	if node.Leaf() {
@@ -734,8 +735,8 @@ func findColumnIndex(schema *Schema, node Node, path columnPath) int16 {
 	fields := node.Fields()
 	if len(fields) == 0 {
 		// Empty group nodes can occur with interface{} types (e.g., map[string]any).
-		// Return -1 to indicate there are no columns to write.
-		return -1
+		// Return MaxUint16 to indicate there are no columns to write.
+		return math.MaxUint16
 	}
 	firstFieldPath := path.append(fields[0].Name())
 	return findColumnIndex(schema, fields[0], firstFieldPath)
@@ -818,7 +819,7 @@ func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeR
 	}
 
 	columnIndex := findColumnIndex(schema, schema, path)
-	if columnIndex < 0 {
+	if columnIndex == math.MaxUint16 {
 		// Empty group - return no-op function
 		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 			// No-op: empty group has no columns to write
@@ -909,7 +910,7 @@ func writeRowsFuncFor[T any](schema *Schema, path columnPath) writeRowsFunc {
 	}
 
 	columnIndex := findColumnIndex(schema, node, path)
-	if columnIndex < 0 {
+	if columnIndex == math.MaxUint16 {
 		// Empty group - return no-op function
 		return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 			// No-op: empty group has no columns to write

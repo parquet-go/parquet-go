@@ -66,7 +66,7 @@ func TestFloatPageBoundsExcludeNaN(t *testing.T) {
 			page := &floatPage{
 				typ:         floatType{},
 				values:      memory.SliceBufferFrom(tt.values),
-				columnIndex: ^int16(0),
+				columnIndex: ^uint16(0),
 			}
 			min, max, ok := page.Bounds()
 			if !ok {
@@ -149,7 +149,7 @@ func TestDoublePageBoundsExcludeNaN(t *testing.T) {
 			page := &doublePage{
 				typ:         doubleType{},
 				values:      memory.SliceBufferFrom(tt.values),
-				columnIndex: ^int16(0),
+				columnIndex: ^uint16(0),
 			}
 			min, max, ok := page.Bounds()
 			if !ok {

@@ -181,6 +181,86 @@ func TestWriterStatistics(t *testing.T) {
 	}
 }
 
+func TestBloomFilterCompression(t *testing.T) {
+	type Record struct {
+		Name string `parquet:"name"`
+	}
+
+	records := []Record{
+		{Name: "Alice"},
+		{Name: "Bob"},
+		{Name: "Charlie"},
+	}
+
+	buf := new(bytes.Buffer)
+	w := NewWriter(buf,
+		BloomFilters(SplitBlockFilter(10, "name")),
+		BloomFilterCompression(&Gzip),
+	)
+	for _, r := range records {
+		if err := w.Write(&r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the bloom filter header has GZip compression set.
+	f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rgs := f.RowGroups()
+	if len(rgs) == 0 {
+		t.Fatal("expected at least one row group")
+	}
+	cols := rgs[0].ColumnChunks()
+	var bf BloomFilter
+	for _, col := range cols {
+		if col.Column() == 0 {
+			bf = col.BloomFilter()
+			break
+		}
+	}
+	if bf == nil {
+		t.Fatal("expected bloom filter for column 0")
+	}
+
+	// All inserted names should be found.
+	for _, r := range records {
+		ok, err := bf.Check(ValueOf(r.Name))
+		if err != nil {
+			t.Fatalf("Check(%q): %v", r.Name, err)
+		}
+		if !ok {
+			t.Errorf("Check(%q) = false, want true", r.Name)
+		}
+	}
+
+	// A value that was not inserted should (very likely) not be found.
+	ok, err := bf.Check(ValueOf("NotInserted"))
+	if err != nil {
+		t.Fatalf("Check(NotInserted): %v", err)
+	}
+	if ok {
+		t.Log("Check(NotInserted) = true (false positive, acceptable)")
+	}
+
+	// Verify the header compression type by re-reading it raw.
+	col0MetaData := f.Metadata().RowGroups[0].Columns[0].MetaData
+	offset := col0MetaData.BloomFilterOffset
+	section := io.NewSectionReader(bytes.NewReader(buf.Bytes()), offset, int64(buf.Len())-offset)
+	var header format.BloomFilterHeader
+	compact := thrift.CompactProtocol{}
+	if err := thrift.NewDecoder(compact.NewReader(section)).Decode(&header); err != nil {
+		t.Fatalf("decoding bloom filter header: %v", err)
+	}
+	if header.Compression.GZip == nil {
+		t.Errorf("expected GZip compression in bloom filter header, got %+v", header.Compression)
+	}
+}
+
 // TestStatsV1 tests that the StatsV1 option causes the deprecated Min/Max
 // statistics fields to be written in column chunk metadata.
 func TestStatsV1(t *testing.T) {

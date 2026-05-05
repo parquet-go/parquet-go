@@ -72,6 +72,17 @@ func TestSchemaOf(t *testing.T) {
 
 		{
 			value: new(struct {
+				Short *float32 `parquet:"short,split"`
+				Long  *float64 `parquet:"long,split"`
+			}),
+			print: `message {
+	optional float short;
+	optional double long;
+}`,
+		},
+
+		{
+			value: new(struct {
 				Inner struct {
 					FirstName          string `parquet:"first_name"`
 					ShouldNotBePresent string `parquet:"-"`
@@ -474,6 +485,26 @@ func TestSchemaOf(t *testing.T) {
 			print: `message {
 	required int32 i8 (INT(8,true));
 	required int32 u16 (INT(16,false));
+}`,
+		},
+
+		// Optional pointer with date tag (*int32)
+		{
+			value: new(struct {
+				Date *int32 `parquet:"date,date"`
+			}),
+			print: `message {
+	optional int32 date (DATE);
+}`,
+		},
+
+		// Optional pointer with timestamp tag (*int64)
+		{
+			value: new(struct {
+				Timestamp *int64 `parquet:"timestamp,timestamp"`
+			}),
+			print: `message {
+	optional int64 timestamp (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
 }`,
 		},
 	}
@@ -1454,4 +1485,19 @@ func (_ roundtripTester[T]) test(t *testing.T, val T, options ...any) {
 	if !reflect.DeepEqual(rows[0], val) {
 		t.Fatal("expected ", val, " got ", rows[0])
 	}
+}
+
+func TestSplitEncodingPointerRoundtrip(t *testing.T) {
+	type Row struct {
+		Value *float64 `parquet:"value,split"`
+	}
+	v := 3.14
+	roundtripTester[Row]{}.test(t, Row{Value: &v})
+}
+
+func TestSplitEncodingNilPointerRoundtrip(t *testing.T) {
+	type Row struct {
+		Value *float64 `parquet:"value,split"`
+	}
+	roundtripTester[Row]{}.test(t, Row{Value: nil})
 }

@@ -2415,3 +2415,142 @@ func BenchmarkConvertLargeSchemaDifferent(b *testing.B) {
 		}
 	}
 }
+
+func shreddedVariant(node parquet.Node) parquet.Node {
+	n, err := parquet.ShreddedVariant(node)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+func TestConvertVariant(t *testing.T) {
+	t.Run("identical unshredded variant", func(t *testing.T) {
+		schema := parquet.NewSchema("test", parquet.Group{
+			"data": parquet.Variant(),
+		})
+		conv, err := parquet.Convert(schema, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Identity conversion for identical schemas
+		if conv.Column(0) != 0 {
+			t.Errorf("column 0 mapping: got %d, want 0", conv.Column(0))
+		}
+		if conv.Column(1) != 1 {
+			t.Errorf("column 1 mapping: got %d, want 1", conv.Column(1))
+		}
+	})
+
+	t.Run("identical shredded variant", func(t *testing.T) {
+		schema := parquet.NewSchema("test", parquet.Group{
+			"data": shreddedVariant(parquet.String()),
+		})
+		conv, err := parquet.Convert(schema, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Identity: metadata(0), typed_value(1), value(2)
+		for i := range 3 {
+			if conv.Column(i) != i {
+				t.Errorf("column %d mapping: got %d, want %d", i, conv.Column(i), i)
+			}
+		}
+	})
+
+	t.Run("unshredded to shredded variant", func(t *testing.T) {
+		// Source: Variant() → metadata (required ByteArray), value (required ByteArray)
+		// Target: ShreddedVariant(String()) → metadata (required), typed_value (optional String), value (optional ByteArray)
+		from := parquet.NewSchema("test", parquet.Group{
+			"data": parquet.Variant(),
+		})
+		to := parquet.NewSchema("test", parquet.Group{
+			"data": shreddedVariant(parquet.String()),
+		})
+
+		conv, err := parquet.Convert(to, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Target columns (alphabetically sorted within variant group):
+		//   0: metadata (required ByteArray) — maps from source 0
+		//   1: typed_value (optional String) — missing from source; uses metadata (col 0)
+		//      as a structural template for def/rep levels, but actual values are null
+		//   2: value (optional ByteArray) — maps from source 1
+		if got := conv.Column(0); got != 0 {
+			t.Errorf("metadata column mapping: got %d, want 0", got)
+		}
+		if got := conv.Column(2); got != 1 {
+			t.Errorf("value column mapping: got %d, want 1", got)
+		}
+	})
+
+	t.Run("shredded variant with extra typed_value columns", func(t *testing.T) {
+		// Source has String typed_value, target adds Int32 typed_value
+		from := parquet.NewSchema("test", parquet.Group{
+			"data": shreddedVariant(parquet.String()),
+		})
+		to := parquet.NewSchema("test", parquet.Group{
+			"data": shreddedVariant(parquet.Group{
+				"name": parquet.String(),
+				"age":  parquet.Leaf(parquet.Int32Type),
+			}),
+		})
+
+		conv, err := parquet.Convert(to, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Conversion should succeed without panicking — variant's leaf columns
+		// (ByteArray for metadata/value, Int32/String for typed_value) are all
+		// standard types handled by the normal conversion pipeline.
+		_ = conv
+	})
+
+	t.Run("shredded variant with fewer typed_value columns", func(t *testing.T) {
+		from := parquet.NewSchema("test", parquet.Group{
+			"data": shreddedVariant(parquet.Group{
+				"name": parquet.String(),
+				"age":  parquet.Leaf(parquet.Int32Type),
+			}),
+		})
+		to := parquet.NewSchema("test", parquet.Group{
+			"data": shreddedVariant(parquet.String()),
+		})
+
+		conv, err := parquet.Convert(to, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_ = conv
+	})
+
+	t.Run("shredded to unshredded variant", func(t *testing.T) {
+		from := parquet.NewSchema("test", parquet.Group{
+			"data": shreddedVariant(parquet.String()),
+		})
+		to := parquet.NewSchema("test", parquet.Group{
+			"data": parquet.Variant(),
+		})
+
+		conv, err := parquet.Convert(to, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Target columns:
+		//   0: metadata (required ByteArray) — maps from source 0
+		//   1: value (required ByteArray) — maps from source 2 (value was optional in source)
+		if got := conv.Column(0); got != 0 {
+			t.Errorf("metadata column mapping: got %d, want 0", got)
+		}
+		// Source typed_value columns are dropped (not in target).
+		// Source value column (optional) maps to target value (required).
+		if got := conv.Column(1); got < 0 {
+			t.Errorf("value column mapping: got %d, want >= 0 (should map from source value)", got)
+		}
+	})
+}

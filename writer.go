@@ -596,7 +596,7 @@ func (w *Writer) Size() int64 {
 	if w.writer == nil {
 		return 0
 	}
-	return w.writer.writer.offset + w.writer.currentRowGroup.Size()
+	return w.writer.writer.offset + w.writer.currentRowGroup.Size() + w.writer.deferredBloomFilterSize
 }
 
 // SetKeyValueMetadata sets a key/value pair in the Parquet file metadata.
@@ -726,18 +726,19 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 		}
 
 		c := &ColumnWriter{
-			pool:               config.ColumnPageBuffers,
-			columnPath:         leaf.path,
-			columnType:         columnType,
-			originalType:       columnType,
-			columnIndex:        columnType.NewColumnIndexer(config.ColumnIndexSizeLimit(leaf.path)),
-			columnFilter:       searchBloomFilterColumn(config.BloomFilters, leaf.path),
-			compression:        compression,
-			dictionary:         dictionary,
-			maxRepetitionLevel: leaf.maxRepetitionLevel,
-			maxDefinitionLevel: leaf.maxDefinitionLevel,
-			bufferIndex:        int32(leaf.columnIndex),
-			bufferSize:         int32(float64(config.PageBufferSize) * 0.98),
+			pool:                   config.ColumnPageBuffers,
+			columnPath:             leaf.path,
+			columnType:             columnType,
+			originalType:           columnType,
+			columnIndex:            columnType.NewColumnIndexer(config.ColumnIndexSizeLimit(leaf.path)),
+			columnFilter:           searchBloomFilterColumn(config.BloomFilters, leaf.path),
+			compression:            compression,
+			bloomFilterCompression: config.BloomFilterCompression,
+			dictionary:             dictionary,
+			maxRepetitionLevel:     leaf.maxRepetitionLevel,
+			maxDefinitionLevel:     leaf.maxDefinitionLevel,
+			bufferIndex:            int32(leaf.columnIndex),
+			bufferSize:             int32(float64(config.PageBufferSize) * 0.98),
 			writePageStats: config.DataPageStatistics && !slices.ContainsFunc(config.SkipPageStatistics, func(skip []string) bool {
 				return columnPath(skip).equal(leaf.path)
 			}),
@@ -746,13 +747,12 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 			}),
 			writeDeprecatedStatistics: config.DeprecatedDataPageStatistics,
 			encodings:                 make([]format.Encoding, 0, 3),
-			// Data pages in version 2 can omit compression when dictionary
-			// encoding is employed; only the dictionary page needs to be
-			// compressed, the data pages are encoded with the hybrid
-			// RLE/Bit-Pack encoding which doesn't benefit from an extra
-			// compression layer.
-			isCompressed:       isCompressed(compression) && (dataPageType != format.DataPageV2 || dictionary == nil),
-			dictionaryMaxBytes: config.DictionaryMaxBytes,
+			isCompressed:              isCompressed(compression),
+			dictionaryMaxBytes:        config.DictionaryMaxBytes,
+		}
+
+		if lt := leaf.node.Type().LogicalType(); lt != nil && (lt.Geometry != nil || lt.Geography != nil) {
+			c.geospatialAccumulator = newGeospatialBBoxAccumulator()
 		}
 
 		if dictionary != nil {
@@ -979,8 +979,18 @@ type writer struct {
 	offsetIndexes  [][]format.OffsetIndex
 	sortingColumns []format.SortingColumn
 
+	deferredBloomFilters    []deferredBloomFilter
+	deferredBloomFilterSize int64
+
 	fileMetaData format.FileMetaData
 	footer       [8]byte
+}
+
+type deferredBloomFilter struct {
+	rowGroup int
+	column   int
+	buf      io.ReadWriteSeeker
+	reset    func()
 }
 
 func newWriter(output io.Writer, config *WriterConfig) *writer {
@@ -1067,6 +1077,11 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 }
 
 func (w *writer) reset(writer io.Writer) {
+	for _, bf := range w.deferredBloomFilters {
+		bf.reset()
+	}
+	w.deferredBloomFilters = w.deferredBloomFilters[:0]
+	w.deferredBloomFilterSize = 0
 	if w.buffer == nil {
 		w.writer.Reset(writer)
 	} else {
@@ -1102,6 +1117,9 @@ func (w *writer) close() error {
 	if err := w.flush(); err != nil {
 		return err
 	}
+	if err := w.writeDeferredBloomFilters(); err != nil {
+		return err
+	}
 	if err := w.writeFileFooter(); err != nil {
 		return err
 	}
@@ -1123,6 +1141,28 @@ func (w *writer) writeFileHeader() error {
 	if w.writer.offset == 0 {
 		_, err := w.writer.WriteString("PAR1")
 		return err
+	}
+	return nil
+}
+
+func (w *writer) writeDeferredBloomFilters() error {
+	defer func() {
+		// Reset here to ensure a re-used closed writer doesn't double return buffers.
+		for _, bf := range w.deferredBloomFilters {
+			bf.reset()
+		}
+		w.deferredBloomFilters = w.deferredBloomFilters[:0]
+		w.deferredBloomFilterSize = 0
+	}()
+	for _, bf := range w.deferredBloomFilters {
+		c := &w.rowGroups[bf.rowGroup].Columns[bf.column]
+		bloomFilterOffset := w.writer.offset
+		c.MetaData.BloomFilterOffset = bloomFilterOffset
+		if _, err := w.writer.ReadFrom(bf.buf); err != nil {
+			return err
+		}
+		bloomFilterLength := w.writer.offset - bloomFilterOffset
+		c.MetaData.BloomFilterLength = int32(bloomFilterLength)
 	}
 	return nil
 }
@@ -1275,16 +1315,45 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		}
 	}
 
-	for _, c := range rg.columns {
-		if len(c.filter) > 0 {
-			bloomFilterOffset := w.writer.offset
-			c.columnChunk.MetaData.BloomFilterOffset = bloomFilterOffset
-			if err := c.writeBloomFilter(&w.writer); err != nil {
+	for i, c := range rg.columns {
+		if len(c.filter) == 0 {
+			continue
+		}
+
+		if rg.config.DeferredBloomFiltersBuffers != nil {
+			buf := rg.config.DeferredBloomFiltersBuffers.GetBuffer()
+			reset := func() { rg.config.DeferredBloomFiltersBuffers.PutBuffer(buf) }
+
+			if err := c.writeBloomFilter(buf); err != nil {
+				reset()
 				return 0, err
 			}
-			bloomFilterLength := w.writer.offset - bloomFilterOffset
-			c.columnChunk.MetaData.BloomFilterLength = int32(bloomFilterLength)
+			size, err := buf.Seek(0, io.SeekCurrent)
+			if err != nil {
+				reset()
+				return 0, err
+			}
+			if _, err := buf.Seek(0, io.SeekStart); err != nil {
+				reset()
+				return 0, err
+			}
+			w.deferredBloomFilterSize += size
+			w.deferredBloomFilters = append(w.deferredBloomFilters, deferredBloomFilter{
+				rowGroup: rowGroupIndex,
+				column:   i,
+				buf:      buf,
+				reset:    reset,
+			})
+			continue
 		}
+
+		bloomFilterOffset := w.writer.offset
+		c.columnChunk.MetaData.BloomFilterOffset = bloomFilterOffset
+		if err := c.writeBloomFilter(&w.writer); err != nil {
+			return 0, err
+		}
+		bloomFilterLength := w.writer.offset - bloomFilterOffset
+		c.columnChunk.MetaData.BloomFilterLength = int32(bloomFilterLength)
 	}
 
 	totalByteSize := int64(0)
@@ -1522,18 +1591,19 @@ type ColumnWriter struct {
 	pageBuffer io.ReadWriteSeeker
 	numPages   int
 
-	columnPath           columnPath
-	columnType           Type
-	originalType         Type // Original type before any encoding changes
-	columnIndex          ColumnIndexer
-	columnBuffer         ColumnBuffer
-	plainColumnBuffer    ColumnBuffer // Retained plain buffer for fallback after lazy creation
-	originalColumnBuffer ColumnBuffer // Original buffer to restore after row group flush
-	columnFilter         BloomFilterColumn
-	encoding             encoding.Encoding
-	originalEncoding     encoding.Encoding // Original encoding before any changes
-	compression          compress.Codec
-	dictionary           Dictionary
+	columnPath             columnPath
+	columnType             Type
+	originalType           Type // Original type before any encoding changes
+	columnIndex            ColumnIndexer
+	columnBuffer           ColumnBuffer
+	plainColumnBuffer      ColumnBuffer // Retained plain buffer for fallback after lazy creation
+	originalColumnBuffer   ColumnBuffer // Original buffer to restore after row group flush
+	columnFilter           BloomFilterColumn
+	encoding               encoding.Encoding
+	originalEncoding       encoding.Encoding // Original encoding before any changes
+	compression            compress.Codec
+	bloomFilterCompression compress.Codec
+	dictionary             Dictionary
 
 	maxRepetitionLevel byte
 	maxDefinitionLevel byte
@@ -1566,6 +1636,8 @@ type ColumnWriter struct {
 	definitionLevelHistogram      []int64
 	pageRepetitionLevelHistograms []int64
 	pageDefinitionLevelHistograms []int64
+
+	geospatialAccumulator *geospatialBBoxAccumulator
 }
 
 func (c *ColumnWriter) reset() {
@@ -1603,6 +1675,10 @@ func (c *ColumnWriter) reset() {
 	c.columnChunk.MetaData.DataPageOffset = 0
 	c.columnChunk.MetaData.DictionaryPageOffset = 0
 	c.columnChunk.MetaData.Statistics = format.Statistics{}
+	c.columnChunk.MetaData.GeospatialStatistics = format.GeospatialStatistics{}
+	if c.geospatialAccumulator != nil {
+		c.geospatialAccumulator.reset()
+	}
 	c.columnChunk.MetaData.EncodingStats = c.columnChunk.MetaData.EncodingStats[:0]
 	c.columnChunk.MetaData.BloomFilterOffset = 0
 	c.offsetIndex.PageLocations = c.offsetIndex.PageLocations[:0]
@@ -1709,7 +1785,7 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 		compression:        c.compression,
 		maxRepetitionLevel: c.maxRepetitionLevel,
 		maxDefinitionLevel: c.maxDefinitionLevel,
-		index:              int16(c.bufferIndex),
+		index:              uint16(c.bufferIndex),
 	}
 
 	var pageReader io.Reader = c.pageBuffer
@@ -1851,12 +1927,29 @@ func (c *ColumnWriter) writeValues(values []Value) (numValues int, err error) {
 
 func (c *ColumnWriter) writeBloomFilter(w io.Writer) error {
 	e := thrift.NewEncoder(c.header.protocol.NewWriter(w))
-	h := bloomFilterHeader(c.columnFilter)
-	h.NumBytes = int32(len(c.filter))
+	h := bloomFilterHeader(c.columnFilter, c.bloomFilterCompression)
+
+	filterBytes := c.filter
+	if c.bloomFilterCompression != nil {
+		switch c.bloomFilterCompression.CompressionCodec() {
+		case format.Uncompressed:
+			// no-op
+		case format.Gzip:
+			compressed, err := c.bloomFilterCompression.Encode(nil, filterBytes)
+			if err != nil {
+				return fmt.Errorf("compressing bloom filter: %w", err)
+			}
+			filterBytes = compressed
+		default:
+			return fmt.Errorf("unsupported bloom filter compression codec: %s", c.bloomFilterCompression)
+		}
+	}
+
+	h.NumBytes = int32(len(filterBytes))
 	if err := e.Encode(&h); err != nil {
 		return err
 	}
-	_, err := w.Write(c.filter)
+	_, err := w.Write(filterBytes)
 	return err
 }
 
@@ -2149,6 +2242,11 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 					c.columnChunk.MetaData.Statistics.Min = c.columnChunk.MetaData.Statistics.MinValue
 				}
 			}
+		}
+
+		if c.geospatialAccumulator != nil {
+			c.geospatialAccumulator.accumulatePage(page)
+			c.columnChunk.MetaData.GeospatialStatistics = c.geospatialAccumulator.toGeospatialStatistics()
 		}
 
 		c.offsetIndex.PageLocations = append(c.offsetIndex.PageLocations, format.PageLocation{

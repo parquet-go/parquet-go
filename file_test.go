@@ -290,7 +290,39 @@ func TestFileTypes(t *testing.T) {
 }
 
 func TestOpenFileOptimisticRead(t *testing.T) {
-	f, err := os.Open("testdata/alltypes_tiny_pages_plain.parquet")
+	for _, filename := range []string{
+		"alltypes_tiny_pages_plain.parquet",
+		"data_index_bloom_encoding_stats.parquet",
+	} {
+		t.Run(filename, func(t *testing.T) {
+			f, err := os.Open(filepath.Join("testdata", filename))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			s, err := f.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			r := &measuredReaderAt{reader: f}
+			if _, err := parquet.OpenFile(r, s.Size(),
+				parquet.OptimisticRead(true),
+				parquet.SkipMagicBytes(true),
+				parquet.ReadBufferSize(int(s.Size())),
+			); err != nil {
+				t.Fatal(err)
+			}
+
+			if reads := r.reads.Load(); reads != 1 {
+				t.Errorf("expected 1 read, got %d", reads)
+			}
+		})
+	}
+}
+
+func TestOpenFileOptimisticReadWithPrefetchBloomFilters(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "data_index_bloom_encoding_stats.parquet"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,17 +332,40 @@ func TestOpenFileOptimisticRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := &measuredReaderAt{reader: f}
-	if _, err := parquet.OpenFile(r, s.Size(),
-		parquet.OptimisticRead(true),
-		parquet.SkipMagicBytes(true),
-		parquet.ReadBufferSize(int(s.Size()/2)),
-	); err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range []struct {
+		OptimisticRead       bool
+		PrefetchBloomFilters bool
+		ExpectedReads        int64
+	}{
+		{false, false, 6},
+		{true, false, 2},
+		{true, true, 1},
+	} {
+		r := &measuredReaderAt{reader: f}
+		pf, err := parquet.OpenFile(r, s.Size(),
+			parquet.OptimisticRead(tt.OptimisticRead),
+			parquet.SkipMagicBytes(true),
+			parquet.ReadBufferSize(int(s.Size())),
+			parquet.PrefetchBloomFilters(tt.PrefetchBloomFilters),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	if reads := r.reads.Load(); reads != 1 {
-		t.Errorf("expected 1 read, got %d", reads)
+		for _, rg := range pf.RowGroups() {
+			for _, cc := range rg.ColumnChunks() {
+				if bf := cc.BloomFilter(); bf != nil {
+					_, err := bf.Check(parquet.NullValue())
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+
+		if reads := r.reads.Load(); reads != tt.ExpectedReads {
+			t.Errorf("expected %d read, got %d", tt.ExpectedReads, reads)
+		}
 	}
 }
 
