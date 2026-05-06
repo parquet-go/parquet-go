@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -1485,6 +1486,83 @@ func TestReadFileWithNullColumns(t *testing.T) {
 
 	if !reflect.DeepEqual(rows, expected) {
 		t.Errorf("rows mismatch:\nwant: %+v\ngot:  %+v", expected, rows)
+	}
+}
+
+// TestWriteFileWithNullColumns tests writing parquet files with NULL-type columns.
+// This test verifies the fix for the issue where parquet-go could read NULL-type columns
+// (from PyArrow-generated files) but could not write them.
+//
+// Reproduces: https://github.com/parquet-go/parquet-go/issues/517
+func TestWriteFileWithNullColumns(t *testing.T) {
+	// Read the existing test file with NULL columns
+	rows, err := parquet.ReadFile[any]("testdata/null_columns.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []any{
+		map[string]any{"name": "test1", "value": nil},
+		map[string]any{"name": "test2", "value": nil},
+		map[string]any{"name": "test3", "value": nil},
+		map[string]any{"name": "test4", "value": nil},
+	}
+
+	if !reflect.DeepEqual(rows, expected) {
+		t.Errorf("rows mismatch:\nwant: %+v\ngot:  %+v", expected, rows)
+	}
+
+	// Write the rows back to a new file using the original schema
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "output.parquet")
+
+	// We need to get the schema from the original file to preserve the NULL-type column
+	f, err := os.Open("testdata/null_columns.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	file, err := parquet.OpenFile(f, stat.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema := file.Schema()
+
+	out, err := os.Create(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+
+	writer := parquet.NewWriter(out, schema)
+	defer writer.Close()
+
+	// Write all rows
+	for _, row := range rows {
+		if err := writer.Write(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back the written file to verify
+	writtenRows, err := parquet.ReadFile[any](outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(writtenRows, expected) {
+		t.Errorf("written rows mismatch:\nwant: %+v\ngot:  %+v", expected, writtenRows)
 	}
 }
 
