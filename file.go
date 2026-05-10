@@ -1023,10 +1023,7 @@ func (c *FileColumnChunk) readBloomFilter(reader io.ReaderAt) (*FileBloomFilter,
 		if err != nil {
 			return nil, fmt.Errorf("decrypting bloom filter bitset: %w", err)
 		}
-		filter, err = newBloomFilterFromBytes(&header, bitsPlain)
-		if err != nil {
-			return nil, fmt.Errorf("reading encrypted bloom filter: %w", err)
-		}
+		filter = newBloomFilterFromBytes(&header, bitsPlain)
 	} else {
 		compact := thrift.CompactProtocol{}
 		decoder := thrift.NewDecoder(compact.NewReader(rbuf))
