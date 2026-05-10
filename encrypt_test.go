@@ -590,3 +590,198 @@ func TestEncryptionMultipleRowGroupsOrdinals(t *testing.T) {
 	got := readDecrypted(t, data, keys)
 	assertRowsEqual(t, testRows, got)
 }
+
+// TestEncryptionBloomFilterGzip verifies that bloom filters configured with
+// gzip compression round-trip when the column is encrypted.  Regression for
+// codex finding 4: newBloomFilterFromBytes only handled the Uncompressed
+// header variant, dropping encrypted gzip-compressed bloom filters silently.
+func TestEncryptionBloomFilterGzip(t *testing.T) {
+	footerKey := aes128Key(0xC1)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: true,
+		FileIdentifier:  []byte{1, 1, 1, 1, 2, 2, 2, 2},
+	}
+
+	rows := []encryptionTestRow{
+		{Name: "alice", Value: 1},
+		{Name: "bob", Value: 2},
+		{Name: "carol", Value: 3},
+	}
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[encryptionTestRow](&buf,
+		parquet.WithEncryption(cfg),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "name")),
+		parquet.BloomFilterCompression(&parquet.Gzip),
+	)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data := buf.Bytes()
+	keys := &staticKeyRetriever{footerKey: footerKey}
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(keys))
+	if err != nil {
+		t.Fatalf("open file with encrypted+gzip bloom filter: %v", err)
+	}
+
+	rgs := f.RowGroups()
+	if len(rgs) == 0 {
+		t.Fatal("no row groups")
+	}
+	chunks := rgs[0].ColumnChunks()
+
+	var nameChunk parquet.ColumnChunk
+	for _, cc := range chunks {
+		if cc.Column() == 0 {
+			nameChunk = cc
+			break
+		}
+	}
+	if nameChunk == nil {
+		t.Fatal("could not find name column chunk")
+	}
+
+	bf := nameChunk.BloomFilter()
+	if bf == nil {
+		t.Fatal("expected bloom filter on encrypted+gzip column, got nil (writer accepted the configuration)")
+	}
+
+	present, err := bf.Check(parquet.ValueOf("alice"))
+	if err != nil {
+		t.Fatalf("bloom filter Check(alice): %v", err)
+	}
+	if !present {
+		t.Error("bloom filter should report 'alice' as present")
+	}
+}
+
+// TestEncryptionEncryptedFooterColumnKeyErrorSurfaced verifies that a real KMS
+// failure surfaces during OpenFile in encrypted-footer mode.  Regression for
+// codex finding 3: FileRowGroup.init silently swallowed FooterKey/ColumnKey
+// errors, so OpenFile would succeed with decryptionKey == nil and the user
+// would later see confusing "decode page header" errors.  In plaintext-footer
+// mode TestEncryptionRealColumnKeyErrorSurfaced already covers this via
+// decryptAllColumnMetadata; encrypted-footer mode never runs that path.
+func TestEncryptionEncryptedFooterColumnKeyErrorSurfaced(t *testing.T) {
+	footerKey := aes128Key(0xC2)
+	nameKey := aes128Key(0xC3)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey: footerKey,
+		ColumnKeys: map[string][]byte{
+			"name": nameKey,
+		},
+		EncryptedFooter: true, // critical: encrypted-footer mode
+		FileIdentifier:  []byte{2, 2, 2, 2, 3, 3, 3, 3},
+	}
+	data := writeEncrypted(t, testRows, cfg)
+
+	hardErr := fmt.Errorf("KMS unavailable")
+	badRetriever := &hardErrorKeyRetriever{
+		footerKey: footerKey,
+		colErr:    hardErr,
+	}
+	_, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(badRetriever))
+	if err == nil {
+		t.Fatal("expected OpenFile to surface the KMS error in encrypted-footer mode, got nil")
+	}
+	if !strings.Contains(err.Error(), "KMS unavailable") {
+		t.Errorf("expected error to contain 'KMS unavailable', got: %v", err)
+	}
+}
+
+// TestEncryptionPlaintextFooterPageIndexAvailable verifies that ColumnIndex
+// and OffsetIndex are populated after OpenFile on an encrypted plaintext-footer
+// file.  Regression for codex finding 2: ReadPageIndex ran before
+// decryptAllColumnMetadata, observing zero ColumnIndexOffset on every column
+// (because MetaData was still encrypted), so the page index was silently lost.
+func TestEncryptionPlaintextFooterPageIndexAvailable(t *testing.T) {
+	footerKey := aes128Key(0xC4)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: false, // critical: plaintext footer with EncryptedColumnMetadata
+		FileIdentifier:  []byte{3, 3, 3, 3, 4, 4, 4, 4},
+	}
+	data := writeEncrypted(t, testRows, cfg)
+
+	keys := &staticKeyRetriever{footerKey: footerKey}
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(keys))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	chunks := f.RowGroups()[0].ColumnChunks()
+	for _, cc := range chunks {
+		oi, err := cc.OffsetIndex()
+		if err != nil {
+			t.Fatalf("OffsetIndex(col=%d): %v", cc.Column(), err)
+		}
+		if oi == nil {
+			t.Errorf("OffsetIndex(col=%d) is nil; encrypted plaintext-footer file lost its page index", cc.Column())
+		}
+		ci, err := cc.ColumnIndex()
+		if err != nil {
+			t.Fatalf("ColumnIndex(col=%d): %v", cc.Column(), err)
+		}
+		if ci == nil {
+			t.Errorf("ColumnIndex(col=%d) is nil; encrypted plaintext-footer file lost its column index", cc.Column())
+		}
+	}
+}
+
+// TestEncryptionPageIndexEncrypted verifies that the per-column page index
+// (column index + offset index) is encrypted on disk for encrypted columns:
+// the literal little-endian encoding of distinctive column statistics must
+// not appear in the file bytes.  Regression for codex finding 1: the writer
+// left the page index plaintext, leaking min/max values on encrypted columns.
+func TestEncryptionPageIndexEncrypted(t *testing.T) {
+	footerKey := aes128Key(0xC6)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: false,
+		FileIdentifier:  []byte{5, 5, 5, 5, 6, 6, 6, 6},
+	}
+
+	// Distinctive values so a leaked column index would be detectable.
+	rows := []encryptionTestRow{
+		{Name: "alpha", Value: 1000},
+		{Name: "omega", Value: 9999},
+	}
+	data := writeEncrypted(t, rows, cfg)
+
+	// The decrypted round-trip must still work.
+	keys := &staticKeyRetriever{footerKey: footerKey}
+	gotRows := readDecrypted(t, data, keys)
+	assertRowsEqual(t, rows, gotRows)
+
+	// And the column index must be readable through the public API.
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(keys))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	for _, cc := range f.RowGroups()[0].ColumnChunks() {
+		ci, err := cc.ColumnIndex()
+		if err != nil || ci == nil {
+			t.Fatalf("missing column index for column %d after decrypted open: err=%v", cc.Column(), err)
+		}
+	}
+
+	// Statistics must not leak in plaintext.  Search the on-disk bytes for
+	// the little-endian encoding of each distinctive Value.  In an unencrypted
+	// page index the writer would embed these as Min/Max thrift fields and
+	// they would be findable byte-for-byte.  AES-GCM ciphertext should not
+	// contain them with vanishing probability for these specific patterns.
+	for _, want := range []int64{1000, 9999} {
+		var le [8]byte
+		for i := range 8 {
+			le[i] = byte(want >> (8 * i))
+		}
+		if bytes.Contains(data, le[:]) {
+			t.Errorf("file bytes contain plaintext little-endian encoding of column statistic %d — page index is not encrypted", want)
+		}
+	}
+}

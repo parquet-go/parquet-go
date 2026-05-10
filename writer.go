@@ -1216,12 +1216,46 @@ func (w *writer) writeFileFooter() error {
 	protocol := new(thrift.CompactProtocol)
 	encoder := thrift.NewEncoder(protocol.NewWriter(&w.writer))
 
+	// pageIndexKey returns the AES key used to encrypt this column's page-index
+	// modules (column index + offset index), or nil if the column is not
+	// encrypted.  When encryption is active, the Parquet spec requires the
+	// per-column index to be encrypted with the column's key (or the footer
+	// key when EncryptionWithFooterKey is selected) so that statistics like
+	// min/max do not leak in the otherwise plaintext page index.
+	pageIndexKey := func(c *format.ColumnChunk) []byte {
+		if w.encryption == nil {
+			return nil
+		}
+		switch {
+		case c.CryptoMetadata.EncryptionWithFooterKey != nil:
+			return w.encryption.cfg.FooterKey
+		case c.CryptoMetadata.EncryptionWithColumnKey != nil:
+			return w.encryption.columnKeyFor(columnPathString(c.CryptoMetadata.EncryptionWithColumnKey.PathInSchema))
+		default:
+			return nil
+		}
+	}
+
 	for i, columnIndexes := range w.columnIndexes {
 		rowGroup := &w.rowGroups[i]
 		for j := range columnIndexes {
 			column := &rowGroup.Columns[j]
 			column.ColumnIndexOffset = w.writer.offset
-			if err := encoder.Encode(&columnIndexes[j]); err != nil {
+			if key := pageIndexKey(column); key != nil {
+				var idxBuf bytes.Buffer
+				idxEnc := thrift.NewEncoder(protocol.NewWriter(&idxBuf))
+				if err := idxEnc.Encode(&columnIndexes[j]); err != nil {
+					return err
+				}
+				aad := makeAAD(w.encryption.cfg.AadPrefix, w.encryption.fileUnique, columnIndexModule, int16(i), int16(j))
+				envelope, err := encryptModule(key, aad, idxBuf.Bytes())
+				if err != nil {
+					return fmt.Errorf("encrypting column index: rowGroup=%d col=%d: %w", i, j, err)
+				}
+				if _, err := w.writer.Write(envelope); err != nil {
+					return err
+				}
+			} else if err := encoder.Encode(&columnIndexes[j]); err != nil {
 				return err
 			}
 			column.ColumnIndexLength = int32(w.writer.offset - column.ColumnIndexOffset)
@@ -1233,7 +1267,21 @@ func (w *writer) writeFileFooter() error {
 		for j := range offsetIndexes {
 			column := &rowGroup.Columns[j]
 			column.OffsetIndexOffset = w.writer.offset
-			if err := encoder.Encode(&offsetIndexes[j]); err != nil {
+			if key := pageIndexKey(column); key != nil {
+				var idxBuf bytes.Buffer
+				idxEnc := thrift.NewEncoder(protocol.NewWriter(&idxBuf))
+				if err := idxEnc.Encode(&offsetIndexes[j]); err != nil {
+					return err
+				}
+				aad := makeAAD(w.encryption.cfg.AadPrefix, w.encryption.fileUnique, offsetIndexModule, int16(i), int16(j))
+				envelope, err := encryptModule(key, aad, idxBuf.Bytes())
+				if err != nil {
+					return fmt.Errorf("encrypting offset index: rowGroup=%d col=%d: %w", i, j, err)
+				}
+				if _, err := w.writer.Write(envelope); err != nil {
+					return err
+				}
+			} else if err := encoder.Encode(&offsetIndexes[j]); err != nil {
 				return err
 			}
 			column.OffsetIndexLength = int32(w.writer.offset - column.OffsetIndexOffset)

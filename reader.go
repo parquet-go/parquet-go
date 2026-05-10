@@ -665,7 +665,9 @@ func makeFileRowGroups(file *File, columns []*Column) ([]FileRowGroup, error) {
 
 	fileRowGroups := make([]FileRowGroup, len(rowGroups))
 	for i := range fileRowGroups {
-		fileRowGroups[i].init(file, columns, &rowGroups[i])
+		if err := fileRowGroups[i].init(file, columns, &rowGroups[i]); err != nil {
+			return nil, err
+		}
 	}
 	return fileRowGroups, nil
 }
@@ -680,26 +682,33 @@ func makeRowGroups(fileRowGroups []FileRowGroup) []RowGroup {
 
 func validateRowGroupOrdinals(rowGroups []format.RowGroup) error {
 	allZero := true
-	seen := make(map[int16]struct{})
 	for _, rg := range rowGroups {
 		if rg.Ordinal != 0 {
 			allZero = false
+			break
 		}
-		// If we've seen this non-zero ordinal before, it's a duplicate, which is an error.
-		if _, ok := seen[rg.Ordinal]; ok && rg.Ordinal != 0 {
-			return fmt.Errorf("duplicate row group ordinal %d", rg.Ordinal)
-		}
-		seen[rg.Ordinal] = struct{}{}
 	}
 
-	// if all ordinals are zero, it's valid, but they need to be assigned
-	// sequential ordinals starting from zero for page offset calculations
-	if !allZero {
+	// If all ordinals are zero, the writer omitted the optional Ordinal field
+	// (or there is a single row group at index 0).  Back-fill sequential values
+	// so callers — including AAD construction for encryption — can rely on
+	// rg.Ordinal == slice index.
+	if allZero {
+		for i := range rowGroups {
+			rowGroups[i].Ordinal = int16(i)
+		}
 		return nil
 	}
 
-	for i := range rowGroups {
-		rowGroups[i].Ordinal = int16(i)
+	// Otherwise the file embeds explicit ordinals; require them to match the
+	// slice index.  The Parquet spec defines RowGroup.Ordinal as the row group
+	// position, and downstream code (page-index lookup, AAD) assumes that
+	// equality.  Files with non-sequential or out-of-order ordinals would
+	// silently produce wrong AADs or out-of-range index lookups.
+	for i, rg := range rowGroups {
+		if int(rg.Ordinal) != i {
+			return fmt.Errorf("row group ordinal %d at index %d does not match its position", rg.Ordinal, i)
+		}
 	}
 	return nil
 }

@@ -114,20 +114,32 @@ func newBloomFilter(file io.ReaderAt, offset int64, header *format.BloomFilterHe
 // newBloomFilterFromBytes constructs a FileBloomFilter backed by an in-memory
 // byte slice.  Used when the bloom filter was read from an encrypted column and
 // the raw bytes were decrypted before constructing the filter.
-func newBloomFilterFromBytes(header *format.BloomFilterHeader, bits []byte) *FileBloomFilter {
-	if header.Algorithm.Block != nil {
-		if header.Hash.XxHash != nil {
-			if header.Compression.Uncompressed != nil {
-				r := bytes.NewReader(bits)
-				return &FileBloomFilter{
-					SectionReader: *io.NewSectionReader(r, 0, int64(len(bits))),
-					hash:          bloom.XXH64{},
-					check:         bloom.CheckSplitBlock,
-				}
-			}
-		}
+func newBloomFilterFromBytes(header *format.BloomFilterHeader, bits []byte) (*FileBloomFilter, error) {
+	if header.Algorithm.Block == nil || header.Hash.XxHash == nil {
+		return nil, nil
 	}
-	return nil
+	switch {
+	case header.Compression.Uncompressed != nil:
+		r := bytes.NewReader(bits)
+		return &FileBloomFilter{
+			SectionReader: *io.NewSectionReader(r, 0, int64(len(bits))),
+			hash:          bloom.XXH64{},
+			check:         bloom.CheckSplitBlock,
+		}, nil
+	case header.Compression.GZip != nil:
+		decompressed, err := LookupCompressionCodec(format.Gzip).Decode(nil, bits)
+		if err != nil {
+			return nil, fmt.Errorf("decompressing bloom filter: %w", err)
+		}
+		r := bytes.NewReader(decompressed)
+		return &FileBloomFilter{
+			SectionReader: *io.NewSectionReader(r, 0, int64(len(decompressed))),
+			hash:          bloom.XXH64{},
+			check:         bloom.CheckSplitBlock,
+		}, nil
+	default:
+		return nil, nil
+	}
 }
 
 // The BloomFilterColumn interface is a declarative representation of bloom filters
