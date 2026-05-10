@@ -105,6 +105,7 @@ type FileConfig struct {
 	ReadBufferSize       int
 	ReadMode             ReadMode
 	Schema               *Schema
+	Decryption           *DecryptionConfig
 }
 
 // DefaultFileConfig returns a new FileConfig value initialized with the
@@ -149,6 +150,7 @@ func (c *FileConfig) ConfigureFile(config *FileConfig) {
 		ReadBufferSize:       cmp.Or(c.ReadBufferSize, config.ReadBufferSize),
 		ReadMode:             ReadMode(cmp.Or(int(c.ReadMode), int(config.ReadMode))),
 		Schema:               cmp.Or(c.Schema, config.Schema),
+		Decryption:           cmp.Or(c.Decryption, config.Decryption),
 	}
 }
 
@@ -239,6 +241,7 @@ type WriterConfig struct {
 	Encodings                    map[Kind]encoding.Encoding
 	DictionaryMaxBytes           int64
 	SchemaConfig                 *SchemaConfig
+	Encryption                   *EncryptionConfig
 }
 
 // DefaultWriterConfig returns a new WriterConfig value initialized with the
@@ -317,6 +320,7 @@ func (c *WriterConfig) ConfigureWriter(config *WriterConfig) {
 		SkipPageStatistics:           coalesceSlices(c.SkipPageStatistics, config.SkipPageStatistics),
 		Encodings:                    encodings,
 		SchemaConfig:                 cmp.Or(c.SchemaConfig, config.SchemaConfig),
+		Encryption:                   cmp.Or(c.Encryption, config.Encryption),
 	}
 }
 
