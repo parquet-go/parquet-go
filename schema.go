@@ -182,7 +182,11 @@ func (v *onceValue[T]) load(f func() *T) *T {
 //	  Attributes []string `parquet:",id(1),list" parquet-element:",id(2)"`
 //	}
 //
-// Note that the name of the element cannot be changed.
+// Note that the name of the element of a list defaults to "element" and can be changed:
+//
+//	type Item struct {
+//	  Attributes []string `parquet:",list" parquet-element:"item"`
+//	}
 //
 // The schema name is the Go type name of the value.
 func SchemaOf(model any, opts ...SchemaOption) *Schema {
@@ -930,12 +934,13 @@ var (
 
 func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, tagReplacements []StructTagOption) Node {
 	var (
-		node       Node
-		optional   bool
-		list       bool
-		encoded    encoding.Encoding
-		compressed compress.Codec
-		fieldID    int
+		node            Node
+		optional        bool
+		list            bool
+		listElementName string
+		encoded         encoding.Encoding
+		compressed      compress.Codec
+		fieldID         int
 	)
 
 	setNode := func(n Node) {
@@ -1067,7 +1072,14 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					if t == reflect.TypeFor[json.RawMessage]() {
 						throwInvalidTag(t, name, option)
 					}
-					element := makeNodeOf(append(path, "list", "element"), t.Elem(), t.Name(), tags.getListElementNodeTags(), tagReplacements)
+					elementTags := tags.getListElementNodeTags()
+					listElementName = "element"
+					if tag := elementTags.parquet; tag != "" {
+						if name, _ := split(tag); name != "" {
+							listElementName = name
+						}
+					}
+					element := makeNodeOf(append(path, "list", listElementName), t.Elem(), t.Name(), elementTags, tagReplacements)
 					setNode(element)
 					setList()
 				default:
@@ -1347,7 +1359,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 	}
 
 	if list {
-		node = List(node)
+		node = ListElement(listElementName, node)
 	}
 
 	if node.Repeated() && !list {
