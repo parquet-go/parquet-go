@@ -516,6 +516,7 @@ func appendStructFields(path []string, t reflect.Type, fields []reflect.StructFi
 
 		ftags := fromStructTag(f.Tag)
 
+		parquetNameSet := false
 		if tag := ftags.parquet; tag != "" {
 			name, _ := split(tag)
 			if tag != "-," && name == "-" {
@@ -523,13 +524,14 @@ func appendStructFields(path []string, t reflect.Type, fields []reflect.StructFi
 			}
 			if name != "" {
 				f.Name = name
+				parquetNameSet = true
 			}
 		}
 
 		// If no explicit parquet name was set, check for protobuf tag name.
 		// This allows protobuf-generated structs to use their proto field names
 		// (typically snake_case) as parquet column names.
-		if f.Name == t.Field(i).Name { // Name wasn't changed by parquet tag
+		if !parquetNameSet {
 			if protoName := protoFieldNameFromTag(f.Tag); protoName != "" {
 				f.Name = protoName
 			}
