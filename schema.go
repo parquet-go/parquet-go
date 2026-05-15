@@ -1102,19 +1102,30 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 				if err != nil {
 					throwInvalidTag(t, name, option+args)
 				}
-				var baseType Type
-				switch t.Kind() {
-				case reflect.Int32:
-					baseType = Int32Type
-				case reflect.Int64:
-					baseType = Int64Type
-				case reflect.Array, reflect.Slice:
-					baseType = FixedLenByteArrayType(decimalFixedLenByteArraySize(precision))
-				default:
-					throwInvalidTag(t, name, option)
+				decimalBaseType := func(et reflect.Type) Type {
+					switch et.Kind() {
+					case reflect.Int32:
+						return Int32Type
+					case reflect.Int64:
+						return Int64Type
+					case reflect.Array, reflect.Slice:
+						return FixedLenByteArrayType(decimalFixedLenByteArraySize(precision))
+					}
+					return nil
 				}
-
-				setNode(Decimal(scale, precision, baseType))
+				if t.Kind() == reflect.Ptr {
+					baseType := decimalBaseType(t.Elem())
+					if baseType == nil {
+						throwInvalidTag(t, name, option)
+					}
+					setNode(Optional(Decimal(scale, precision, baseType)))
+				} else {
+					baseType := decimalBaseType(t)
+					if baseType == nil {
+						throwInvalidTag(t, name, option)
+					}
+					setNode(Decimal(scale, precision, baseType))
+				}
 
 			case "string":
 				switch {
