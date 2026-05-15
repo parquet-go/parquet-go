@@ -442,15 +442,23 @@ func writeRowsFuncOfByteSlice(t reflect.Type, schema *Schema, path columnPath) w
 			func(b *byteSliceBuf) { b.values = b.values[:0] },
 		)
 		buf.values = slices.Grow(buf.values, n*size)[:n*size]
+		// Zero-fill so empty/nil slice slots emit placeholder bytes; the
+		// pooled buffer may otherwise carry stale contents from a previous
+		// caller. The optional wrapper upstream marks those rows null via
+		// the definition level, matching fixedLenByteArrayColumnBuffer.writeNull.
+		clear(buf.values)
 		defer byteSliceBufPool.Put(buf)
 
 		stringArray := rows.StringArray()
 		for i := range n {
 			s := stringArray.Index(i)
-			if len(s) != size {
+			switch len(s) {
+			case 0:
+			case size:
+				copy(buf.values[i*size:], s)
+			default:
 				panic(fmt.Sprintf("cannot write byte slice of length %d to FIXED_LEN_BYTE_ARRAY(%d) column", len(s), size))
 			}
-			copy(buf.values[i*size:], s)
 		}
 
 		flatArray := sparse.UnsafeArray(unsafe.Pointer(&buf.values[0]), n, uintptr(size))
