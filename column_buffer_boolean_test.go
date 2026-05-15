@@ -1,6 +1,8 @@
 package parquet
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"math"
 	"testing"
 )
@@ -231,6 +233,90 @@ func TestColumnBufferBooleanEdgeCases(t *testing.T) {
 			t.Errorf("expected negative float to be true")
 		}
 	})
+}
+
+// TestIssue520BooleanDeterministicTrailingBits verifies that writing a
+// non-multiple-of-8 number of booleans produces deterministic bytes even when
+// the underlying SliceBuffer carries stale memory from a pool.
+// Issue: https://github.com/parquet-go/parquet-go/issues/520
+func TestIssue520BooleanDeterministicTrailingBits(t *testing.T) {
+	contaminate := func(col *booleanColumnBuffer) {
+		col.bits.Grow(8)
+		col.bits.Resize(8)
+		slice := col.bits.Slice()
+		for i := range slice {
+			slice[i] = 0xFF
+		}
+		col.bits.Resize(0)
+	}
+
+	t.Run("WriteBooleans", func(t *testing.T) {
+		col := newBooleanColumnBuffer(BooleanType, 0, 0)
+		contaminate(col)
+		if _, err := col.WriteBooleans([]bool{true, true, true, true}); err != nil {
+			t.Fatal(err)
+		}
+		got := col.bits.Slice()
+		want := []byte{0x0F}
+		if !bytes.Equal(got, want) {
+			t.Errorf("bits = % x, want % x", got, want)
+		}
+	})
+
+	t.Run("writeBoolean", func(t *testing.T) {
+		col := newBooleanColumnBuffer(BooleanType, 0, 0)
+		contaminate(col)
+		for range 4 {
+			col.writeBoolean(columnLevels{}, true)
+		}
+		got := col.bits.Slice()
+		want := []byte{0x0F}
+		if !bytes.Equal(got, want) {
+			t.Errorf("bits = % x, want % x", got, want)
+		}
+	})
+}
+
+// TestIssue520WriterByteDeterminism mirrors the reproducer from the issue:
+// the same 4-row boolean column written N times must produce byte-identical
+// Parquet files.
+func TestIssue520WriterByteDeterminism(t *testing.T) {
+	type Row struct {
+		N      int32 `parquet:"n"`
+		Retain bool  `parquet:"retain"`
+	}
+
+	rows := []Row{
+		{N: 1, Retain: true},
+		{N: 2, Retain: true},
+		{N: 3, Retain: true},
+		{N: 4, Retain: true},
+	}
+
+	n := 500
+	if testing.Short() {
+		n = 50
+	}
+
+	hashes := map[[32]byte]int{}
+	for range n {
+		var buf bytes.Buffer
+		w := NewGenericWriter[Row](&buf)
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		hashes[sha256.Sum256(buf.Bytes())]++
+	}
+
+	if len(hashes) != 1 {
+		t.Errorf("expected 1 distinct hash across %d runs, got %d", n, len(hashes))
+		for h, c := range hashes {
+			t.Logf("  %x ×%d", h, c)
+		}
+	}
 }
 
 // TestIssue406BooleanDictionaryLookup tests that boolean dictionary lookup correctly
