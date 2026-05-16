@@ -1093,3 +1093,45 @@ type FixedLenByteArrayWriter interface {
 	// is not a multiple of the expected item size.
 	WriteFixedLenByteArrays(values []byte) (int, error)
 }
+
+// BE128Reader is an interface implemented by ValueReader instances which
+// expose the content of a column of 128-bit big-endian byte array values.
+type BE128Reader interface {
+	// Read 128-bit big-endian values into the buffer passed as argument,
+	// returning the number of values read.
+	//
+	// The method returns io.EOF when all values have been read.
+	ReadBE128s(values [][16]byte) (int, error)
+}
+
+// BE128Writer is an interface implemented by ValueWriter instances which
+// support writing columns of 128-bit big-endian byte array values.
+type BE128Writer interface {
+	// Write 128-bit big-endian values.
+	//
+	// The method returns the number of values written, and any error that
+	// occurred while writing the values.
+	WriteBE128s(values [][16]byte) (int, error)
+}
+
+// UUIDReader is an interface implemented by ValueReader instances which
+// expose the content of a column of UUID values stored as 16-byte
+// FIXED_LEN_BYTE_ARRAY with the UUID logical type.
+type UUIDReader interface {
+	// Read UUID values into the buffer passed as argument, returning the
+	// number of values read.
+	//
+	// The method returns io.EOF when all values have been read.
+	ReadUUIDs(values []uuid.UUID) (int, error)
+}
+
+// UUIDWriter is an interface implemented by ValueWriter instances which
+// support writing columns of UUID values stored as 16-byte
+// FIXED_LEN_BYTE_ARRAY with the UUID logical type.
+type UUIDWriter interface {
+	// Write UUID values.
+	//
+	// The method returns the number of values written, and any error that
+	// occurred while writing the values.
+	WriteUUIDs(values []uuid.UUID) (int, error)
+}
