@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -98,14 +99,19 @@ func TestWriteValueFuncOfOptional(t *testing.T) {
 		{
 			name:       "zero value",
 			value:      int32(0),
-			expectNull: false,
-			expected:   int32(0),
+			expectNull: true,
 		},
 		{
 			name:       "non zero value",
 			value:      int32(42),
 			expectNull: false,
 			expected:   int32(42),
+		},
+		{
+			name:       "pointer to zero value",
+			value:      ptrTo(int32(0)),
+			expectNull: false,
+			expected:   int32(0),
 		},
 	}
 
@@ -178,10 +184,9 @@ func TestWriteValueFuncOfOptionalGroup(t *testing.T) {
 		{
 			name:        "empty id",
 			value:       Record{Point: &Point{X: 3.5, Y: 4.5}, ID: ""},
-			expectNulls: [3]bool{false, false, false},
+			expectNulls: [3]bool{false, false, true},
 			expectX:     3.5,
 			expectY:     4.5,
-			expectID:    "",
 		},
 	}
 
@@ -1997,9 +2002,10 @@ func TestGenericWriterAnyPointerVsOptionalTag(t *testing.T) {
 	}
 }
 
-// TestWriteOptionalZeroValuesAreNotNull verifies that zero values of value types
-// are written as values (not null) for optional columns.
-func TestWriteOptionalZeroValuesAreNotNull(t *testing.T) {
+// TestWriteOptionalZeroValues verifies the nullability of optional columns:
+// value-type zeros are written as null, non-nil pointers to zero values are
+// written as non-null values, and nil pointers are written as null.
+func TestWriteOptionalZeroValues(t *testing.T) {
 	tests := []struct {
 		name       string
 		schema     Node
@@ -2011,43 +2017,37 @@ func TestWriteOptionalZeroValuesAreNotNull(t *testing.T) {
 			name:       "bool false",
 			schema:     Optional(Leaf(BooleanType)),
 			value:      false,
-			expectNull: false,
-			expected:   false,
+			expectNull: true,
 		},
 		{
 			name:       "int32 zero",
 			schema:     Optional(Leaf(Int32Type)),
 			value:      int32(0),
-			expectNull: false,
-			expected:   int32(0),
+			expectNull: true,
 		},
 		{
 			name:       "int64 zero",
 			schema:     Optional(Leaf(Int64Type)),
 			value:      int64(0),
-			expectNull: false,
-			expected:   int64(0),
+			expectNull: true,
 		},
 		{
 			name:       "float32 zero",
 			schema:     Optional(Leaf(FloatType)),
 			value:      float32(0),
-			expectNull: false,
-			expected:   float32(0),
+			expectNull: true,
 		},
 		{
 			name:       "float64 zero",
 			schema:     Optional(Leaf(DoubleType)),
 			value:      float64(0),
-			expectNull: false,
-			expected:   float64(0),
+			expectNull: true,
 		},
 		{
 			name:       "empty string",
 			schema:     Optional(Leaf(ByteArrayType)),
 			value:      "",
-			expectNull: false,
-			expected:   "",
+			expectNull: true,
 		},
 		{
 			name:       "empty byte slice",
@@ -2101,10 +2101,11 @@ func TestWriteOptionalZeroValuesAreNotNull(t *testing.T) {
 	}
 }
 
-// TestGenericWriterStructOptionalZeroValues is an end-to-end test that writes a struct
-// with all zero-valued optional fields and verifies they are present (not null).
+// TestGenericWriterStructOptionalZeroValues is an end-to-end test verifying
+// that zero-valued optional value-type fields are written as null, while
+// non-nil pointers to zero values are written as non-null.
 func TestGenericWriterStructOptionalZeroValues(t *testing.T) {
-	type Record struct {
+	type ValueRecord struct {
 		Bool    bool    `parquet:"bool,optional"`
 		Int32   int32   `parquet:"int32,optional"`
 		Int64   int64   `parquet:"int64,optional"`
@@ -2112,55 +2113,6 @@ func TestGenericWriterStructOptionalZeroValues(t *testing.T) {
 		Float64 float64 `parquet:"float64,optional"`
 		String  string  `parquet:"string,optional"`
 	}
-
-	// Write zero values
-	buf := new(bytes.Buffer)
-	writer := NewGenericWriter[Record](buf)
-	_, err := writer.Write([]Record{{
-		Bool:    false,
-		Int32:   0,
-		Int64:   0,
-		Float32: 0,
-		Float64: 0,
-		String:  "",
-	}})
-	if err != nil {
-		t.Fatalf("error writing: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("error closing writer: %v", err)
-	}
-
-	// Read back as structs
-	rows, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	if err != nil {
-		t.Fatalf("error reading: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(rows))
-	}
-
-	row := rows[0]
-	if row.Bool != false {
-		t.Errorf("Bool: expected false, got %v", row.Bool)
-	}
-	if row.Int32 != 0 {
-		t.Errorf("Int32: expected 0, got %v", row.Int32)
-	}
-	if row.Int64 != 0 {
-		t.Errorf("Int64: expected 0, got %v", row.Int64)
-	}
-	if row.Float32 != 0 {
-		t.Errorf("Float32: expected 0, got %v", row.Float32)
-	}
-	if row.Float64 != 0 {
-		t.Errorf("Float64: expected 0, got %v", row.Float64)
-	}
-	if row.String != "" {
-		t.Errorf("String: expected empty, got %q", row.String)
-	}
-
-	// Cross-verify: read into pointer-field struct to check definition levels
 	type PtrRecord struct {
 		Bool    *bool    `parquet:"bool,optional"`
 		Int32   *int32   `parquet:"int32,optional"`
@@ -2170,6 +2122,16 @@ func TestGenericWriterStructOptionalZeroValues(t *testing.T) {
 		String  *string  `parquet:"string,optional"`
 	}
 
+	// Part 1: write zero values via value-type fields -> all written as null.
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[ValueRecord](buf)
+	if _, err := writer.Write([]ValueRecord{{}}); err != nil {
+		t.Fatalf("error writing: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("error closing writer: %v", err)
+	}
+
 	ptrRows, err := Read[PtrRecord](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	if err != nil {
 		t.Fatalf("error reading as PtrRecord: %v", err)
@@ -2177,42 +2139,74 @@ func TestGenericWriterStructOptionalZeroValues(t *testing.T) {
 	if len(ptrRows) != 1 {
 		t.Fatalf("expected 1 PtrRecord row, got %d", len(ptrRows))
 	}
-
 	prow := ptrRows[0]
-	if prow.Bool == nil {
-		t.Error("Bool pointer is nil, expected non-nil")
-	} else if *prow.Bool != false {
-		t.Errorf("Bool: expected false, got %v", *prow.Bool)
+	if prow.Bool != nil {
+		t.Errorf("Bool: expected nil (null), got %v", *prow.Bool)
 	}
-	if prow.Int32 == nil {
-		t.Error("Int32 pointer is nil, expected non-nil")
-	} else if *prow.Int32 != 0 {
-		t.Errorf("Int32: expected 0, got %v", *prow.Int32)
+	if prow.Int32 != nil {
+		t.Errorf("Int32: expected nil (null), got %v", *prow.Int32)
 	}
-	if prow.Int64 == nil {
-		t.Error("Int64 pointer is nil, expected non-nil")
-	} else if *prow.Int64 != 0 {
-		t.Errorf("Int64: expected 0, got %v", *prow.Int64)
+	if prow.Int64 != nil {
+		t.Errorf("Int64: expected nil (null), got %v", *prow.Int64)
 	}
-	if prow.Float32 == nil {
-		t.Error("Float32 pointer is nil, expected non-nil")
-	} else if *prow.Float32 != 0 {
-		t.Errorf("Float32: expected 0, got %v", *prow.Float32)
+	if prow.Float32 != nil {
+		t.Errorf("Float32: expected nil (null), got %v", *prow.Float32)
 	}
-	if prow.Float64 == nil {
-		t.Error("Float64 pointer is nil, expected non-nil")
-	} else if *prow.Float64 != 0 {
-		t.Errorf("Float64: expected 0, got %v", *prow.Float64)
+	if prow.Float64 != nil {
+		t.Errorf("Float64: expected nil (null), got %v", *prow.Float64)
 	}
-	if prow.String == nil {
-		t.Error("String pointer is nil, expected non-nil")
-	} else if *prow.String != "" {
-		t.Errorf("String: expected empty, got %q", *prow.String)
+	if prow.String != nil {
+		t.Errorf("String: expected nil (null), got %v", *prow.String)
+	}
+
+	// Part 2: write non-nil pointers to zero values -> all written as non-null.
+	buf2 := new(bytes.Buffer)
+	writer2 := NewGenericWriter[PtrRecord](buf2)
+	if _, err := writer2.Write([]PtrRecord{{
+		Bool:    ptr(false),
+		Int32:   ptr(int32(0)),
+		Int64:   ptr(int64(0)),
+		Float32: ptr(float32(0)),
+		Float64: ptr(float64(0)),
+		String:  ptr(""),
+	}}); err != nil {
+		t.Fatalf("error writing PtrRecord: %v", err)
+	}
+	if err := writer2.Close(); err != nil {
+		t.Fatalf("error closing PtrRecord writer: %v", err)
+	}
+
+	ptrRows2, err := Read[PtrRecord](bytes.NewReader(buf2.Bytes()), int64(buf2.Len()))
+	if err != nil {
+		t.Fatalf("error reading PtrRecord: %v", err)
+	}
+	if len(ptrRows2) != 1 {
+		t.Fatalf("expected 1 PtrRecord row, got %d", len(ptrRows2))
+	}
+	prow2 := ptrRows2[0]
+	if prow2.Bool == nil || *prow2.Bool != false {
+		t.Errorf("Bool: expected false (non-null), got %v", prow2.Bool)
+	}
+	if prow2.Int32 == nil || *prow2.Int32 != 0 {
+		t.Errorf("Int32: expected 0 (non-null), got %v", prow2.Int32)
+	}
+	if prow2.Int64 == nil || *prow2.Int64 != 0 {
+		t.Errorf("Int64: expected 0 (non-null), got %v", prow2.Int64)
+	}
+	if prow2.Float32 == nil || *prow2.Float32 != 0 {
+		t.Errorf("Float32: expected 0 (non-null), got %v", prow2.Float32)
+	}
+	if prow2.Float64 == nil || *prow2.Float64 != 0 {
+		t.Errorf("Float64: expected 0 (non-null), got %v", prow2.Float64)
+	}
+	if prow2.String == nil || *prow2.String != "" {
+		t.Errorf("String: expected empty (non-null), got %v", prow2.String)
 	}
 }
 
-// TestGenericWriterMapStringAnyOptionalZeroValues verifies that zero values
-// written via map[string]any are stored as values (not null), and missing keys produce null.
+// TestGenericWriterMapStringAnyOptionalZeroValues verifies that values written
+// via map[string]any to optional columns follow the same nullability rule as
+// value-typed struct fields: zero values are null, non-zero values round-trip.
 func TestGenericWriterMapStringAnyOptionalZeroValues(t *testing.T) {
 	type Record struct {
 		Bool    bool    `parquet:"bool,optional"`
@@ -2226,7 +2220,7 @@ func TestGenericWriterMapStringAnyOptionalZeroValues(t *testing.T) {
 	buf := new(bytes.Buffer)
 	writer := NewGenericWriter[any](buf, schema)
 
-	// Write zero values (all present)
+	// Row 0: present zero values -> all written as null.
 	_, err := writer.Write([]any{map[string]any{
 		"bool":    false,
 		"int32":   int32(0),
@@ -2237,7 +2231,7 @@ func TestGenericWriterMapStringAnyOptionalZeroValues(t *testing.T) {
 		t.Fatalf("error writing zero values: %v", err)
 	}
 
-	// Write row with missing keys (should produce null)
+	// Row 1: only "bool":true present, rest missing -> bool is true, rest null.
 	_, err = writer.Write([]any{map[string]any{
 		"bool": true,
 	}})
@@ -2264,22 +2258,22 @@ func TestGenericWriterMapStringAnyOptionalZeroValues(t *testing.T) {
 		t.Fatalf("expected 2 rows, got %d", len(rows))
 	}
 
-	// Row 0: all zero values present (not null)
+	// Row 0: zero values -> null
 	r0 := rows[0]
-	if r0.Bool == nil || *r0.Bool != false {
-		t.Errorf("row 0 Bool: expected false, got %v", r0.Bool)
+	if r0.Bool != nil {
+		t.Errorf("row 0 Bool: expected nil, got %v", *r0.Bool)
 	}
-	if r0.Int32 == nil || *r0.Int32 != 0 {
-		t.Errorf("row 0 Int32: expected 0, got %v", r0.Int32)
+	if r0.Int32 != nil {
+		t.Errorf("row 0 Int32: expected nil, got %v", *r0.Int32)
 	}
-	if r0.Float64 == nil || *r0.Float64 != 0 {
-		t.Errorf("row 0 Float64: expected 0, got %v", r0.Float64)
+	if r0.Float64 != nil {
+		t.Errorf("row 0 Float64: expected nil, got %v", *r0.Float64)
 	}
-	if r0.String == nil || *r0.String != "" {
-		t.Errorf("row 0 String: expected empty, got %v", r0.String)
+	if r0.String != nil {
+		t.Errorf("row 0 String: expected nil, got %v", *r0.String)
 	}
 
-	// Row 1: missing keys produce null
+	// Row 1: bool present (non-zero) round-trips, rest are null.
 	r1 := rows[1]
 	if r1.Bool == nil || *r1.Bool != true {
 		t.Errorf("row 1 Bool: expected true, got %v", r1.Bool)
@@ -2295,8 +2289,10 @@ func TestGenericWriterMapStringAnyOptionalZeroValues(t *testing.T) {
 	}
 }
 
-// TestGenericWriterMapStringStringOptionalMissingKeys tests that missing keys in
-// map[string]string produce null, while present empty strings produce empty string values.
+// TestGenericWriterMapStringStringOptionalMissingKeys tests that map[string]string
+// values written to optional string columns follow the same nullability rule as
+// value-typed struct fields: both missing keys and present empty strings produce
+// null; present non-empty strings round-trip as values.
 func TestGenericWriterMapStringStringOptionalMissingKeys(t *testing.T) {
 	type Record struct {
 		Name  string `parquet:"name,optional"`
@@ -2308,7 +2304,7 @@ func TestGenericWriterMapStringStringOptionalMissingKeys(t *testing.T) {
 	buf := new(bytes.Buffer)
 	writer := NewGenericWriter[map[string]string](buf, schema)
 
-	// Row with both keys present (value is empty string)
+	// Row 0: both keys present, value is empty string -> empty collapses to null
 	_, err := writer.Write([]map[string]string{
 		{"name": "test", "value": ""},
 	})
@@ -2316,7 +2312,7 @@ func TestGenericWriterMapStringStringOptionalMissingKeys(t *testing.T) {
 		t.Fatalf("error writing: %v", err)
 	}
 
-	// Row with missing key
+	// Row 1: missing key -> null
 	_, err = writer.Write([]map[string]string{
 		{"name": "test2"},
 	})
@@ -2341,17 +2337,15 @@ func TestGenericWriterMapStringStringOptionalMissingKeys(t *testing.T) {
 		t.Fatalf("expected 2 rows, got %d", len(rows))
 	}
 
-	// Row 0: both present, value is empty string (not null)
+	// Row 0: name round-trips, present empty value is null.
 	if rows[0].Name == nil || *rows[0].Name != "test" {
 		t.Errorf("row 0 Name: expected 'test', got %v", rows[0].Name)
 	}
-	if rows[0].Value == nil {
-		t.Error("row 0 Value: expected empty string, got nil (null)")
-	} else if *rows[0].Value != "" {
-		t.Errorf("row 0 Value: expected empty string, got %q", *rows[0].Value)
+	if rows[0].Value != nil {
+		t.Errorf("row 0 Value: expected nil (null), got %q", *rows[0].Value)
 	}
 
-	// Row 1: missing key produces null
+	// Row 1: missing key -> null
 	if rows[1].Name == nil || *rows[1].Name != "test2" {
 		t.Errorf("row 1 Name: expected 'test2', got %v", rows[1].Name)
 	}
@@ -2360,55 +2354,136 @@ func TestGenericWriterMapStringStringOptionalMissingKeys(t *testing.T) {
 	}
 }
 
-// TestDeconstructOptionalZeroValues tests that row deconstruction correctly handles
-// zero values as non-null for value types.
+// TestDeconstructOptionalZeroValues verifies row deconstruction nullability:
+// value-type zero fields deconstruct as null (definitionLevel=0); non-nil
+// pointers to zero values deconstruct as non-null (definitionLevel=1).
 func TestDeconstructOptionalZeroValues(t *testing.T) {
-	type Record struct {
+	type ValueRecord struct {
 		Bool    bool    `parquet:"bool,optional"`
 		Int32   int32   `parquet:"int32,optional"`
 		Float64 float64 `parquet:"float64,optional"`
 		String  string  `parquet:"string,optional"`
 	}
 
-	schema := SchemaOf(Record{})
-	row := Record{
-		Bool:    false,
-		Int32:   0,
-		Float64: 0,
-		String:  "",
-	}
-
-	values := make([]Value, 0, 4)
-	deconstructed := schema.Deconstruct(values, row)
-
+	schema := SchemaOf(ValueRecord{})
+	deconstructed := schema.Deconstruct(make([]Value, 0, 4), ValueRecord{})
 	if len(deconstructed) != 4 {
 		t.Fatalf("expected 4 values, got %d", len(deconstructed))
 	}
-
-	// All values should have definitionLevel 1 (present, not null)
 	for i, v := range deconstructed {
-		if v.DefinitionLevel() != 1 {
-			t.Errorf("value %d: expected definitionLevel=1, got %d", i, v.DefinitionLevel())
+		if v.DefinitionLevel() != 0 {
+			t.Errorf("value %d: expected definitionLevel=0 (null), got %d", i, v.DefinitionLevel())
 		}
 	}
 
-	// Check the actual values
-	if deconstructed[0].Boolean() != false {
-		t.Errorf("Bool: expected false, got %v", deconstructed[0].Boolean())
+	type PtrRecord struct {
+		Bool    *bool    `parquet:"bool,optional"`
+		Int32   *int32   `parquet:"int32,optional"`
+		Float64 *float64 `parquet:"float64,optional"`
+		String  *string  `parquet:"string,optional"`
 	}
-	if deconstructed[1].Int32() != 0 {
-		t.Errorf("Int32: expected 0, got %v", deconstructed[1].Int32())
+
+	ptrSchema := SchemaOf(PtrRecord{})
+	ptrDeconstructed := ptrSchema.Deconstruct(make([]Value, 0, 4), PtrRecord{
+		Bool:    ptr(false),
+		Int32:   ptr(int32(0)),
+		Float64: ptr(float64(0)),
+		String:  ptr(""),
+	})
+	if len(ptrDeconstructed) != 4 {
+		t.Fatalf("expected 4 values, got %d", len(ptrDeconstructed))
 	}
-	if deconstructed[2].Double() != 0 {
-		t.Errorf("Float64: expected 0, got %v", deconstructed[2].Double())
+	for i, v := range ptrDeconstructed {
+		if v.DefinitionLevel() != 1 {
+			t.Errorf("ptr value %d: expected definitionLevel=1 (non-null), got %d", i, v.DefinitionLevel())
+		}
 	}
-	if string(deconstructed[3].ByteArray()) != "" {
-		t.Errorf("String: expected empty, got %q", string(deconstructed[3].ByteArray()))
+	if ptrDeconstructed[0].Boolean() != false {
+		t.Errorf("Bool: expected false, got %v", ptrDeconstructed[0].Boolean())
+	}
+	if ptrDeconstructed[1].Int32() != 0 {
+		t.Errorf("Int32: expected 0, got %v", ptrDeconstructed[1].Int32())
+	}
+	if ptrDeconstructed[2].Double() != 0 {
+		t.Errorf("Float64: expected 0, got %v", ptrDeconstructed[2].Double())
+	}
+	if string(ptrDeconstructed[3].ByteArray()) != "" {
+		t.Errorf("String: expected empty, got %q", string(ptrDeconstructed[3].ByteArray()))
 	}
 }
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+// TestOptionalZeroValueIsNullValueType locks in the v0.27.0 contract: when an
+// optional struct field has a Go value type (not a pointer) and is set to its
+// zero value, the column writes null (definitionLevel=0). This test exists to
+// prevent silent re-introduction of the regression that landed in v0.29.0
+// (PR #480), where value-type zeros began round-tripping as non-null values.
+func TestOptionalZeroValueIsNullValueType(t *testing.T) {
+	t.Run("int32", func(t *testing.T) {
+		type Record struct {
+			V int32 `parquet:"v,optional"`
+		}
+		assertOptionalZeroIsNull[Record](t, Record{})
+	})
+	t.Run("int64", func(t *testing.T) {
+		type Record struct {
+			V int64 `parquet:"v,optional"`
+		}
+		assertOptionalZeroIsNull[Record](t, Record{})
+	})
+	t.Run("bool", func(t *testing.T) {
+		type Record struct {
+			V bool `parquet:"v,optional"`
+		}
+		assertOptionalZeroIsNull[Record](t, Record{})
+	})
+	t.Run("float64", func(t *testing.T) {
+		type Record struct {
+			V float64 `parquet:"v,optional"`
+		}
+		assertOptionalZeroIsNull[Record](t, Record{})
+	})
+	t.Run("string", func(t *testing.T) {
+		type Record struct {
+			V string `parquet:"v,optional"`
+		}
+		assertOptionalZeroIsNull[Record](t, Record{})
+	})
+	t.Run("time.Time", func(t *testing.T) {
+		type Record struct {
+			V time.Time `parquet:"v,optional,timestamp(microsecond)"`
+		}
+		assertOptionalZeroIsNull[Record](t, Record{})
+	})
+}
+
+func assertOptionalZeroIsNull[T any](t *testing.T, row T) {
+	t.Helper()
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[T](buf)
+	if _, err := writer.Write([]T{row}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]Row, 1)
+	if _, err := reader.ReadRows(rows); err != nil && err != io.EOF {
+		t.Fatalf("read rows: %v", err)
+	}
+	if len(rows[0]) != 1 {
+		t.Fatalf("expected 1 column, got %d", len(rows[0]))
+	}
+	v := rows[0][0]
+	if !v.IsNull() {
+		t.Errorf("expected null, got definitionLevel=%d value=%v", v.DefinitionLevel(), v)
+	}
 }
 
 // TestIssue417MapStructOptionalField tests that GenericWriter[any] can write
