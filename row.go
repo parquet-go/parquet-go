@@ -616,9 +616,11 @@ func reconstructFuncOfOptional(columnIndex uint16, node Node) (uint16, reconstru
 		}
 
 		if value.Kind() == reflect.Ptr {
-			if value.IsNil() {
-				value.Set(reflect.New(value.Type().Elem()))
-			}
+			// Always allocate a fresh pointer. Reusing the caller's
+			// previous-call allocation would let downstream AssignValue
+			// mutate bytes behind any pointer the caller has retained from
+			// an earlier Read (issue #522).
+			value.Set(reflect.New(value.Type().Elem()))
 			value = value.Elem()
 		}
 

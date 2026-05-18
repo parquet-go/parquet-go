@@ -1097,3 +1097,62 @@ func TestIssue406LeadingBooleanField(t *testing.T) {
 		}
 	}
 }
+
+// TestIssue522 checks that optional pointer fields are freshly allocated on
+// every Read call. Reusing the caller's previous-call pointer let downstream
+// AssignValue mutate bytes behind any retained shallow copy of an earlier
+// batch.
+// Issue: https://github.com/parquet-go/parquet-go/issues/522
+func TestIssue522(t *testing.T) {
+	type Row struct {
+		ID  int64   `parquet:"id"`
+		Opt *string `parquet:"opt,optional"`
+	}
+
+	const n = 4096
+	src := make([]Row, n)
+	for i := range src {
+		s := fmt.Sprintf("val-%04d", i)
+		src[i] = Row{ID: int64(i), Opt: &s}
+	}
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[Row](buf)
+	if _, err := w.Write(src); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+	defer r.Close()
+
+	var retained []Row
+	batch := make([]Row, 256)
+	for {
+		nRead, err := r.Read(batch)
+		retained = append(retained, batch[:nRead]...)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(retained) != n {
+		t.Fatalf("retained %d rows, want %d", len(retained), n)
+	}
+
+	for i, got := range retained {
+		want := fmt.Sprintf("val-%04d", i)
+		if got.Opt == nil {
+			t.Errorf("row %d: Opt is nil, want %q", i, want)
+			continue
+		}
+		if *got.Opt != want {
+			t.Errorf("row %d: Opt = %q, want %q", i, *got.Opt, want)
+		}
+	}
+}
