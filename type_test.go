@@ -389,10 +389,9 @@ func TestOptionalTimeZeroValue(t *testing.T) {
 		Time time.Time `parquet:"time,optional,timestamp(microsecond)"`
 	}
 
-	// Create records with zero and non-zero time.Time values.
-	// Value types (including time.Time) are never null — zero time is a valid value.
+	// Create records with zero and non-zero time.Time values
 	records := []Record{
-		{ID: 1, Time: time.Time{}},                                 // zero value - stored as value (not NULL)
+		{ID: 1, Time: time.Time{}},                                 // zero value - should be NULL
 		{ID: 2, Time: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)}, // non-zero value
 		{ID: 3, Time: time.Time{}},                                 // another zero value
 	}
@@ -423,8 +422,13 @@ func TestOptionalTimeZeroValue(t *testing.T) {
 		t.Fatalf("expected %d rows, got %d", len(records), n)
 	}
 
-	// All time values should be non-null (definitionLevel=1) since
-	// value types are never null.
+	// Check definition levels
+	// For record 1 (zero time): should have definitionLevel=0 (NULL)
+	// For record 2 (non-zero time): should have definitionLevel=1 (non-NULL)
+	// For record 3 (zero time): should have definitionLevel=0 (NULL)
+
+	expectedDefinitionLevels := []int{0, 1, 0} // ID column has 0 (required), Time column varies
+
 	for i, row := range rows[:n] {
 		if len(row) < 2 {
 			t.Fatalf("row %d has less than 2 columns", i)
@@ -433,20 +437,25 @@ func TestOptionalTimeZeroValue(t *testing.T) {
 		timeValue := row[1] // Second column is Time
 		definitionLevel := int(timeValue.DefinitionLevel())
 
-		if definitionLevel != 1 {
-			t.Errorf("row %d: expected definitionLevel=1 for Time column, got %d",
-				i, definitionLevel)
+		if definitionLevel != expectedDefinitionLevels[i] {
+			t.Errorf("row %d: expected definitionLevel=%d for Time column, got %d",
+				i, expectedDefinitionLevels[i], definitionLevel)
 		}
 
-		if timeValue.IsNull() {
-			t.Errorf("row %d: expected IsNull()=false, got true", i)
+		// For NULL values, IsNull() should return true
+		if expectedDefinitionLevels[i] == 0 && !timeValue.IsNull() {
+			t.Errorf("row %d: expected IsNull()=true for zero time.Time, got false", i)
+		}
+
+		// For non-NULL values, check the actual value
+		if expectedDefinitionLevels[i] == 1 {
+			if timeValue.IsNull() {
+				t.Errorf("row %d: expected IsNull()=false for non-zero time.Time, got true", i)
+			}
 		}
 	}
 
-	// Read back using GenericReader to verify non-zero values round-trip.
-	// Note: time.Time{} (year 1 AD) does not round-trip correctly through
-	// microsecond timestamps due to int64 overflow in the reader's nanos
-	// conversion. This is a pre-existing reader limitation.
+	// Also read back using GenericReader to verify the values
 	genReader := parquet.NewGenericReader[Record](bytes.NewReader(buf.Bytes()))
 	defer genReader.Close()
 
@@ -458,8 +467,17 @@ func TestOptionalTimeZeroValue(t *testing.T) {
 
 	readRecords = readRecords[:n2]
 
+	// Verify that zero time.Time values are preserved as zero
+	if !readRecords[0].Time.IsZero() {
+		t.Errorf("record 0: expected zero time.Time, got %v", readRecords[0].Time)
+	}
+
 	if readRecords[1].Time.IsZero() {
 		t.Errorf("record 1: expected non-zero time.Time, got zero")
+	}
+
+	if !readRecords[2].Time.IsZero() {
+		t.Errorf("record 2: expected zero time.Time, got %v", readRecords[2].Time)
 	}
 
 	// Verify IDs are correct
@@ -496,9 +514,10 @@ func TestOptionalTimeWithMillisecond(t *testing.T) {
 	n, _ := reader.Read(readRecords)
 	readRecords = readRecords[:n]
 
-	// Note: time.Time{} (year 1 AD) does not round-trip correctly through
-	// millisecond timestamps due to int64 overflow in the reader's nanos
-	// conversion. Verify the non-zero time round-trips correctly.
+	if !readRecords[0].Time.IsZero() {
+		t.Errorf("expected zero time, got %v", readRecords[0].Time)
+	}
+
 	if readRecords[1].Time.IsZero() {
 		t.Errorf("expected non-zero time, got zero")
 	}
@@ -530,34 +549,27 @@ func TestOptionalTimeWithNanosecond(t *testing.T) {
 	n, _ := reader.Read(readRecords)
 	readRecords = readRecords[:n]
 
-	// Note: Nanosecond timestamps (int64) cannot represent time.Time{} (year 1 AD)
-	// due to int64 overflow. The zero time is stored as a non-null value but
-	// doesn't round-trip correctly. Users needing null semantics should use *time.Time.
-	// We just verify the non-zero time round-trips correctly.
+	if !readRecords[0].Time.IsZero() {
+		t.Errorf("expected zero time, got %v", readRecords[0].Time)
+	}
+
 	if readRecords[1].Time.IsZero() {
 		t.Errorf("expected non-zero time, got zero")
 	}
-	if !readRecords[1].Time.Equal(time.Date(2024, 12, 25, 0, 0, 0, 123456789, time.UTC)) {
-		t.Errorf("expected 2024-12-25, got %v", readRecords[1].Time)
-	}
 }
 
-// TestIssue155 verifies that time.Time value types are stored as values (not null).
-// Previously, zero time.Time was stored as null, but the fix for #153 changes this:
-// value types are never null. Users who need null semantics should use *time.Time.
-//
-// Note: The default timestamp unit is nanosecond. Nanosecond int64 cannot represent
-// time.Time{} (year 1 AD) due to overflow, so the zero time doesn't round-trip.
-// Users needing zero-time round-trip should use microsecond or millisecond timestamps,
-// or use *time.Time for null semantics.
+// TestIssue155 verifies the fix for https://github.com/parquet-go/parquet-go/issues/155
+// The issue reported that empty time.Time{} values were being serialized as "1754-08-30"
+// instead of being preserved as zero values (NULL) when using optional timestamp fields.
 func TestIssue155(t *testing.T) {
 	type TestStruct struct {
 		TestDate time.Time `parquet:"test_date,optional,timestamp"`
 		TestInt  int       `parquet:"test_int"`
 	}
 
+	// Create a record with an empty time.Time (zero value)
 	original := TestStruct{
-		TestDate: time.Time{},
+		TestDate: time.Time{}, // empty/zero time - should be preserved
 		TestInt:  123,
 	}
 
@@ -587,6 +599,18 @@ func TestIssue155(t *testing.T) {
 	// Verify the TestInt field is preserved
 	if result[0].TestInt != 123 {
 		t.Errorf("expected TestInt=123, got %d", result[0].TestInt)
+	}
+
+	// The critical assertion from issue #155:
+	// An empty time.Time should remain zero after round-trip
+	if !result[0].TestDate.IsZero() {
+		t.Errorf("expected TestDate.IsZero()=true, got false with value: %v (was: %s)",
+			result[0].TestDate, result[0].TestDate.Format("2006-01-02"))
+	}
+
+	// Also verify it's not the erroneous "1754-08-30" date that was reported
+	if result[0].TestDate.Year() == 1754 {
+		t.Errorf("got the erroneous 1754-08-30 date that was reported in issue #155")
 	}
 }
 
