@@ -189,6 +189,17 @@ func convertToLevels(repetitionLevels, definitionLevels []byte) conversionFunc {
 		for i := range column {
 			r := column[i].repetitionLevel
 			d := column[i].definitionLevel
+			// Source levels that exceed the lookup-table size can be produced
+			// when maskMissingRowGroupColumns or sibling-fallback synthesizes
+			// values for schemas where source and target disagree on optionality
+			// or nesting depth. Without this guard, the convertedRows reader
+			// panics with "index out of range" inside this hot loop. Treat the
+			// value as null so downstream Reconstruct skips it instead of
+			// dereferencing a placeholder's nil byte-array pointer.
+			if int(r) >= len(repetitionLevels) || int(d) >= len(definitionLevels) {
+				column[i] = Value{}
+				continue
+			}
 			column[i].repetitionLevel = repetitionLevels[r]
 			column[i].definitionLevel = definitionLevels[d]
 		}
@@ -279,12 +290,32 @@ func (c *conversion) Convert(rows []Row) (int, error) {
 			// Since the column index may have changed between the source and
 			// taget columns we ensure that the right value is always written
 			// to the output row.
+			targetKindEnc := ^int8(conv.targetKind)
 			for i := range columnValues {
 				// Fix: If we have a zero Value{}, convert it to a properly typed value
 				// For optional fields, keep as null (kind = 0)
 				// For required fields, convert to typed zero value
 				if columnValues[i].IsNull() && !conv.isOptional {
 					columnValues[i] = ZeroValue(conv.targetKind)
+				} else if k := columnValues[i].kind; k != 0 && k != targetKindEnc {
+					// Type-mismatch guard: the source row-major reader is known
+					// to deliver values whose kind doesn't match the target
+					// column's expected kind in heavily-mismatched schemas (the
+					// downstream Reconstruct then panics in unsafe.Slice when it
+					// reinterprets, e.g., an Int64 value as a ByteArray). When
+					// that happens, drop to a typed null/zero for the target so
+					// the row stays self-consistent.
+					if conv.isOptional {
+						columnValues[i] = Value{
+							repetitionLevel: columnValues[i].repetitionLevel,
+							definitionLevel: columnValues[i].definitionLevel,
+						}
+					} else {
+						v := ZeroValue(conv.targetKind)
+						v.repetitionLevel = columnValues[i].repetitionLevel
+						v.definitionLevel = columnValues[i].definitionLevel
+						columnValues[i] = v
+					}
 				}
 
 				columnValues[i].columnIndex = ^uint16(columnIndex)
