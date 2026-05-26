@@ -2554,3 +2554,122 @@ func TestConvertVariant(t *testing.T) {
 		}
 	})
 }
+
+// TestConvertOutOfBoundsLevelsGuard asserts that a Conversion produced by
+// parquet.Convert does not panic when a source row carries repetition or
+// definition levels that exceed the lookup-table size, and instead surfaces
+// those values as typed nulls at the target column. Such out-of-range levels
+// can be synthesized inside the reader pipeline (mask / sibling-fallback)
+// when source and target schemas disagree on optionality or nesting depth.
+func TestConvertOutOfBoundsLevelsGuard(t *testing.T) {
+	type Source struct {
+		X int64 `parquet:"x"`
+	}
+	type Target struct {
+		X *int64 `parquet:"x,optional"`
+	}
+
+	from := parquet.SchemaOf(Source{})
+	to := parquet.SchemaOf(Target{})
+
+	// Required source → optional target makes the definition-level lookup
+	// table non-identity (definitionLevels = [1]), which is what causes
+	// Convert to install convertToLevels in the pipeline.
+	conv, err := parquet.Convert(to, from)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Source max rep=0, max def=0 → lookup tables have length 1. Any
+	// rep/def >= 1 in a source value is out of bounds for the tables.
+	inBounds := parquet.Int64Value(42).Level(0, 0, 0)
+	oobDef := parquet.Int64Value(99).Level(0, 5, 0)
+	oobRep := parquet.Int64Value(100).Level(5, 0, 0)
+
+	rows := []parquet.Row{
+		{inBounds},
+		{oobDef},
+		{oobRep},
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Convert panicked on OOB source levels (expected guard to null the value): %v", r)
+		}
+	}()
+
+	n, err := conv.Convert(rows)
+	if err != nil {
+		t.Fatalf("Convert returned error: %v", err)
+	}
+	if n != len(rows) {
+		t.Fatalf("expected %d rows converted, got %d", len(rows), n)
+	}
+
+	// In-bounds value: payload preserved, def-level remapped via lookup
+	// table from source max (0) to target max (1).
+	if len(rows[0]) != 1 {
+		t.Fatalf("row 0: expected 1 value, got %d", len(rows[0]))
+	}
+	got0 := rows[0][0]
+	if got0.IsNull() {
+		t.Errorf("in-bounds value unexpectedly null: %+v", got0)
+	}
+	if got0.Kind() != parquet.Int64 || got0.Int64() != 42 {
+		t.Errorf("in-bounds value payload mutated: kind=%v int64=%d", got0.Kind(), got0.Int64())
+	}
+	if got0.RepetitionLevel() != 0 || got0.DefinitionLevel() != 1 {
+		t.Errorf("in-bounds levels not remapped correctly: rep=%d def=%d (want rep=0 def=1)",
+			got0.RepetitionLevel(), got0.DefinitionLevel())
+	}
+
+	// OOB definition level: convertToLevels zeroes the Value, then Convert's
+	// post-loop fixup keeps it null (target is optional) and rewrites
+	// columnIndex to the target column.
+	if len(rows[1]) != 1 {
+		t.Fatalf("row 1: expected 1 value, got %d", len(rows[1]))
+	}
+	got1 := rows[1][0]
+	if !got1.IsNull() {
+		t.Errorf("oob-definition value: expected typed null, got kind=%v int64=%d",
+			got1.Kind(), got1.Int64())
+	}
+	if got1.RepetitionLevel() != 0 || got1.DefinitionLevel() != 0 {
+		t.Errorf("oob-definition value levels not reset: rep=%d def=%d",
+			got1.RepetitionLevel(), got1.DefinitionLevel())
+	}
+
+	// OOB repetition level: same outcome — typed null at the target column.
+	if len(rows[2]) != 1 {
+		t.Fatalf("row 2: expected 1 value, got %d", len(rows[2]))
+	}
+	got2 := rows[2][0]
+	if !got2.IsNull() {
+		t.Errorf("oob-repetition value: expected typed null, got kind=%v int64=%d",
+			got2.Kind(), got2.Int64())
+	}
+	if got2.RepetitionLevel() != 0 || got2.DefinitionLevel() != 0 {
+		t.Errorf("oob-repetition value levels not reset: rep=%d def=%d",
+			got2.RepetitionLevel(), got2.DefinitionLevel())
+	}
+
+	// End-to-end sanity: the converted rows reconstruct cleanly into the
+	// target Go type, with the OOB rows surfacing as nil pointers.
+	var present Target
+	if err := to.Reconstruct(&present, rows[0]); err != nil {
+		t.Fatalf("reconstruct in-bounds row: %v", err)
+	}
+	if present.X == nil || *present.X != 42 {
+		t.Errorf("reconstructed in-bounds X: want &42, got %v", present.X)
+	}
+
+	for i, row := range rows[1:] {
+		var v Target
+		if err := to.Reconstruct(&v, row); err != nil {
+			t.Fatalf("reconstruct oob row %d: %v", i+1, err)
+		}
+		if v.X != nil {
+			t.Errorf("reconstructed oob row %d: want X=nil, got %v", i+1, *v.X)
+		}
+	}
+}
