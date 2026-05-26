@@ -602,6 +602,150 @@ func TestReconstructMapInInterface(t *testing.T) {
 	}
 }
 
+// TestReconstructMapShortSiblingColumn is a regression test for the
+// reconstructFuncOfMap padding shim. It simulates a writer that emitted fewer
+// level entries than columns[0] expects on a sibling leaf under a Map subtree,
+// and asserts that Reconstruct does not panic and assigns the Go zero value to
+// the under-supplied slots while leaving the other slots intact.
+func TestReconstructMapShortSiblingColumn(t *testing.T) {
+	type Entry struct {
+		A string
+		B string
+	}
+	type Outer struct {
+		M map[string]Entry
+	}
+
+	schema := parquet.SchemaOf(Outer{})
+
+	// Build a fully-populated row, then drop one Value from the leaf column
+	// corresponding to field B to simulate writer elision. We rebuild the
+	// row column-by-column so the (rep, def) levels carried by each Value
+	// remain consistent.
+	full := schema.Deconstruct(nil, Outer{M: map[string]Entry{
+		"k1": {A: "a1", B: "b1"},
+		"k2": {A: "a2", B: "b2"},
+	}})
+
+	columns := columnsOf(full)
+
+	// Schema leaves are: key, value.A, value.B. The last column is B —
+	// drop its trailing Value so the column has only one entry while the
+	// key and A columns still carry two.
+	bCol := len(columns) - 1
+	if len(columns[bCol]) != 2 {
+		t.Fatalf("expected exactly 2 values in B column before truncation, got %d", len(columns[bCol]))
+	}
+	columns[bCol] = columns[bCol][:1]
+
+	var short parquet.Row
+	for _, c := range columns {
+		short = append(short, c...)
+	}
+
+	var got Outer
+	if err := schema.Reconstruct(&got, short); err != nil {
+		t.Fatalf("Reconstruct after truncation returned error: %v", err)
+	}
+
+	if len(got.M) != 2 {
+		t.Fatalf("expected 2 map entries after reconstruction, got %d: %#v", len(got.M), got.M)
+	}
+
+	// A column was not truncated, so both A values must round-trip with the
+	// correct key→A pairing. Exactly one B must be the Go zero value (the
+	// truncated entry); the other must match the original non-empty B for
+	// its key. Which key ends up with the zero B depends on iteration order
+	// during Deconstruct — both outcomes are valid.
+	wantA := map[string]string{"k1": "a1", "k2": "a2"}
+	wantB := map[string]string{"k1": "b1", "k2": "b2"}
+
+	emptyB := 0
+	nonEmptyB := 0
+	for k, e := range got.M {
+		if a, ok := wantA[k]; !ok {
+			t.Errorf("unexpected key %q in reconstructed map", k)
+		} else if e.A != a {
+			t.Errorf("key %q: A=%q, want %q", k, e.A, a)
+		}
+
+		switch e.B {
+		case "":
+			emptyB++
+		case wantB[k]:
+			nonEmptyB++
+		default:
+			t.Errorf("key %q: B=%q, want %q or empty string", k, e.B, wantB[k])
+		}
+	}
+
+	if emptyB != 1 || nonEmptyB != 1 {
+		t.Errorf("expected exactly one empty and one non-empty B after truncation, got empty=%d non-empty=%d (M=%#v)", emptyB, nonEmptyB, got.M)
+	}
+}
+
+// TestReconstructMapShortSiblingColumnNestedRepeated covers the case where a
+// single Map entry can legitimately contribute multiple Values to a sibling
+// leaf (here, a nested Map inside the value group). The row is constructed
+// manually with explicit Level() calls so the layout is deterministic and
+// independent of Go's map iteration order during Deconstruct.
+func TestReconstructMapShortSiblingColumnNestedRepeated(t *testing.T) {
+	type Entry struct {
+		Inner map[string]string
+	}
+	type Outer struct {
+		M map[string]Entry
+	}
+
+	schema := parquet.SchemaOf(Outer{})
+
+	// Schema leaves (column indices):
+	//   0: M.key_value.key                          max_def=1, max_rep=1
+	//   1: M.key_value.value.Inner.key_value.key    max_def=2, max_rep=2
+	//   2: M.key_value.value.Inner.key_value.value  max_def=2, max_rep=2
+	//
+	// We hand-build the row to simulate a non-conformant writer that
+	// emitted the outer map {"k1": {"x":"1","y":"2"}, "k2": {}} but
+	// elided the (R:1, D:1) placeholder that a spec-compliant writer
+	// would have emitted on each inner leaf for k2's empty inner map.
+	//
+	// Resulting columns:
+	//   key   : [k1@R0D1, k2@R1D1]
+	//   inner_key   : [x@R0D2, y@R2D2]   (k2's placeholder elided)
+	//   inner_value : [1@R0D2, 2@R2D2]   (k2's placeholder elided)
+	row := parquet.Row{
+		parquet.ValueOf("k1").Level(0, 1, 0),
+		parquet.ValueOf("k2").Level(1, 1, 0),
+		parquet.ValueOf("x").Level(0, 2, 1),
+		parquet.ValueOf("y").Level(2, 2, 1),
+		parquet.ValueOf("1").Level(0, 2, 2),
+		parquet.ValueOf("2").Level(2, 2, 2),
+	}
+
+	var got Outer
+	if err := schema.Reconstruct(&got, row); err != nil {
+		t.Fatalf("Reconstruct with nested-Repeated elision returned error: %v", err)
+	}
+
+	if len(got.M) != 2 {
+		t.Fatalf("expected 2 outer map entries, got %d: %#v", len(got.M), got.M)
+	}
+
+	// k1's Inner round-trips both entries; k2's Inner is empty after
+	// reconstruction since the placeholder was elided.
+	if e, ok := got.M["k1"]; !ok {
+		t.Errorf("missing outer key k1")
+	} else if want := map[string]string{"x": "1", "y": "2"}; !reflect.DeepEqual(e.Inner, want) {
+		t.Errorf("k1.Inner = %#v, want %#v", e.Inner, want)
+	}
+
+	if e, ok := got.M["k2"]; !ok {
+		t.Errorf("missing outer key k2")
+	} else if len(e.Inner) != 0 {
+		t.Errorf("k2.Inner expected empty, got %#v", e.Inner)
+	}
+}
+
 func columnsOf(row parquet.Row) [][]parquet.Value {
 	columns := make([][]parquet.Value, 0)
 	row.Range(func(_ int, c []parquet.Value) bool {

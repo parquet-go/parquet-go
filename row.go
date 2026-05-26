@@ -784,26 +784,6 @@ func reconstructFuncOfMap(columnIndex uint16, node Node) (uint16, reconstructFun
 			}
 		}
 
-		// compatibility shim for spec-non-conformant writers The Apache Parquet
-		// spec — and Dremel §4.2 — require one (R, D, value-if-present) tuple per
-		// leaf per record; there are 3rd party writers elides level entries for nil
-		// child leaves under Optional Groups inside Maps, leaving sibling columns
-		// short. Without this guard, the inner `column[:1]` slice on cap=0 panics.
-		// We pad short columns up to n with null Values (def=0 → leaf assigns Go zero,
-		// which matches the writer's intent for the elided fields).
-		// No-op on conformant input (parquet-go/Arrow/Spark/DuckDB writers).
-		for j, col := range columns {
-			if len(col) < n {
-				padded := make([]Value, n)
-				copy(padded, col)
-				for k := len(col); k < n; k++ {
-					padded[k].repetitionLevel = levels.repetitionDepth
-				}
-				columns[j] = padded
-				values[j] = padded[0:0:n]
-			}
-		}
-
 		if value.IsNil() {
 			m := reflect.MakeMapWithSize(t, n)
 			value.Set(m)
@@ -818,6 +798,26 @@ func reconstructFuncOfMap(columnIndex uint16, node Node) (uint16, reconstructFun
 		for range n {
 			for j, column := range values {
 				column = column[:cap(column)]
+
+				// Compatibility shim for spec-non-conformant writers.
+				//
+				// The Apache Parquet spec — and Dremel §4.2 — require one
+				// (R, D, value-if-present) tuple per leaf per record. Some
+				// third-party writers elide level entries for nil child leaves
+				// under Optional Groups inside Maps, so a sibling column can
+				// run out of Values before all n entries have been consumed.
+				// When that happens, synthesise a null placeholder at the
+				// Map's repetition depth so the leaf reconstruct path assigns
+				// the Go zero value (def=0 → null), matching the writer's
+				// intent for the elided fields.
+				//
+				// No-op on conformant input — every leaf always has enough
+				// Values for n entries, so this branch never fires.
+				if cap(column) == 0 {
+					values[j] = []Value{{repetitionLevel: levels.repetitionDepth}}
+					continue
+				}
+
 				k := 1
 
 				for k < len(column) && column[k].repetitionLevel > levels.repetitionDepth {
