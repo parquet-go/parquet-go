@@ -784,6 +784,26 @@ func reconstructFuncOfMap(columnIndex uint16, node Node) (uint16, reconstructFun
 			}
 		}
 
+		// compatibility shim for spec-non-conformant writers The Apache Parquet
+		// spec — and Dremel §4.2 — require one (R, D, value-if-present) tuple per
+		// leaf per record; fraugster elides level entries for nil child leaves
+		// under Optional Groups inside Maps, leaving sibling columns short. Without
+		// this guard, the inner `column[:1]` slice on cap=0 panics. We pad short
+		// columns up to n with null Values (def=0 → leaf assigns Go zero,
+		// which matches the writer's intent for the elided fields).
+		// No-op on conformant input (parquet-go/Arrow/Spark/DuckDB writers).
+		for j, col := range columns {
+			if len(col) < n {
+				padded := make([]Value, n)
+				copy(padded, col)
+				for k := len(col); k < n; k++ {
+					padded[k].repetitionLevel = levels.repetitionDepth
+				}
+				columns[j] = padded
+				values[j] = padded[0:0:n]
+			}
+		}
+
 		if value.IsNil() {
 			m := reflect.MakeMapWithSize(t, n)
 			value.Set(m)
