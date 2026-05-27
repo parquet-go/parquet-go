@@ -215,6 +215,26 @@ func TestEncoding(t *testing.T) {
 	}
 }
 
+func TestRLEDecodeLevelsToleratesEmptyRuns(t *testing.T) {
+	if cpu.IsBigEndian {
+		t.Skip("tests for RLE encoding are failing on s390x")
+	}
+
+	enc := &rle.Encoding{BitWidth: 1}
+
+	src := []byte{0x00, 0x08, 0x01}
+	want := []byte{1, 1, 1, 1}
+
+	got, err := enc.DecodeLevels(nil, src)
+	if err != nil {
+		t.Fatalf("DecodeLevels: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("DecodeLevels produced %d values, want %d (got=%v)", len(got), len(want), got)
+	}
+	assertEqualBytes(t, want, got)
+}
+
 func testEncoding(t *testing.T, e encoding.Encoding) {
 	for _, test := range [...]struct {
 		scenario string
