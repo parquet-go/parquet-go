@@ -2554,3 +2554,169 @@ func TestConvertVariant(t *testing.T) {
 		}
 	})
 }
+
+// TestConvertKindMismatchOptional verifies that parquet.Convert produces a
+// typed null at the target column when an input value's kind doesn't match
+// the optional target column's kind, with rep/def levels preserved.
+//
+// The setup uses matching ByteArray + optional schemas for column X on both
+// sides, so the conversion pipeline installs no in-flight transform: a
+// hand-crafted Int64 value injected at column 0 reaches the post-conversion
+// fixup unchanged, modeling the malformed input that mismatched row-group
+// readers can deliver.
+func TestConvertKindMismatchOptional(t *testing.T) {
+	type Source struct {
+		X string `parquet:"x,optional"`
+		Y string `parquet:"y"`
+	}
+	type Target struct {
+		X *string `parquet:"x,optional"`
+	}
+
+	from := parquet.SchemaOf(Source{})
+	to := parquet.SchemaOf(Target{})
+
+	conv, err := parquet.Convert(to, from)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// X is ByteArray + optional on both sides → no convertToType,
+	// definition-level mapping is direct → no convertToLevels. The
+	// misrouted Int64 value passes straight through convertToSelf and
+	// reaches the post-loop guard with a non-matching kind.
+	misrouted := parquet.Int64Value(0xDEADBEEF).Level(0, 1, 0)
+	yVal := parquet.ByteArrayValue([]byte("y")).Level(0, 0, 1)
+	rows := []parquet.Row{{misrouted, yVal}}
+
+	n, err := conv.Convert(rows)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if n != 1 || len(rows[0]) != 1 {
+		t.Fatalf("expected 1 row with 1 value (target has only X), got n=%d row=%v", n, rows[0])
+	}
+
+	got := rows[0][0]
+	if !got.IsNull() {
+		t.Errorf("optional target with kind-mismatched source: expected typed null, got kind=%v int64=%#x",
+			got.Kind(), got.Int64())
+	}
+	if got.RepetitionLevel() != 0 || got.DefinitionLevel() != 1 {
+		t.Errorf("levels not preserved across kind-mismatch fix: rep=%d def=%d (want rep=0 def=1)",
+			got.RepetitionLevel(), got.DefinitionLevel())
+	}
+}
+
+// TestConvertKindMismatchRequired verifies that parquet.Convert substitutes
+// a typed zero of the target kind when an input value's kind doesn't match
+// the required target column's kind, with rep/def levels preserved. This
+// ensures a required ByteArray column never reaches Reconstruct holding an
+// Int64-encoded payload (which would fault on unsafe.Slice).
+//
+// The setup uses matching ByteArray + required schemas for column X on both
+// sides, so the conversion pipeline installs no in-flight transform: a
+// hand-crafted Int64 value injected at column 0 reaches the post-conversion
+// fixup unchanged.
+func TestConvertKindMismatchRequired(t *testing.T) {
+	type Source struct {
+		X string `parquet:"x"`
+		Y string `parquet:"y"`
+	}
+	type Target struct {
+		X string `parquet:"x"`
+	}
+
+	from := parquet.SchemaOf(Source{})
+	to := parquet.SchemaOf(Target{})
+
+	conv, err := parquet.Convert(to, from)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	misrouted := parquet.Int64Value(0xCAFEBABE).Level(0, 0, 0)
+	yVal := parquet.ByteArrayValue([]byte("y")).Level(0, 0, 1)
+	rows := []parquet.Row{{misrouted, yVal}}
+
+	n, err := conv.Convert(rows)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if n != 1 || len(rows[0]) != 1 {
+		t.Fatalf("expected 1 row with 1 value (target has only X), got n=%d row=%v", n, rows[0])
+	}
+
+	got := rows[0][0]
+	if got.Kind() != parquet.ByteArray {
+		t.Errorf("required target with kind-mismatched source: expected ByteArray zero, got kind=%v", got.Kind())
+	}
+	if got.IsNull() {
+		t.Errorf("required target: expected typed zero (non-null), got null")
+	}
+	if len(got.ByteArray()) != 0 {
+		t.Errorf("required target: expected empty payload, got %q", got.ByteArray())
+	}
+	if got.RepetitionLevel() != 0 || got.DefinitionLevel() != 0 {
+		t.Errorf("levels not preserved across kind-mismatch fix: rep=%d def=%d",
+			got.RepetitionLevel(), got.DefinitionLevel())
+	}
+}
+
+// Identity-Convert hole: when source/target schemas match, the post-Convert
+// kind-mismatch fixup is skipped and a misrouted Int64 reaches AssignValue
+// directly. The guard in byteArrayType.AssignValue must drop to null instead
+// of unsafe.Slice'ing nil with the payload's length.
+func TestByteArrayAssignValueKindGuard(t *testing.T) {
+	misrouted := parquet.Int64Value(0x800000) // 8 MiB payload in u64, nil ptr
+
+	t.Run("ByteSlice", func(t *testing.T) {
+		dst := []byte("preserved")
+		defer func() {
+			if rec := recover(); rec != nil {
+				t.Fatalf("panicked: %v", rec)
+			}
+		}()
+		if err := parquet.ByteArrayType.AssignValue(reflect.ValueOf(&dst).Elem(), misrouted); err != nil {
+			t.Fatalf("AssignValue: %v", err)
+		}
+		if len(dst) != 0 {
+			t.Errorf("want empty, got %q", dst)
+		}
+	})
+
+	t.Run("String", func(t *testing.T) {
+		dst := "preserved"
+		defer func() {
+			if rec := recover(); rec != nil {
+				t.Fatalf("panicked: %v", rec)
+			}
+		}()
+		if err := parquet.ByteArrayType.AssignValue(reflect.ValueOf(&dst).Elem(), misrouted); err != nil {
+			t.Fatalf("AssignValue: %v", err)
+		}
+		if dst != "" {
+			t.Errorf("want empty, got %q", dst)
+		}
+	})
+
+	t.Run("MatchingByteArrayStillAssigns", func(t *testing.T) {
+		var dst []byte
+		if err := parquet.ByteArrayType.AssignValue(reflect.ValueOf(&dst).Elem(), parquet.ByteArrayValue([]byte("hello"))); err != nil {
+			t.Fatalf("AssignValue: %v", err)
+		}
+		if string(dst) != "hello" {
+			t.Errorf("want %q, got %q", "hello", dst)
+		}
+	})
+
+	t.Run("NullStillNulls", func(t *testing.T) {
+		dst := []byte("preserved")
+		if err := parquet.ByteArrayType.AssignValue(reflect.ValueOf(&dst).Elem(), parquet.NullValue()); err != nil {
+			t.Fatalf("AssignValue: %v", err)
+		}
+		if len(dst) != 0 {
+			t.Errorf("want empty, got %q", dst)
+		}
+	})
+}
