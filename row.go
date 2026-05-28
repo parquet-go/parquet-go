@@ -93,19 +93,32 @@ func (row Row) Equal(other Row) bool {
 	return true
 }
 
-// Range calls f for each column of row.
+// Range calls f for each column of row. Values are grouped by their
+// (XOR-encoded) columnIndex tag; explicit tags pointing past the current
+// column cause empty slices to be emitted for the skipped columns. Untagged
+// values (raw 0) are accepted positionally for callers that build Row values
+// directly (e.g. FixedLenByteArrayValue).
 func (row Row) Range(f func(columnIndex int, columnValues []Value) bool) {
 	columnIndex := 0
 
 	for i := 0; i < len(row); {
-		j := i + 1
+		expected := ^uint16(columnIndex)
 
-		for j < len(row) && row[j].columnIndex == ^uint16(columnIndex) {
+		if row[i].columnIndex != 0 && row[i].columnIndex != expected {
+			if !f(columnIndex, nil) {
+				return
+			}
+			columnIndex++
+			continue
+		}
+
+		j := i + 1
+		for j < len(row) && row[j].columnIndex == expected {
 			j++
 		}
 
 		if !f(columnIndex, row[i:j:j]) {
-			break
+			return
 		}
 
 		columnIndex++
@@ -606,10 +619,22 @@ func reconstructFuncOfOptional(columnIndex uint16, node Node) (uint16, reconstru
 	return nextColumnIndex, func(value reflect.Value, levels columnLevels, columns [][]Value) error {
 		levels.definitionLevel++
 
-		// For empty groups (no columns), we can't check definition levels.
-		// Treat them as always present (non-null).
-		if len(columns) > 0 && len(columns[0]) > 0 {
-			if columns[0][0].definitionLevel < levels.definitionLevel {
+		// Scan all sibling columns: a low-def placeholder in columns[0]
+		// (e.g. Convert's NullValue for an elided leaf) shouldn't null the
+		// group when another column proves it's present.
+		if len(columns) > 0 {
+			anyValue, present := false, false
+			for _, col := range columns {
+				if len(col) == 0 {
+					continue
+				}
+				anyValue = true
+				if col[0].definitionLevel >= levels.definitionLevel {
+					present = true
+					break
+				}
+			}
+			if anyValue && !present {
 				value.SetZero()
 				return nil
 			}
@@ -948,7 +973,9 @@ func reconstructFuncOfLeaf(columnIndex uint16, node Node) (uint16, reconstructFu
 	return columnIndex + 1, func(value reflect.Value, _ columnLevels, columns [][]Value) error {
 		column := columns[0]
 		if len(column) == 0 {
-			return fmt.Errorf("no values found in parquet row for column %d", columnIndex)
+			// Spec-non-conformant writers can elide a leaf's tuple; leave
+			// the Go destination at its zero value.
+			return nil
 		}
 		return typ.AssignValue(value, column[0])
 	}

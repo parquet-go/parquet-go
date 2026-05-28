@@ -602,6 +602,245 @@ func TestReconstructMapInInterface(t *testing.T) {
 	}
 }
 
+func columnsOf(row parquet.Row) [][]parquet.Value {
+	columns := make([][]parquet.Value, 0)
+	row.Range(func(_ int, c []parquet.Value) bool {
+		columns = append(columns, c)
+		return true
+	})
+	return columns
+}
+
+func assertEqualRows(t *testing.T, want, got []parquet.Row) {
+	if len(want) != len(got) {
+		t.Errorf("number of rows mismatch: want=%d got=%d", len(want), len(got))
+		return
+	}
+
+	for i := range want {
+		row1, row2 := want[i], got[i]
+
+		if len(row1) != len(row2) {
+			t.Errorf("number of values in row %d mismatch: want=%d got=%d", i, len(row1), len(row2))
+			continue
+		}
+
+		for j := range row1 {
+			if value1, value2 := row1[j], row2[j]; !parquet.DeepEqual(value1, value2) {
+				t.Errorf("values of row %d at index %d mismatch: want=%+v got=%+v", i, j, value1, value2)
+			}
+		}
+	}
+}
+
+func assertEqualValues(t *testing.T, columnIndex int, want, got []parquet.Value) {
+	n := len(want)
+
+	if len(want) != len(got) {
+		t.Errorf("wrong number of values in column %d: want=%d got=%d", columnIndex, len(want), len(got))
+		if len(want) > len(got) {
+			n = len(got)
+		}
+	}
+
+	for i := range n {
+		v1, v2 := want[i], got[i]
+
+		if !parquet.Equal(v1, v2) {
+			t.Errorf("values at index %d mismatch in column %d: want=%#v got=%#v", i, columnIndex, v1, v2)
+		}
+		if columnIndex != int(v2.Column()) {
+			t.Errorf("column index mismatch in column %d: want=%d got=%#v", i, columnIndex, v2)
+		}
+		if v1.RepetitionLevel() != v2.RepetitionLevel() {
+			t.Errorf("repetition levels at index %d mismatch in column %d: want=%#v got=%#v", i, columnIndex, v1, v2)
+		}
+		if v1.DefinitionLevel() != v2.DefinitionLevel() {
+			t.Errorf("definition levels at index %d mismatch in column %d: want=%#v got=%#v", i, columnIndex, v1, v2)
+		}
+	}
+}
+
+func BenchmarkDeconstruct(b *testing.B) {
+	row := &AddressBook{
+		Owner: "Julien Le Dem",
+		OwnerPhoneNumbers: []string{
+			"555 123 4567",
+			"555 666 1337",
+		},
+		Contacts: []Contact{
+			{
+				Name:        "Dmitriy Ryaboy",
+				PhoneNumber: "555 987 6543",
+			},
+			{
+				Name: "Chris Aniszczyk",
+			},
+		},
+	}
+
+	schema := parquet.SchemaOf(row)
+	buffer := parquet.Row{}
+
+	for b.Loop() {
+		buffer = schema.Deconstruct(buffer[:0], row)
+	}
+}
+
+func BenchmarkReconstruct(b *testing.B) {
+	row := &AddressBook{
+		Owner: "Julien Le Dem",
+		OwnerPhoneNumbers: []string{
+			"555 123 4567",
+			"555 666 1337",
+		},
+		Contacts: []Contact{
+			{
+				Name:        "Dmitriy Ryaboy",
+				PhoneNumber: "555 987 6543",
+			},
+			{
+				Name: "Chris Aniszczyk",
+			},
+		},
+	}
+
+	schema := parquet.SchemaOf(row)
+	values := schema.Deconstruct(nil, row)
+	buffer := AddressBook{}
+
+	for b.Loop() {
+		buffer = AddressBook{}
+
+		if err := schema.Reconstruct(&buffer, values); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// Untagged values (e.g. from FixedLenByteArrayValue) must be accepted
+// positionally; otherwise Range gap-fills forever on raw columnIndex=0.
+func TestRowRangeUntaggedPositional(t *testing.T) {
+	row := parquet.Row{parquet.FixedLenByteArrayValue([]byte("0123456789abcdef"))}
+	var seen []int
+	row.Range(func(c int, v []parquet.Value) bool {
+		seen = append(seen, c)
+		if len(v) != 1 {
+			t.Errorf("col=%d: want 1 value, got %d", c, len(v))
+		}
+		return true
+	})
+	if len(seen) != 1 || seen[0] != 0 {
+		t.Errorf("want [0], got %v", seen)
+	}
+
+	row = parquet.Row{parquet.Int32Value(10), parquet.Int32Value(20), parquet.Int32Value(30)}
+	seen = seen[:0]
+	row.Range(func(c int, _ []parquet.Value) bool {
+		seen = append(seen, c)
+		return true
+	})
+	if want := []int{0, 1, 2}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("want %v, got %v", want, seen)
+	}
+}
+
+// Tagged values pointing past the current column must trigger empty-slice
+// gap-fills so cross-routing into a neighbour's slot doesn't happen.
+func TestRowRangeGapFillForTaggedValues(t *testing.T) {
+	type emit struct{ col, n int }
+
+	row := parquet.Row{parquet.Int64Value(0xCAFE).Level(0, 1, 2)}
+	var seen []emit
+	row.Range(func(c int, v []parquet.Value) bool {
+		seen = append(seen, emit{c, len(v)})
+		return true
+	})
+	if want := []emit{{0, 0}, {1, 0}, {2, 1}}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("want %v, got %v", want, seen)
+	}
+
+	row = parquet.Row{
+		parquet.ByteArrayValue([]byte("a")).Level(0, 0, 0),
+		parquet.ByteArrayValue([]byte("b")).Level(1, 0, 0),
+		parquet.Int64Value(7).Level(0, 0, 2),
+	}
+	seen = seen[:0]
+	row.Range(func(c int, v []parquet.Value) bool {
+		seen = append(seen, emit{c, len(v)})
+		return true
+	})
+	if want := []emit{{0, 2}, {1, 0}, {2, 1}}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("want %v, got %v", want, seen)
+	}
+}
+
+// A column with no values for the row (writer elided its tuple) must not
+// fail Reconstruct; the Go field stays at zero.
+func TestReconstructLeafToleratesEmptyColumn(t *testing.T) {
+	type Row struct {
+		Blob    []byte `parquet:"Blob,optional"`
+		Trigger int64  `parquet:"Trigger"`
+	}
+
+	r := parquet.Row{parquet.Int64Value(42).Level(0, 0, 1)}
+	var got Row
+	if err := parquet.SchemaOf(Row{}).Reconstruct(&got, r); err != nil {
+		t.Fatalf("Reconstruct: %v", err)
+	}
+	if got.Blob != nil {
+		t.Errorf("Blob: want nil, got %v", got.Blob)
+	}
+	if got.Trigger != 42 {
+		t.Errorf("Trigger: want 42, got %d", got.Trigger)
+	}
+}
+
+// Optional-group presence must be decided by any sibling column, not just
+// columns[0]: a low-def placeholder in column 0 shouldn't null the group
+// when another column carries a present-level value.
+func TestReconstructOptionalScansAllColumnsForPresence(t *testing.T) {
+	type Inner struct {
+		Blob    []byte `parquet:"Blob,optional"`
+		Trigger int64  `parquet:"Trigger"`
+	}
+	type Outer struct {
+		Extras *Inner `parquet:"Extras"`
+	}
+	schema := parquet.SchemaOf(Outer{})
+
+	r := parquet.Row{
+		parquet.NullValue().Level(0, 0, 0),
+		parquet.Int64Value(7).Level(0, 1, 1),
+	}
+	var got Outer
+	if err := schema.Reconstruct(&got, r); err != nil {
+		t.Fatalf("Reconstruct: %v", err)
+	}
+	if got.Extras == nil {
+		t.Fatalf("Extras: want non-nil, got nil")
+	}
+	if got.Extras.Trigger != 7 {
+		t.Errorf("Trigger: want 7, got %d", got.Extras.Trigger)
+	}
+	if got.Extras.Blob != nil {
+		t.Errorf("Blob: want nil, got %v", got.Extras.Blob)
+	}
+
+	// All columns below defLevel → Extras null.
+	r = parquet.Row{
+		parquet.NullValue().Level(0, 0, 0),
+		parquet.NullValue().Level(0, 0, 1),
+	}
+	got = Outer{}
+	if err := schema.Reconstruct(&got, r); err != nil {
+		t.Fatalf("Reconstruct: %v", err)
+	}
+	if got.Extras != nil {
+		t.Errorf("Extras: want nil, got %+v", *got.Extras)
+	}
+}
+
 // TestReconstructMapShortSiblingColumn is a regression test for the
 // reconstructFuncOfMap padding shim. It simulates a writer that emitted fewer
 // level entries than columns[0] expects on a sibling leaf under a Map subtree,
@@ -743,121 +982,5 @@ func TestReconstructMapShortSiblingColumnNestedRepeated(t *testing.T) {
 		t.Errorf("missing outer key k2")
 	} else if len(e.Inner) != 0 {
 		t.Errorf("k2.Inner expected empty, got %#v", e.Inner)
-	}
-}
-
-func columnsOf(row parquet.Row) [][]parquet.Value {
-	columns := make([][]parquet.Value, 0)
-	row.Range(func(_ int, c []parquet.Value) bool {
-		columns = append(columns, c)
-		return true
-	})
-	return columns
-}
-
-func assertEqualRows(t *testing.T, want, got []parquet.Row) {
-	if len(want) != len(got) {
-		t.Errorf("number of rows mismatch: want=%d got=%d", len(want), len(got))
-		return
-	}
-
-	for i := range want {
-		row1, row2 := want[i], got[i]
-
-		if len(row1) != len(row2) {
-			t.Errorf("number of values in row %d mismatch: want=%d got=%d", i, len(row1), len(row2))
-			continue
-		}
-
-		for j := range row1 {
-			if value1, value2 := row1[j], row2[j]; !parquet.DeepEqual(value1, value2) {
-				t.Errorf("values of row %d at index %d mismatch: want=%+v got=%+v", i, j, value1, value2)
-			}
-		}
-	}
-}
-
-func assertEqualValues(t *testing.T, columnIndex int, want, got []parquet.Value) {
-	n := len(want)
-
-	if len(want) != len(got) {
-		t.Errorf("wrong number of values in column %d: want=%d got=%d", columnIndex, len(want), len(got))
-		if len(want) > len(got) {
-			n = len(got)
-		}
-	}
-
-	for i := range n {
-		v1, v2 := want[i], got[i]
-
-		if !parquet.Equal(v1, v2) {
-			t.Errorf("values at index %d mismatch in column %d: want=%#v got=%#v", i, columnIndex, v1, v2)
-		}
-		if columnIndex != int(v2.Column()) {
-			t.Errorf("column index mismatch in column %d: want=%d got=%#v", i, columnIndex, v2)
-		}
-		if v1.RepetitionLevel() != v2.RepetitionLevel() {
-			t.Errorf("repetition levels at index %d mismatch in column %d: want=%#v got=%#v", i, columnIndex, v1, v2)
-		}
-		if v1.DefinitionLevel() != v2.DefinitionLevel() {
-			t.Errorf("definition levels at index %d mismatch in column %d: want=%#v got=%#v", i, columnIndex, v1, v2)
-		}
-	}
-}
-
-func BenchmarkDeconstruct(b *testing.B) {
-	row := &AddressBook{
-		Owner: "Julien Le Dem",
-		OwnerPhoneNumbers: []string{
-			"555 123 4567",
-			"555 666 1337",
-		},
-		Contacts: []Contact{
-			{
-				Name:        "Dmitriy Ryaboy",
-				PhoneNumber: "555 987 6543",
-			},
-			{
-				Name: "Chris Aniszczyk",
-			},
-		},
-	}
-
-	schema := parquet.SchemaOf(row)
-	buffer := parquet.Row{}
-
-	for b.Loop() {
-		buffer = schema.Deconstruct(buffer[:0], row)
-	}
-}
-
-func BenchmarkReconstruct(b *testing.B) {
-	row := &AddressBook{
-		Owner: "Julien Le Dem",
-		OwnerPhoneNumbers: []string{
-			"555 123 4567",
-			"555 666 1337",
-		},
-		Contacts: []Contact{
-			{
-				Name:        "Dmitriy Ryaboy",
-				PhoneNumber: "555 987 6543",
-			},
-			{
-				Name: "Chris Aniszczyk",
-			},
-		},
-	}
-
-	schema := parquet.SchemaOf(row)
-	values := schema.Deconstruct(nil, row)
-	buffer := AddressBook{}
-
-	for b.Loop() {
-		buffer = AddressBook{}
-
-		if err := schema.Reconstruct(&buffer, values); err != nil {
-			b.Fatal(err)
-		}
 	}
 }

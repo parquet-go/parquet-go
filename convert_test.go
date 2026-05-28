@@ -2554,3 +2554,61 @@ func TestConvertVariant(t *testing.T) {
 		}
 	})
 }
+
+// Identity-Convert hole: when source/target schemas match, the post-Convert
+// kind-mismatch fixup is skipped and a misrouted Int64 reaches AssignValue
+// directly. The guard in byteArrayType.AssignValue must drop to null instead
+// of unsafe.Slice'ing nil with the payload's length.
+func TestByteArrayAssignValueKindGuard(t *testing.T) {
+	misrouted := parquet.Int64Value(0x800000) // 8 MiB payload in u64, nil ptr
+
+	t.Run("ByteSlice", func(t *testing.T) {
+		dst := []byte("preserved")
+		defer func() {
+			if rec := recover(); rec != nil {
+				t.Fatalf("panicked: %v", rec)
+			}
+		}()
+		if err := parquet.ByteArrayType.AssignValue(reflect.ValueOf(&dst).Elem(), misrouted); err != nil {
+			t.Fatalf("AssignValue: %v", err)
+		}
+		if len(dst) != 0 {
+			t.Errorf("want empty, got %q", dst)
+		}
+	})
+
+	t.Run("String", func(t *testing.T) {
+		dst := "preserved"
+		defer func() {
+			if rec := recover(); rec != nil {
+				t.Fatalf("panicked: %v", rec)
+			}
+		}()
+		if err := parquet.ByteArrayType.AssignValue(reflect.ValueOf(&dst).Elem(), misrouted); err != nil {
+			t.Fatalf("AssignValue: %v", err)
+		}
+		if dst != "" {
+			t.Errorf("want empty, got %q", dst)
+		}
+	})
+
+	t.Run("MatchingByteArrayStillAssigns", func(t *testing.T) {
+		var dst []byte
+		if err := parquet.ByteArrayType.AssignValue(reflect.ValueOf(&dst).Elem(), parquet.ByteArrayValue([]byte("hello"))); err != nil {
+			t.Fatalf("AssignValue: %v", err)
+		}
+		if string(dst) != "hello" {
+			t.Errorf("want %q, got %q", "hello", dst)
+		}
+	})
+
+	t.Run("NullStillNulls", func(t *testing.T) {
+		dst := []byte("preserved")
+		if err := parquet.ByteArrayType.AssignValue(reflect.ValueOf(&dst).Elem(), parquet.NullValue()); err != nil {
+			t.Fatalf("AssignValue: %v", err)
+		}
+		if len(dst) != 0 {
+			t.Errorf("want empty, got %q", dst)
+		}
+	})
+}
