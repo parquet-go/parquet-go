@@ -215,6 +215,60 @@ func TestEncoding(t *testing.T) {
 	}
 }
 
+func TestRLEDecodeToleratesEmptyRuns(t *testing.T) {
+	if cpu.IsBigEndian {
+		t.Skip("tests for RLE encoding are failing on s390x")
+	}
+
+	for _, tc := range []struct {
+		name   string
+		enc    *rle.Encoding
+		decode func(*rle.Encoding, []byte) ([]byte, error)
+		src    []byte
+		want   []byte
+	}{
+		{
+			name: "levels",
+			enc:  &rle.Encoding{BitWidth: 1},
+			decode: func(e *rle.Encoding, src []byte) ([]byte, error) {
+				return e.DecodeLevels(nil, src)
+			},
+			src:  []byte{0x00, 0x08, 0x01},
+			want: []byte{1, 1, 1, 1},
+		},
+		{
+			name: "int32",
+			enc:  &rle.Encoding{BitWidth: 16},
+			decode: func(e *rle.Encoding, src []byte) ([]byte, error) {
+				v, err := e.DecodeInt32(nil, src)
+				return unsafecast.Slice[byte](v), err
+			},
+			src:  []byte{0x00, 0x08, 0x07, 0x00},
+			want: unsafecast.Slice[byte]([]int32{7, 7, 7, 7}),
+		},
+		{
+			name: "boolean",
+			enc:  &rle.Encoding{BitWidth: 1},
+			decode: func(e *rle.Encoding, src []byte) ([]byte, error) {
+				return e.DecodeBoolean(nil, src)
+			},
+			src:  []byte{0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0xFF},
+			want: []byte{0xFF},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.decode(tc.enc, tc.src)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("produced %d bytes, want %d (got=%v)", len(got), len(tc.want), got)
+			}
+			assertEqualBytes(t, tc.want, got)
+		})
+	}
+}
+
 func testEncoding(t *testing.T, e encoding.Encoding) {
 	for _, test := range [...]struct {
 		scenario string
