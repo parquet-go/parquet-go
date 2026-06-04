@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -21,6 +22,7 @@ func TestPage(t *testing.T) {
 	t.Run("DOUBLE", testPageDouble)
 	t.Run("BYTE_ARRAY", testPageByteArray)
 	t.Run("FIXED_LEN_BYTE_ARRAY", testPageFixedLenByteArray)
+	t.Run("UUID", testPageUUID)
 }
 
 func testPageBoolean(t *testing.T) {
@@ -299,6 +301,52 @@ func testPageFixedLenByteArray(t *testing.T) {
 				values := make([]byte, 3*3)
 				n, err := r.(parquet.FixedLenByteArrayReader).ReadFixedLenByteArrays(values)
 				return values[:3*n], err
+			},
+		})
+	})
+}
+
+func testPageUUID(t *testing.T) {
+	schema := parquet.NewSchema("test", parquet.Group{
+		"Value": parquet.UUID(),
+	})
+
+	t.Run("be128", func(t *testing.T) {
+		testPage(t, schema, pageTest{
+			write: func(w parquet.ValueWriter) (any, error) {
+				values := [][16]byte{
+					{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F},
+					{0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F},
+					{0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00},
+				}
+				n, err := w.(parquet.BE128Writer).WriteBE128s(values)
+				return values[:n], err
+			},
+
+			read: func(r parquet.ValueReader) (any, error) {
+				values := make([][16]byte, 3)
+				n, err := r.(parquet.BE128Reader).ReadBE128s(values)
+				return values[:n], err
+			},
+		})
+	})
+
+	t.Run("uuid", func(t *testing.T) {
+		testPage(t, schema, pageTest{
+			write: func(w parquet.ValueWriter) (any, error) {
+				values := []uuid.UUID{
+					uuid.MustParse("00010203-0405-0607-0809-0a0b0c0d0e0f"),
+					uuid.MustParse("10111213-1415-1617-1819-1a1b1c1d1e1f"),
+					uuid.MustParse("ffeeddcc-bbaa-9988-7766-554433221100"),
+				}
+				n, err := w.(parquet.UUIDWriter).WriteUUIDs(values)
+				return values[:n], err
+			},
+
+			read: func(r parquet.ValueReader) (any, error) {
+				values := make([]uuid.UUID, 3)
+				n, err := r.(parquet.UUIDReader).ReadUUIDs(values)
+				return values[:n], err
 			},
 		})
 	})
