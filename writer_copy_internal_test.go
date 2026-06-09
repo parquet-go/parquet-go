@@ -565,3 +565,192 @@ func BenchmarkWriteRowGroupReencodeWide(b *testing.B) {
 	b.Run("rowpath", func(b *testing.B) { run(b, false) })
 	b.Run("L3", func(b *testing.B) { run(b, true) })
 }
+
+// buildIDFile writes a single-row-group file whose rows are sorted by id. The
+// caller must pass ids in ascending order. Other fields are derived from id so
+// that the fully-sorted sequence of rows is uniquely determined by the id set.
+func buildIDFile(t *testing.T, ids []int64) *File {
+	t.Helper()
+	rows := make([]copyTestRow, len(ids))
+	for i, id := range ids {
+		rows[i] = copyTestRow{ID: id, Name: fmt.Sprintf("n%d", id%13), Val: float64(id)}
+	}
+	return writeCopyTestFile(t, rows, SortingWriterConfig(SortingColumns(Ascending("id"))))
+}
+
+func idSeq(start, end int64) []int64 {
+	out := make([]int64, 0, end-start+1)
+	for v := start; v <= end; v++ {
+		out = append(out, v)
+	}
+	return out
+}
+
+func idStride(start, end, step int64) []int64 {
+	var out []int64
+	for v := start; v <= end; v += step {
+		out = append(out, v)
+	}
+	return out
+}
+
+// TestWriteRowGroupMergeRangePatterns exercises the segment-splitting logic for a
+// variety of overlapping/non-overlapping range mixes. For each pattern it
+// verifies that the optimized merge (L0 copy of non-overlapping single-row-group
+// segments + heap merge of overlapping segments) produces exactly the same
+// globally-sorted rows as the pure row-path reference, and that the number of
+// column chunks copied matches the expected number of single-row-group segments.
+func TestWriteRowGroupMergeRangePatterns(t *testing.T) {
+	const numColumns = 3 // id, name, val
+
+	patterns := []struct {
+		name string
+		// each entry is one source file's ascending id list; files overlap iff
+		// their [min,max] ranges intersect.
+		idLists [][]int64
+		// number of single-row-group (non-overlapping) segments, each of which is
+		// copied verbatim (numColumns chunks each).
+		wantCopiedSegments int
+	}{
+		{
+			name:               "non_overlapping",
+			idLists:            [][]int64{idSeq(0, 99), idSeq(100, 199), idSeq(200, 299)},
+			wantCopiedSegments: 3,
+		},
+		{
+			name:               "all_overlapping",
+			idLists:            [][]int64{idStride(0, 299, 3), idStride(1, 299, 3), idStride(2, 299, 3)},
+			wantCopiedSegments: 0,
+		},
+		{
+			name: "mixed",
+			idLists: [][]int64{
+				idSeq(0, 49),          // isolated  -> copied
+				idStride(100, 198, 2), // overlaps next
+				idStride(101, 199, 2), // overlaps prev -> merged
+				idSeq(300, 349),       // isolated  -> copied
+			},
+			wantCopiedSegments: 2,
+		},
+		{
+			name: "two_overlapping_pairs",
+			idLists: [][]int64{
+				idStride(0, 98, 2), idStride(1, 99, 2), // pair -> merged
+				idStride(200, 298, 2), idStride(201, 299, 2), // pair -> merged
+			},
+			wantCopiedSegments: 0,
+		},
+		{
+			name: "isolated_then_triple_overlap",
+			idLists: [][]int64{
+				idSeq(0, 99),                                                        // isolated -> copied
+				idStride(200, 299, 3), idStride(201, 299, 3), idStride(202, 299, 3), // triple -> merged
+			},
+			wantCopiedSegments: 1,
+		},
+	}
+
+	for _, p := range patterns {
+		t.Run(p.name, func(t *testing.T) {
+			files := make([]*File, len(p.idLists))
+			var allIDs []int64
+			for i, ids := range p.idLists {
+				files[i] = buildIDFile(t, ids)
+				allIDs = append(allIDs, ids...)
+			}
+			slices.Sort(allIDs)
+			expected := make([]copyTestRow, len(allIDs))
+			for i, id := range allIDs {
+				expected[i] = copyTestRow{ID: id, Name: fmt.Sprintf("n%d", id%13), Val: float64(id)}
+			}
+
+			writeMerged := func(fastPaths bool) ([]byte, int64) {
+				rgs := make([]RowGroup, len(files))
+				for i, f := range files {
+					rgs[i] = f.RowGroups()[0]
+				}
+				merged, err := MergeRowGroups(rgs, SortingRowGroupConfig(SortingColumns(Ascending("id"))))
+				if err != nil {
+					t.Fatalf("MergeRowGroups: %v", err)
+				}
+				defer func(c, r bool) { disableWriteCopy = c; disableWriteReencode = r }(disableWriteCopy, disableWriteReencode)
+				disableWriteCopy = !fastPaths
+				disableWriteReencode = !fastPaths
+
+				before := copyPathCounter.Load()
+				var dst bytes.Buffer
+				w := NewGenericWriter[copyTestRow](&dst, SortingWriterConfig(SortingColumns(Ascending("id"))))
+				if _, err := w.WriteRowGroup(merged); err != nil {
+					t.Fatalf("WriteRowGroup: %v", err)
+				}
+				if err := w.Close(); err != nil {
+					t.Fatalf("Close: %v", err)
+				}
+				return dst.Bytes(), copyPathCounter.Load() - before
+			}
+
+			ref, _ := writeMerged(false)
+			opt, copied := writeMerged(true)
+
+			gotRef := readCopyTestRows(t, ref, len(expected))
+			gotOpt := readCopyTestRows(t, opt, len(expected))
+
+			if !reflect.DeepEqual(gotRef, expected) {
+				t.Fatalf("reference (row-path) output is not globally sorted as expected (%d rows)", len(gotRef))
+			}
+			if !reflect.DeepEqual(gotOpt, expected) {
+				t.Fatalf("optimized output differs from expected globally-sorted rows (%d rows)", len(gotOpt))
+			}
+			if want := int64(p.wantCopiedSegments * numColumns); copied != want {
+				t.Fatalf("copied column chunks = %d, want %d (%d single-row-group segments * %d columns)",
+					copied, want, p.wantCopiedSegments, numColumns)
+			}
+		})
+	}
+}
+
+// TestWriteRowGroupMergeDropDuplicates verifies that when duplicate rows are
+// dropped, the merge is NOT split for verbatim copy (dedup spans segment
+// boundaries) and the output is correctly deduplicated and sorted.
+func TestWriteRowGroupMergeDropDuplicates(t *testing.T) {
+	// Overlapping ranges that also share ids 50..99.
+	fileA := buildIDFile(t, idSeq(0, 99))
+	fileB := buildIDFile(t, idSeq(50, 149))
+
+	merged, err := MergeRowGroups(
+		[]RowGroup{fileA.RowGroups()[0], fileB.RowGroups()[0]},
+		SortingRowGroupConfig(SortingColumns(Ascending("id")), DropDuplicatedRows(true)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := copyPathCounter.Load()
+	var dst bytes.Buffer
+	w := NewGenericWriter[copyTestRow](&dst, SortingWriterConfig(SortingColumns(Ascending("id"))))
+	if _, err := w.WriteRowGroup(merged); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if copied := copyPathCounter.Load() - before; copied != 0 {
+		t.Fatalf("expected no verbatim copy when dropping duplicates, but %d chunks were copied", copied)
+	}
+
+	out, err := OpenFile(bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Deduplicated union of [0,99] and [50,149] is [0,149].
+	if got := out.NumRows(); got != 150 {
+		t.Fatalf("deduplicated row count = %d, want 150", got)
+	}
+	got := readCopyTestRows(t, dst.Bytes(), 150)
+	for i, r := range got {
+		if r.ID != int64(i) {
+			t.Fatalf("row %d has id %d, want %d (expected deduplicated 0..149 sorted)", i, r.ID, i)
+		}
+	}
+}
