@@ -281,10 +281,37 @@ Two parts:
 
 Decision on the transparency invariant: row-group partitioning *below*
 `MaxRowsPerRowGroup` is treated as an unspecified internal (the same class as
-page boundaries/sizing, which the invariant already permits to differ). Emitting
-one output row group per copyable segment preserves all rows, their order, and
-correct per-row-group statistics/indexes; only the number of row groups (each
-still ≤ `MaxRowsPerRowGroup`) may differ from the re-encode path.
+page boundaries/sizing, which the invariant already permits to differ). Output
+row groups preserve all rows, their order, and correct per-row-group
+statistics/indexes; only the number of row groups (each still ≤
+`MaxRowsPerRowGroup`) may differ from the re-encode path.
+
+Packing toward `MaxRowsPerRowGroup`: `MaxRowsPerRowGroup` is a maximum, not an
+exact target, and undershooting is fine. Consecutive non-overlapping
+(file-backed) segments are greedily packed into output row groups up to the
+limit (`writeSegmentsPacked`):
+
+- a **single-segment batch** is written through the normal path, preserving the
+  verbatim **L0** copy for the common 1:1 rewrite (each source row group already
+  ≈ the target size);
+- a **multi-segment batch** (many small inputs being consolidated) is written as
+  one output row group via **L3** column-by-column re-encode
+  (`packSegmentsByColumn`) — undershooting the limit rather than emitting one
+  tiny row group per source.
+
+Why multi-segment packing can't stay L0: a verbatim copy writes a *complete*
+column chunk, so it cannot append a second source's pages to a partially-filled
+chunk. Consolidating K sources into one output chunk therefore requires
+value-level writing (L3) for the whole batch. For dictionary-encoded columns
+this is unavoidable regardless (each source chunk has its own dictionary, which
+cannot be concatenated); page-concatenation of non-dictionary columns is a
+possible future refinement on top.
+
+The reverse case — a source row group *larger* than `MaxRowsPerRowGroup` — cannot
+be copied or column-packed at all, because column page boundaries do not align
+at a common interior row, so there is nowhere to split without decoding a page.
+Both L0 and L3 demote such a row group to the row path, which splits it
+correctly.
 
 Guards that keep the change scoped and correct:
 - `mergedRowGroup` (overlapping heap merge) returns nil segments — it is never

@@ -374,7 +374,10 @@ func TestWriteRowGroupCopyMergeNonOverlapping(t *testing.T) {
 	before := copyPathCounter.Load()
 
 	var dst bytes.Buffer
-	w := NewGenericWriter[copyTestRow](&dst, writerSorting)
+	// MaxRowsPerRowGroup equal to each source segment's row count so the two
+	// non-overlapping segments are not packed together and each takes the
+	// verbatim L0 copy path.
+	w := NewGenericWriter[copyTestRow](&dst, writerSorting, MaxRowsPerRowGroup(500))
 	if _, err := w.WriteRowGroup(merged); err != nil {
 		t.Fatalf("WriteRowGroup(merged): %v", err)
 	}
@@ -586,14 +589,6 @@ func idSeq(start, end int64) []int64 {
 	return out
 }
 
-func idStride(start, end, step int64) []int64 {
-	var out []int64
-	for v := start; v <= end; v += step {
-		out = append(out, v)
-	}
-	return out
-}
-
 // TestWriteRowGroupMergeRangePatterns exercises the segment-splitting logic for a
 // variety of overlapping/non-overlapping range mixes. For each pattern it
 // verifies that the optimized merge (L0 copy of non-overlapping single-row-group
@@ -602,59 +597,59 @@ func idStride(start, end, step int64) []int64 {
 // column chunks copied matches the expected number of single-row-group segments.
 func TestWriteRowGroupMergeRangePatterns(t *testing.T) {
 	const numColumns = 3 // id, name, val
+	// All source files have the same row count and the destination uses that as
+	// MaxRowsPerRowGroup, so non-overlapping segments are never packed together
+	// (any two would exceed the limit). Each isolated segment therefore takes the
+	// verbatim L0 copy path, letting the copied-chunk count verify the
+	// segmentation decision directly. Packing is covered separately.
+	const rowsPerFile = 64
+
+	// spec describes one source file: count ids starting at start, spaced by step
+	// (so files overlap iff their [start, start+(count-1)*step] ranges intersect,
+	// while staying unique within a pattern via disjoint step residues).
+	type spec struct{ start, step int64 }
 
 	patterns := []struct {
-		name string
-		// each entry is one source file's ascending id list; files overlap iff
-		// their [min,max] ranges intersect.
-		idLists [][]int64
-		// number of single-row-group (non-overlapping) segments, each of which is
-		// copied verbatim (numColumns chunks each).
-		wantCopiedSegments int
+		name               string
+		files              []spec
+		wantCopiedSegments int // isolated single-row-group segments (numColumns chunks each)
 	}{
 		{
 			name:               "non_overlapping",
-			idLists:            [][]int64{idSeq(0, 99), idSeq(100, 199), idSeq(200, 299)},
+			files:              []spec{{0, 1}, {100, 1}, {200, 1}},
 			wantCopiedSegments: 3,
 		},
 		{
 			name:               "all_overlapping",
-			idLists:            [][]int64{idStride(0, 299, 3), idStride(1, 299, 3), idStride(2, 299, 3)},
+			files:              []spec{{0, 3}, {1, 3}, {2, 3}},
 			wantCopiedSegments: 0,
 		},
 		{
-			name: "mixed",
-			idLists: [][]int64{
-				idSeq(0, 49),          // isolated  -> copied
-				idStride(100, 198, 2), // overlaps next
-				idStride(101, 199, 2), // overlaps prev -> merged
-				idSeq(300, 349),       // isolated  -> copied
-			},
+			name:               "mixed",
+			files:              []spec{{0, 1}, {100, 2}, {101, 2}, {300, 1}}, // iso, overlap-pair, iso
 			wantCopiedSegments: 2,
 		},
 		{
-			name: "two_overlapping_pairs",
-			idLists: [][]int64{
-				idStride(0, 98, 2), idStride(1, 99, 2), // pair -> merged
-				idStride(200, 298, 2), idStride(201, 299, 2), // pair -> merged
-			},
+			name:               "two_overlapping_pairs",
+			files:              []spec{{0, 2}, {1, 2}, {200, 2}, {201, 2}},
 			wantCopiedSegments: 0,
 		},
 		{
-			name: "isolated_then_triple_overlap",
-			idLists: [][]int64{
-				idSeq(0, 99),                                                        // isolated -> copied
-				idStride(200, 299, 3), idStride(201, 299, 3), idStride(202, 299, 3), // triple -> merged
-			},
+			name:               "isolated_then_triple_overlap",
+			files:              []spec{{0, 1}, {200, 3}, {201, 3}, {202, 3}},
 			wantCopiedSegments: 1,
 		},
 	}
 
 	for _, p := range patterns {
 		t.Run(p.name, func(t *testing.T) {
-			files := make([]*File, len(p.idLists))
+			files := make([]*File, len(p.files))
 			var allIDs []int64
-			for i, ids := range p.idLists {
+			for i, s := range p.files {
+				ids := make([]int64, rowsPerFile)
+				for j := range ids {
+					ids[j] = s.start + int64(j)*s.step
+				}
 				files[i] = buildIDFile(t, ids)
 				allIDs = append(allIDs, ids...)
 			}
@@ -679,7 +674,7 @@ func TestWriteRowGroupMergeRangePatterns(t *testing.T) {
 
 				before := copyPathCounter.Load()
 				var dst bytes.Buffer
-				w := NewGenericWriter[copyTestRow](&dst, SortingWriterConfig(SortingColumns(Ascending("id"))))
+				w := NewGenericWriter[copyTestRow](&dst, SortingWriterConfig(SortingColumns(Ascending("id"))), MaxRowsPerRowGroup(rowsPerFile))
 				if _, err := w.WriteRowGroup(merged); err != nil {
 					t.Fatalf("WriteRowGroup: %v", err)
 				}
@@ -794,5 +789,65 @@ func TestWriteRowGroupCopyHonorsSmallerMaxRows(t *testing.T) {
 	got := readCopyTestRows(t, dst.Bytes(), len(rows))
 	if !reflect.DeepEqual(got, rows) {
 		t.Fatal("round-tripped rows differ after maxRows split")
+	}
+}
+
+// TestWriteRowGroupMergePacksToMaxRows verifies that merging many small
+// non-overlapping row groups packs them into output row groups up to
+// MaxRowsPerRowGroup (undershooting, never exceeding) rather than emitting one
+// tiny output row group per source segment, while preserving data and order.
+func TestWriteRowGroupMergePacksToMaxRows(t *testing.T) {
+	// 20 disjoint files of 100 rows each (ids 0..1999).
+	const numFiles, perFile = 20, 100
+	files := make([]*File, numFiles)
+	for i := range files {
+		files[i] = buildIDFile(t, idSeq(int64(i*perFile), int64(i*perFile+perFile-1)))
+	}
+
+	write := func(maxRows int64) *File {
+		rgs := make([]RowGroup, numFiles)
+		for i, f := range files {
+			rgs[i] = f.RowGroups()[0]
+		}
+		merged, err := MergeRowGroups(rgs, SortingRowGroupConfig(SortingColumns(Ascending("id"))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dst bytes.Buffer
+		w := NewGenericWriter[copyTestRow](&dst, SortingWriterConfig(SortingColumns(Ascending("id"))), MaxRowsPerRowGroup(maxRows))
+		if _, err := w.WriteRowGroup(merged); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		out, err := OpenFile(bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Verify data and global order.
+		got := readCopyTestRows(t, dst.Bytes(), numFiles*perFile)
+		for i, r := range got {
+			if r.ID != int64(i) {
+				t.Fatalf("row %d has id %d, want %d", i, r.ID, i)
+			}
+		}
+		return out
+	}
+
+	// Large limit: all 2000 rows pack into a single output row group.
+	if out := write(100000); len(out.RowGroups()) != 1 {
+		t.Fatalf("with large MaxRowsPerRowGroup: output row groups = %d, want 1 (packed)", len(out.RowGroups()))
+	}
+
+	// Limit of 500: 2000 rows pack into 4 output row groups, none exceeding 500.
+	out := write(500)
+	if got := len(out.RowGroups()); got != 4 {
+		t.Fatalf("with MaxRowsPerRowGroup=500: output row groups = %d, want 4", got)
+	}
+	for i, rg := range out.RowGroups() {
+		if rg.NumRows() > 500 {
+			t.Fatalf("row group %d has %d rows, exceeds MaxRowsPerRowGroup=500", i, rg.NumRows())
+		}
 	}
 }

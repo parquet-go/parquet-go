@@ -31,16 +31,13 @@ var reencodePathCounter atomic.Int64
 // baseline.
 var disableWriteReencode bool
 
-// reencodableRowGroup reports whether rowGroup can be written via the L3
-// column-oriented re-encode path: every column must unwrap to a file-backed
-// chunk (which guarantees reading column-wise preserves row order — this
-// excludes overlapping heap merges, whose order depends on cross-column row
-// interleaving), and the source row count must fit the configured row group
-// size (otherwise the row path's row-group splitting would differ).
-func (w *Writer) reencodableRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool) {
-	if disableWriteReencode {
-		return nil, false
-	}
+// fileBackedRowGroup reports whether every column of rowGroup unwraps to a
+// file-backed chunk and the row count fits the configured row group size.
+// File-backed columns guarantee that reading column-wise preserves row order
+// (this excludes overlapping heap merges, whose order depends on cross-column
+// row interleaving); the size check ensures column-wise writing does not produce
+// a row group larger than the row path would.
+func (w *Writer) fileBackedRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool) {
 	dst := w.writer.currentRowGroup.columns
 	columns := rowGroup.ColumnChunks()
 	if len(columns) == 0 || len(columns) != len(dst) {
@@ -55,6 +52,112 @@ func (w *Writer) reencodableRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool) {
 		return nil, false
 	}
 	return columns, true
+}
+
+// reencodableRowGroup reports whether rowGroup can be written via the L3
+// column-oriented re-encode path.
+func (w *Writer) reencodableRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool) {
+	if disableWriteReencode {
+		return nil, false
+	}
+	return w.fileBackedRowGroup(rowGroup)
+}
+
+// writeSegmentsPacked writes the segments of a split merge, packing consecutive
+// file-backed (non-overlapping) segments into output row groups up to the
+// configured MaxRowsPerRowGroup. A single-segment batch is written through the
+// normal path (preserving the verbatim L0 fast path for the 1:1 case); a
+// multi-segment batch is consolidated column-by-column via L3 into one output
+// row group, undershooting MaxRowsPerRowGroup as needed. Non-file-backed
+// segments (overlapping heap merges) or segments larger than the limit flush the
+// pending batch and are written individually through the row path.
+func (w *Writer) writeSegmentsPacked(segments []RowGroup, schema *Schema, sortingColumns []SortingColumn) (int64, error) {
+	maxRows := w.writer.currentRowGroup.maxRows
+
+	var (
+		total       int64
+		pending     []RowGroup
+		pendingRows int64
+	)
+
+	flushPending := func() error {
+		var (
+			n   int64
+			err error
+		)
+		switch len(pending) {
+		case 0:
+			return nil
+		case 1:
+			n, err = w.WriteRowGroup(pending[0])
+		default:
+			n, err = w.packSegmentsByColumn(pending, schema, sortingColumns)
+		}
+		total += n
+		pending = pending[:0]
+		pendingRows = 0
+		return err
+	}
+
+	for _, seg := range segments {
+		if _, ok := w.fileBackedRowGroup(seg); ok {
+			if pendingRows > 0 && pendingRows+seg.NumRows() > maxRows {
+				if err := flushPending(); err != nil {
+					return total, err
+				}
+			}
+			pending = append(pending, seg)
+			pendingRows += seg.NumRows()
+			continue
+		}
+		if err := flushPending(); err != nil {
+			return total, err
+		}
+		n, err := w.WriteRowGroup(seg)
+		total += n
+		if err != nil {
+			return total, err
+		}
+	}
+	if err := flushPending(); err != nil {
+		return total, err
+	}
+	return total, nil
+}
+
+// packSegmentsByColumn consolidates several file-backed segments into a single
+// output row group by re-encoding each column across all segments in order.
+func (w *Writer) packSegmentsByColumn(segments []RowGroup, schema *Schema, sortingColumns []SortingColumn) (int64, error) {
+	if err := w.writer.flush(); err != nil {
+		return 0, err
+	}
+	dst := w.writer.currentRowGroup.columns
+	w.configureBloomFiltersForSegments(segments)
+	for _, seg := range segments {
+		columns := seg.ColumnChunks()
+		for i := range columns {
+			if err := copyColumnValues(dst[i], columns[i]); err != nil {
+				return 0, err
+			}
+		}
+	}
+	reencodePathCounter.Add(1)
+	return w.writer.writeRowGroup(w.writer.currentRowGroup, schema, sortingColumns)
+}
+
+// configureBloomFiltersForSegments sizes each column's bloom filter for the
+// total number of values across all segments being packed together.
+func (w *Writer) configureBloomFiltersForSegments(segments []RowGroup) {
+	for i, c := range w.writer.currentRowGroup.columns {
+		if c.columnFilter == nil {
+			continue
+		}
+		var total int64
+		for _, seg := range segments {
+			total += seg.ColumnChunks()[i].NumValues()
+		}
+		c.resizeBloomFilter(total)
+	}
 }
 
 // writeRowGroupByColumn re-encodes each source column chunk into its destination

@@ -549,15 +549,7 @@ func (w *Writer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 	// so the copyable ones take the fast path. Row group sizing below
 	// MaxRowsPerRowGroup is an unspecified internal; data and order are preserved.
 	if segments, ok := w.splittableCopyableSegments(rowGroup); ok {
-		var total int64
-		for _, seg := range segments {
-			n, err := w.WriteRowGroup(seg)
-			if err != nil {
-				return total, err
-			}
-			total += n
-		}
-		return total, nil
+		return w.writeSegmentsPacked(segments, rowGroup.Schema(), rowGroup.SortingColumns())
 	}
 	if err := w.writer.flush(); err != nil {
 		return 0, err
