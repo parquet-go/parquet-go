@@ -1168,12 +1168,12 @@ func TestJSONRawMessageNumberConversions(t *testing.T) {
 func TestJSONRawMessageFixedLenByteArray(t *testing.T) {
 	type ReadRecord struct {
 		ID   int64    `parquet:"id"`
-		UUID [16]byte `parquet:"uuid,fixedlenbytearray"`
+		UUID [16]byte `parquet:"uuid"`
 	}
 
 	type WriteRecord struct {
 		ID   int64           `parquet:"id"`
-		UUID json.RawMessage `parquet:"uuid,fixedlenbytearray"`
+		UUID json.RawMessage `parquet:"uuid"`
 	}
 
 	schema := SchemaOf(ReadRecord{})
