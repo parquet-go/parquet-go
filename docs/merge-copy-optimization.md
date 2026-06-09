@@ -294,24 +294,97 @@ Guards that keep the change scoped and correct:
 - Splitting only happens when at least one segment is copy-eligible, so pure
   re-encode merges keep their existing output structure.
 
-### Increment 4 — L2/L3 partial layers (DEFERRED, optional)
+### Increment 4 — L2/L3 partial layers (L3 DONE, L2 DESIGNED)
 
-Deliberately not implemented. The config-mismatch case (different codec or
-encoding) already produces correct output via the row-oriented re-encode
-fallback; L2/L3 would only make it faster. The plan marked this increment
-optional, and L2's raw-page recompression carries file-corruption risk
-(notably the DataPageV2 layout, below) that is disproportionate to a marginal
-speed gain on a non-primary case. Documented mechanism for a future, deliberate
-implementation:
+The config-mismatch case already produces correct output via the row-oriented
+re-encode fallback; L2/L3 only make it faster. **L3 is implemented** (see below).
+L2 is designed but not implemented; it is worth doing for codec-migration
+workloads (e.g. recompress an existing Snappy file to Zstd) because it skips
+value decode and re-encode, paying only decompress + recompress.
 
-- **L2 (decompress, recompress, skip decode)** for encoding-matches /
-  codec-differs (e.g. recompress Snappy→Zstd): iterate raw pages, decompress the
-  body, recompress with the destination codec, rewrite the page header
-  (`CompressedPageSize`, CRC), copy statistics, rebuild the offset index.
-  Caveat: DataPageV2 stores repetition/definition levels *uncompressed* ahead of
-  the values, so only the values portion may be recompressed
-  (`{Repetition,Definition}LevelsByteLength`); the simplest safe first cut would
-  handle DataPageV1 only and demote V2.
-- **L3 (decode, skip row assembly)** mainly buys per-column parallelism over the
-  re-encode path (the payoff for `WriteColumnConcurrency` on mismatched configs);
-  lower priority than L2.
+#### L2 — transcode compression, skip value decode
+
+Fires when, per column chunk: physical type matches, **encoding matches**, data
+page version matches, no encryption, no writer-requested bloom filter, source
+column + offset index present, and the **codec differs** from the writer's
+configured codec (if the codec also matched, that is L0).
+
+Per-page transcode (validated against the decode path in `column.go`):
+
+- **DataPage (v1) and DictionaryPage:** the whole body is one compressed blob.
+  `decompressed = srcCodec.Decode(body)`; `newBody = dstCodec.Encode(decompressed)`.
+- **DataPageV2:** the body is
+  `[rep levels: RepetitionLevelsByteLength bytes][def levels:
+  DefinitionLevelsByteLength bytes][compressed values]`; the levels are
+  **uncompressed**. So `levelsLen = repLen + defLen`; keep `body[:levelsLen]`
+  verbatim, recompress only `body[levelsLen:]`:
+  `newBody = body[:levelsLen] ++ dstCodec.Encode(srcCodec.Decode(body[levelsLen:]))`.
+  Respect `IsCompressed` (false ⇒ source values are raw).
+- Rewrite the page header: new `CompressedPageSize`, recomputed CRC;
+  `UncompressedPageSize`, encoding, levels lengths, num values, and page
+  statistics are unchanged.
+
+Because the codec change alters compressed sizes, L2 cannot stream a contiguous
+range like L0. It transcodes page-by-page into a staging buffer and rebuilds the
+**offset index** from the new per-page compressed sizes. The **column index** and
+chunk statistics are codec-independent, so they are copied verbatim from the
+source (as in L0). `TotalCompressedSize` is recomputed.
+
+Building blocks already present: a raw page iterator can be built by reading the
+chunk section `[baseOffset, +TotalCompressedSize)` and decoding each
+`format.PageHeader` followed by `CompressedPageSize` body bytes (the same seam
+`FilePages.readPage` uses before decode); `compress.Codec.Encode/Decode` for the
+transcode; `writerBuffers.crc32` for the CRC; the thrift encoder for the header.
+
+Integration: extend the per-chunk predicate to return a tier (L0 / L2 / none).
+L2 stages transcoded data pages in the column's page buffer (reintroducing the
+buffering that L0 avoids — acceptable here since L2 is already CPU-bound on
+(de)compression) plus a transcoded dictionary page, with a prebuilt column index;
+`writeRowGroup` writes them much like the pre-streaming L0 path did.
+
+Risk: page-layout surgery (esp. the V2 levels boundary), CRC, and offset-index
+rebuild — all file-corruption-class if wrong. Mitigation: round-trip tests per
+page version and per codec, plus a property test comparing L2 output bytes'
+decoded values against the source.
+
+Expected gain: skips value decode + re-encode but keeps (de)compression, so
+~2–4× over full re-encode for a codec change (vs L0's ~350×, which also skips
+(de)compression).
+
+#### L3 — re-encode column-by-column, skip row assembly (DONE)
+
+Implemented in `writer_reencode.go`. When a single file-backed source row group's
+schema matches the writer but it cannot be copied verbatim (codec/encoding/etc.
+differ), `WriteRowGroup` re-encodes it **column-by-column** instead of the
+row-oriented fallback: it reads each column's values directly
+(`ColumnChunkValueReader`) and feeds them to the column writer's
+`WriteRowValues`, which re-encodes, re-compresses, computes statistics, and
+populates bloom filters exactly as the row path would. This skips the wasteful
+round-trip of interleaving columns into `Row` objects and immediately tearing
+them back apart.
+
+Fires when every column unwraps to a file-backed chunk (guaranteeing that
+reading column-wise preserves row order — this excludes overlapping heap merges,
+whose order depends on cross-column interleaving) and the source row count fits
+the configured row group size. Output is data-identical to the row path (only
+config-unspecified page boundaries may differ).
+
+Measured (200k rows, codec differs from source so L0 can't fire, → `io.Discard`):
+
+| workload | row path | L3 | speedup | L3 allocs |
+|---|---|---|---|---|
+| 6 cols, uncompressed dest | ~23.4 ms | ~12.3 ms | **1.90×** | 6× less |
+| 6 cols, Zstd dest | ~33.6 ms | ~23.0 ms | **1.46×** | 4× less |
+| 24 cols, Zstd dest | ~76.8 ms | ~55.0 ms | **1.40×** | 2× less |
+
+The uncompressed case isolates the win (no compression cost in either arm): the
+entire ~1.9× and the 6× allocation drop come purely from avoiding the row
+round-trip. With compression the relative speedup shrinks (compression is a
+fixed cost in both paths) but remains a real wall-clock saving.
+
+Column concurrency was prototyped on top of L3 (the per-column re-encode is
+genuinely CPU-heavy, unlike L0): it added a further ~1.2–1.7× depending on
+workload, but its benefit is workload-dependent and its peak memory scales with
+the worker count (decompressed column working sets held concurrently). It was
+left out for now to keep L3 simple and allocation-light; it can be added later as
+an opt-in `WriterConfig` knob if a concrete workload justifies it.

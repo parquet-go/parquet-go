@@ -273,7 +273,7 @@ func makeBenchRows(n int) []benchRow {
 	return rows
 }
 
-func benchmarkWriteRowGroupRewrite(b *testing.B, disableCopy bool) {
+func benchmarkWriteRowGroupRewrite(b *testing.B, baseline bool) {
 	const numRows = 200_000
 	rows := makeBenchRows(numRows)
 
@@ -291,8 +291,11 @@ func benchmarkWriteRowGroupRewrite(b *testing.B, disableCopy bool) {
 	}
 	rowGroups := file.RowGroups()
 
-	defer func(prev bool) { disableWriteCopy = prev }(disableWriteCopy)
-	disableWriteCopy = disableCopy
+	// The baseline is the pure row-oriented path: disable both fast paths so it
+	// measures full decode + row assembly + re-encode.
+	defer func(c, r bool) { disableWriteCopy = c; disableWriteReencode = r }(disableWriteCopy, disableWriteReencode)
+	disableWriteCopy = baseline
+	disableWriteReencode = baseline
 
 	b.ReportAllocs()
 	b.SetBytes(int64(src.Len()))
@@ -405,4 +408,160 @@ func TestWriteRowGroupCopyMergeNonOverlapping(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal("merged+copied rows differ from expected")
 	}
+}
+
+// TestWriteRowGroupReencodeMatchesRowPath verifies that the L3 column-oriented
+// re-encode produces the same data as the row-oriented fallback, and that it
+// actually fires (config differs from source, so L0 cannot apply).
+func TestWriteRowGroupReencodeMatchesRowPath(t *testing.T) {
+	rows := makeCopyTestRows(5000)
+	src := writeCopyTestFile(t, rows, Compression(&Snappy))
+
+	rewrite := func(reencode bool) []byte {
+		defer func(prev bool) { disableWriteReencode = prev }(disableWriteReencode)
+		disableWriteReencode = !reencode
+		var dst bytes.Buffer
+		// Codec differs from source (Snappy -> Zstd) so L0 cannot fire.
+		w := NewGenericWriter[copyTestRow](&dst, Compression(&Zstd))
+		for _, rg := range src.RowGroups() {
+			if _, err := w.WriteRowGroup(rg); err != nil {
+				t.Fatalf("WriteRowGroup(reencode=%v): %v", reencode, err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return dst.Bytes()
+	}
+
+	before := reencodePathCounter.Load()
+	l3 := rewrite(true)
+	if reencodePathCounter.Load() == before {
+		t.Fatal("expected the L3 re-encode path to fire")
+	}
+	rowPath := rewrite(false)
+
+	gotL3 := readCopyTestRows(t, l3, len(rows))
+	gotRow := readCopyTestRows(t, rowPath, len(rows))
+	if !reflect.DeepEqual(gotL3, rows) {
+		t.Fatal("L3 output differs from source data")
+	}
+	if !reflect.DeepEqual(gotL3, gotRow) {
+		t.Fatal("L3 output differs from row-path output")
+	}
+}
+
+// BenchmarkWriteRowGroupReencodePaths compares the L3 column-oriented re-encode
+// against the row-oriented fallback. The codec differs from the source (Snappy)
+// so L0 cannot fire. The "uncompressed" dest isolates the row round-trip cost
+// (no compression in the write); the "zstd" dest reflects a realistic codec
+// migration.
+func BenchmarkWriteRowGroupReencodePaths(b *testing.B) {
+	rows := makeBenchRows(200_000)
+	var src bytes.Buffer
+	sw := NewGenericWriter[benchRow](&src, Compression(&Snappy), MaxRowsPerRowGroup(50_000))
+	if _, err := sw.Write(rows); err != nil {
+		b.Fatal(err)
+	}
+	if err := sw.Close(); err != nil {
+		b.Fatal(err)
+	}
+	file, err := OpenFile(bytes.NewReader(src.Bytes()), int64(src.Len()))
+	if err != nil {
+		b.Fatal(err)
+	}
+	rowGroups := file.RowGroups()
+
+	run := func(b *testing.B, compression WriterOption, reencode bool) {
+		defer func(d bool) { disableWriteReencode = d }(disableWriteReencode)
+		disableWriteReencode = !reencode
+		b.ReportAllocs()
+		b.SetBytes(int64(src.Len()))
+		b.ResetTimer()
+		for b.Loop() {
+			w := NewGenericWriter[benchRow](io.Discard, compression, MaxRowsPerRowGroup(50_000))
+			for _, rg := range rowGroups {
+				if _, err := w.WriteRowGroup(rg); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := w.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	for _, c := range []struct {
+		name string
+		opt  WriterOption
+	}{
+		{"uncompressed", Compression(&Uncompressed)},
+		{"zstd", Compression(&Zstd)},
+	} {
+		b.Run(c.name+"/rowpath", func(b *testing.B) { run(b, c.opt, false) })
+		b.Run(c.name+"/L3", func(b *testing.B) { run(b, c.opt, true) })
+	}
+}
+
+type wideRow struct {
+	C0, C1, C2, C3, C4, C5, C6, C7, C8, C9           int64
+	C10, C11, C12, C13, C14, C15, C16, C17, C18, C19 int64
+	S0, S1, S2, S3                                   string
+}
+
+func makeWideRows(n int) []wideRow {
+	rows := make([]wideRow, n)
+	for i := range rows {
+		v := int64(i)
+		rows[i] = wideRow{
+			C0: v, C1: v + 1, C2: v + 2, C3: v + 3, C4: v + 4,
+			C5: v + 5, C6: v + 6, C7: v + 7, C8: v + 8, C9: v + 9,
+			C10: v, C11: v + 1, C12: v + 2, C13: v + 3, C14: v + 4,
+			C15: v + 5, C16: v + 6, C17: v + 7, C18: v + 8, C19: v + 9,
+			S0: fmt.Sprintf("a%d", i%97), S1: fmt.Sprintf("b%d", i%89),
+			S2: fmt.Sprintf("c%d", i%83), S3: fmt.Sprintf("d%d", i%79),
+		}
+	}
+	return rows
+}
+
+// BenchmarkWriteRowGroupReencodeWide measures L3 vs the row path on a wide
+// (24-column) schema, where the row round-trip has more to do.
+func BenchmarkWriteRowGroupReencodeWide(b *testing.B) {
+	rows := makeWideRows(100_000)
+	var src bytes.Buffer
+	sw := NewGenericWriter[wideRow](&src, Compression(&Snappy), MaxRowsPerRowGroup(25_000))
+	if _, err := sw.Write(rows); err != nil {
+		b.Fatal(err)
+	}
+	if err := sw.Close(); err != nil {
+		b.Fatal(err)
+	}
+	file, err := OpenFile(bytes.NewReader(src.Bytes()), int64(src.Len()))
+	if err != nil {
+		b.Fatal(err)
+	}
+	rowGroups := file.RowGroups()
+
+	run := func(b *testing.B, reencode bool) {
+		defer func(d bool) { disableWriteReencode = d }(disableWriteReencode)
+		disableWriteReencode = !reencode
+		b.ReportAllocs()
+		b.SetBytes(int64(src.Len()))
+		b.ResetTimer()
+		for b.Loop() {
+			w := NewGenericWriter[wideRow](io.Discard, Compression(&Zstd), MaxRowsPerRowGroup(25_000))
+			for _, rg := range rowGroups {
+				if _, err := w.WriteRowGroup(rg); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := w.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	b.Run("rowpath", func(b *testing.B) { run(b, false) })
+	b.Run("L3", func(b *testing.B) { run(b, true) })
 }

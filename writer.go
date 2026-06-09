@@ -571,6 +571,16 @@ func (w *Writer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 		}
 		return w.writer.writeRowGroup(w.writer.currentRowGroup, rowGroup.Schema(), rowGroup.SortingColumns())
 	}
+	// L3 fast path: a file-backed source whose schema matches but cannot be
+	// copied verbatim (config differs) is re-encoded column-by-column, skipping
+	// the row assembly/deconstruction round-trip of the path below.
+	if cols, ok := w.reencodableRowGroup(rowGroup); ok {
+		w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks())
+		if err := w.writeRowGroupByColumn(cols); err != nil {
+			return 0, err
+		}
+		return w.writer.writeRowGroup(w.writer.currentRowGroup, rowGroup.Schema(), rowGroup.SortingColumns())
+	}
 	w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks())
 	rows := rowGroup.Rows()
 	defer rows.Close()
