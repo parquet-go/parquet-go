@@ -517,6 +517,16 @@ func TestSchemaOf(t *testing.T) {
 	optional int64 timestamp (TIMESTAMP(isAdjustedToUTC=true,unit=MILLIS));
 }`,
 		},
+
+		// Whitespace after commas in option lists is tolerated.
+		{
+			value: new(struct {
+				Name string `parquet:"name, optional"`
+			}),
+			print: `message {
+	optional binary name (STRING);
+}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -666,6 +676,34 @@ func TestInvalidSchemaOf(t *testing.T) {
 				V int `parquet:",int"`
 			}),
 			panic: `int() is an invalid parquet tag: V int [int()]`,
+		},
+		// Unrecognized options on regular struct fields must panic via
+		// throwUnknownTag, mirroring the existing strict behavior for map
+		// option tags. xitongsys/parquet-go-style tags (type=, convertedtype=,
+		// repetitiontype=) are the most common offenders.
+		{
+			value: new(struct {
+				Date time.Time `parquet:"date, type=INT64, convertedtype=TIMESTAMP_MILLIS"`
+			}),
+			panic: `type=INT64 is an unrecognized parquet tag: date time.Time [type=INT64]`,
+		},
+		{
+			value: new(struct {
+				Date time.Time `parquet:"date,convertedtype=TIMESTAMP_MILLIS"`
+			}),
+			panic: `convertedtype=TIMESTAMP_MILLIS is an unrecognized parquet tag: date time.Time [convertedtype=TIMESTAMP_MILLIS]`,
+		},
+		{
+			value: new(struct {
+				V int `parquet:",foobar"`
+			}),
+			panic: `foobar is an unrecognized parquet tag: V int [foobar]`,
+		},
+		{
+			value: new(struct {
+				V int `parquet:",foo(bar)"`
+			}),
+			panic: `foo(bar) is an unrecognized parquet tag: V int [foo(bar)]`,
 		},
 	}
 
