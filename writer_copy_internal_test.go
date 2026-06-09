@@ -754,3 +754,45 @@ func TestWriteRowGroupMergeDropDuplicates(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteRowGroupCopyHonorsSmallerMaxRows verifies that a source row group
+// larger than the destination's MaxRowsPerRowGroup is NOT copied verbatim (which
+// would exceed the configured limit) but split by the row path instead, while
+// still producing correct data.
+func TestWriteRowGroupCopyHonorsSmallerMaxRows(t *testing.T) {
+	rows := makeCopyTestRows(1000)
+	src := writeCopyTestFile(t, rows) // single 1000-row row group
+
+	before := copyPathCounter.Load()
+	var dst bytes.Buffer
+	w := NewGenericWriter[copyTestRow](&dst, MaxRowsPerRowGroup(100))
+	for _, rg := range src.RowGroups() {
+		if _, err := w.WriteRowGroup(rg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if copied := copyPathCounter.Load() - before; copied != 0 {
+		t.Fatalf("expected no verbatim copy when source exceeds MaxRowsPerRowGroup, but %d chunks were copied", copied)
+	}
+
+	out, err := OpenFile(bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(out.RowGroups()); got != 10 {
+		t.Fatalf("output row group count = %d, want 10 (1000 rows / 100 max)", got)
+	}
+	for _, rg := range out.RowGroups() {
+		if rg.NumRows() > 100 {
+			t.Fatalf("output row group exceeds MaxRowsPerRowGroup: %d > 100", rg.NumRows())
+		}
+	}
+	got := readCopyTestRows(t, dst.Bytes(), len(rows))
+	if !reflect.DeepEqual(got, rows) {
+		t.Fatal("round-tripped rows differ after maxRows split")
+	}
+}

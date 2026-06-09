@@ -105,6 +105,12 @@ func (w *Writer) copyableColumnChunks(rowGroup RowGroup) ([]*FileColumnChunk, bo
 	if w.writer.encryption != nil {
 		return nil, false
 	}
+	// A verbatim copy reproduces the source row group as a single output row
+	// group, so it cannot honor a smaller configured MaxRowsPerRowGroup. When the
+	// source exceeds the limit, demote so the row path splits it correctly.
+	if rowGroup.NumRows() > w.writer.currentRowGroup.maxRows {
+		return nil, false
+	}
 
 	dst := w.writer.currentRowGroup.columns
 	columns := rowGroup.ColumnChunks()
