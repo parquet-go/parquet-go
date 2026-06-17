@@ -1215,6 +1215,34 @@ func TestRepeatedEmptyGroup(t *testing.T) {
 	}
 }
 
+// TestIssue537NegativePageSize verifies that files with invalid page headers
+// return an ErrCorrupted error instead of a panic later on
+func TestIssue537NegativePageSize(t *testing.T) {
+	f, err := os.Open("testdata/malformed/negative_page_size.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	s, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := parquet.OpenFile(f, s.Size())
+	if err != nil {
+		t.Fatalf("OpenFile: footer is intact, expected success, got %v", err)
+	}
+
+	pages := p.RowGroups()[0].ColumnChunks()[0].Pages()
+	defer pages.Close()
+
+	_, err = pages.ReadPage()
+	if !errors.Is(err, parquet.ErrCorrupted) {
+		t.Fatalf("ReadPage: got %v, want error wrapping ErrCorrupted", err)
+	}
+}
+
 func TestIssue406(t *testing.T) {
 	type Row struct {
 		A *string `parquet:"a"`
