@@ -1215,6 +1215,30 @@ func TestRepeatedEmptyGroup(t *testing.T) {
 	}
 }
 
+// TestIssue537NegativeRowGroupNumRows verifies that OpenFile rejects a footer
+// whose row-group num_rows is negative, rather than letting the value reach
+// callers who would panic.
+func TestIssue537NegativeRowGroupNumRows(t *testing.T) {
+	f, err := os.Open("testdata/malformed/negative_row_group_num_rows.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	s, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = parquet.OpenFile(f, s.Size())
+	if err == nil {
+		t.Fatal("OpenFile: expected error for negative row-group num_rows, got nil")
+	}
+	if !strings.Contains(err.Error(), "num_rows") {
+		t.Fatalf("OpenFile: expected num_rows validation error, got %v", err)
+	}
+}
+
 func TestIssue406(t *testing.T) {
 	type Row struct {
 		A *string `parquet:"a"`
