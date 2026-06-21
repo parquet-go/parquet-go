@@ -1215,6 +1215,42 @@ func TestRepeatedEmptyGroup(t *testing.T) {
 	}
 }
 
+// TestIssue537MalformedPageHeader verifies that files with corrupted page
+// headers return an ErrCorrupted error from ReadPage instead of panicking
+// later in the read path.
+func TestIssue537MalformedPageHeader(t *testing.T) {
+	for _, name := range []string{
+		"negative_page_size",      // compressed_page_size < 0
+		"num_values_exceeds_data", // header num_values larger than the decoded data can hold
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, err := os.Open("testdata/malformed/" + name + ".parquet")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+
+			s, err := f.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			p, err := parquet.OpenFile(f, s.Size())
+			if err != nil {
+				t.Fatalf("OpenFile: footer is intact, expected success, got %v", err)
+			}
+
+			pages := p.RowGroups()[0].ColumnChunks()[0].Pages()
+			defer pages.Close()
+
+			_, err = pages.ReadPage()
+			if !errors.Is(err, parquet.ErrCorrupted) {
+				t.Fatalf("ReadPage: got %v, want error wrapping ErrCorrupted", err)
+			}
+		})
+	}
+}
+
 func TestIssue406(t *testing.T) {
 	type Row struct {
 		A *string `parquet:"a"`
