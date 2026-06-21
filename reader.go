@@ -716,7 +716,7 @@ func validateRowGroupOrdinals(rowGroups []format.RowGroup) error {
 	return nil
 }
 
-// validateRowCounts rejects negative row counts in the file footer and row groups 
+// validateRowCounts rejects negative row counts in the file footer and row groups
 // prevent panics later on that would reach for an invalid slice index
 func validateRowCounts(fileNumRows int64, rowGroups []format.RowGroup) error {
 	if fileNumRows < 0 {

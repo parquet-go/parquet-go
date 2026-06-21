@@ -206,6 +206,19 @@ func makeWriteFunc[T any](t reflect.Type, writeRows writeRowsFunc) writeFunc[T] 
 				// These fields are usually lazily initialized when writing rows,
 				// we need them to exist now tho.
 				c.columnBuffer = c.newColumnBuffer()
+				// Record the original buffer so the dictionary-encoded buffer is
+				// restored when the row group is flushed after a fallback to PLAIN
+				// switched the column to a different buffer.
+				c.originalColumnBuffer = c.columnBuffer
+				w.columns[i] = c.columnBuffer
+			}
+		} else {
+			// The column buffers may have been replaced since the previous call:
+			// when a column's dictionary outgrows DictionaryMaxBytes its buffer is
+			// swapped for a PLAIN-encoded one (fallbackDictionaryToPlain), and
+			// flushing a row group restores the original buffer. Re-resolve the
+			// cached references so rows are not written into abandoned buffers.
+			for i, c := range w.base.writer.currentRowGroup.columns {
 				w.columns[i] = c.columnBuffer
 			}
 		}
