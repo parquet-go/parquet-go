@@ -256,25 +256,13 @@ func compareRowsFuncOfIndexAscending(columnIndex uint16, typ Type) func(Row, Row
 		return func(row1, row2 Row) int {
 			return compareBool(row1[columnIndex].boolean(), row2[columnIndex].boolean())
 		}
-	case byteArrayType, *stringType:
-		return func(row1, row2 Row) int {
-			return bytes.Compare(row1[columnIndex].byteArray(), row2[columnIndex].byteArray())
-		}
-	case fixedLenByteArrayType:
+	case byteArrayType, *stringType, fixedLenByteArrayType, *enumType, *geographyType, *bsonType, *geometryType, *jsonType:
 		return func(row1, row2 Row) int {
 			return bytes.Compare(row1[columnIndex].byteArray(), row2[columnIndex].byteArray())
 		}
 	case be128Type, *uuidType:
 		return func(row1, row2 Row) int {
 			return compareBE128(row1[columnIndex].be128(), row2[columnIndex].be128())
-		}
-	case *geographyType, *bsonType, *geometryType, *jsonType:
-		return func(row1, row2 Row) int {
-			return bytes.Compare(row1[columnIndex].byteArray(), row2[columnIndex].byteArray())
-		}
-	case *enumType:
-		return func(row1, row2 Row) int {
-			return bytes.Compare(row1[columnIndex].byteArray(), row2[columnIndex].byteArray())
 		}
 	case *dateType:
 		return func(row1, row2 Row) int {
@@ -352,25 +340,13 @@ func compareRowsFuncOfIndexDescending(columnIndex uint16, typ Type) func(Row, Ro
 		return func(row1, row2 Row) int {
 			return -compareBool(row1[columnIndex].boolean(), row2[columnIndex].boolean())
 		}
-	case byteArrayType, *stringType:
-		return func(row1, row2 Row) int {
-			return -bytes.Compare(row1[columnIndex].byteArray(), row2[columnIndex].byteArray())
-		}
-	case fixedLenByteArrayType:
+	case byteArrayType, *stringType, fixedLenByteArrayType, *enumType, *geographyType, *bsonType, *geometryType, *jsonType:
 		return func(row1, row2 Row) int {
 			return -bytes.Compare(row1[columnIndex].byteArray(), row2[columnIndex].byteArray())
 		}
 	case be128Type, *uuidType:
 		return func(row1, row2 Row) int {
 			return -compareBE128(row1[columnIndex].be128(), row2[columnIndex].be128())
-		}
-	case *geographyType, *bsonType, *geometryType, *jsonType:
-		return func(row1, row2 Row) int {
-			return -bytes.Compare(row1[columnIndex].byteArray(), row2[columnIndex].byteArray())
-		}
-	case *enumType:
-		return func(row1, row2 Row) int {
-			return -bytes.Compare(row1[columnIndex].byteArray(), row2[columnIndex].byteArray())
 		}
 	case *dateType:
 		return func(row1, row2 Row) int {
