@@ -12,7 +12,12 @@ import (
 //
 // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
 func List(of Node) Node {
-	return listNode{Group{"list": Repeated(Group{"element": of})}}
+	return ListElement("element", of)
+}
+
+// ListElement constructs a node of LIST logical type with a custom element name.
+func ListElement(elementName string, of Node) Node {
+	return listNode{Group{"list": Repeated(Group{elementName: of})}}
 }
 
 type listNode struct{ Group }

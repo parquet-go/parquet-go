@@ -44,6 +44,13 @@ func TestFromStructTag(t *testing.T) {
 				parquetElement: ",id(2)",
 			},
 		},
+		{
+			structTag: reflect.StructTag(`parquet:"name,list" parquet-element:"item,optional"`),
+			expected: parquetTags{
+				parquet:        "name,list",
+				parquetElement: "item,optional",
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -107,6 +114,18 @@ func TestGetNodeTags(t *testing.T) {
 			},
 			expected: parquetTags{
 				parquet: ",id(2)",
+			},
+		},
+		{
+			input: parquetTags{
+				parquet:        "list_name,list",
+				parquetElement: "item_name",
+			},
+			getNodeTags: func(p parquetTags) parquetTags {
+				return p.getListElementNodeTags()
+			},
+			expected: parquetTags{
+				parquet: "item_name",
 			},
 		},
 	}
