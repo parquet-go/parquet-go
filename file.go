@@ -1030,9 +1030,10 @@ func (c *FileColumnChunk) readBloomFilter(reader io.ReaderAt) (*FileBloomFilter,
 		if err := decoder.Decode(&header); err != nil {
 			return nil, fmt.Errorf("decoding bloom filter header: %w", err)
 		}
-		offset, _ = section.Seek(0, io.SeekCurrent)
+		sectionPos, _ := section.Seek(0, io.SeekCurrent)
+		dataOffset := offset + sectionPos - int64(rbuf.Buffered())
 		var err error
-		filter, err = newBloomFilter(reader, offset, &header)
+		filter, err = newBloomFilter(reader, dataOffset, &header)
 		if err != nil {
 			return nil, fmt.Errorf("reading bloom filter: %w", err)
 		}
