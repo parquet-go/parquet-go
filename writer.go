@@ -556,8 +556,35 @@ func (w *Writer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 	case !EqualNodes(w.schema, rowGroupSchema):
 		return 0, ErrRowGroupSchemaMismatch
 	}
+	// When the row group is the in-order concatenation of independently writable
+	// segments and at least one segment can be copied verbatim (e.g. a merge of
+	// non-overlapping row groups), write each segment as its own output row group
+	// so the copyable ones take the fast path. Row group sizing below
+	// MaxRowsPerRowGroup is an unspecified internal; data and order are preserved.
+	if segments, ok := w.splittableCopyableSegments(rowGroup); ok {
+		return w.writeSegmentsPacked(segments, rowGroup.Schema(), rowGroup.SortingColumns())
+	}
 	if err := w.writer.flush(); err != nil {
 		return 0, err
+	}
+	// Fast path: when the whole row group can be copied verbatim from a source
+	// file, splice the compressed bytes in directly instead of decoding and
+	// re-encoding every value (see writer_copy.go).
+	if srcs, ok := w.copyableColumnChunks(rowGroup); ok {
+		if err := w.loadCopiedChunks(srcs); err != nil {
+			return 0, err
+		}
+		return w.writer.writeRowGroup(w.writer.currentRowGroup, rowGroup.Schema(), rowGroup.SortingColumns())
+	}
+	// L3 fast path: a file-backed source whose schema matches but cannot be
+	// copied verbatim (config differs) is re-encoded column-by-column, skipping
+	// the row assembly/deconstruction round-trip of the path below.
+	if cols, ok := w.reencodableRowGroup(rowGroup); ok {
+		w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks())
+		if err := w.writeRowGroupByColumn(cols); err != nil {
+			return 0, err
+		}
+		return w.writer.writeRowGroup(w.writer.currentRowGroup, rowGroup.Schema(), rowGroup.SortingColumns())
 	}
 	w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks())
 	rows := rowGroup.Rows()
@@ -1457,6 +1484,34 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 	fileOffset := w.writer.offset
 
 	for i, c := range rg.columns {
+		if c.copied != nil {
+			// Column copied verbatim: use the source's column index and size
+			// statistics, and stream the dictionary and data page bytes straight
+			// from the source file into the output (no intermediate buffer).
+			cc := c.copied
+			rg.columnIndex[i] = cc.columnIndex
+			c.columnChunk.MetaData.SizeStatistics = cc.sizeStats
+
+			if cc.dictLength > 0 {
+				c.columnChunk.MetaData.DictionaryPageOffset = w.writer.offset
+				if _, err := w.writer.ReadFrom(io.NewSectionReader(cc.reader, cc.dictOffset, cc.dictLength)); err != nil {
+					return 0, fmt.Errorf("writing copied dictionary page of row group column %d: %w", i, err)
+				}
+			}
+
+			dataPageOffset := w.writer.offset
+			c.columnChunk.MetaData.DataPageOffset = dataPageOffset
+			for j := range c.offsetIndex.PageLocations {
+				c.offsetIndex.PageLocations[j].Offset += dataPageOffset
+			}
+			if cc.dataLength > 0 {
+				if _, err := w.writer.ReadFrom(io.NewSectionReader(cc.reader, cc.dataOffset, cc.dataLength)); err != nil {
+					return 0, fmt.Errorf("writing copied data pages of row group column %d: %w", i, err)
+				}
+			}
+			continue
+		}
+
 		rg.columnIndex[i] = c.columnIndex.ColumnIndex()
 		rg.columnIndex[i].RepetitionLevelHistogram = append(rg.columnIndex[i].RepetitionLevelHistogram[:0], c.pageRepetitionLevelHistograms...)
 		rg.columnIndex[i].DefinitionLevelHistogram = append(rg.columnIndex[i].DefinitionLevelHistogram[:0], c.pageDefinitionLevelHistograms...)
@@ -1852,6 +1907,10 @@ type ColumnWriter struct {
 	hasSwitchedToPlain bool  // Tracks if dictionary encoding was switched to PLAIN
 	dictionaryMaxBytes int64 // Per-column dictionary size limit
 
+	// Set when this column is being copied verbatim from a source file for the
+	// current row group (see writer_copy.go). nil for the regular re-encode path.
+	copied *copiedChunk
+
 	// Encryption state; nil encKey means column is not encrypted.
 	encKey          []byte
 	rowGroupOrdinal int16
@@ -1891,6 +1950,7 @@ func (c *ColumnWriter) reset() {
 		c.pageBuffer = nil
 	}
 	c.numPages = 0
+	c.copied = nil
 	// Bloom filters may change in size between row groups, but we retain the
 	// buffer to avoid reallocating large memory blocks.
 	c.filter = c.filter[:0]
