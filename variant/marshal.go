@@ -10,16 +10,17 @@ import (
 // metadata and value byte slices.
 func Marshal(v any) (metadata, value []byte, err error) {
 	var b MetadataBuilder
-	enc := encoder{
-		b:       &b,
-		scratch: make([]byte, 0, 1024),
-	}
+	enc := getEncoder(&b)
+
 	start, end, err := enc.encodeReflect(reflect.ValueOf(v))
 	if err != nil {
+		releaseEncoder(enc)
 		return nil, nil, err
 	}
 	valueBytes := make([]byte, end-start)
 	copy(valueBytes, enc.scratch[start:end])
+
+	releaseEncoder(enc)
 
 	_, metadataBytes := b.Build()
 	return metadataBytes, valueBytes, nil
