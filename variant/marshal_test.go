@@ -2,6 +2,7 @@ package variant
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -204,6 +205,62 @@ func TestMarshalStructSkipField(t *testing.T) {
 	}
 	if m["visible"] != "yes" {
 		t.Errorf("visible = %v, want yes", m["visible"])
+	}
+}
+
+// TestMarshalTimeTime verifies that time.Time maps to timestamp primitives.
+// time.Time has no exported fields, so the reflection-based marshaler used
+// to encode it as an empty object — silent data loss. Instants with whole
+// microseconds map to timestamp(MICROS, UTC) (type 12); sub-microsecond
+// instants in the nanos-representable range map to timestamp(NANOS, UTC)
+// (type 18).
+func TestMarshalTimeTime(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Time
+		wantType PrimitiveType
+	}{
+		{
+			name:     "microsecond precision",
+			input:    time.Date(2025, 4, 16, 12, 34, 56, 780_000_000, time.UTC),
+			wantType: PrimitiveTimestamp,
+		},
+		{
+			name:     "nanosecond precision",
+			input:    time.Date(2024, 11, 7, 12, 33, 54, 123_456_789, time.UTC),
+			wantType: PrimitiveTimestampNanos,
+		},
+		{
+			name:     "non-UTC zone keeps the instant",
+			input:    time.Date(2025, 4, 16, 12, 34, 56, 0, time.FixedZone("EDT", -4*3600)),
+			wantType: PrimitiveTimestamp,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta, val, err := Marshal(tt.input)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			m, err := DecodeMetadata(meta)
+			if err != nil {
+				t.Fatalf("DecodeMetadata: %v", err)
+			}
+			decoded, err := Decode(m, val)
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if decoded.Type() != tt.wantType {
+				t.Fatalf("primitive type = %d, want %d", decoded.Type(), tt.wantType)
+			}
+			got, ok := decoded.GoValue().(time.Time)
+			if !ok {
+				t.Fatalf("GoValue() = %T, want time.Time", decoded.GoValue())
+			}
+			if !got.Equal(tt.input) {
+				t.Errorf("round-trip instant = %v, want %v", got, tt.input)
+			}
+		})
 	}
 }
 

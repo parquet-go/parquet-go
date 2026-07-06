@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -425,6 +426,10 @@ func (e *encoder) encodeReflect(rv reflect.Value) (start, end int, err error) {
 		start, end = e.encodeValuePrimitive(UUID(rv.Interface().(uuid.UUID)))
 		return start, end, nil
 	}
+	if rv.Type() == reflect.TypeFor[time.Time]() {
+		start, end = e.encodeValuePrimitive(timeToVariant(rv.Interface().(time.Time)))
+		return start, end, nil
+	}
 
 	switch rv.Kind() {
 	case reflect.Bool:
@@ -760,6 +765,14 @@ func (e *encoder) buildObjectBytes(entries []encodedField) (start, end int, err 
 	offsetSzCode := offsetSizeCode(totalValueSize)
 	offsetSz := offsetSize(offsetSzCode)
 
+	// Header byte layout for objects, per the spec's value encoding grammar
+	// (object_header: is_large << 4 | field_id_size_minus_one << 2 |
+	// field_offset_size_minus_one, shifted left 2 past the basic type):
+	//
+	//	bits 0-1: basic_type (2 = object)
+	//	bits 2-3: field_offset_size_minus_one
+	//	bits 4-5: field_id_size_minus_one
+	//	bit 6:    is_large (0 = 1-byte num_elements, 1 = 4-byte)
 	isLarge := byte(0)
 	numElemSize := 1
 	if n > 255 {
@@ -767,7 +780,7 @@ func (e *encoder) buildObjectBytes(entries []encodedField) (start, end int, err 
 		numElemSize = 4
 	}
 
-	header := byte(BasicObject) | (fieldIDSizeCode << 2) | (offsetSzCode << 4) | (isLarge << 6)
+	header := byte(BasicObject) | (offsetSzCode << 2) | (fieldIDSizeCode << 4) | (isLarge << 6)
 
 	totalSize := 1 + numElemSize + n*fieldIDSize + (n+1)*offsetSz + totalValueSize
 	if cap(e.temp) < totalSize {

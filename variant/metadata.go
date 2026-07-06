@@ -17,12 +17,12 @@ type Metadata struct {
 //
 // Format: header(1) | dictionary_size(uint) | offsets(dictionary_size+1) | string_data
 //
-// Header bits:
+// Header bits (per the spec's metadata encoding grammar,
+// header = version | sorted_strings << 4 | offset_size_minus_one << 6):
 //
 //	0-3: version (must be 1)
-//	4: sorted_strings
-//	5-6: offset_size_minus_one
-//	7: reserved (must be 0)
+//	4:   sorted_strings
+//	6-7: offset_size_minus_one
 func DecodeMetadata(data []byte) (Metadata, error) {
 	if len(data) == 0 {
 		return Metadata{}, errors.New("variant metadata: empty data")
@@ -33,12 +33,9 @@ func DecodeMetadata(data []byte) (Metadata, error) {
 	if version != 1 {
 		return Metadata{}, fmt.Errorf("variant metadata: unsupported version %d", version)
 	}
-	if header&0x80 != 0 {
-		return Metadata{}, errors.New("variant metadata: reserved bit is set")
-	}
 
 	sorted := (header>>4)&1 == 1
-	offsetSz := offsetSize((header >> 5) & 0x03)
+	offsetSz := offsetSize((header >> 6) & 0x03)
 
 	pos := 1
 	dictSize, n, err := readUint(data[pos:], offsetSz)
@@ -140,12 +137,13 @@ func (b *MetadataBuilder) Build() (Metadata, []byte) {
 	size := 1 + offsetSz + (n+1)*offsetSz + totalLen
 	buf := make([]byte, size)
 
-	// Header: version=1, sorted_strings flag, offset_size_minus_one
+	// Header: version=1, sorted_strings flag at bit 4, offset_size_minus_one
+	// at bits 6-7 (per the spec's metadata encoding grammar).
 	sortedBit := byte(0)
 	if sorted {
 		sortedBit = 1
 	}
-	buf[0] = 1 | (sortedBit << 4) | (osc << 5)
+	buf[0] = 1 | (sortedBit << 4) | (osc << 6)
 
 	pos := 1
 	writeUint(buf[pos:], n, offsetSz)

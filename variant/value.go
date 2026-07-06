@@ -2,6 +2,7 @@ package variant
 
 import (
 	"math"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -235,7 +236,10 @@ func (v Value) ArrayValue() Array {
 //	Float → float32, Double → float64
 //	String → string, Binary → []byte
 //	Date → int32 (days since epoch)
-//	Timestamp/TimestampNTZ → int64 (microseconds since epoch)
+//	Timestamp/TimestampNanos → time.Time (UTC)
+//	TimestampNTZ/TimestampNTZNanos → int64 (microseconds/nanoseconds since
+//	    epoch; these have no time zone, so no time.Time instant exists for
+//	    them)
 //	Time → int64 (microseconds since midnight)
 //	UUID → uuid.UUID
 //	Decimal4 → int32 (unscaled), Decimal8 → int64 (unscaled), Decimal16 → [16]byte
@@ -284,8 +288,11 @@ func (v Value) GoValue() any {
 		return v.bytes
 	case PrimitiveDate:
 		return int32(v.i64)
-	case PrimitiveTimestamp, PrimitiveTimestampNTZ, PrimitiveTime,
-		PrimitiveTimestampNanos, PrimitiveTimestampNTZNanos:
+	case PrimitiveTimestamp:
+		return time.UnixMicro(v.i64).UTC()
+	case PrimitiveTimestampNanos:
+		return time.Unix(0, v.i64).UTC()
+	case PrimitiveTimestampNTZ, PrimitiveTimestampNTZNanos, PrimitiveTime:
 		return v.i64
 	case PrimitiveUUID:
 		return v.uuid

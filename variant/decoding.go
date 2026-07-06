@@ -173,8 +173,11 @@ func decodePrimitive(pt PrimitiveType, data []byte) (Value, int, error) {
 }
 
 func decodeObject(m Metadata, header byte, data []byte) (Value, int, error) {
-	fieldIDSizeCode := (header >> 2) & 0x03
-	offsetSzCode := (header >> 4) & 0x03
+	// Object header byte layout (see encodeObject): bits 2-3 hold
+	// field_offset_size_minus_one, bits 4-5 hold field_id_size_minus_one,
+	// bit 6 holds is_large.
+	offsetSzCode := (header >> 2) & 0x03
+	fieldIDSizeCode := (header >> 4) & 0x03
 	isLarge := (header >> 6) & 0x01
 
 	fieldIDSize := offsetSize(fieldIDSizeCode)
