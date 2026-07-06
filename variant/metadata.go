@@ -47,6 +47,16 @@ func DecodeMetadata(data []byte) (Metadata, error) {
 	}
 	pos += n
 
+	// The metadata must contain at least (dictSize+1) offsets; validate
+	// against the input size before allocating to reject corrupt data that
+	// declares an absurdly large dictionary. dictSize < 0 happens only on
+	// 32-bit platforms, where a 4-byte size above math.MaxInt32 overflows
+	// int; the comparison is phrased as <= dictSize rather than
+	// < dictSize+1 so the addition cannot overflow the same way.
+	if remaining := len(data) - pos; dictSize < 0 || remaining/offsetSz <= dictSize {
+		return Metadata{}, fmt.Errorf("variant metadata: dictionary size %d exceeds data", dictSize)
+	}
+
 	// Read (dictSize+1) offsets
 	offsets := make([]int, dictSize+1)
 	for i := range offsets {

@@ -35,8 +35,12 @@ func decodeValue(m Metadata, data []byte) (Value, int, error) {
 		if len(data) < 1+length {
 			return Null(), 0, fmt.Errorf("variant value: short string length %d exceeds data", length)
 		}
-		v := Value{basic: BasicShortString, str: string(data[1 : 1+length])}
-		return v, 1 + length, nil
+		// Normalize to the string primitive so the value re-encodes
+		// correctly. VariantEncoding.md: "The 'short string' basic type
+		// may be used as an optimization to fold string length into the
+		// type byte for strings less than 64 bytes. It is semantically
+		// identical to the 'string' primitive type."
+		return String(string(data[1 : 1+length])), 1 + length, nil
 	case BasicObject:
 		return decodeObject(m, header, data[1:])
 	case BasicArray:
@@ -124,6 +128,16 @@ func decodePrimitive(pt PrimitiveType, data []byte) (Value, int, error) {
 			return Null(), 0, errors.New("variant value: not enough data for time")
 		}
 		return Time(int64(binary.LittleEndian.Uint64(data[:8]))), 9, nil
+	case PrimitiveTimestampNanos:
+		if len(data) < 8 {
+			return Null(), 0, errors.New("variant value: not enough data for timestamp nanos")
+		}
+		return TimestampNanos(int64(binary.LittleEndian.Uint64(data[:8]))), 9, nil
+	case PrimitiveTimestampNTZNanos:
+		if len(data) < 8 {
+			return Null(), 0, errors.New("variant value: not enough data for timestamp_ntz nanos")
+		}
+		return TimestampNTZNanos(int64(binary.LittleEndian.Uint64(data[:8]))), 9, nil
 	case PrimitiveUUID:
 		if len(data) < 16 {
 			return Null(), 0, errors.New("variant value: not enough data for uuid")
@@ -184,6 +198,15 @@ func decodeObject(m Metadata, header byte, data []byte) (Value, int, error) {
 		pos += 1
 	}
 
+	// Validate the declared element count against the available data
+	// before allocating, to reject corrupt inputs with absurd sizes.
+	// numElements < 0 happens only on 32-bit platforms, where a 4-byte
+	// count above math.MaxInt32 overflows int.
+	if remaining := len(data) - pos; numElements < 0 ||
+		remaining/(fieldIDSize+offsetSz) < numElements {
+		return Null(), 0, fmt.Errorf("variant value: object element count %d exceeds data", numElements)
+	}
+
 	// Read field IDs
 	fieldIDs := make([]int, numElements)
 	for i := range numElements {
@@ -206,23 +229,60 @@ func decodeObject(m Metadata, header byte, data []byte) (Value, int, error) {
 		pos += n
 	}
 
-	// Value data starts at pos
+	// Value data starts at pos. The last offset is the total size of the
+	// value data region. Fields must NOT be sliced as [offset[i],
+	// offset[i+1]) — per VariantEncoding.md, "the actual value entries do
+	// not need to be in any particular order. This implies that the
+	// field_offset values may not be monotonically increasing." (Spark
+	// writes such objects.) Each value is self-delimiting; the offset only
+	// determines where it starts.
 	valueDataStart := pos
+	valueDataEnd := valueDataStart + offsets[numElements]
+	// valueDataEnd < valueDataStart rejects a last offset that overflowed
+	// int to a negative value on 32-bit platforms.
+	if valueDataEnd > len(data) || valueDataEnd < valueDataStart {
+		return Null(), 0, errors.New("variant value: object value data exceeds input")
+	}
 
 	fields := make([]Field, numElements)
+	// VariantEncoding.md: "Field names are required to be unique for each
+	// object. It is an error for an object to contain two fields with the
+	// same name, whether or not they have distinct dictionary IDs." (The
+	// last clause is why the check compares names, not field IDs.)
+	//
+	// The spec also requires fields to be listed in lexicographic order of
+	// their names, so in well-formed input a duplicate is adjacent to its
+	// twin and one comparison against the previous name detects it. The
+	// map is only allocated for inputs that violate the sort order (which
+	// are otherwise accepted, for compatibility with lenient writers).
+	var seen map[string]struct{}
 	for i := range numElements {
 		name, err := m.Lookup(fieldIDs[i])
 		if err != nil {
 			return Null(), 0, fmt.Errorf("variant value: object field %d: %w", i, err)
 		}
+		if seen == nil && i > 0 && name <= fields[i-1].Name {
+			if name == fields[i-1].Name {
+				return Null(), 0, fmt.Errorf("variant value: duplicate object field %q", name)
+			}
+			seen = make(map[string]struct{}, numElements)
+			for _, f := range fields[:i] {
+				seen[f.Name] = struct{}{}
+			}
+		}
+		if seen != nil {
+			if _, dup := seen[name]; dup {
+				return Null(), 0, fmt.Errorf("variant value: duplicate object field %q", name)
+			}
+			seen[name] = struct{}{}
+		}
 
 		valueStart := valueDataStart + offsets[i]
-		valueEnd := valueDataStart + offsets[i+1]
-		if valueStart > len(data) || valueEnd > len(data) || valueStart > valueEnd {
+		if valueStart < valueDataStart || valueStart > valueDataEnd {
 			return Null(), 0, fmt.Errorf("variant value: object field %d: invalid value offset", i)
 		}
 
-		v, _, err := decodeValue(m, data[valueStart:valueEnd])
+		v, _, err := decodeValue(m, data[valueStart:valueDataEnd])
 		if err != nil {
 			return Null(), 0, fmt.Errorf("variant value: object field %q: %w", name, err)
 		}
@@ -230,7 +290,7 @@ func decodeObject(m Metadata, header byte, data []byte) (Value, int, error) {
 		fields[i] = Field{Name: name, Value: v}
 	}
 
-	totalConsumed := 1 + valueDataStart + offsets[numElements] // +1 for header byte
+	totalConsumed := 1 + valueDataEnd // +1 for header byte
 	return MakeObject(fields), totalConsumed, nil
 }
 
@@ -256,6 +316,17 @@ func decodeArray(m Metadata, header byte, data []byte) (Value, int, error) {
 		}
 		numElements = int(data[0])
 		pos += 1
+	}
+
+	// Validate the declared element count against the available data
+	// before allocating, to reject corrupt inputs with absurd sizes.
+	// numElements < 0 happens only on 32-bit platforms, where a 4-byte
+	// count above math.MaxInt32 overflows int; the comparison is phrased
+	// as <= numElements rather than < numElements+1 (there are
+	// numElements+1 offsets) so the addition cannot overflow the same way.
+	if remaining := len(data) - pos; numElements < 0 ||
+		remaining/offsetSz <= numElements {
+		return Null(), 0, fmt.Errorf("variant value: array element count %d exceeds data", numElements)
 	}
 
 	// Read offsets (numElements+1)

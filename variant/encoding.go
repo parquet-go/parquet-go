@@ -121,6 +121,16 @@ func encodePrimitive(v Value) []byte {
 		buf[0] = makeHeader(BasicPrimitive, byte(PrimitiveTime))
 		binary.LittleEndian.PutUint64(buf[1:], uint64(v.i64))
 		return buf
+	case PrimitiveTimestampNanos:
+		buf := make([]byte, 9)
+		buf[0] = makeHeader(BasicPrimitive, byte(PrimitiveTimestampNanos))
+		binary.LittleEndian.PutUint64(buf[1:], uint64(v.i64))
+		return buf
+	case PrimitiveTimestampNTZNanos:
+		buf := make([]byte, 9)
+		buf[0] = makeHeader(BasicPrimitive, byte(PrimitiveTimestampNTZNanos))
+		binary.LittleEndian.PutUint64(buf[1:], uint64(v.i64))
+		return buf
 	case PrimitiveUUID:
 		buf := make([]byte, 17)
 		buf[0] = makeHeader(BasicPrimitive, byte(PrimitiveUUID))
@@ -287,6 +297,12 @@ func (e *encoder) encodeValuePrimitive(v Value) (start, end int) {
 		binary.LittleEndian.PutUint64(e.scratch[start+1:], uint64(v.i64))
 	case PrimitiveTime:
 		e.scratch = append(e.scratch, makeHeader(BasicPrimitive, byte(PrimitiveTime)), 0, 0, 0, 0, 0, 0, 0, 0)
+		binary.LittleEndian.PutUint64(e.scratch[start+1:], uint64(v.i64))
+	case PrimitiveTimestampNanos:
+		e.scratch = append(e.scratch, makeHeader(BasicPrimitive, byte(PrimitiveTimestampNanos)), 0, 0, 0, 0, 0, 0, 0, 0)
+		binary.LittleEndian.PutUint64(e.scratch[start+1:], uint64(v.i64))
+	case PrimitiveTimestampNTZNanos:
+		e.scratch = append(e.scratch, makeHeader(BasicPrimitive, byte(PrimitiveTimestampNTZNanos)), 0, 0, 0, 0, 0, 0, 0, 0)
 		binary.LittleEndian.PutUint64(e.scratch[start+1:], uint64(v.i64))
 	case PrimitiveUUID:
 		e.scratch = append(e.scratch, makeHeader(BasicPrimitive, byte(PrimitiveUUID)))
