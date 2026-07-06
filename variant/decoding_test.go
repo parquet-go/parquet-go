@@ -100,3 +100,27 @@ func TestDecodeMetadataRejectsCorruptSizes(t *testing.T) {
 		t.Fatalf("DecodeMetadata error = %q, want dictionary size error", err)
 	}
 }
+
+// TestDecodeRejectsInvalidUTF8 verifies that strings are validated on
+// decode: the spec requires variant strings and metadata dictionary entries
+// to be valid UTF-8. 0xFF can never appear in UTF-8 text.
+func TestDecodeRejectsInvalidUTF8(t *testing.T) {
+	t.Run("short string", func(t *testing.T) {
+		// Short-string header with length 1, followed by 0xFF.
+		if _, err := Decode(Metadata{}, []byte{0x05, 0xFF}); err == nil {
+			t.Fatal("Decode succeeded, want invalid UTF-8 error")
+		}
+	})
+	t.Run("string primitive", func(t *testing.T) {
+		// String primitive (type 16) with 4-byte length 1, followed by 0xFF.
+		if _, err := Decode(Metadata{}, []byte{0x40, 0x01, 0x00, 0x00, 0x00, 0xFF}); err == nil {
+			t.Fatal("Decode succeeded, want invalid UTF-8 error")
+		}
+	})
+	t.Run("metadata dictionary entry", func(t *testing.T) {
+		// Dictionary with one 1-byte string 0xFF.
+		if _, err := DecodeMetadata([]byte{0x01, 0x01, 0x00, 0x01, 0xFF}); err == nil {
+			t.Fatal("DecodeMetadata succeeded, want invalid UTF-8 error")
+		}
+	})
+}

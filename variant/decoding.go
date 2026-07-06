@@ -5,10 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unicode/utf8"
 )
 
 // Decode decodes a variant value from its binary representation using the
 // given metadata dictionary.
+//
+// Decode rejects input the spec declares invalid: strings that are not valid
+// UTF-8, objects with duplicate field names, and structures whose declared
+// sizes exceed the data. It accepts input that is non-canonical but
+// unambiguous, as the spec directs for readers: reserved header bits are
+// ignored, object fields need not be listed in lexicographic order, and
+// bytes past the end of the value are ignored (values are self-delimiting).
 func Decode(m Metadata, data []byte) (Value, error) {
 	if len(data) == 0 {
 		return Null(), errors.New("variant value: empty data")
@@ -34,6 +42,9 @@ func decodeValue(m Metadata, data []byte) (Value, int, error) {
 		length := int(valueHeader)
 		if len(data) < 1+length {
 			return Null(), 0, fmt.Errorf("variant value: short string length %d exceeds data", length)
+		}
+		if !utf8.Valid(data[1 : 1+length]) {
+			return Null(), 0, errors.New("variant value: short string is not valid UTF-8")
 		}
 		// Normalize to the string primitive so the value re-encodes
 		// correctly. VariantEncoding.md: "The 'short string' basic type
@@ -92,9 +103,21 @@ func decodePrimitive(pt PrimitiveType, data []byte) (Value, int, error) {
 		if len(data) < 4 {
 			return Null(), 0, errors.New("variant value: not enough data for string length")
 		}
+		// On 32-bit platforms a 4-byte length above math.MaxInt32
+		// overflows int and is negative, and 4+length can overflow the
+		// same way, so the bounds check avoids the addition. Neither
+		// overflow can happen on 64-bit platforms.
 		length := int(binary.LittleEndian.Uint32(data[:4]))
-		if len(data) < 4+length {
+		if length < 0 || length > len(data)-4 {
 			return Null(), 0, fmt.Errorf("variant value: string length %d exceeds data", length)
+		}
+		// VariantEncoding.md: "All strings within the Variant binary
+		// format must be UTF-8 encoded. This includes the dictionary key
+		// string values, the 'short string' values, and the 'long string'
+		// values." (Short strings and dictionary entries are validated at
+		// their own decode sites.)
+		if !utf8.Valid(data[4 : 4+length]) {
+			return Null(), 0, errors.New("variant value: string is not valid UTF-8")
 		}
 		return String(string(data[4 : 4+length])), 5 + length, nil
 	case PrimitiveBinary:
@@ -102,7 +125,9 @@ func decodePrimitive(pt PrimitiveType, data []byte) (Value, int, error) {
 			return Null(), 0, errors.New("variant value: not enough data for binary length")
 		}
 		length := int(binary.LittleEndian.Uint32(data[:4]))
-		if len(data) < 4+length {
+		// The check is phrased for 32-bit overflow safety; see the string
+		// case above.
+		if length < 0 || length > len(data)-4 {
 			return Null(), 0, fmt.Errorf("variant value: binary length %d exceeds data", length)
 		}
 		b := make([]byte, length)
@@ -350,7 +375,11 @@ func decodeArray(m Metadata, header byte, data []byte) (Value, int, error) {
 	for i := range numElements {
 		elemStart := valueDataStart + offsets[i]
 		elemEnd := valueDataStart + offsets[i+1]
-		if elemStart > len(data) || elemEnd > len(data) || elemStart > elemEnd {
+		// elemStart < 0 happens only on 32-bit platforms, where a 4-byte
+		// offset above math.MaxInt32 overflows int; without the check the
+		// slice below would panic. The remaining conditions imply
+		// elemStart <= elemEnd <= len(data).
+		if elemStart < 0 || elemEnd > len(data) || elemStart > elemEnd {
 			return Null(), 0, fmt.Errorf("variant value: array element %d: invalid offset", i)
 		}
 

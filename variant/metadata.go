@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"unicode/utf8"
 )
 
 // Metadata holds the decoded metadata dictionary for a variant value.
@@ -23,6 +24,11 @@ type Metadata struct {
 //	0-3: version (must be 1)
 //	4:   sorted_strings
 //	6-7: offset_size_minus_one
+//
+// Like Decode, DecodeMetadata rejects what the spec declares invalid
+// (non-UTF-8 dictionary strings, sizes exceeding the data) and does not
+// validate the unused header bit, per VariantEncoding.md: "Bit 5 (marked R)
+// is reserved; it must be ignored by readers."
 func DecodeMetadata(data []byte) (Metadata, error) {
 	if len(data) == 0 {
 		return Metadata{}, errors.New("variant metadata: empty data")
@@ -71,8 +77,14 @@ func DecodeMetadata(data []byte) (Metadata, error) {
 	for i := range dictSize {
 		start := offsets[i]
 		end := offsets[i+1]
-		if start > end || end > len(stringData) {
+		// start < 0 happens only on 32-bit platforms, where a 4-byte
+		// offset above math.MaxInt32 overflows int; without the check the
+		// slice below would panic.
+		if start < 0 || start > end || end > len(stringData) {
 			return Metadata{}, fmt.Errorf("variant metadata: invalid string offset [%d, %d) in data of length %d", start, end, len(stringData))
+		}
+		if !utf8.Valid(stringData[start:end]) {
+			return Metadata{}, fmt.Errorf("variant metadata: dictionary string %d is not valid UTF-8", i)
 		}
 		strings[i] = string(stringData[start:end])
 	}
@@ -170,7 +182,10 @@ func (b *MetadataBuilder) Reset() {
 	}
 }
 
-// readUint reads an unsigned integer of the given byte width from data.
+// readUint reads an unsigned integer of the given byte width from data. Note
+// that on 32-bit platforms a 4-byte value above math.MaxInt32 overflows int
+// and is returned negative; callers validating sizes and offsets against the
+// input must guard against negative results before using them.
 func readUint(data []byte, size int) (int, int, error) {
 	if len(data) < size {
 		return 0, 0, errors.New("not enough data")
