@@ -49,8 +49,10 @@ func Variant() Node {
 // *Experimental*: Support for the VARIANT type is still being developed and subject to
 // change.
 //
-// Reading a shredded column through an unshredded variant schema reconstructs the
-// values per the [Parquet documentation].
+// Go values written to a shredded variant column with the "variant" struct tag are
+// shredded per the [Parquet documentation]: values matching the shredded type are
+// stored in the typed_value columns, and everything else is encoded into the
+// appropriate value column. Reading reconstructs the variant from all columns.
 //
 // [VARIANT logical type]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#variant
 // [variant value types]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#shredded-value-types

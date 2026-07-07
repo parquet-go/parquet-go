@@ -375,3 +375,242 @@ func TestShreddedVariantConvertRepeatedColumn(t *testing.T) {
 		t.Errorf("row 2 = %#v, want [9]", got[2].Vars)
 	}
 }
+
+// TestShreddedVariantWriteLayout pins the physical column layout produced by
+// the shredded variant writer against the case table of the Variant
+// Shredding specification. Round-trip tests cannot catch layout bugs — a
+// writer and reader that agree on a non-spec layout still round-trip (the
+// original writer stored per-field fallbacks in a homegrown length-prefixed
+// framing that only this package could read) — so this test asserts the
+// column contents directly:
+//
+//   - values matching the shredded type go to typed_value, value is null
+//   - a partially shredded object stores residual fields as a variant
+//     object in value; shredded field names never appear in value
+//   - a missing object field has both of its columns null
+//   - a field whose value mismatches its shredded type falls back to the
+//     field's value column, encoded against the row's shared metadata
+//   - a non-object row leaves the whole typed_value subtree null
+//   - the row metadata dictionary contains every field name, shredded or not
+func TestShreddedVariantWriteLayout(t *testing.T) {
+	shreddedNode, err := parquet.ShreddedVariant(parquet.Group{
+		"a": parquet.Int(64),
+		"b": parquet.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := parquet.NewSchema("table", parquet.Group{
+		"id":  parquet.Int(32),
+		"var": shreddedNode,
+	})
+
+	type row struct {
+		ID  int32 `parquet:"id"`
+		Var any   `parquet:"var,variant"`
+	}
+	rows := []row{
+		{0, map[string]any{"a": int64(1), "b": "x", "extra": true}}, // partially shredded
+		{1, map[string]any{"a": int64(2)}},                          // field b missing
+		{2, "scalar"},                                               // non-object
+		{3, map[string]any{"a": "wrong", "b": "y"}},                 // field a type mismatch
+	}
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[row](buf, schema)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Collect the values of every leaf column under var, in row order.
+	columns := make(map[string][]parquet.Value)
+	err = forEachColumnValue(pf.Root(), func(leaf *parquet.Column, value parquet.Value) error {
+		path := strings.Join(leaf.Path(), ".")
+		columns[path] = append(columns[path], value.Clone())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Every row's metadata dictionary must contain all of the row's object
+	// field names, including unshredded ones ("extra" in row 0).
+	metadatas := make([]variant.Metadata, len(rows))
+	for i, v := range columns["var.metadata"] {
+		m, err := variant.DecodeMetadata(v.ByteArray())
+		if err != nil {
+			t.Fatalf("row %d: decoding metadata column: %v", i, err)
+		}
+		metadatas[i] = m
+	}
+	if got := metadatas[0].Strings; len(got) != 3 {
+		t.Errorf("row 0 metadata dictionary = %q, want the field names a, b, extra", got)
+	}
+
+	// decodeAt decodes the variant value stored in a value column at a row,
+	// using that row's metadata dictionary.
+	decodeAt := func(path string, row int) variant.Value {
+		t.Helper()
+		v := columns[path][row]
+		if v.IsNull() {
+			t.Fatalf("%s row %d: expected a value, found null", path, row)
+		}
+		decoded, err := variant.Decode(metadatas[row], v.ByteArray())
+		if err != nil {
+			t.Fatalf("%s row %d: %v", path, row, err)
+		}
+		return decoded
+	}
+	assertNull := func(path string, row int) {
+		t.Helper()
+		if v := columns[path][row]; !v.IsNull() {
+			t.Errorf("%s row %d = %v, want null", path, row, v)
+		}
+	}
+
+	// Row 0: a and b shredded into typed_value, residual object {extra:
+	// true} in value. The shredded names must not appear in value.
+	if got := columns["var.typed_value.a.typed_value"][0].Int64(); got != 1 {
+		t.Errorf("row 0 shredded a = %d, want 1", got)
+	}
+	if got := string(columns["var.typed_value.b.typed_value"][0].ByteArray()); got != "x" {
+		t.Errorf("row 0 shredded b = %q, want %q", got, "x")
+	}
+	assertNull("var.typed_value.a.value", 0)
+	assertNull("var.typed_value.b.value", 0)
+	residual := decodeAt("var.value", 0)
+	if fields := residual.ObjectValue().Fields; len(fields) != 1 || fields[0].Name != "extra" {
+		t.Errorf("row 0 residual object = %#v, want only field %q", residual.GoValue(), "extra")
+	}
+
+	// Row 1: field b is missing, so both of its columns are null; nothing
+	// goes to the object's value column.
+	if got := columns["var.typed_value.a.typed_value"][1].Int64(); got != 2 {
+		t.Errorf("row 1 shredded a = %d, want 2", got)
+	}
+	assertNull("var.typed_value.b.typed_value", 1)
+	assertNull("var.typed_value.b.value", 1)
+	assertNull("var.value", 1)
+
+	// Row 2: a non-object cannot use the object typed_value; the whole
+	// typed subtree is null and the value column holds the encoded string.
+	for _, path := range []string{
+		"var.typed_value.a.value", "var.typed_value.a.typed_value",
+		"var.typed_value.b.value", "var.typed_value.b.typed_value",
+	} {
+		assertNull(path, 2)
+	}
+	if got := decodeAt("var.value", 2); got.Str() != "scalar" {
+		t.Errorf("row 2 value = %#v, want the string %q", got.GoValue(), "scalar")
+	}
+
+	// Row 3: field a's string does not match its int64 shredded type, so it
+	// falls back to field a's own value column (not the object's).
+	assertNull("var.typed_value.a.typed_value", 3)
+	if got := decodeAt("var.typed_value.a.value", 3); got.Str() != "wrong" {
+		t.Errorf("row 3 field a fallback = %#v, want the string %q", got.GoValue(), "wrong")
+	}
+	if got := string(columns["var.typed_value.b.typed_value"][3].ByteArray()); got != "y" {
+		t.Errorf("row 3 shredded b = %q, want %q", got, "y")
+	}
+	assertNull("var.value", 3)
+}
+
+// benchmarkShreddedRows builds a mixed workload for the shredding
+// benchmarks: fully shredded objects, partially shredded objects with
+// residual fields, and scalar fallbacks.
+func benchmarkShreddedRows(n int) []struct {
+	ID  int32 `parquet:"id"`
+	Var any   `parquet:"var,variant"`
+} {
+	rows := make([]struct {
+		ID  int32 `parquet:"id"`
+		Var any   `parquet:"var,variant"`
+	}, n)
+	for i := range rows {
+		rows[i].ID = int32(i)
+		switch i % 3 {
+		case 0:
+			rows[i].Var = map[string]any{"a": int64(i), "b": "value"}
+		case 1:
+			rows[i].Var = map[string]any{"a": int64(i), "b": "value", "extra": float64(i)}
+		default:
+			rows[i].Var = "scalar fallback"
+		}
+	}
+	return rows
+}
+
+func benchmarkShreddedSchema(b *testing.B) *parquet.Schema {
+	shredded, err := parquet.ShreddedVariant(parquet.Group{
+		"a": parquet.Int(64),
+		"b": parquet.String(),
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return parquet.NewSchema("table", parquet.Group{
+		"id":  parquet.Int(32),
+		"var": shredded,
+	})
+}
+
+func BenchmarkShreddedVariantWrite(b *testing.B) {
+	schema := benchmarkShreddedSchema(b)
+	rows := benchmarkShreddedRows(1000)
+	buf := new(bytes.Buffer)
+	b.ReportAllocs()
+	for b.Loop() {
+		buf.Reset()
+		w := parquet.NewGenericWriter[struct {
+			ID  int32 `parquet:"id"`
+			Var any   `parquet:"var,variant"`
+		}](buf, schema)
+		if _, err := w.Write(rows); err != nil {
+			b.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(len(rows)*b.N)/b.Elapsed().Seconds(), "rows/s")
+}
+
+func BenchmarkShreddedVariantRead(b *testing.B) {
+	schema := benchmarkShreddedSchema(b)
+	rows := benchmarkShreddedRows(1000)
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[struct {
+		ID  int32 `parquet:"id"`
+		Var any   `parquet:"var,variant"`
+	}](buf, schema)
+	if _, err := w.Write(rows); err != nil {
+		b.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		b.Fatal(err)
+	}
+	data := bytes.NewReader(buf.Bytes())
+	b.ReportAllocs()
+	for b.Loop() {
+		got, err := parquet.Read[struct {
+			ID  int32 `parquet:"id"`
+			Var any   `parquet:"var,variant"`
+		}](data, int64(buf.Len()))
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got) != len(rows) {
+			b.Fatalf("read %d rows, want %d", len(got), len(rows))
+		}
+	}
+	b.ReportMetric(float64(len(rows)*b.N)/b.Elapsed().Seconds(), "rows/s")
+}
