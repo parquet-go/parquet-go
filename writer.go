@@ -736,6 +736,21 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 		}
 
 		if isDictionaryEncoding(encoding) {
+			// The deprecated PLAIN_DICTIONARY encoding is normalized to
+			// RLE_DICTIONARY on the write path: the spec defines a single
+			// dictionary data page layout for both enum values —
+			// Encodings.md: "Data page format: the bit width used to
+			// encode the entry ids stored as 1 byte (max bit width = 32),
+			// followed by the values encoded using the RLE/Bit-Packing
+			// described above" — and directs writers away from the old
+			// enum: "Using the PLAIN_DICTIONARY enum value is deprecated,
+			// use RLE_DICTIONARY in a data page and PLAIN in a dictionary
+			// page for new Parquet files." Writing the PLAIN int32 index
+			// layout of plain.DictionaryEncoding would produce pages no
+			// reader understands. This matters for schemas derived from
+			// files written by legacy writers, which report
+			// PLAIN_DICTIONARY as the column encoding.
+			encoding = &RLEDictionary
 			dictBuffer := columnType.NewValues(make([]byte, 0, defaultDictBufferSize), nil)
 			dictionary = columnType.NewDictionary(columnIndex, 0, dictBuffer)
 			columnType = dictionary.Type()

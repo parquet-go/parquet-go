@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -605,5 +606,49 @@ func TestColumnPages_SeekToRow(t *testing.T) {
 			parquet.Release(page)
 			idx++
 		}
+	}
+}
+
+// TestOpenFileColumnEncodingSkipsBitPacked verifies that BIT_PACKED is never
+// reported as a column's encoding. Legacy writers (parquet-java/Impala) list
+// BIT_PACKED in a column chunk's encodings when it was used for repetition
+// or definition levels, but it is not a data page encoding: picking it as
+// the column encoding makes schemas derived from the file unwritable
+// ("encoding not supported for type ...").
+func TestOpenFileColumnEncodingSkipsBitPacked(t *testing.T) {
+	f, err := os.Open("testdata/alltypes_tiny_pages.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf, err := parquet.OpenFile(f, st.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The test file must actually list BIT_PACKED in its chunk metadata,
+	// otherwise this test asserts nothing.
+	hasBitPacked := false
+	for _, chunk := range pf.Metadata().RowGroups[0].Columns {
+		for _, enc := range chunk.MetaData.Encoding {
+			hasBitPacked = hasBitPacked || enc == format.BitPacked
+		}
+	}
+	if !hasBitPacked {
+		t.Fatal("test file does not use BIT_PACKED level encoding")
+	}
+
+	err = forEachLeafColumn(pf.Root(), func(leaf *parquet.Column) error {
+		if enc := leaf.Encoding(); enc != nil && enc.Encoding() == format.BitPacked {
+			t.Errorf("column %q reports BIT_PACKED as its encoding", leaf.Name())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
