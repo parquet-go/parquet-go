@@ -327,10 +327,7 @@ func (e *encoder) encodeValueArray(arr Array) (start, end int, err error) {
 
 	savedStart := len(e.positions)
 	if cap(e.positions) < savedStart+n {
-		newCap := cap(e.positions) * 2
-		if newCap < savedStart+n {
-			newCap = savedStart + n
-		}
+		newCap := max(cap(e.positions)*2, savedStart+n)
 		newP := make([]elementPos, len(e.positions), newCap)
 		copy(newP, e.positions)
 		e.positions = newP
@@ -360,10 +357,7 @@ func (e *encoder) encodeValueObject(obj Object) (start, end int, err error) {
 
 	savedStart := len(e.fields)
 	if cap(e.fields) < savedStart+n {
-		newCap := cap(e.fields) * 2
-		if newCap < savedStart+n {
-			newCap = savedStart + n
-		}
+		newCap := max(cap(e.fields)*2, savedStart+n)
 		newF := make([]encodedField, len(e.fields), newCap)
 		copy(newF, e.fields)
 		e.fields = newF
@@ -488,10 +482,7 @@ func (e *encoder) encodeSliceArray(rv reflect.Value) (start, end int, err error)
 
 	savedStart := len(e.positions)
 	if cap(e.positions) < savedStart+n {
-		newCap := cap(e.positions) * 2
-		if newCap < savedStart+n {
-			newCap = savedStart + n
-		}
+		newCap := max(cap(e.positions)*2, savedStart+n)
 		newP := make([]elementPos, len(e.positions), newCap)
 		copy(newP, e.positions)
 		e.positions = newP
@@ -607,10 +598,7 @@ func (e *encoder) encodeMapObject(rv reflect.Value) (start, end int, err error) 
 
 	savedStart := len(e.fields)
 	if cap(e.fields) < savedStart+n {
-		newCap := cap(e.fields) * 2
-		if newCap < savedStart+n {
-			newCap = savedStart + n
-		}
+		newCap := max(cap(e.fields)*2, savedStart+n)
 		newF := make([]encodedField, len(e.fields), newCap)
 		copy(newF, e.fields)
 		e.fields = newF
@@ -675,10 +663,7 @@ func (e *encoder) encodeStructObject(rv reflect.Value) (start, end int, err erro
 
 	savedStart := len(e.fields)
 	if cap(e.fields) < savedStart+visibleCount {
-		newCap := cap(e.fields) * 2
-		if newCap < savedStart+visibleCount {
-			newCap = savedStart + visibleCount
-		}
+		newCap := max(cap(e.fields)*2, savedStart+visibleCount)
 		newF := make([]encodedField, len(e.fields), newCap)
 		copy(newF, e.fields)
 		e.fields = newF
