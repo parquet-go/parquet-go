@@ -17,9 +17,10 @@ import (
 // *Experimental*: Support for the VARIANT type is still being developed and subject to
 // change.
 //
-// Initial support does not attempt to process the variant data. So reading and writing
-// data of this type behaves as if it were just a group with two byte array fields, as
-// if the logical type annotation were absent. This may change in the future.
+// Go values written to a variant column with the "variant" struct tag are encoded
+// with the variant binary encoding (see the variant subpackage); structs with
+// Metadata and Value []byte fields pass the raw encoding through unchanged. When
+// reading, files that store the column shredded are reconstructed automatically.
 //
 // [VARIANT logical type]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#variant
 func Variant() Node {
@@ -48,9 +49,8 @@ func Variant() Node {
 // *Experimental*: Support for the VARIANT type is still being developed and subject to
 // change.
 //
-// Initial support does not attempt to process the variant data. So reading and writing
-// data of this type behaves as if it were just a group with the three described fields,
-// as if the logical type annotation were absent. This may change in the future.
+// Reading a shredded column through an unshredded variant schema reconstructs the
+// values per the [Parquet documentation].
 //
 // [VARIANT logical type]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#variant
 // [variant value types]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#shredded-value-types
