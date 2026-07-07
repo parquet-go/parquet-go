@@ -2450,7 +2450,7 @@ func TestConvertVariant(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Identity: metadata(0), typed_value(1), value(2)
+		// Identity: metadata(0), value(1), typed_value(2)
 		for i := range 3 {
 			if conv.Column(i) != i {
 				t.Errorf("column %d mapping: got %d, want %d", i, conv.Column(i), i)
@@ -2473,15 +2473,16 @@ func TestConvertVariant(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Target columns (alphabetically sorted within variant group):
+		// Target columns (canonical variant order within the group):
 		//   0: metadata (required ByteArray) — maps from source 0
-		//   1: typed_value (optional String) — missing from source; uses metadata (col 0)
-		//      as a structural template for def/rep levels, but actual values are null
-		//   2: value (optional ByteArray) — maps from source 1
+		//   1: value (optional ByteArray) — maps from source 1
+		//   2: typed_value (optional String) — missing from source; uses
+		//      metadata (col 0) as a structural template for def/rep levels,
+		//      but actual values are null
 		if got := conv.Column(0); got != 0 {
 			t.Errorf("metadata column mapping: got %d, want 0", got)
 		}
-		if got := conv.Column(2); got != 1 {
+		if got := conv.Column(1); got != 1 {
 			t.Errorf("value column mapping: got %d, want 1", got)
 		}
 	})

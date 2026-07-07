@@ -1004,121 +1004,121 @@ func TestSchemaRoundTrip(t *testing.T) {
 		required group shredded {
 			optional group bool (VARIANT) {
 				required binary metadata;
-				optional boolean typed_value;
 				optional binary value;
+				optional boolean typed_value;
 			}
 			optional group date (VARIANT) {
 				required binary metadata;
-				optional int32 typed_value (DATE);
 				optional binary value;
+				optional int32 typed_value (DATE);
 			}
 			optional group decimal (VARIANT) {
 				required binary metadata;
-				optional int32 typed_value (DECIMAL(9,5));
 				optional binary value;
+				optional int32 typed_value (DECIMAL(9,5));
 			}
 			optional group double (VARIANT) {
 				required binary metadata;
-				optional double typed_value;
 				optional binary value;
+				optional double typed_value;
 			}
 			optional group float (VARIANT) {
 				required binary metadata;
-				optional float typed_value;
 				optional binary value;
+				optional float typed_value;
 			}
 			optional group group (VARIANT) {
 				required binary metadata;
+				optional binary value;
 				optional group typed_value {
 					required group extra {
+						optional binary value;
 						optional group typed_value (LIST) {
 							repeated group list {
 								required group element {
+									optional binary value;
 									optional group typed_value {
 										required group name {
-											optional binary typed_value (STRING);
 											optional binary value;
+											optional binary typed_value (STRING);
 										}
 										required group num {
-											optional int64 typed_value (INT(64,true));
 											optional binary value;
+											optional int64 typed_value (INT(64,true));
 										}
 									}
-									optional binary value;
 								}
 							}
 						}
-						optional binary value;
 					}
 					required group id {
-						optional binary typed_value (STRING);
 						optional binary value;
+						optional binary typed_value (STRING);
 					}
 					required group tags {
+						optional binary value;
 						optional group typed_value (LIST) {
 							repeated group list {
 								required group element {
-									optional binary typed_value (STRING);
 									optional binary value;
+									optional binary typed_value (STRING);
 								}
 							}
 						}
-						optional binary value;
 					}
 				}
-				optional binary value;
 			}
 			optional group int16 (VARIANT) {
 				required binary metadata;
-				optional int32 typed_value (INT(16,true));
 				optional binary value;
+				optional int32 typed_value (INT(16,true));
 			}
 			optional group int32 (VARIANT) {
 				required binary metadata;
-				optional int32 typed_value (INT(32,true));
 				optional binary value;
+				optional int32 typed_value (INT(32,true));
 			}
 			optional group int64 (VARIANT) {
 				required binary metadata;
-				optional int64 typed_value (INT(64,true));
 				optional binary value;
+				optional int64 typed_value (INT(64,true));
 			}
 			optional group int8 (VARIANT) {
 				required binary metadata;
-				optional int32 typed_value (INT(8,true));
 				optional binary value;
+				optional int32 typed_value (INT(8,true));
 			}
 			optional group list (VARIANT) {
 				required binary metadata;
+				optional binary value;
 				optional group typed_value (LIST) {
 					repeated group list {
 						required group element {
-							optional binary typed_value (STRING);
 							optional binary value;
+							optional binary typed_value (STRING);
 						}
 					}
 				}
-				optional binary value;
 			}
 			optional group string (VARIANT) {
 				required binary metadata;
-				optional binary typed_value (STRING);
 				optional binary value;
+				optional binary typed_value (STRING);
 			}
 			optional group time (VARIANT) {
 				required binary metadata;
-				optional int64 typed_value (TIME(isAdjustedToUTC=true,unit=MICROS));
 				optional binary value;
+				optional int64 typed_value (TIME(isAdjustedToUTC=true,unit=MICROS));
 			}
 			optional group timestamp (VARIANT) {
 				required binary metadata;
-				optional int64 typed_value (TIMESTAMP(isAdjustedToUTC=true,unit=MICROS));
 				optional binary value;
+				optional int64 typed_value (TIMESTAMP(isAdjustedToUTC=true,unit=MICROS));
 			}
 			optional group uuid (VARIANT) {
 				required binary metadata;
-				optional fixed_len_byte_array(16) typed_value (UUID);
 				optional binary value;
+				optional fixed_len_byte_array(16) typed_value (UUID);
 			}
 		}
 		optional group unshredded (VARIANT) {
