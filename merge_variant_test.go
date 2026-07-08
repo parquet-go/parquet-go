@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/variant"
-	"slices"
 )
 
 // The tests in this file cover variant columns flowing through the standard
@@ -404,6 +404,128 @@ func TestMergeRowGroupsVariantExtraColumn(t *testing.T) {
 		if !got[i].Equal(want[i]) {
 			t.Errorf("row %d mismatch:\n got: %#v\nwant: %#v", i, got[i].GoValue(), want[i].GoValue())
 		}
+	}
+}
+
+// TestMergeRowGroupsVariantNestedOptional merges files whose variant column
+// sits below an optional group. The columnar fast path cannot express the
+// distinction between "the enclosing group is null" and "the variant column
+// is null" (both are missing rows to VariantReader), so these schemas must
+// take the row-based path, which carries the levels through unchanged.
+func TestMergeRowGroupsVariantNestedOptional(t *testing.T) {
+	type inner struct {
+		Var rawVariant `parquet:"var,optional,variant"`
+	}
+	type row struct {
+		ID   int32  `parquet:"id"`
+		Meta *inner `parquet:"meta,optional"`
+	}
+	build := func(shred parquet.Node) []byte {
+		variantNode := parquet.Variant()
+		if shred != nil {
+			n, err := parquet.ShreddedVariant(shred)
+			if err != nil {
+				t.Fatal(err)
+			}
+			variantNode = n
+		}
+		schema := parquet.NewSchema("table", parquet.Group{
+			"id": parquet.Int(32),
+			"meta": parquet.Optional(parquet.Group{
+				"var": parquet.Optional(variantNode),
+			}),
+		})
+		rows := []row{
+			{ID: 0, Meta: nil},      // enclosing group null
+			{ID: 1, Meta: &inner{}}, // group present, variant null
+			{ID: 2, Meta: &inner{Var: encodeRawVariant(variant.Int64(7))}},
+		}
+		buf := new(bytes.Buffer)
+		w := parquet.NewGenericWriter[row](buf, schema)
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+
+	data := mergeVariantFiles(t, [][]byte{
+		build(parquet.Group{"a": parquet.Int(64)}),
+		build(nil),
+	})
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := parquet.NewGenericReader[row](f)
+	defer r.Close()
+	got := make([]row, 6)
+	if n, _ := r.Read(got); n != 6 {
+		t.Fatalf("read %d rows, want 6", n)
+	}
+	for i, g := range got {
+		if wantNull := i%3 == 0; (g.Meta == nil) != wantNull {
+			t.Errorf("row %d: meta==nil is %v, want %v", i, g.Meta == nil, wantNull)
+		}
+	}
+	for _, i := range []int{2, 5} {
+		m, err := variant.DecodeMetadata(got[i].Meta.Var.Metadata)
+		if err != nil {
+			t.Fatalf("row %d: metadata: %v", i, err)
+		}
+		val, err := variant.Decode(m, got[i].Meta.Var.Value)
+		if err != nil {
+			t.Fatalf("row %d: value: %v", i, err)
+		}
+		if !val.Equal(variant.Int64(7)) {
+			t.Errorf("row %d: got %#v, want 7", i, val.GoValue())
+		}
+	}
+}
+
+// TestMergeRowGroupsVariantEmptyBytes merges a file holding a zero
+// rawVariant: the plain unshredded write path stores it as present with
+// empty metadata and value bytes, which both the re-shredding conversion
+// and the columnar reader must read as variant null rather than erroring.
+func TestMergeRowGroupsVariantEmptyBytes(t *testing.T) {
+	type row struct {
+		ID  int32      `parquet:"id"`
+		Var rawVariant `parquet:"var,optional,variant"`
+	}
+	files := [][]byte{
+		// A zero rawVariant behind an optional tag writes the variant group
+		// as present with empty metadata and value byte arrays.
+		func() []byte {
+			schema := parquet.NewSchema("table", parquet.Group{
+				"id":  parquet.Int(32),
+				"var": parquet.Optional(parquet.Variant()),
+			})
+			buf := new(bytes.Buffer)
+			w := parquet.NewGenericWriter[row](buf, schema)
+			if _, err := w.Write([]row{{ID: 0}, {ID: 1, Var: encodeRawVariant(variant.Int64(3))}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return buf.Bytes()
+		}(),
+		buildVariantFile(t, parquet.Group{"a": parquet.Int(64)}, []*variant.Value{
+			vptr(variant.MakeObject([]variant.Field{{Name: "a", Value: variant.Int64(4)}})),
+		}),
+	}
+	data := mergeVariantFiles(t, files)
+	got, present := readVariantColumnar(t, data, 100, "var")
+	if len(got) != 3 {
+		t.Fatalf("read %d rows, want 3", len(got))
+	}
+	if !present[0] || !got[0].IsNull() {
+		t.Errorf("row 0: got (present=%v, %#v), want variant null", present[0], got[0].GoValue())
+	}
+	if !present[1] || !got[1].Equal(variant.Int64(3)) {
+		t.Errorf("row 1: got %#v, want 3", got[1].GoValue())
 	}
 }
 

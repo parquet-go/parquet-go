@@ -342,6 +342,13 @@ type concatenatedRowGroup struct {
 	multiRowGroup
 }
 
+// rowGroupSegments returns nil, opting out of the writer's segment-splitting
+// fast path: the chunk-level view of the segments cannot express the
+// row-level variant conversions this row group exists to preserve. Without
+// this override the embedded multiRowGroup would expose the raw segments and
+// the writer would copy column chunks that still have the source shredding.
+func (c *concatenatedRowGroup) rowGroupSegments() []RowGroup { return nil }
+
 func (c *concatenatedRowGroup) Rows() Rows {
 	readers := make([]Rows, len(c.rowGroups))
 	for i, rg := range c.rowGroups {

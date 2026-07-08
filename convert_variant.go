@@ -185,6 +185,7 @@ func setLevelMapping(levels []byte, source, target byte) []byte {
 type variantScratch struct {
 	pos  []int
 	cols [][]Value
+	meta variant.MetadataBuilder
 }
 
 // convert re-shreds every occurrence of the variant column in the current
@@ -239,10 +240,6 @@ func (vc *variantConversion) convert(source [][]Value, scratch *variantScratch) 
 		}
 
 		reader.next(vc.source.metadataCol)
-		m, err := variant.DecodeMetadata(metaVal.ByteArray())
-		if err != nil {
-			return fmt.Errorf("variant metadata: %w", err)
-		}
 
 		var v variant.Value
 		if vc.sourceValueRequired {
@@ -252,10 +249,25 @@ func (vc *variantConversion) convert(source [][]Value, scratch *variantScratch) 
 			if !ok {
 				return fmt.Errorf("variant: value column has fewer values than metadata")
 			}
-			if v, err = variant.Decode(m, val.ByteArray()); err != nil {
-				return fmt.Errorf("variant: decoding value: %w", err)
+			if b := val.ByteArray(); len(b) == 0 {
+				// The plain unshredded write path stores a zero variant
+				// value as empty metadata and value bytes; read it as
+				// variant null like the row-based reader.
+				v = variant.Null()
+			} else {
+				m, err := variant.DecodeMetadata(metaVal.ByteArray())
+				if err != nil {
+					return fmt.Errorf("variant metadata: %w", err)
+				}
+				if v, err = variant.Decode(m, b); err != nil {
+					return fmt.Errorf("variant: decoding value: %w", err)
+				}
 			}
 		} else {
+			m, err := variant.DecodeMetadata(metaVal.ByteArray())
+			if err != nil {
+				return fmt.Errorf("variant metadata: %w", err)
+			}
 			var present bool
 			v, present, err = vc.source.read(&reader, m, vc.sourceGroupDef, vc.sourceGroupRep)
 			if err != nil {
@@ -291,17 +303,18 @@ func (vc *variantConversion) convert(source [][]Value, scratch *variantScratch) 
 // emit re-shreds one occurrence of the variant value into the scratch
 // columns of the target group, mirroring the row-based shredded write path.
 func (vc *variantConversion) emit(v variant.Value, rep byte, scratch *variantScratch) {
-	var b variant.MetadataBuilder
+	b := &scratch.meta
+	b.Reset()
 	if vc.targetValueRequired {
 		// Plain unshredded target: encode the whole value into the
 		// required value column.
-		encoded := variant.Encode(&b, v)
+		encoded := variant.Encode(b, v)
 		appendShredded(scratch.cols, 0, vc.target.valueCol, ByteArrayValue(encoded), vc.targetDef, rep)
 	} else {
 		// The row's metadata dictionary contains every object field name
 		// of the value, shredded or not (VariantShredding.md).
-		addVariantFieldNames(&b, v)
-		vc.target.write(scratch.cols, 0, &b, v, true, shredLevels{
+		addVariantFieldNames(b, v)
+		vc.target.write(scratch.cols, 0, b, v, true, shredLevels{
 			baseDef: int(vc.targetDef),
 			baseRep: int(vc.targetRep),
 			rep:     rep,

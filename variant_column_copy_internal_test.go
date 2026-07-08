@@ -75,6 +75,30 @@ func TestVariantCopyPlan(t *testing.T) {
 			t.Fatal("variant under a repeated field should reject the fast path")
 		}
 	})
+
+	t.Run("variant under optional group", func(t *testing.T) {
+		// An optional ancestor's null rows are indistinguishable from
+		// variant-null rows in the columnar readers, so the fast path must
+		// leave these schemas to the row-based copy.
+		s := NewSchema("table", Group{
+			"meta": Optional(Group{"var": Optional(Variant())}),
+		})
+		if _, ok := makeVariantCopyPlan(s, s); ok {
+			t.Fatal("variant under an optional group should reject the fast path")
+		}
+	})
+
+	t.Run("variant under required group", func(t *testing.T) {
+		s := func(v Node) *Schema {
+			return NewSchema("table", Group{
+				"meta": Group{"var": Optional(v)},
+			})
+		}
+		plan, ok := makeVariantCopyPlan(s(Variant()), s(shred(Group{"a": Int(64)})))
+		if !ok || !plan.needsReshred {
+			t.Fatalf("ok=%v, want a re-shredding plan for a variant under a required group", ok)
+		}
+	})
 }
 
 // TestVariantCopySources checks the decomposition of merged row groups into

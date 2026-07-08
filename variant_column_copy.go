@@ -54,6 +54,11 @@ const variantCopyWindow = 256
 // On error, rows already copied remain written and w must be abandoned along
 // with its parent writer's current row group, as documented on
 // VariantColumnWriter.
+//
+// The variant column should not sit below optional or repeated fields on
+// either side: the reader reports a null enclosing level and a null variant
+// column both as missing rows, and the writer writes missing rows as null
+// variant columns, so enclosing nulls would not round-trip.
 func CopyVariantRows(w *VariantColumnWriter, r *VariantReader) (int64, error) {
 	cp, err := newVariantCopier(r.Root())
 	if err != nil {
@@ -360,7 +365,12 @@ type variantCopyPlan struct {
 // makeVariantCopyPlan reports whether the source schema can be copied into
 // the target column-by-column: the schemas must be equal everywhere except
 // inside variant groups (same fields, repetitions, and leaf types, in any
-// field order), and variant groups must not sit under repeated fields.
+// field order), and variant groups must sit under required fields only. An
+// optional or repeated ancestor stores its levels in the variant's leaf
+// columns, which the variant readers and writers cannot express: the reader
+// reports every enclosing null as a missing row, and the writer writes
+// every null row at the variant group's own level, so the copy would
+// silently rewrite "ancestor is null" as "variant is null".
 func makeVariantCopyPlan(target, source *Schema) (*variantCopyPlan, bool) {
 	plan := &variantCopyPlan{}
 	if !planVariantCopy(target, source, 0, 0, nil, plan) {
@@ -417,9 +427,11 @@ func planVariantCopy(t, s Node, tCol, sCol int, path []string, plan *variantCopy
 		if !ok {
 			return false
 		}
-		if tf.Repeated() && !tf.Leaf() && schemaHasVariant(tf) {
-			// Variant groups under repeated fields are not supported by
-			// the columnar readers and writers.
+		if !tf.Required() && !tf.Leaf() && !isVariant(tf) && schemaHasVariant(tf) {
+			// A variant group below an optional or repeated field cannot be
+			// copied columnar (see makeVariantCopyPlan). The variant group
+			// itself may be optional: its own presence is part of what the
+			// variant readers and writers track.
 			return false
 		}
 		if !planVariantCopy(tf, sf, tCol, sColOf[tf.Name()], append(path, tf.Name()), plan) {

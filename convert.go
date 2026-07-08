@@ -85,8 +85,8 @@ type conversionColumn struct {
 	targetKind    Kind // Target column kind for creating proper null values
 	isOptional    bool // Whether the target column is optional (for null handling)
 	// Index in conversion.variants of the variant conversion producing this
-	// column, or -1; variantOutput selects its metadata (0) or value (1)
-	// output column.
+	// column, or -1; variantOutput is the column's index within the target
+	// variant group's leaf columns (its slot in variantScratch.cols).
 	variantIndex  int
 	variantOutput int
 }
