@@ -1009,12 +1009,12 @@ func TestVariantReaderDictionary(t *testing.T) {
 // ($.a) of a variant column, columnar cursors vs. the row-based read path.
 func BenchmarkVariantReaderScan(b *testing.B) {
 	const numRows = 10000
-	values := make([]*variant.Value, numRows)
+	values := make([]variant.Value, numRows)
 	for i := range values {
-		values[i] = vptr(variant.MakeObject([]variant.Field{
+		values[i] = variant.MakeObject([]variant.Field{
 			{Name: "a", Value: variant.Int64(int64(i))},
 			{Name: "s", Value: variant.String("payload that is not projected")},
-		}))
+		})
 	}
 	shredded, err := parquet.ShreddedVariant(parquet.Group{"a": parquet.Int(64), "s": parquet.String()})
 	if err != nil {
@@ -1026,7 +1026,7 @@ func BenchmarkVariantReaderScan(b *testing.B) {
 	})
 	rows := make([]shreddedVariantRow, numRows)
 	for i, v := range values {
-		rows[i] = shreddedVariantRow{ID: int32(i), Var: encodeRawVariant(*v)}
+		rows[i] = shreddedVariantRow{ID: int32(i), Var: encodeRawVariant(v)}
 	}
 	buf := new(bytes.Buffer)
 	w := parquet.NewGenericWriter[shreddedVariantRow](buf, schema)

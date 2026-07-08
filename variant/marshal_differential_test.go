@@ -70,13 +70,13 @@ func TestMarshalMatchesValueOf(t *testing.T) {
 		"string_short": {"hello", String("hello")},
 		"string_long":  {longString, String(longString)},
 		"bytes":        {[]byte{1, 2, 3}, Binary([]byte{1, 2, 3})},
-		// [16]byte arrays (including uuid.UUID and types derived from it)
-		// map to the UUID primitive, matching the FIXED_LEN_BYTE_ARRAY(16)
-		// semantics of shredded UUID columns; other arrays stay arrays.
+		// uuid.UUID maps to the UUID primitive; plain [16]byte (and types
+		// derived from it) map to Binary, matching []byte. Other arrays
+		// stay arrays.
 		"uuid":           {u, UUID(u)},
-		"byte_array_16":  {[16]byte(u), UUID(u)},
-		"derived_16":     {derived16(u), UUID(u)},
-		"named_elem_16":  {namedElem16{0x55, 0x0e, 0x84}, UUID(uuid.UUID{0x55, 0x0e, 0x84})},
+		"byte_array_16":  {[16]byte(u), Binary(u[:])},
+		"derived_16":     {derived16(u), Binary(u[:])},
+		"named_elem_16":  {namedElem16{0x55, 0x0e, 0x84}, Binary([]byte{0x55, 0x0e, 0x84, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})},
 		"array_non_byte": {[3]int32{1, 2, 3}, MakeArray([]Value{Int32(1), Int32(2), Int32(3)})},
 		// time.Time maps to UTC-adjusted timestamps: nanosecond precision
 		// only when the value has sub-microsecond components and fits the

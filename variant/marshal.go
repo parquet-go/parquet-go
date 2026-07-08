@@ -119,15 +119,15 @@ func goToVariantReflect(rv reflect.Value) (Value, error) {
 		}
 		return goSliceToArray(rv)
 	case reflect.Array:
-		// [16]byte arrays (including uuid.UUID and types derived from it)
-		// map to the UUID primitive. The element-wise copy handles named
-		// element types like [16]myByte, which reflect.Copy rejects.
-		if rv.Type().Elem().Kind() == reflect.Uint8 && rv.Len() == 16 {
-			var u uuid.UUID
-			for i := range u {
-				u[i] = byte(rv.Index(i).Uint())
+		// Byte arrays (including [16]byte) map to Binary. uuid.UUID is
+		// handled above via its concrete type; without a logical UUID
+		// annotation a fixed-length byte array is just bytes.
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			b := make([]byte, rv.Len())
+			for i := range b {
+				b[i] = byte(rv.Index(i).Uint())
 			}
-			return UUID(u), nil
+			return Binary(b), nil
 		}
 		return goSliceToArray(rv)
 	case reflect.Map:
