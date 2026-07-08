@@ -153,6 +153,58 @@ func TestReplayValidationAgreesWithDecode(t *testing.T) {
 	}
 }
 
+// TestReplayObjectFieldOrder exercises the duplicate-field detection of the
+// out-of-order path: the spec requires object fields sorted by name, and
+// both Replay and Decode accept unsorted fields (lenient writers) but must
+// still reject duplicates that are not adjacent.
+func TestReplayObjectFieldOrder(t *testing.T) {
+	var mb MetadataBuilder
+	encoded := Encode(&mb, MakeObject([]Field{
+		{Name: "a", Value: Null()},
+		{Name: "b", Value: Null()},
+		{Name: "c", Value: Null()},
+	}))
+	m, err := DecodeMetadata(mb.AppendTo(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Layout: header, num_elements, field_ids[3], field_offsets[4],
+	// values[3] (each value a 1-byte null). Verify the assumed layout and
+	// map names to field ID bytes so the IDs can be rewritten.
+	if h := encoded[0]; len(encoded) != 12 || h&0x03 != byte(BasicObject) || h>>2 != 0 {
+		t.Fatalf("unexpected encoding % x", encoded)
+	}
+	idOf := make(map[string]byte, 3)
+	for _, i := range []int{2, 3, 4} {
+		name, err := m.Lookup(int(encoded[i]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		idOf[name] = encoded[i]
+	}
+	withIDs := func(names ...string) []byte {
+		out := slices.Clone(encoded)
+		for i, name := range names {
+			out[2+i] = idOf[name]
+		}
+		return out
+	}
+
+	replay := func(data []byte) error {
+		var b Builder
+		return Replay(&b, m, data)
+	}
+	if err := replay(withIDs("c", "a", "b")); err != nil {
+		t.Errorf("Replay rejected out-of-order fields: %v", err)
+	}
+	if err := replay(withIDs("c", "a", "c")); err == nil {
+		t.Error("Replay accepted a non-adjacent duplicate field")
+	}
+	if err := replay(withIDs("a", "b", "b")); err == nil {
+		t.Error("Replay accepted an adjacent duplicate field")
+	}
+}
+
 // TestReplayAllocations checks that replaying a container of scalars emits
 // no allocations: this is what lets the columnar variant copy move residual
 // values without a per-row decode cost.

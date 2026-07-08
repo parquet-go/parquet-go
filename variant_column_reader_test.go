@@ -415,10 +415,10 @@ func TestVariantReaderSpecFiles(t *testing.T) {
 	}
 }
 
-// buildVariantFile writes the given variant values (nil means a null
-// variant row) into a file with the given typed_value shredding schema
-// (nil means unshredded), returning the file bytes.
-func buildVariantFile(t *testing.T, shred parquet.Node, values []*variant.Value, options ...parquet.WriterOption) []byte {
+// variantTestSchema builds the schema shared by the variant test file
+// builders: an id column plus an optional "var" variant column shredded per
+// shred (nil means unshredded).
+func variantTestSchema(t *testing.T, shred parquet.Node) *parquet.Schema {
 	t.Helper()
 	variantNode := parquet.Variant()
 	if shred != nil {
@@ -428,10 +428,18 @@ func buildVariantFile(t *testing.T, shred parquet.Node, values []*variant.Value,
 		}
 		variantNode = shredded
 	}
-	schema := parquet.NewSchema("table", parquet.Group{
+	return parquet.NewSchema("table", parquet.Group{
 		"id":  parquet.Int(32),
 		"var": parquet.Optional(variantNode),
 	})
+}
+
+// buildVariantFile writes the given variant values (nil means a null
+// variant row) into a file with the given typed_value shredding schema
+// (nil means unshredded), returning the file bytes.
+func buildVariantFile(t *testing.T, shred parquet.Node, values []*variant.Value, options ...parquet.WriterOption) []byte {
+	t.Helper()
+	schema := variantTestSchema(t, shred)
 	rows := make([]shreddedVariantRow, len(values))
 	for i, v := range values {
 		rows[i] = shreddedVariantRow{ID: int32(i)}
@@ -490,6 +498,59 @@ func TestVariantReaderErrors(t *testing.T) {
 	}
 	if _, err := r.Next(1); err != io.EOF {
 		t.Errorf("Next after exhaustion: err = %v, want io.EOF", err)
+	}
+}
+
+// TestVariantReaderAccessors covers the small informational accessors: the
+// String forms of location tags and cursor kinds, NumRows, and the nil
+// results of typed accessors on non-leaf cursors.
+func TestVariantReaderAccessors(t *testing.T) {
+	for want, loc := range map[string]variant.Loc{
+		"missing": variant.LocMissing, "null": variant.LocNull,
+		"typed": variant.LocTyped, "typed-object": variant.LocTypedObject,
+		"typed-list": variant.LocTypedList, "residual": variant.LocResidual,
+		"unknown": variant.Loc(99),
+	} {
+		if got := loc.String(); got != want {
+			t.Errorf("variant.Loc(%d).String() = %q, want %q", loc, got, want)
+		}
+	}
+	for want, kind := range map[string]parquet.VariantCursorKind{
+		"unshredded": parquet.VariantCursorUnshredded, "leaf": parquet.VariantCursorLeaf,
+		"object": parquet.VariantCursorObject, "list": parquet.VariantCursorList,
+		"unknown": parquet.VariantCursorKind(99),
+	} {
+		if got := kind.String(); got != want {
+			t.Errorf("VariantCursorKind(%d).String() = %q, want %q", kind, got, want)
+		}
+	}
+
+	values := []*variant.Value{vptr(variant.MakeObject([]variant.Field{
+		{Name: "a", Value: variant.Int64(1)},
+	}))}
+	data := buildVariantFile(t, parquet.Group{"a": parquet.Int(64)}, values)
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if n := r.NumRows(); n != 1 {
+		t.Errorf("NumRows() = %d, want 1", n)
+	}
+	root := r.Root() // object cursor: every typed accessor returns nothing
+	if root.LeafType() != nil {
+		t.Errorf("LeafType() = %v on an object cursor, want nil", root.LeafType())
+	}
+	slab, offsets := root.ByteArrays()
+	flba, size := root.FixedLenByteArrays()
+	if root.Booleans() != nil || root.Int32s() != nil || root.Int64s() != nil ||
+		root.Floats() != nil || root.Doubles() != nil ||
+		slab != nil || offsets != nil || flba != nil || size != 0 {
+		t.Error("typed accessors on an object cursor returned values, want none")
 	}
 }
 

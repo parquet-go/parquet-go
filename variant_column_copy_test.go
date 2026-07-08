@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/variant"
 )
@@ -31,6 +32,8 @@ func compactVariantFiles(t *testing.T, target parquet.Node, sources [][]byte, op
 		}
 		variantNode = shredded
 	}
+	// The destination schema holds only the variant column: CopyVariantRows
+	// fills the variant leaf columns and nothing else.
 	schema := parquet.NewSchema("table", parquet.Group{
 		"var": parquet.Optional(variantNode),
 	})
@@ -51,8 +54,12 @@ func compactVariantFiles(t *testing.T, target parquet.Node, sources [][]byte, op
 			if err != nil {
 				t.Fatalf("NewVariantReader on source %d: %v", i, err)
 			}
-			if _, err := parquet.CopyVariantRows(vw, r); err != nil {
+			n, err := parquet.CopyVariantRows(vw, r)
+			if err != nil {
 				t.Fatalf("CopyVariantRows on source %d: %v", i, err)
+			}
+			if n != rg.NumRows() {
+				t.Fatalf("CopyVariantRows on source %d copied %d rows, want %d", i, n, rg.NumRows())
 			}
 			if err := r.Close(); err != nil {
 				t.Fatalf("closing reader on source %d: %v", i, err)
@@ -95,29 +102,38 @@ func TestCopyVariantRowsRandomized(t *testing.T) {
 	}
 }
 
-// TestCopyVariantRowsMultiFile compacts several files with different
-// shredding schemas (and one unshredded) into a single file, shredded and
-// unshredded.
-func TestCopyVariantRowsMultiFile(t *testing.T) {
-	r := rand.New(rand.NewPCG(77, 99))
+// buildMultiSchemaVariantSources builds one file per shredding schema in a
+// fixed three-schema mix (two different shreddings and one unshredded) with
+// random values and occasional null rows, returning the files and the
+// concatenated expected values.
+func buildMultiSchemaVariantSources(t *testing.T, r *rand.Rand, rowsPerFile int) ([][]byte, []*variant.Value) {
+	t.Helper()
 	schemas := []parquet.Node{
 		parquet.Group{"a": parquet.Int(64), "b": parquet.String()},
 		parquet.Group{"a": parquet.String(), "c": parquet.List(parquet.Int(64))},
 		nil, // unshredded
 	}
-	var sources [][]byte
+	var files [][]byte
 	var all []*variant.Value
 	for _, shred := range schemas {
-		values := make([]*variant.Value, 9)
+		values := make([]*variant.Value, rowsPerFile)
 		for j := range values {
 			if r.IntN(6) == 0 {
-				continue
+				continue // null variant row
 			}
 			values[j] = vptr(randomVariant(r, 0))
 		}
-		sources = append(sources, buildVariantFile(t, shred, values))
+		files = append(files, buildVariantFile(t, shred, values))
 		all = append(all, values...)
 	}
+	return files, all
+}
+
+// TestCopyVariantRowsMultiFile compacts several files with different
+// shredding schemas (and one unshredded) into a single file, shredded and
+// unshredded.
+func TestCopyVariantRowsMultiFile(t *testing.T) {
+	sources, all := buildMultiSchemaVariantSources(t, rand.New(rand.NewPCG(77, 99)), 9)
 
 	targets := map[string]parquet.Node{
 		"shredded":   parquet.Group{"a": parquet.Int(64), "c": parquet.List(parquet.Int(64))},
@@ -162,43 +178,53 @@ func TestCopyVariantRowsManyRows(t *testing.T) {
 
 // TestCopyVariantRowsStaysTyped verifies that compacting between identical
 // shredding schemas keeps values in the typed_value columns instead of
-// degrading them to residual variant binary.
+// degrading them to residual variant binary, across every shredded leaf
+// type (which also exercises every typed emitter of the copy).
 func TestCopyVariantRowsStaysTyped(t *testing.T) {
-	shred := parquet.Group{"a": parquet.Int(64), "b": parquet.String()}
+	shred := parquet.Group{}
+	fields := make(map[string]variant.Value)
+	u := uuid.MustParse("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+	for name, tv := range map[string]struct {
+		node  parquet.Node
+		value variant.Value
+	}{
+		"b":      {parquet.Leaf(parquet.BooleanType), variant.Bool(true)},
+		"i8":     {parquet.Int(8), variant.Int8(-5)},
+		"i16":    {parquet.Int(16), variant.Int16(300)},
+		"i32":    {parquet.Int(32), variant.Int32(70000)},
+		"i64":    {parquet.Int(64), variant.Int64(1 << 40)},
+		"f":      {parquet.Leaf(parquet.FloatType), variant.Float(1.5)},
+		"d":      {parquet.Leaf(parquet.DoubleType), variant.Double(2.5)},
+		"s":      {parquet.String(), variant.String("hello")},
+		"bin":    {parquet.Leaf(parquet.ByteArrayType), variant.Binary([]byte{1, 2, 3})},
+		"date":   {parquet.Date(), variant.Date(19000)},
+		"uuid":   {parquet.UUID(), variant.UUID(u)},
+		"ts":     {parquet.TimestampAdjusted(parquet.Microsecond, true), variant.Timestamp(1234567)},
+		"tsntz":  {parquet.TimestampAdjusted(parquet.Microsecond, false), variant.TimestampNTZ(1234567)},
+		"tsn":    {parquet.TimestampAdjusted(parquet.Nanosecond, true), variant.TimestampNanos(123456789)},
+		"tsnntz": {parquet.TimestampAdjusted(parquet.Nanosecond, false), variant.TimestampNTZNanos(123456789)},
+		"time":   {parquet.TimeAdjusted(parquet.Microsecond, false), variant.Time(456789)},
+		"dec4":   {parquet.Decimal(2, 9, parquet.Int32Type), variant.Decimal4(12345, 2)},
+		"dec8":   {parquet.Decimal(2, 18, parquet.Int64Type), variant.Decimal8(1234567, 2)},
+		"dec16":  {parquet.Decimal(2, 38, parquet.FixedLenByteArrayType(16)), variant.Decimal16([16]byte{0x39, 0x30}, 2)}, // 12345 little-endian
+	} {
+		shred[name] = tv.node
+		fields[name] = tv.value
+	}
+	names := make([]string, 0, len(fields))
+	vfields := make([]variant.Field, 0, len(fields))
+	for name, v := range fields {
+		names = append(names, name)
+		vfields = append(vfields, variant.Field{Name: name, Value: v})
+	}
 	values := make([]*variant.Value, 20)
 	for j := range values {
-		values[j] = vptr(variant.MakeObject([]variant.Field{
-			{Name: "a", Value: variant.Int64(int64(j))},
-			{Name: "b", Value: variant.String(fmt.Sprintf("s%d", j))},
-		}))
+		values[j] = vptr(variant.MakeObject(vfields))
 	}
 	data := buildVariantFile(t, shred, values)
 	compacted := compactVariantFiles(t, shred, [][]byte{data})
 	assertVariantFile(t, compacted, values, "stays typed")
-
-	f, err := parquet.OpenFile(bytes.NewReader(compacted), int64(len(compacted)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	cursors := map[string]*parquet.VariantCursor{
-		"a": r.Path("a"),
-		"b": r.Path("b"),
-	}
-	if _, err := r.Next(len(values)); err != nil {
-		t.Fatal(err)
-	}
-	for name, c := range cursors {
-		for e, loc := range c.Locs() {
-			if loc != variant.LocTyped {
-				t.Errorf("field %q row %d: location %v, want typed", name, e, loc)
-			}
-		}
-	}
+	assertVariantFieldsTyped(t, compacted, len(values), names...)
 }
 
 // BenchmarkCopyVariantRows compares compacting a shredded variant file

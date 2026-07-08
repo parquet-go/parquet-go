@@ -52,24 +52,6 @@ type variantConversion struct {
 	repLevels []byte
 }
 
-// variantGroupOf builds the shredding tree of a variant group node,
-// accepting both the shredded shapes (optional value) and the plain
-// unshredded shape (required value) that VariantEncoding.md declares. The
-// boolean result reports the latter.
-func variantGroupOf(node Node) (*shreddedVariantGroup, bool, error) {
-	g, err := buildShreddedVariantGroup(node, 0, 0, 0)
-	if err != nil {
-		if u, ok := unshreddedVariantGroupOf(node); ok {
-			return u, true, nil
-		}
-		return nil, false, err
-	}
-	if g.metadataCol < 0 {
-		return nil, false, fmt.Errorf("variant: variant group has no metadata field")
-	}
-	return g, false, nil
-}
-
 // variantNodesEquivalent reports whether two variant group nodes have the
 // same shredding, ignoring the repetition of the group node itself and
 // field order. Equivalent groups convert through the generic column

@@ -30,18 +30,7 @@ import (
 // a null variant row.
 func buildVariantFileStreaming(t *testing.T, shred parquet.Node, values []*variant.Value, options ...parquet.WriterOption) []byte {
 	t.Helper()
-	variantNode := parquet.Variant()
-	if shred != nil {
-		shredded, err := parquet.ShreddedVariant(shred)
-		if err != nil {
-			t.Fatalf("building shredded variant node: %v", err)
-		}
-		variantNode = shredded
-	}
-	schema := parquet.NewSchema("table", parquet.Group{
-		"id":  parquet.Int(32),
-		"var": parquet.Optional(variantNode),
-	})
+	schema := variantTestSchema(t, shred)
 	buf := new(bytes.Buffer)
 	opts := append([]parquet.WriterOption{schema}, options...)
 	w := parquet.NewWriter(buf, opts...)
@@ -161,6 +150,41 @@ func readMetadataColumn(t *testing.T, data []byte, col int) [][]byte {
 		parquet.Release(p)
 	}
 	return metas
+}
+
+// assertVariantFieldsTyped opens a written file and asserts that every row
+// of the given shredded fields is stored in the typed_value column (not as
+// residual variant binary), which is how tests verify a copy or merge kept
+// (or re-established) the shredding.
+func assertVariantFieldsTyped(t *testing.T, data []byte, numRows int, fields ...string) {
+	t.Helper()
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	cursors := make(map[string]*parquet.VariantCursor, len(fields))
+	for _, name := range fields {
+		cursors[name] = r.Path(name)
+	}
+	n, err := r.Next(numRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != numRows {
+		t.Fatalf("read %d rows, want %d", n, numRows)
+	}
+	for name, c := range cursors {
+		for e, loc := range c.Locs() {
+			if loc != variant.LocTyped {
+				t.Errorf("field %q row %d: location %v, want typed", name, e, loc)
+			}
+		}
+	}
 }
 
 // TestVariantColumnWriterRandomizedDifferential runs the randomized
@@ -321,14 +345,14 @@ func TestVariantColumnWriterEvents(t *testing.T) {
 	}
 
 	want := []*variant.Value{
-		ptrTo(variant.MakeObject([]variant.Field{
+		vptr(variant.MakeObject([]variant.Field{
 			{Name: "name", Value: variant.String("alice")},
 			{Name: "extra", Value: variant.MakeObject([]variant.Field{{Name: "x", Value: variant.Int64(1)}})},
 			{Name: "age", Value: variant.Int64(30)},
 			{Name: "tags", Value: variant.MakeArray([]variant.Value{variant.String("a"), variant.String("b")})},
 		})),
-		ptrTo(variant.Int32(42)),
-		ptrTo(variant.MakeObject([]variant.Field{
+		vptr(variant.Int32(42)),
+		vptr(variant.MakeObject([]variant.Field{
 			{Name: "age", Value: variant.String("not a number")},
 			{Name: "tags", Value: variant.MakeArray([]variant.Value{variant.String("ok"), variant.Int64(7), variant.Null()})},
 		})),
@@ -742,12 +766,12 @@ func TestVariantColumnWriterNestedEmptyList(t *testing.T) {
 	}
 
 	want := []*variant.Value{
-		ptrTo(variant.MakeArray([]variant.Value{
+		vptr(variant.MakeArray([]variant.Value{
 			variant.MakeArray([]variant.Value{variant.Int64(1), variant.Int64(2)}),
 			variant.MakeArray(nil),
 			variant.String("conflict"),
 		})),
-		ptrTo(variant.MakeArray(nil)),
+		vptr(variant.MakeArray(nil)),
 	}
 	assertVariantFile(t, buf.Bytes(), want, "nested empty list")
 }

@@ -99,25 +99,7 @@ func fieldByName(t *testing.T, node parquet.Node, name string) parquet.Node {
 // to unshredded, and every value must survive both the columnar fast path
 // (WriteRowGroup) and the row-based path (ReadRowsFrom of the merged rows).
 func TestMergeRowGroupsVariantReshred(t *testing.T) {
-	r := rand.New(rand.NewPCG(5, 25))
-	schemas := []parquet.Node{
-		parquet.Group{"a": parquet.Int(64), "b": parquet.String()},
-		parquet.Group{"a": parquet.String(), "c": parquet.List(parquet.Int(64))},
-		nil, // unshredded
-	}
-	var files [][]byte
-	var all []*variant.Value
-	for _, shred := range schemas {
-		values := make([]*variant.Value, 7)
-		for j := range values {
-			if r.IntN(6) == 0 {
-				continue // null variant row
-			}
-			values[j] = vptr(randomVariant(r, 0))
-		}
-		files = append(files, buildVariantFile(t, shred, values))
-		all = append(all, values...)
-	}
+	files, all := buildMultiSchemaVariantSources(t, rand.New(rand.NewPCG(5, 25)), 7)
 
 	// Columnar fast path through WriteRowGroup.
 	data := mergeVariantFiles(t, files)
@@ -186,26 +168,7 @@ func TestMergeRowGroupsVariantExplicitSchema(t *testing.T) {
 
 	// Both fields must be typed in the merged file: the copy re-shredded
 	// values from both the shredded and the unshredded source.
-	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	ca, cb := r.Path("a"), r.Path("b")
-	if _, err := r.Next(len(all)); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range []*parquet.VariantCursor{ca, cb} {
-		for e, loc := range c.Locs() {
-			if loc != variant.LocTyped {
-				t.Errorf("entry %d: location %v, want typed", e, loc)
-			}
-		}
-	}
+	assertVariantFieldsTyped(t, data, len(all), "a", "b")
 }
 
 // TestMergeRowGroupsVariantSameShredding merges files with identical
@@ -238,29 +201,7 @@ func TestMergeRowGroupsVariantSameShredding(t *testing.T) {
 
 	data := mergeVariantFiles(t, files)
 	assertVariantFile(t, data, slices.Concat(valuesA, valuesB), "same shredding")
-
-	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	c := r.Path("a")
-	n, err := r.Next(1000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != len(valuesA)+len(valuesB) {
-		t.Fatalf("read %d rows, want %d", n, len(valuesA)+len(valuesB))
-	}
-	for e, loc := range c.Locs() {
-		if loc != variant.LocTyped {
-			t.Errorf("row %d: location %v, want typed", e, loc)
-		}
-	}
+	assertVariantFieldsTyped(t, data, len(valuesA)+len(valuesB), "a")
 }
 
 // TestMergeRowGroupsVariantSorted exercises the sorted (heap) merge, which
@@ -325,24 +266,15 @@ func TestMergeRowGroupsVariantSorted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, present := readVariantColumnar(t, buf.Bytes(), 100, "var")
-	if len(got) != 10 {
-		t.Fatalf("read %d rows, want 10", len(got))
-	}
-	for i := range got {
-		id := int32(i) // ids interleave to 0..9 after the sorted merge
-		want, ok := byIDA[id]
-		if !ok {
-			want = byIDB[id]
-		}
-		if !present[i] {
-			t.Errorf("row %d: null, want %#v", i, want.GoValue())
-			continue
-		}
-		if !got[i].Equal(want) {
-			t.Errorf("row %d mismatch:\n got: %#v\nwant: %#v", i, got[i].GoValue(), want.GoValue())
+	want := make([]*variant.Value, 10)
+	for id := range int32(10) { // ids interleave to 0..9 after the sorted merge
+		if v, ok := byIDA[id]; ok {
+			want[id] = vptr(v)
+		} else {
+			want[id] = vptr(byIDB[id])
 		}
 	}
+	assertVariantFile(t, buf.Bytes(), want, "sorted merge")
 }
 
 // TestMergeRowGroupsVariantExtraColumn merges sources whose non-variant
@@ -391,20 +323,7 @@ func TestMergeRowGroupsVariantExtraColumn(t *testing.T) {
 	}
 
 	data := mergeVariantFiles(t, [][]byte{bufA.Bytes(), bufB.Bytes()})
-	got, present := readVariantColumnar(t, data, 100, "var")
-	want := []variant.Value{v1, v2}
-	if len(got) != len(want) {
-		t.Fatalf("read %d rows, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if !present[i] {
-			t.Errorf("row %d: null, want %#v", i, want[i].GoValue())
-			continue
-		}
-		if !got[i].Equal(want[i]) {
-			t.Errorf("row %d mismatch:\n got: %#v\nwant: %#v", i, got[i].GoValue(), want[i].GoValue())
-		}
-	}
+	assertVariantFile(t, data, []*variant.Value{vptr(v1), vptr(v2)}, "extra column")
 }
 
 // TestMergeRowGroupsVariantNestedOptional merges files whose variant column
@@ -517,16 +436,11 @@ func TestMergeRowGroupsVariantEmptyBytes(t *testing.T) {
 		}),
 	}
 	data := mergeVariantFiles(t, files)
-	got, present := readVariantColumnar(t, data, 100, "var")
-	if len(got) != 3 {
-		t.Fatalf("read %d rows, want 3", len(got))
-	}
-	if !present[0] || !got[0].IsNull() {
-		t.Errorf("row 0: got (present=%v, %#v), want variant null", present[0], got[0].GoValue())
-	}
-	if !present[1] || !got[1].Equal(variant.Int64(3)) {
-		t.Errorf("row 1: got %#v, want 3", got[1].GoValue())
-	}
+	assertVariantFile(t, data, []*variant.Value{
+		vptr(variant.Null()), // the empty bytes read as variant null
+		vptr(variant.Int64(3)),
+		vptr(variant.MakeObject([]variant.Field{{Name: "a", Value: variant.Int64(4)}})),
+	}, "empty bytes")
 }
 
 // TestMergeRowGroupsVariantRandomized runs the randomized schema/value
