@@ -736,6 +736,17 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 		}
 
 		if isDictionaryEncoding(encoding) {
+			// The deprecated PLAIN_DICTIONARY encoding is normalized to
+			// RLE_DICTIONARY: the spec defines a single dictionary data
+			// page layout for both enum values — Encodings.md: "Data page
+			// format: the bit width used to encode the entry ids stored
+			// as 1 byte (max bit width = 32), followed by the values
+			// encoded using the RLE/Bit-Packing described above" — so the
+			// plain int32 index layout of plain.DictionaryEncoding
+			// produces pages no reader understands. Schemas derived from
+			// files written by legacy writers report PLAIN_DICTIONARY as
+			// the column encoding, which is how the configuration arises.
+			encoding = &RLEDictionary
 			dictBuffer := columnType.NewValues(make([]byte, 0, defaultDictBufferSize), nil)
 			dictionary = columnType.NewDictionary(columnIndex, 0, dictBuffer)
 			columnType = dictionary.Type()
