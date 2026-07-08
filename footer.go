@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"sync"
 
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
@@ -29,15 +28,14 @@ import (
 type Footer struct {
 	metadata format.FileMetaData
 	data     []byte // backing buffer aliased by metadata strings and byte slices
+	schema   *Schema
+	size     int64 // size of the file the footer was read from, 0 if unknown
 
 	// Decryption state carried over to files opened from this footer;
 	// non-nil only when the file has encryption metadata.
 	decryption *DecryptionConfig
 	fileUnique []byte
 	aadPrefix  []byte
-
-	schemaOnce sync.Once
-	schema     *Schema
 }
 
 // ReadFooter reads and decodes the footer of the parquet file of the given
@@ -47,25 +45,40 @@ type Footer struct {
 // Options are interpreted the same way as OpenFile: WithDecryption is
 // required for files with encrypted or signed footers, SkipMagicBytes skips
 // the header magic check, and OptimisticRead and ReadBufferSize control how
-// the footer bytes are fetched.
+// the footer bytes are fetched. Decryption is resolved at construction time:
+// the footer (and the column metadata it contains) is decrypted here, and
+// files later opened from it inherit this decryption configuration
+// regardless of the options passed to OpenFile.
 func ReadFooter(r io.ReaderAt, size int64, options ...FileOption) (*Footer, error) {
 	c, err := NewFileConfig(options...)
 	if err != nil {
 		return nil, err
 	}
 	footer, _, err := readFooter(r, size, c)
-	return footer, err
+	if err != nil {
+		return nil, err
+	}
+	footer.size = size
+	if err := footer.buildSchema(); err != nil {
+		return nil, err
+	}
+	return footer, nil
 }
 
 // DecodeFooter decodes a parquet footer from bytes previously read from the
 // end of a parquet file, as cached by programs that store raw footer bytes
 // instead of decoded footers.
 //
-// The data must be the last footerSize+8 bytes of the file excluding the
-// final magic: the thrift-encoded footer (and trailing signature, if any)
-// followed by the 4-byte footer size and 4-byte magic ("PAR1" or "PARE").
-// Equivalently: with footerSize the little-endian uint32 stored at offset
-// size-8, data must be file[size-(footerSize+8) : size].
+// The data must be the last footerSize+8 bytes of the file: the
+// thrift-encoded footer (and trailing signature, if any) followed by the
+// 8-byte trailer holding the 4-byte little-endian footer size and the
+// 4-byte magic ("PAR1" or "PARE"). Equivalently: with footerSize the
+// little-endian uint32 stored at offset size-8, data must be
+// file[size-(footerSize+8) : size].
+//
+// The WithDecryption option is required for encrypted or signed footers,
+// and is resolved at construction time like in ReadFooter; I/O related
+// options have no effect since no reads are performed.
 //
 // DecodeFooter does not retain data; it makes a private copy of the parts it
 // needs, and the caller remains free to reuse the slice.
@@ -85,17 +98,31 @@ func DecodeFooter(data []byte, options ...FileOption) (*Footer, error) {
 	if footerSize := int64(binary.LittleEndian.Uint32(trailer[:4])); footerSize != int64(len(data)-8) {
 		return nil, fmt.Errorf("decoding parquet footer: input of %d bytes does not match footer size %d", len(data)-8, footerSize)
 	}
-	return newFooter(data[:len(data)-8], magic, c)
+	footer, err := newFooter(data[:len(data)-8], magic, c)
+	if err != nil {
+		return nil, err
+	}
+	if err := footer.buildSchema(); err != nil {
+		return nil, err
+	}
+	return footer, nil
 }
 
 // Metadata returns the file metadata of the footer.
 //
-// The returned value is shared by all files opened from this footer and must
-// be treated as read-only; modifying it results in undefined behavior.
+// The returned value is shared by every file opened from this footer, across
+// goroutines: it must be treated as strictly read-only. Mutating it corrupts
+// all files backed by the footer and is a data race if any of them is in use
+// concurrently.
 func (f *Footer) Metadata() *format.FileMetaData { return &f.metadata }
 
 // NumRows returns the number of rows in the file.
 func (f *Footer) NumRows() int64 { return f.metadata.NumRows }
+
+// Size returns the size of the file the footer was read from, or 0 when the
+// size is unknown (footers constructed by DecodeFooter, which only sees the
+// footer bytes).
+func (f *Footer) Size() int64 { return f.size }
 
 // Lookup returns the value associated with the given key in the file
 // key/value metadata.
@@ -105,19 +132,21 @@ func (f *Footer) Lookup(key string) (value string, ok bool) {
 
 // Schema returns the schema of the file the footer was read from.
 //
-// The schema is constructed lazily on first call and shared by subsequent
-// calls; like the footer it is safe for concurrent use.
-func (f *Footer) Schema() *Schema {
-	f.schemaOnce.Do(func() {
-		root, err := openColumns(nil, &f.metadata, nil, nil)
-		if err != nil {
-			// The schema was validated when the footer was constructed, so
-			// errors here indicate a bug rather than a malformed input.
-			panic(fmt.Errorf("parquet: constructing schema from footer: %w", err))
-		}
-		f.schema = NewSchema(root.Name(), root)
-	})
-	return f.schema
+// The schema is constructed when the footer is, and shared by all callers;
+// like the footer itself it is safe for concurrent use.
+func (f *Footer) Schema() *Schema { return f.schema }
+
+// buildSchema constructs the schema from the footer metadata, validating the
+// schema tree in the process. It is called by the public footer constructors
+// so that a Footer obtained from ReadFooter or DecodeFooter is guaranteed to
+// carry a valid schema.
+func (f *Footer) buildSchema() error {
+	root, err := openColumns(nil, &f.metadata, nil, nil)
+	if err != nil {
+		return fmt.Errorf("opening columns of parquet footer: %w", err)
+	}
+	f.schema = NewSchema(root.Name(), root)
+	return nil
 }
 
 // readFooter reads the footer section of the parquet file of the given size
@@ -288,8 +317,8 @@ func newFooter(data []byte, magic string, c *FileConfig) (*Footer, error) {
 				return nil, err
 			}
 			f.decryption = c.Decryption
-			f.fileUnique = fileUnique
-			f.aadPrefix = aadPrefix
+			f.fileUnique = slices.Clone(fileUnique)
+			f.aadPrefix = slices.Clone(aadPrefix)
 		default:
 			return nil, fmt.Errorf("reading parquet file metadata: unexpected trailing bytes at the end of thrift input: %d", trailing)
 		}

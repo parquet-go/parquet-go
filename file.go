@@ -81,6 +81,11 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		if footer, reader, err = readFooter(r, size, c); err != nil {
 			return nil, err
 		}
+	} else if footer.size != 0 && footer.size != size {
+		// Guards against passing a cached footer with the wrong file: a
+		// footer read from a file of a different size cannot be the footer
+		// of this one.
+		return nil, fmt.Errorf("opening parquet file of size %d with footer read from a file of size %d", size, footer.size)
 	}
 
 	f := &File{

@@ -3,6 +3,7 @@ package parquet_test
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -67,6 +68,12 @@ func assertFilesEquivalent(t *testing.T, base, withFooter *parquet.File) {
 			t.Errorf("lookup mismatch for key %q: %q (%t)", kv.Key, v, ok)
 		}
 	}
+	if !reflect.DeepEqual(base.ColumnIndexes(), withFooter.ColumnIndexes()) {
+		t.Error("column indexes mismatch between base open and open with footer")
+	}
+	if !reflect.DeepEqual(base.OffsetIndexes(), withFooter.OffsetIndexes()) {
+		t.Error("offset indexes mismatch between base open and open with footer")
+	}
 
 	baseRows := readAllFileRows(t, base)
 	withFooterRows := readAllFileRows(t, withFooter)
@@ -120,7 +127,34 @@ func TestOpenFileWithFooter(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertFilesEquivalent(t, base, withFooter)
+
+			// A footer must support any number of sequential opens.
+			again, err := parquet.OpenFile(bytes.NewReader(data), size, parquet.WithFooter(footer))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertFilesEquivalent(t, base, again)
 		})
+	}
+}
+
+// TestOpenFileWithFooterRejectsWrongSize checks that a footer read from a
+// file of a different size is rejected instead of producing a corrupt file.
+func TestOpenFileWithFooterRejectsWrongSize(t *testing.T) {
+	data, err := os.ReadFile("testdata/file.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := int64(len(data))
+	footer, err := parquet.ReadFooter(bytes.NewReader(data), size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if footer.Size() != size {
+		t.Errorf("footer.Size() = %d, want %d", footer.Size(), size)
+	}
+	if _, err := parquet.OpenFile(bytes.NewReader(data), size+1, parquet.WithFooter(footer)); err == nil {
+		t.Error("expected error opening a file with a footer read from a file of a different size")
 	}
 }
 
@@ -144,6 +178,9 @@ func TestDecodeFooter(t *testing.T) {
 			decoded, err := parquet.DecodeFooter(footerBytes)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if decoded.Size() != 0 {
+				t.Errorf("decoded.Size() = %d, want 0 (unknown)", decoded.Size())
 			}
 			if b, w := marshalMetadata(t, read.Metadata()), marshalMetadata(t, decoded.Metadata()); !bytes.Equal(b, w) {
 				t.Error("metadata mismatch between ReadFooter and DecodeFooter")
@@ -204,7 +241,9 @@ func TestFooterSharedAcrossConcurrentOpens(t *testing.T) {
 				errs <- err
 				return
 			}
-			_ = footer.Schema() // exercise concurrent lazy schema construction
+			if footer.Schema() == nil {
+				errs <- errors.New("footer schema is nil")
+			}
 			rows := f.RowGroups()[0].Rows()
 			defer rows.Close()
 			buf := make([]parquet.Row, 32)

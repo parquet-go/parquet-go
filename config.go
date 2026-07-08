@@ -581,8 +581,18 @@ func FileSchema(schema *Schema) FileOption {
 //	f, err := parquet.OpenFile(reader, size, parquet.WithFooter(footer))
 //
 // Footers are immutable and safe for concurrent use: a single footer can
-// back any number of open files at the same time. The size passed to
-// OpenFile must be the size of the file the footer was read from.
+// back any number of open files at the same time. The footer must have been
+// read from the same file passed to OpenFile, and the size passed to OpenFile
+// must be the size of that file (OpenFile reports an error when the footer
+// records a different size).
+//
+// Because the footer is not read or decoded by OpenFile, the options that
+// affect footer reading and decoding are ignored when WithFooter is used;
+// they took effect when the footer was constructed instead. In particular
+// decryption is inherited from the footer: WithDecryption passed to OpenFile
+// has no effect, and encrypted files require the DecryptionConfig to be
+// passed to ReadFooter or DecodeFooter. SkipMagicBytes, OptimisticRead, and
+// ReadBufferSize only affect the footer read and are likewise ignored.
 //
 // Combined with SkipPageIndex and SkipBloomFilters, opening a file with a
 // footer performs no I/O.
