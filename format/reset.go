@@ -62,6 +62,17 @@ func (s *SchemaElement) Reset() {
 	// allocation if the input holds the same member type (zeroing its
 	// contents first), and clears the union if the field is absent from
 	// the input. Either way no stale state survives a decode.
+	//
+	// The Geometry and Geography members are the exception: their CRS
+	// strings alias the decode input buffer, which the owner of this value
+	// may overwrite before the next decode. Clear their contents so no
+	// retained member holds a reference into a buffer with unrelated data.
+	switch m := s.LogicalType.Value.(type) {
+	case *GeometryType:
+		*m = GeometryType{}
+	case *GeographyType:
+		*m = GeographyType{}
+	}
 }
 
 // Reset clears c in place, retaining allocated capacity for reuse in

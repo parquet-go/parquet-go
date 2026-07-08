@@ -142,6 +142,30 @@ func TestFooterDecoderZeroAllocs(t *testing.T) {
 	}
 }
 
+// TestFooterDecoderErrorRecovery checks that a failed decode does not
+// poison the decoder: decoding a valid footer after an invalid input must
+// produce the same result as a fresh decode.
+func TestFooterDecoderErrorRecovery(t *testing.T) {
+	footers := loadAllFooters(t)
+	decoder := new(format.FooterDecoder)
+
+	// Truncated inputs fail partway through decoding, leaving partially
+	// populated metadata that the next Decode must fully reset.
+	for _, name := range sortedNames(footers) {
+		footer := footers[name]
+		if _, _, err := decoder.Decode(footer[:len(footer)/2]); err == nil {
+			t.Fatalf("%s: expected error decoding truncated footer", name)
+		}
+		decoded, _, err := decoder.Decode(footer)
+		if err != nil {
+			t.Fatalf("%s: decoding after a failed decode: %v", name, err)
+		}
+		if fresh := decodeFresh(t, footer); !equalMetadata(decoded, fresh) {
+			t.Errorf("%s: metadata differs from fresh decode after a failed decode", name)
+		}
+	}
+}
+
 func BenchmarkFooterDecoder(b *testing.B) {
 	footers := loadAllFooters(b)
 
