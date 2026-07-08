@@ -139,6 +139,10 @@ func BenchmarkOpenFooter(b *testing.B) {
 
 			// The zero-allocation transient decode path: what a pooled
 			// decoder pays per decode when re-decoding cached footer bytes.
+			// Not equivalent work to DecodeFooter above, which additionally
+			// validates the trailer, normalizes the metadata, and builds
+			// the schema; the delta between the two is mostly schema
+			// construction, not decoder overhead.
 			b.Run("FooterDecoder", func(b *testing.B) {
 				decoder := new(format.FooterDecoder)
 				payload := footerBytes[:len(footerBytes)-8]

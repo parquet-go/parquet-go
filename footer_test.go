@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 
@@ -33,6 +34,12 @@ func footerTestFiles(t *testing.T) []string {
 			continue
 		}
 		files = append(files, path)
+	}
+	// Guard against silently shrinking coverage: if a regression makes many
+	// files fail the plain open above, the footer tests must fail loudly
+	// instead of adapting to the smaller file list.
+	if len(files) < 30 {
+		t.Fatalf("only %d testdata files opened successfully, expected at least 30", len(files))
 	}
 	return files
 }
@@ -73,6 +80,17 @@ func assertFilesEquivalent(t *testing.T, base, withFooter *parquet.File) {
 	}
 	if !reflect.DeepEqual(base.OffsetIndexes(), withFooter.OffsetIndexes()) {
 		t.Error("offset indexes mismatch between base open and open with footer")
+	}
+	for i, rg := range base.RowGroups() {
+		for j, cc := range rg.ColumnChunks() {
+			b := cc.BloomFilter()
+			w := withFooter.RowGroups()[i].ColumnChunks()[j].BloomFilter()
+			if (b == nil) != (w == nil) {
+				t.Errorf("bloom filter presence mismatch for row group %d column %d: base=%t withFooter=%t", i, j, b != nil, w != nil)
+			} else if b != nil && b.Size() != w.Size() {
+				t.Errorf("bloom filter size mismatch for row group %d column %d: %d != %d", i, j, b.Size(), w.Size())
+			}
+		}
 	}
 
 	baseRows := readAllFileRows(t, base)
@@ -265,9 +283,10 @@ func TestFooterSharedAcrossConcurrentOpens(t *testing.T) {
 
 // TestOpenFileWithFooterPerformsNoReads checks the documented contract of
 // WithFooter: combined with SkipPageIndex and SkipBloomFilters, OpenFile
-// performs no I/O.
+// performs no I/O. The test file must have a page index so that the skip
+// options are load-bearing, which the second open verifies.
 func TestOpenFileWithFooterPerformsNoReads(t *testing.T) {
-	data, err := os.ReadFile("testdata/file.parquet")
+	data, err := os.ReadFile("testdata/alltypes_tiny_pages_plain.parquet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +307,123 @@ func TestOpenFileWithFooterPerformsNoReads(t *testing.T) {
 	if counting.reads != 0 {
 		t.Errorf("OpenFile with footer performed %d reads, want 0", counting.reads)
 	}
+
+	// Sanity check that the skip options above are doing the work: the same
+	// open without them must read the page index from the file.
+	if _, err := parquet.OpenFile(counting, size, parquet.WithFooter(footer)); err != nil {
+		t.Fatal(err)
+	}
+	if counting.reads == 0 {
+		t.Error("OpenFile with footer and no skip options performed no reads; the zero-read assertion above is vacuous")
+	}
+}
+
+// TestOpenFileWithFooterRejectsZeroValue checks that a hand-constructed
+// zero-value footer is rejected with an error instead of a panic.
+func TestOpenFileWithFooterRejectsZeroValue(t *testing.T) {
+	data, err := os.ReadFile("testdata/file.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := int64(len(data))
+	if _, err := parquet.OpenFile(bytes.NewReader(data), size, parquet.WithFooter(new(parquet.Footer))); err == nil {
+		t.Error("expected error opening a file with a zero-value footer")
+	}
+}
+
+// TestFileFooter checks that the footer of an open file can be recovered
+// with File.Footer and reused to open the file again.
+func TestFileFooter(t *testing.T) {
+	data, err := os.ReadFile("testdata/alltypes_tiny_pages_plain.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := int64(len(data))
+
+	base, err := parquet.OpenFile(bytes.NewReader(data), size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	footer := base.Footer()
+	if footer == nil {
+		t.Fatal("File.Footer returned nil after a regular open")
+	}
+	if footer.Size() != size {
+		t.Errorf("footer.Size() = %d, want %d", footer.Size(), size)
+	}
+	if footer.Schema() == nil {
+		t.Error("footer.Schema() returned nil")
+	} else if b, w := base.Schema().String(), footer.Schema().String(); b != w {
+		t.Errorf("schema mismatch:\nfile: %s\nfooter: %s", b, w)
+	}
+
+	reopened, err := parquet.OpenFile(bytes.NewReader(data), size, parquet.WithFooter(footer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Footer() != footer {
+		t.Error("File.Footer of a file opened with WithFooter is not the provided footer")
+	}
+	assertFilesEquivalent(t, base, reopened)
+}
+
+// TestDecodeFooterDoesNotRetainInput checks the documented ownership
+// contract: mutating the input slice after DecodeFooter returns must not
+// corrupt the footer.
+func TestDecodeFooterDoesNotRetainInput(t *testing.T) {
+	data, err := os.ReadFile("testdata/alltypes_tiny_pages_plain.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := int64(len(data))
+	footerSize := binary.LittleEndian.Uint32(data[size-8 : size-4])
+	footerBytes := slices.Clone(data[size-int64(footerSize)-8 : size])
+
+	decoded, err := parquet.DecodeFooter(footerBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := marshalMetadata(t, decoded.Metadata())
+	for i := range footerBytes {
+		footerBytes[i] = 0xff
+	}
+	if after := marshalMetadata(t, decoded.Metadata()); !bytes.Equal(before, after) {
+		t.Error("footer metadata corrupted after mutating the input buffer")
+	}
+	if decoded.Schema() == nil {
+		t.Error("footer schema is nil after mutating the input buffer")
+	}
+}
+
+// TestDecodeFooterValidatesRowCounts checks that footer-level validation
+// runs at construction: ReadFooter and DecodeFooter are standalone APIs, so
+// inconsistent row counts must be rejected even though OpenFile would also
+// catch them later.
+func TestDecodeFooterValidatesRowCounts(t *testing.T) {
+	data, err := os.ReadFile("testdata/file.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := int64(len(data))
+	footerSize := binary.LittleEndian.Uint32(data[size-8 : size-4])
+	footerBytes := data[size-int64(footerSize)-8 : size]
+
+	valid, err := parquet.DecodeFooter(footerBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-encode the metadata with a negative total row count and rebuild
+	// the footer bytes around it.
+	metadata := *valid.Metadata()
+	metadata.NumRows = -1
+	corrupt := marshalMetadata(t, &metadata)
+	corrupt = binary.LittleEndian.AppendUint32(corrupt, uint32(len(corrupt)))
+	corrupt = append(corrupt, "PAR1"...)
+
+	if _, err := parquet.DecodeFooter(corrupt); err == nil {
+		t.Error("expected error decoding a footer with a negative row count")
+	}
 }
 
 // TestFooterEncrypted checks ReadFooter/WithFooter against files with
@@ -298,18 +434,30 @@ func TestFooterEncrypted(t *testing.T) {
 		{Name: "beta", Value: 2},
 		{Name: "gamma", Value: 3},
 	}
-	keys := &staticKeyRetriever{footerKey: aes128Key(0x11)}
+	nameKey := aes128Key(0x22)
+	keys := &staticKeyRetriever{
+		footerKey:  aes128Key(0x11),
+		columnKeys: map[string][]byte{"name": nameKey},
+	}
+	columnKeys := map[string][]byte{"name": nameKey}
+	aadPrefix := []byte("footer-test-prefix")
 
 	for _, test := range []struct {
 		scenario        string
 		encryptedFooter bool
+		columnKeys      map[string][]byte
+		aadPrefix       []byte
 	}{
 		{scenario: "encrypted footer", encryptedFooter: true},
 		{scenario: "signed plaintext footer", encryptedFooter: false},
+		{scenario: "encrypted footer with column keys and AAD prefix", encryptedFooter: true, columnKeys: columnKeys, aadPrefix: aadPrefix},
+		{scenario: "signed plaintext footer with column keys and AAD prefix", encryptedFooter: false, columnKeys: columnKeys, aadPrefix: aadPrefix},
 	} {
 		t.Run(test.scenario, func(t *testing.T) {
 			data := writeEncrypted(t, rows, &parquet.EncryptionConfig{
 				FooterKey:       keys.footerKey,
+				ColumnKeys:      test.columnKeys,
+				AadPrefix:       test.aadPrefix,
 				EncryptedFooter: test.encryptedFooter,
 			})
 			size := int64(len(data))
@@ -331,6 +479,15 @@ func TestFooterEncrypted(t *testing.T) {
 			if !reflect.DeepEqual(got, rows) {
 				t.Errorf("rows mismatch: got %+v, want %+v", got, rows)
 			}
+
+			// The footer-based open must be fully equivalent to a regular
+			// open with decryption, including the page index read from the
+			// decrypted column metadata.
+			base, err := parquet.OpenFile(bytes.NewReader(data), size, parquet.WithDecryption(keys))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertFilesEquivalent(t, base, f)
 
 			// DecodeFooter over the raw footer region must work as well.
 			footerSize := binary.LittleEndian.Uint32(data[size-8 : size-4])

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync"
 
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
@@ -25,11 +26,23 @@ import (
 // time: key/value metadata is sorted, row group ordinals are back-filled,
 // and encrypted column metadata is decrypted. Files opened with WithFooter
 // never write to the footer.
+//
+// A cached Footer retains the decoded metadata graph, one backing byte
+// buffer, and the schema (including a column tree with per-leaf slices
+// proportional to the number of row groups). The page index is not part of
+// the footer: files opened with WithFooter read it from the file unless
+// SkipPageIndex is used.
 type Footer struct {
 	metadata format.FileMetaData
 	data     []byte // backing buffer aliased by metadata strings and byte slices
-	schema   *Schema
-	size     int64 // size of the file the footer was read from, 0 if unknown
+	size     int64  // size of the file the footer was read from, 0 if unknown
+
+	// The schema is built eagerly by ReadFooter and DecodeFooter (which
+	// report schema validation errors), and lazily through schemaOnce for
+	// footers created internally by OpenFile and exposed via File.Footer.
+	schemaOnce sync.Once
+	schema     *Schema
+	schemaErr  error
 
 	// Decryption state carried over to files opened from this footer;
 	// non-nil only when the file has encryption metadata.
@@ -96,7 +109,7 @@ func DecodeFooter(data []byte, options ...FileOption) (*Footer, error) {
 		return nil, fmt.Errorf("invalid magic footer of parquet file: %q", trailer[4:])
 	}
 	if footerSize := int64(binary.LittleEndian.Uint32(trailer[:4])); footerSize != int64(len(data)-8) {
-		return nil, fmt.Errorf("decoding parquet footer: input of %d bytes does not match footer size %d", len(data)-8, footerSize)
+		return nil, fmt.Errorf("decoding parquet footer: input of %d bytes implies a footer of %d bytes, but the trailer records %d", len(data), len(data)-8, footerSize)
 	}
 	footer, err := newFooter(data[:len(data)-8], magic, c)
 	if err != nil {
@@ -132,21 +145,31 @@ func (f *Footer) Lookup(key string) (value string, ok bool) {
 
 // Schema returns the schema of the file the footer was read from.
 //
-// The schema is constructed when the footer is, and shared by all callers;
-// like the footer itself it is safe for concurrent use.
-func (f *Footer) Schema() *Schema { return f.schema }
+// The schema is shared by all callers and safe for concurrent use. For
+// footers returned by ReadFooter and DecodeFooter it was constructed and
+// validated when the footer was; for footers obtained from File.Footer it
+// is constructed lazily on first call.
+func (f *Footer) Schema() *Schema {
+	f.buildSchema()
+	return f.schema
+}
 
 // buildSchema constructs the schema from the footer metadata, validating the
-// schema tree in the process. It is called by the public footer constructors
+// schema tree in the process. The public footer constructors call it eagerly
 // so that a Footer obtained from ReadFooter or DecodeFooter is guaranteed to
-// carry a valid schema.
+// carry a valid schema; footers created internally by OpenFile skip it
+// because OpenFile builds (and validates) its own file-bound column tree
+// from the same metadata.
 func (f *Footer) buildSchema() error {
-	root, err := openColumns(nil, &f.metadata, nil, nil)
-	if err != nil {
-		return fmt.Errorf("opening columns of parquet footer: %w", err)
-	}
-	f.schema = NewSchema(root.Name(), root)
-	return nil
+	f.schemaOnce.Do(func() {
+		root, err := openColumns(nil, &f.metadata, nil, nil)
+		if err != nil {
+			f.schemaErr = fmt.Errorf("opening columns of parquet footer: %w", err)
+			return
+		}
+		f.schema = NewSchema(root.Name(), root)
+	})
+	return f.schemaErr
 }
 
 // readFooter reads the footer section of the parquet file of the given size
@@ -335,7 +358,7 @@ func newFooter(data []byte, magic string, c *FileConfig) (*Footer, error) {
 	// Files from writers that omit the optional Ordinal field have all
 	// zeros; back-fill sequential values so all downstream code (page-index
 	// lookup, AAD construction) can rely on rg.Ordinal == slice index.
-	if err := validateRowGroupOrdinals(f.metadata.RowGroups); err != nil {
+	if err := normalizeRowGroupOrdinals(f.metadata.RowGroups); err != nil {
 		return nil, err
 	}
 	if err := validateRowCounts(f.metadata.NumRows, f.metadata.RowGroups); err != nil {

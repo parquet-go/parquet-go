@@ -28,6 +28,7 @@ const (
 // here: https://github.com/apache/parquet-format#file-format
 type File struct {
 	metadata      *format.FileMetaData
+	footer        *Footer
 	protocol      thrift.CompactProtocol
 	reader        io.ReaderAt
 	size          int64
@@ -81,15 +82,24 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		if footer, reader, err = readFooter(r, size, c); err != nil {
 			return nil, err
 		}
-	} else if footer.size != 0 && footer.size != size {
-		// Guards against passing a cached footer with the wrong file: a
-		// footer read from a file of a different size cannot be the footer
-		// of this one.
-		return nil, fmt.Errorf("opening parquet file of size %d with footer read from a file of size %d", size, footer.size)
+		footer.size = size
+	} else {
+		if len(footer.metadata.Schema) == 0 {
+			// The constructors validate the schema, so an empty one means
+			// the footer is a hand-constructed zero value.
+			return nil, fmt.Errorf("opening parquet file with a footer that was not created by ReadFooter, DecodeFooter, or File.Footer")
+		}
+		if footer.size != 0 && footer.size != size {
+			// Guards against passing a cached footer with the wrong file: a
+			// footer read from a file of a different size cannot be the
+			// footer of this one.
+			return nil, fmt.Errorf("opening parquet file of size %d with footer read from a file of size %d", size, footer.size)
+		}
 	}
 
 	f := &File{
 		metadata:   &footer.metadata,
+		footer:     footer,
 		reader:     reader,
 		size:       size,
 		config:     c,
@@ -108,9 +118,14 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		return nil, fmt.Errorf("opening columns of parquet file: %w", err)
 	}
 
-	if c.Schema != nil {
+	switch {
+	case c.Schema != nil:
 		f.schema = c.Schema
-	} else {
+	case c.Footer != nil && c.Footer.Schema() != nil:
+		// Footers from the public constructors already carry a schema built
+		// from the same metadata; share it instead of rebuilding.
+		f.schema = c.Footer.Schema()
+	default:
 		f.schema = NewSchema(f.root.Name(), f.root)
 	}
 	columns := makeLeafColumns(f.root)
@@ -409,6 +424,16 @@ func (f *File) Schema() *Schema { return f.schema }
 // is shared with the footer (and any other files opened from it) and must be
 // treated as read-only.
 func (f *File) Metadata() *format.FileMetaData { return f.metadata }
+
+// Footer returns the footer of f, suitable for caching and for opening the
+// same file again with the WithFooter option. When f was opened with
+// WithFooter, the footer it was opened with is returned; otherwise the
+// footer read by OpenFile is returned, so programs that cache footers do
+// not need a separate ReadFooter call after opening a file.
+//
+// Like the footer's other consumers, callers must treat the returned value
+// as read-only.
+func (f *File) Footer() *Footer { return f.footer }
 
 // Size returns the size of f (in bytes).
 func (f *File) Size() int64 { return f.size }

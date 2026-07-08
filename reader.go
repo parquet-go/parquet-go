@@ -689,7 +689,7 @@ func makeRowGroups(fileRowGroups []FileRowGroup) []RowGroup {
 	return rowGroups
 }
 
-func validateRowGroupOrdinals(rowGroups []format.RowGroup) error {
+func normalizeRowGroupOrdinals(rowGroups []format.RowGroup) error {
 	allZero := true
 	for _, rg := range rowGroups {
 		if rg.Ordinal != 0 {
