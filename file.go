@@ -27,7 +27,7 @@ const (
 // File represents a parquet file. The layout of a Parquet file can be found
 // here: https://github.com/apache/parquet-format#file-format
 type File struct {
-	metadata      format.FileMetaData
+	metadata      *format.FileMetaData
 	protocol      thrift.CompactProtocol
 	reader        io.ReaderAt
 	size          int64
@@ -62,169 +62,35 @@ type FileView interface {
 // Only the parquet magic bytes and footer are read, column chunks and other
 // parts of the file are left untouched; this means that successfully opening
 // a file does not validate that the pages have valid checksums.
+//
+// If the WithFooter option is used, the footer is not read from r at all:
+// the file is opened from the already-decoded footer, and r is only accessed
+// to read the page index and bloom filters (unless those are skipped too, in
+// which case OpenFile performs no reads).
 func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	c, err := NewFileConfig(options...)
 	if err != nil {
 		return nil, err
 	}
-	f := &File{reader: r, size: size, config: c}
 
-	var headerMagic [4]byte
-	if !c.SkipMagicBytes {
-		if _, err := readAt(r, headerMagic[:], 0); err != nil {
-			return nil, fmt.Errorf("reading magic header of parquet file: %w", err)
-		}
-		switch string(headerMagic[:]) {
-		case "PAR1":
-			// plain or plaintext-footer-with-signature
-		case "PARE":
-			// encrypted footer
-			if c.Decryption == nil {
-				return nil, fmt.Errorf("parquet file has encrypted footer (magic \"PARE\") but no DecryptionConfig was provided")
-			}
-		default:
-			return nil, fmt.Errorf("invalid magic header of parquet file: %q", headerMagic[:])
-		}
-	}
-
-	if cast, ok := f.reader.(interface{ SetMagicFooterSection(offset, length int64) }); ok {
-		cast.SetMagicFooterSection(size-8, 8)
-	}
-
-	optimisticRead := c.OptimisticRead
-	optimisticFooterSize := min(int64(c.ReadBufferSize), size)
-	if !optimisticRead || optimisticFooterSize < 8 {
-		optimisticFooterSize = 8
-	}
-	optimisticFooterData := make([]byte, optimisticFooterSize)
-	if optimisticRead {
-		f.reader = &optimisticFileReaderAt{
-			reader: f.reader,
-			offset: size - optimisticFooterSize,
-			footer: optimisticFooterData,
-		}
-	}
-
-	if n, err := readAt(r, optimisticFooterData, size-optimisticFooterSize); n != len(optimisticFooterData) {
-		return nil, fmt.Errorf("reading magic footer of parquet file: %w (read: %d)", err, n)
-	}
-	optimisticFooterSize -= 8
-	b := optimisticFooterData[optimisticFooterSize:]
-	footerMagic := string(b[4:])
-	if footerMagic != "PAR1" && footerMagic != "PARE" {
-		return nil, fmt.Errorf("invalid magic footer of parquet file: %q", b[4:])
-	}
-
-	footerSize := int64(binary.LittleEndian.Uint32(b[:4]))
-	footerData := []byte(nil)
-
-	if footerSize <= optimisticFooterSize {
-		footerData = optimisticFooterData[optimisticFooterSize-footerSize : optimisticFooterSize]
-	} else {
-		footerData = make([]byte, footerSize)
-		if cast, ok := f.reader.(interface{ SetFooterSection(offset, length int64) }); ok {
-			cast.SetFooterSection(size-(footerSize+8), footerSize)
-		}
-		if _, err := f.readAt(footerData, size-(footerSize+8)); err != nil {
-			return nil, fmt.Errorf("reading footer of parquet file: %w", err)
-		}
-	}
-
-	if footerMagic == "PARE" {
-		// Encrypted footer: footerData = FileCryptoMetaData (thrift) || encrypted footer module.
-		// Decode FileCryptoMetaData using a bytes-backed reader to count bytes consumed.
-		pr := f.protocol.NewReaderFromBytes(footerData)
-		var cryptoMeta format.FileCryptoMetaData
-		if err := thrift.NewDecoder(pr).Decode(&cryptoMeta); err != nil {
-			return nil, fmt.Errorf("reading FileCryptoMetaData: %w", err)
-		}
-		encFooterEnvelope := footerData[pr.BytesRead():]
-
-		// Extract AAD parameters from the encryption algorithm.
-		var fileUnique, aadPrefix []byte
-		switch algo := cryptoMeta.EncryptionAlgorithm.Value.(type) {
-		case *format.AesGcmV1:
-			fileUnique = algo.AadFileUnique
-			aadPrefix = algo.AadPrefix
-		case *format.AesGcmCtrV1:
-			fileUnique = algo.AadFileUnique
-			aadPrefix = algo.AadPrefix
-		}
-
-		footerKey, err := c.Decryption.Keys.FooterKey(cryptoMeta.KeyMetadata)
-		if err != nil {
-			return nil, fmt.Errorf("retrieving footer key: %w", err)
-		}
-		footerAAD := makeAAD(aadPrefix, fileUnique, footerModule)
-		plainFooter, err := decryptModule(footerKey, footerAAD, encFooterEnvelope)
-		if err != nil {
-			return nil, fmt.Errorf("decrypting footer: %w", err)
-		}
-		if err := thrift.Unmarshal(&f.protocol, plainFooter, &f.metadata); err != nil {
-			return nil, fmt.Errorf("reading parquet file metadata from decrypted footer: %w", err)
-		}
-		f.decryption = c.Decryption
-		f.fileUnique = fileUnique
-		f.aadPrefix = aadPrefix
-	} else {
-		// Decode the footer metadata using a reader that tracks bytes consumed,
-		// so that we can detect a trailing 28-byte AES-GCM signature without
-		// tripping over the "unexpected trailing bytes" check in thrift.Unmarshal.
-		pr := f.protocol.NewReaderFromBytes(bytes.Clone(footerData))
-		if err := thrift.NewDecoder(pr).Decode(&f.metadata); err != nil {
-			return nil, fmt.Errorf("reading parquet file metadata: %w", err)
-		}
-		trailing := len(footerData) - pr.BytesRead()
-		const sigLen = encNonceSize + encTagSize
-		switch {
-		case trailing == 0:
-			// Plain, unsigned footer — nothing to do.
-		case trailing == sigLen:
-			// Plaintext footer with AES-GCM signature appended.
-			if c.Decryption == nil {
-				return nil, fmt.Errorf("parquet file has a signed footer but no DecryptionConfig was provided")
-			}
-			var fileUnique, aadPrefix []byte
-			switch algo := f.metadata.EncryptionAlgorithm.Value.(type) {
-			case *format.AesGcmV1:
-				fileUnique = algo.AadFileUnique
-				aadPrefix = algo.AadPrefix
-			case *format.AesGcmCtrV1:
-				fileUnique = algo.AadFileUnique
-				aadPrefix = algo.AadPrefix
-			}
-			plainFooterBytes := footerData[:pr.BytesRead()]
-			sig := footerData[pr.BytesRead():]
-
-			footerKey, err := c.Decryption.Keys.FooterKey(f.metadata.FooterSigningKeyMetadata)
-			if err != nil {
-				return nil, fmt.Errorf("retrieving footer signing key: %w", err)
-			}
-			footerAAD := makeAAD(aadPrefix, fileUnique, footerModule)
-			if err := verifyFooterSignature(footerKey, footerAAD, plainFooterBytes, sig); err != nil {
-				return nil, err
-			}
-			f.decryption = c.Decryption
-			f.fileUnique = fileUnique
-			f.aadPrefix = aadPrefix
-		default:
-			return nil, fmt.Errorf("reading parquet file metadata: unexpected trailing bytes at the end of thrift input: %d", trailing)
-		}
-	}
-
-	if len(f.metadata.Schema) == 0 {
-		return nil, ErrMissingRootColumn
-	}
-
-	// In plaintext-footer mode with encryption, column metadata is stored as
-	// EncryptedColumnMetadata. Decrypt it into MetaData before reading the page
-	// index — column index/offset index offsets live in MetaData and would
-	// otherwise be zero, silently losing the page index for every encrypted
-	// plaintext-footer file.
-	if f.decryption != nil {
-		if err := f.decryptAllColumnMetadata(); err != nil {
+	// reader may wrap r with a prefetched footer region (OptimisticRead),
+	// which the page index and bloom filter reads below take advantage of.
+	// It is unwrapped before the file is returned.
+	footer, reader := c.Footer, r
+	if footer == nil {
+		if footer, reader, err = readFooter(r, size, c); err != nil {
 			return nil, err
 		}
+	}
+
+	f := &File{
+		metadata:   &footer.metadata,
+		reader:     reader,
+		size:       size,
+		config:     c,
+		decryption: footer.decryption,
+		fileUnique: footer.fileUnique,
+		aadPrefix:  footer.aadPrefix,
 	}
 
 	if !c.SkipPageIndex {
@@ -233,7 +99,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		}
 	}
 
-	if f.root, err = openColumns(f, &f.metadata, f.columnIndexes, f.offsetIndexes); err != nil {
+	if f.root, err = openColumns(f, f.metadata, f.columnIndexes, f.offsetIndexes); err != nil {
 		return nil, fmt.Errorf("opening columns of parquet file: %w", err)
 	}
 
@@ -312,7 +178,6 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 		}
 	}
 
-	sortKeyValueMetadata(f.metadata.KeyValueMetadata)
 	f.reader = r // restore in case an optimistic reader was used
 	return f, nil
 }
@@ -519,65 +384,6 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 	return columnIndexes, offsetIndexes, nil
 }
 
-// decryptAllColumnMetadata decrypts EncryptedColumnMetadata for every column
-// chunk in every row group, restoring ColumnChunk.MetaData so that
-// openColumns and schema construction see the full encoding/compression info.
-// This must be called before openColumns.
-func (f *File) decryptAllColumnMetadata() error {
-	// Normalize ordinals before using them in AADs.  Files from writers that
-	// omit the optional Ordinal field have all zeros; validateRowGroupOrdinals
-	// back-fills sequential values so rg.Ordinal is guaranteed to equal the
-	// slice index — matching exactly what the writer embedded in every AAD.
-	if err := validateRowGroupOrdinals(f.metadata.RowGroups); err != nil {
-		return err
-	}
-
-	for rgIdx := range f.metadata.RowGroups {
-		rg := &f.metadata.RowGroups[rgIdx]
-		for colIdx := range rg.Columns {
-			chunk := &rg.Columns[colIdx]
-			if len(chunk.EncryptedColumnMetadata) == 0 {
-				continue
-			}
-			var key []byte
-			switch crypto := chunk.CryptoMetadata.Value.(type) {
-			case *format.EncryptionWithFooterKey:
-				var err error
-				key, err = f.decryption.Keys.FooterKey(nil)
-				if err != nil {
-					return fmt.Errorf("resolving footer key for column metadata: %w", err)
-				}
-			case *format.EncryptionWithColumnKey:
-				var err error
-				key, err = f.decryption.Keys.ColumnKey(crypto.PathInSchema, crypto.KeyMetadata)
-				if err != nil {
-					// Only treat an explicit ErrKeyNotFound as non-fatal: the
-					// caller intentionally omitted this column's key.  Any other
-					// error (KMS failure, bad metadata, …) is propagated so the
-					// caller sees the real problem instead of silent zero data.
-					if errors.Is(err, ErrKeyNotFound) {
-						continue
-					}
-					return fmt.Errorf("resolving column key for column metadata: %w", err)
-				}
-			default:
-				continue
-			}
-			// rg.Ordinal is reliable here because validateRowGroupOrdinals ran above.
-			aad := makeAAD(f.aadPrefix, f.fileUnique, columnMetaDataModule, rg.Ordinal, int16(colIdx))
-			plain, err := decryptModule(key, aad, chunk.EncryptedColumnMetadata)
-			if err != nil {
-				return fmt.Errorf("decrypting column metadata: rowGroup=%d col=%d: %w", rg.Ordinal, colIdx, err)
-			}
-			compact := thrift.CompactProtocol{}
-			if err := thrift.Unmarshal(&compact, plain, &chunk.MetaData); err != nil {
-				return fmt.Errorf("decoding column metadata: rowGroup=%d col=%d: %w", rg.Ordinal, colIdx, err)
-			}
-		}
-	}
-	return nil
-}
-
 // NumRows returns the number of rows in the file.
 func (f *File) NumRows() int64 { return f.metadata.NumRows }
 
@@ -593,7 +399,11 @@ func (f *File) Root() *Column { return f.root }
 func (f *File) Schema() *Schema { return f.schema }
 
 // Metadata returns the metadata of f.
-func (f *File) Metadata() *format.FileMetaData { return &f.metadata }
+//
+// When the file was opened with the WithFooter option, the returned metadata
+// is shared with the footer (and any other files opened from it) and must be
+// treated as read-only.
+func (f *File) Metadata() *format.FileMetaData { return f.metadata }
 
 // Size returns the size of f (in bytes).
 func (f *File) Size() int64 { return f.size }

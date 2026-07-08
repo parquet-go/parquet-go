@@ -659,8 +659,14 @@ func makeLeafColumns(root *Column) []*Column {
 func makeFileRowGroups(file *File, columns []*Column) ([]FileRowGroup, error) {
 	rowGroups := file.metadata.RowGroups
 
-	if err := validateRowGroupOrdinals(rowGroups); err != nil {
-		return nil, err
+	// Row group ordinals are normalized when the footer is constructed (see
+	// newFooter) and by the writer, so this path only validates them: it
+	// must never write to metadata that may be shared with other files
+	// through a common Footer.
+	for i := range rowGroups {
+		if int(rowGroups[i].Ordinal) != i {
+			return nil, fmt.Errorf("row group ordinal %d at index %d does not match its position", rowGroups[i].Ordinal, i)
+		}
 	}
 	if err := validateRowCounts(file.metadata.NumRows, rowGroups); err != nil {
 		return nil, err

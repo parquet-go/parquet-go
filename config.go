@@ -106,6 +106,7 @@ type FileConfig struct {
 	ReadMode             ReadMode
 	Schema               *Schema
 	Decryption           *DecryptionConfig
+	Footer               *Footer
 }
 
 // DefaultFileConfig returns a new FileConfig value initialized with the
@@ -151,6 +152,7 @@ func (c *FileConfig) ConfigureFile(config *FileConfig) {
 		ReadMode:             ReadMode(cmp.Or(int(c.ReadMode), int(config.ReadMode))),
 		Schema:               cmp.Or(c.Schema, config.Schema),
 		Decryption:           cmp.Or(c.Decryption, config.Decryption),
+		Footer:               cmp.Or(c.Footer, config.Footer),
 	}
 }
 
@@ -567,6 +569,27 @@ func ReadBufferSize(size int) FileOption {
 // Defaults to nil.
 func FileSchema(schema *Schema) FileOption {
 	return fileOption(func(config *FileConfig) { config.Schema = schema })
+}
+
+// WithFooter is used to open a parquet file from an already-decoded footer,
+// obtained from ReadFooter or DecodeFooter, skipping the footer read and
+// decode entirely. Programs which open the same parquet files repeatedly can
+// cache footers to amortize the cost of decoding them:
+//
+//	footer, err := parquet.ReadFooter(reader, size)
+//	...
+//	f, err := parquet.OpenFile(reader, size, parquet.WithFooter(footer))
+//
+// Footers are immutable and safe for concurrent use: a single footer can
+// back any number of open files at the same time. The size passed to
+// OpenFile must be the size of the file the footer was read from.
+//
+// Combined with SkipPageIndex and SkipBloomFilters, opening a file with a
+// footer performs no I/O.
+//
+// Defaults to nil.
+func WithFooter(footer *Footer) FileOption {
+	return fileOption(func(config *FileConfig) { config.Footer = footer })
 }
 
 // PageBufferSize configures the size of column page buffers on parquet writers.
