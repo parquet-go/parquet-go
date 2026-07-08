@@ -556,6 +556,14 @@ func (w *Writer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 	case !EqualNodes(w.schema, rowGroupSchema):
 		return 0, ErrRowGroupSchemaMismatch
 	}
+	// Concatenated row groups with variant columns that must be re-shredded
+	// are copied column-wise: variant values move through the columnar
+	// variant reader and writer without being reconstructed into rows (see
+	// variant_column_copy.go). Re-shredding rules out verbatim chunk copies,
+	// so this check runs before the segment-splitting fast path below.
+	if n, ok, err := w.writeRowGroupVariantColumnar(rowGroup); ok {
+		return n, err
+	}
 	// When the row group is the in-order concatenation of independently writable
 	// segments and at least one segment can be copied verbatim (e.g. a merge of
 	// non-overlapping row groups), write each segment as its own output row group

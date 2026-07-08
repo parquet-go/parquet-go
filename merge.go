@@ -77,7 +77,14 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 		// concatenation path. Instead of returning the multiRowGroup directly
 		// (which bypasses row-level conversion), we create a simple concatenating
 		// row reader that preserves the conversion logic.
-		return newMultiRowGroup(schema, nil, mergedRowGroups), nil
+		m := newMultiRowGroup(schema, nil, mergedRowGroups)
+		if rowGroupsHaveVariantConversions(mergedRowGroups) {
+			// Variant re-shredding is a row-level conversion that the
+			// chunk-level view of multiRowGroup cannot express; read rows
+			// through each source's converted Rows() instead.
+			return &concatenatedRowGroup{multiRowGroup: *m}, nil
+		}
+		return m, nil
 	}
 
 	mergedCompare := compareRowsFuncOf(schema, mergedSortingColumns)
@@ -311,6 +318,39 @@ func (m *mergedRowGroup) Rows() Rows {
 		merge:  merge,
 		rows:   rows,
 		schema: m.schema,
+	}
+}
+
+// rowGroupsHaveVariantConversions reports whether any of the row groups is
+// a converted view whose conversion re-shreds variant columns.
+func rowGroupsHaveVariantConversions(rowGroups []RowGroup) bool {
+	for _, rg := range rowGroups {
+		if crg, ok := rg.(*convertedRowGroup); ok {
+			if c, ok := crg.conv.(*conversion); ok && len(c.variants) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// concatenatedRowGroup wraps a multiRowGroup but overrides Rows() to read
+// each source's Rows() in sequence, preserving row-level conversions
+// (variant re-shredding) that the chunk-level view of multiRowGroup cannot
+// express.
+type concatenatedRowGroup struct {
+	multiRowGroup
+}
+
+func (c *concatenatedRowGroup) Rows() Rows {
+	readers := make([]Rows, len(c.rowGroups))
+	for i, rg := range c.rowGroups {
+		readers[i] = rg.Rows()
+	}
+	return &concatenatingRowsWrapper{
+		reader:  &concatenatingRows{readers: readers, schema: c.schema},
+		readers: readers,
+		schema:  c.schema,
 	}
 }
 
@@ -1054,7 +1094,21 @@ func mergeTwoNodes(a, b Node) Node {
 	}
 
 	var merged Node
-	if leaf1 {
+	switch {
+	case isVariant(a) && isVariant(b):
+		// Variant groups are not unioned field-by-field: the union of two
+		// different shredding schemas is not a valid shredding schema (a
+		// typed_value column holds exactly one type per position). Identical
+		// shredding is preserved; different shredding falls back to the
+		// unshredded form, which every variant value can be converted to.
+		// Callers that want a specific shredding for the merged output pass
+		// an explicit schema to MergeRowGroups.
+		if SameNodes(Required(a), Required(b)) {
+			merged = b
+		} else {
+			merged = Variant()
+		}
+	case leaf1:
 		// Prefer the type with a logical type annotation if one exists.
 		// This ensures that logical types like JSON are preserved when merging
 		// a typed node (from an authoritative schema) with a plain node (from
@@ -1082,7 +1136,7 @@ func mergeTwoNodes(a, b Node) Node {
 		if encoding != nil && canEncode(encoding, merged.Type().Kind()) {
 			merged = Encoded(merged, encoding)
 		}
-	} else {
+	default:
 		fields1 := slices.Clone(a.Fields())
 		fields2 := slices.Clone(b.Fields())
 		sortFields(fields1)
