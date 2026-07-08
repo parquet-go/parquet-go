@@ -199,7 +199,7 @@ func (cp *variantCopier) copyEntry(w *VariantColumnWriter, e int) error {
 				if err != nil {
 					return err
 				}
-				if _, err := variant.ReplayObjectFields(w, m, r.bytes, cp.skipShredded); err != nil {
+				if err := variant.ReplayObjectFields(w, m, r.bytes, cp.skipShredded); err != nil {
 					return err
 				}
 			}

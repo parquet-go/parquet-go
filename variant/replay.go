@@ -48,19 +48,19 @@ func Replay(w ValueBuilder, m Metadata, data []byte) error {
 // as Field/value event pairs on w, skipping fields whose name skip reports
 // true for (a nil skip replays every field). It emits no BeginObject or
 // EndObject events, so callers can splice the fields into an object of
-// their own framing. The boolean result reports whether data encoded an
-// object; other values replay nothing. Field names are validated for
-// duplicates whether or not they are skipped, matching Decode; the values
-// of skipped fields are not walked and therefore not validated.
-func ReplayObjectFields(w ValueBuilder, m Metadata, data []byte, skip func(name string) bool) (bool, error) {
+// their own framing. Values that are not objects replay nothing. Field
+// names are validated for duplicates whether or not they are skipped,
+// matching Decode; the values of skipped fields are not walked and
+// therefore not validated.
+func ReplayObjectFields(w ValueBuilder, m Metadata, data []byte, skip func(name string) bool) error {
 	if len(data) == 0 {
-		return false, errors.New("variant value: empty data")
+		return errors.New("variant value: empty data")
 	}
 	header := data[0]
 	if BasicType(header&0x03) != BasicObject {
-		return false, nil
+		return nil
 	}
-	return true, replayObjectFields(w, m, header, data[1:], skip)
+	return replayObjectFields(w, m, header, data[1:], skip)
 }
 
 // viewString views a byte slice as a string without copying. Callers must

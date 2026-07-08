@@ -52,7 +52,7 @@ func TestReplayDifferential(t *testing.T) {
 }
 
 // TestReplayObjectFields checks the field filtering and the non-object
-// result.
+// no-op behavior.
 func TestReplayObjectFields(t *testing.T) {
 	v := MakeObject([]Field{
 		{Name: "a", Value: Int64(1)},
@@ -68,12 +68,8 @@ func TestReplayObjectFields(t *testing.T) {
 
 	var b Builder
 	b.BeginObject()
-	ok, err := ReplayObjectFields(&b, m, encoded, func(name string) bool { return name == "b" })
-	if err != nil {
+	if err := ReplayObjectFields(&b, m, encoded, func(name string) bool { return name == "b" }); err != nil {
 		t.Fatalf("ReplayObjectFields: %v", err)
-	}
-	if !ok {
-		t.Fatal("ReplayObjectFields reported a non-object for an object value")
 	}
 	b.EndObject()
 	metadata, value, err := b.Finish()
@@ -96,15 +92,29 @@ func TestReplayObjectFields(t *testing.T) {
 		t.Fatalf("got %#v, want %#v", got.GoValue(), want.GoValue())
 	}
 
-	// Non-object values replay nothing and report false.
+	// Non-object values replay nothing: framing an empty object around the
+	// call must produce an empty object.
 	scalar := Encode(&mb, Int64(7))
 	var b2 Builder
-	ok, err = ReplayObjectFields(&b2, m, scalar, nil)
-	if err != nil {
+	b2.BeginObject()
+	if err := ReplayObjectFields(&b2, m, scalar, nil); err != nil {
 		t.Fatalf("ReplayObjectFields on scalar: %v", err)
 	}
-	if ok {
-		t.Fatal("ReplayObjectFields reported an object for a scalar value")
+	b2.EndObject()
+	metadata, value, err = b2.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m2, err = DecodeMetadata(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = Decode(m2, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := MakeObject(nil); !got.Equal(want) {
+		t.Fatalf("scalar input replayed fields: got %#v", got.GoValue())
 	}
 }
 

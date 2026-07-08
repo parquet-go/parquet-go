@@ -1279,27 +1279,19 @@ type variantLeafReader struct {
 	ppos   int // slots consumed
 	pdense int // non-null values consumed
 
-	// Typed data of the current page (one of these per kind), or dictionary
-	// indexes when the page is dictionary-encoded.
-	pi32    []int32
-	pi64    []int64
-	pf32    []float32
-	pf64    []float64
-	pba     []byte
-	pbaOff  []uint32
-	pflba   []byte
-	pflbaN  int
-	pbools  []bool
-	pidx    []int32
-	dictSet bool
-	di32    []int32
-	di64    []int64
-	df32    []float32
-	df64    []float64
-	dba     []byte
-	dbaOff  []uint32
-	dflba   []byte
-	dflbaN  int
+	// Typed data of the current page (one of these per kind). For
+	// dictionary-encoded pages this is the dictionary's data and pidx holds
+	// the per-value dictionary indexes; otherwise pidx is nil.
+	pi32   []int32
+	pi64   []int64
+	pf32   []float32
+	pf64   []float64
+	pba    []byte
+	pbaOff []uint32
+	pflba  []byte
+	pflbaN int
+	pbools []bool
+	pidx   []int32
 
 	win variantLeafWindow
 }
@@ -1413,26 +1405,10 @@ func (l *variantLeafReader) setPage(p Page) error {
 
 	data := p.Data()
 	if d := p.Dictionary(); d != nil {
+		// Dictionary-encoded page: the page data holds indexes and the
+		// typed values come from the dictionary's page (a zero-copy view).
 		l.pidx = data.Int32()
-		if !l.dictSet {
-			dd := d.Page().Data()
-			switch l.kind {
-			case Int32:
-				l.di32 = dd.Int32()
-			case Int64:
-				l.di64 = dd.Int64()
-			case Float:
-				l.df32 = dd.Float()
-			case Double:
-				l.df64 = dd.Double()
-			case ByteArray:
-				l.dba, l.dbaOff = dd.ByteArray()
-			case FixedLenByteArray:
-				l.dflba, l.dflbaN = dd.FixedLenByteArray()
-			}
-			l.dictSet = true
-		}
-		return l.checkPageValues()
+		data = d.Page().Data()
 	}
 	switch l.kind {
 	case Int32:
@@ -1538,51 +1514,27 @@ func (l *variantLeafReader) consumeSlot(w *variantLeafWindow, rep byte) {
 func (l *variantLeafReader) appendValue(w *variantLeafWindow) {
 	i := l.pdense
 	l.pdense++
-	switch l.kind {
-	case Boolean:
+	if l.kind == Boolean {
 		w.bools = append(w.bools, l.pbools[i])
+		return
+	}
+	if l.pidx != nil {
+		i = int(l.pidx[i])
+	}
+	switch l.kind {
 	case Int32:
-		if l.pidx != nil {
-			w.i32 = append(w.i32, l.di32[l.pidx[i]])
-		} else {
-			w.i32 = append(w.i32, l.pi32[i])
-		}
+		w.i32 = append(w.i32, l.pi32[i])
 	case Int64:
-		if l.pidx != nil {
-			w.i64 = append(w.i64, l.di64[l.pidx[i]])
-		} else {
-			w.i64 = append(w.i64, l.pi64[i])
-		}
+		w.i64 = append(w.i64, l.pi64[i])
 	case Float:
-		if l.pidx != nil {
-			w.f32 = append(w.f32, l.df32[l.pidx[i]])
-		} else {
-			w.f32 = append(w.f32, l.pf32[i])
-		}
+		w.f32 = append(w.f32, l.pf32[i])
 	case Double:
-		if l.pidx != nil {
-			w.f64 = append(w.f64, l.df64[l.pidx[i]])
-		} else {
-			w.f64 = append(w.f64, l.pf64[i])
-		}
+		w.f64 = append(w.f64, l.pf64[i])
 	case ByteArray:
-		var b []byte
-		if l.pidx != nil {
-			j := l.pidx[i]
-			b = l.dba[l.dbaOff[j]:l.dbaOff[j+1]]
-		} else {
-			b = l.pba[l.pbaOff[i]:l.pbaOff[i+1]]
-		}
-		w.slab = append(w.slab, b...)
+		w.slab = append(w.slab, l.pba[l.pbaOff[i]:l.pbaOff[i+1]]...)
 		w.offsets = append(w.offsets, uint32(len(w.slab)))
 	case FixedLenByteArray:
-		if l.pidx != nil {
-			j := int(l.pidx[i])
-			w.flba = append(w.flba, l.dflba[j*l.dflbaN:(j+1)*l.dflbaN]...)
-			w.flbaSize = l.dflbaN
-		} else {
-			w.flba = append(w.flba, l.pflba[i*l.pflbaN:(i+1)*l.pflbaN]...)
-			w.flbaSize = l.pflbaN
-		}
+		w.flba = append(w.flba, l.pflba[i*l.pflbaN:(i+1)*l.pflbaN]...)
+		w.flbaSize = l.pflbaN
 	}
 }
