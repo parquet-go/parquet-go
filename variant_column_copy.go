@@ -25,7 +25,8 @@ import (
 //     reader's cursors and replayed as scalar events, so they flow from the
 //     source column buffers to the destination column buffers without ever
 //     being decoded to variant binary or boxed into a variant.Value.
-//   - Residual variant binary is decoded and replayed as events. Decoding is
+//   - Residual variant binary is walked in place and replayed as events
+//     (variant.Replay), without materializing a variant.Value. The walk is
 //     unavoidable in general: residual bytes reference the source row's
 //     metadata dictionary by field ID, and the destination row's dictionary
 //     is rebuilt from the events of the whole row.
@@ -182,6 +183,8 @@ func (cp *variantCopier) copyEntry(w *VariantColumnWriter, e int) error {
 		// Leftover fields of a partially shredded object. Fields whose name
 		// is in the shredded schema are ignored like the row-based reader
 		// does: the shredded field wins over a non-compliant residual copy.
+		// ReplayObjectFields replays nothing if the bytes are not an object
+		// (the spec requires an object here).
 		if r := cp.cur.residualAt(e); r != nil {
 			if r.decoded {
 				// Already decoded by the reader for cursor navigation.

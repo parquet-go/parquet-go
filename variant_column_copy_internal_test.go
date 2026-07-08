@@ -6,8 +6,9 @@ import (
 )
 
 // TestVariantCopyPlan pins down when the columnar fast path of
-// Writer.WriteRowGroup applies: schemas must match outside variant groups,
-// and at least one variant column must need re-shredding.
+// Writer.WriteRowGroup applies: schemas must match outside variant groups
+// and contain a variant column at a supported (non-repeated) position.
+// Re-shredding is planned only where the shredding schemas differ.
 func TestVariantCopyPlan(t *testing.T) {
 	shred := func(g Group) Node {
 		n, err := ShreddedVariant(g)

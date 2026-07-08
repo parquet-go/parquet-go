@@ -333,8 +333,9 @@ func TestVariantReaderRandomizedDifferential(t *testing.T) {
 	}
 }
 
-// TestVariantReaderUnshredded reads a plain (metadata, value) variant
-// column through the columnar reader.
+// TestVariantReaderUnshredded verifies that cursor-based reconstruction of
+// a plain (metadata, value) variant column, written by the row-based
+// writer, matches the values written.
 func TestVariantReaderUnshredded(t *testing.T) {
 	r := rand.New(rand.NewPCG(21, 42))
 	values := make([]variant.Value, 17)

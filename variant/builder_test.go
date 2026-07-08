@@ -57,13 +57,12 @@ func builderTestValues() []Value {
 	}
 }
 
-// TestBuilderDifferential checks that streaming a value through Builder
-// produces bytes that decode back to the original value, and that the
-// builder's metadata dictionary is compatible with the tree encoder's.
+// TestBuilderDifferential verifies that streaming a value through Builder
+// produces (metadata, value) bytes that decode back to a value Equal to the
+// original.
 func TestBuilderDifferential(t *testing.T) {
 	values := builderTestValues()
 
-	// A few random values on top of the fixed pool.
 	r := rand.New(rand.NewPCG(7, 13))
 	for range 50 {
 		values = append(values, randomBuilderValue(r, 0))

@@ -63,6 +63,9 @@ func TestMarshalUnmarshalInt(t *testing.T) {
 	}
 }
 
+// TestMarshalUnmarshalUnsignedInts verifies that unsigned integers marshal
+// to the narrowest signed variant type that can hold their value, since the
+// variant format has no unsigned types.
 func TestMarshalUnmarshalUnsignedInts(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -134,6 +137,9 @@ func TestMarshalUnmarshalSlice(t *testing.T) {
 	}
 }
 
+// TestMarshalStruct verifies that struct fields map to object fields named
+// by their `variant` or `json` tags, that unexported fields are omitted,
+// and that nested structs become nested objects.
 func TestMarshalStruct(t *testing.T) {
 	type Address struct {
 		Street string `json:"street"`

@@ -22,7 +22,9 @@ type Value struct {
 	array     Array
 }
 
-// Object represents a variant object (ordered set of named fields).
+// Object represents a variant object: a collection of uniquely named
+// fields. Field order is preserved but not significant for equality, and
+// the encoded form sorts fields by name regardless of it.
 type Object struct {
 	Fields []Field
 }
@@ -153,8 +155,9 @@ func MakeArray(elements []Value) Value {
 	return Value{basic: BasicArray, array: Array{Elements: elements}}
 }
 
-// Type returns the PrimitiveType of the value. For non-primitive values
-// (objects, arrays, short strings), it returns -1.
+// Type returns the PrimitiveType of the value. It is meaningful only when
+// Basic reports BasicPrimitive; for objects, arrays, and short strings it
+// returns the zero PrimitiveType.
 func (v Value) Type() PrimitiveType {
 	return v.primitive
 }
@@ -169,7 +172,8 @@ func (v Value) IsNull() bool {
 	return v.basic == BasicPrimitive && v.primitive == PrimitiveNull
 }
 
-// BoolValue returns the boolean value. Panics if not a boolean.
+// BoolValue returns true if the value is the true primitive, and false for
+// the false primitive and every other type.
 func (v Value) BoolValue() bool {
 	return v.primitive == PrimitiveTrue
 }
@@ -216,12 +220,14 @@ func (v Value) Decimal16Value() [16]byte {
 	return v.decimal16
 }
 
-// ObjectValue returns the Object. Panics if not an object.
+// ObjectValue returns the Object. It is meaningful only when Basic reports
+// BasicObject; otherwise it returns an empty Object.
 func (v Value) ObjectValue() Object {
 	return v.object
 }
 
-// ArrayValue returns the Array. Panics if not an array.
+// ArrayValue returns the Array. It is meaningful only when Basic reports
+// BasicArray; otherwise it returns an empty Array.
 func (v Value) ArrayValue() Array {
 	return v.array
 }

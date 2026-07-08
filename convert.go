@@ -273,8 +273,8 @@ func (c *conversion) Convert(rows []Row) (int, error) {
 		})
 		row = row[:0]
 
-		// Reconstruct shredded variant columns once per row; the column
-		// loop below picks up the metadata and value outputs.
+		// Convert variant columns once per row; the column loop below
+		// appends each target leaf column from the conversion's scratch.
 		for k := range c.variants {
 			if err := c.variants[k].convert(source.columns, &source.variants[k]); err != nil {
 				return n, err
@@ -373,9 +373,6 @@ func Convert(to, from Node) (conv Conversion, err error) {
 		return identity{schema}, nil
 	}
 
-	// Variant columns whose shredding differs between the target and the
-	// source are re-shredded, not mapped column-by-column (see
-	// convert_variant.go).
 	variants := findVariantConversions(to, from)
 	variantColumns := make(map[int]conversionColumn, 2*len(variants))
 	for k := range variants {

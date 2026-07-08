@@ -224,8 +224,8 @@ func TestVariantColumnWriterRandomizedDifferential(t *testing.T) {
 	}
 }
 
-// TestVariantColumnWriterUnshredded writes through a plain unshredded
-// variant column (required binary metadata and value).
+// TestVariantColumnWriterUnshredded writes through an optional unshredded
+// variant column and verifies read-back equality, including null rows.
 func TestVariantColumnWriterUnshredded(t *testing.T) {
 	r := rand.New(rand.NewPCG(5, 6))
 	values := make([]*variant.Value, 20)
