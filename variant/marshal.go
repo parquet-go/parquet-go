@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 )
 
 // Marshal converts a Go value to variant binary encoding, returning the
@@ -37,6 +38,18 @@ func Unmarshal(metadata, value []byte) (any, error) {
 		return nil, fmt.Errorf("variant unmarshal: %w", err)
 	}
 	return v.GoValue(), nil
+}
+
+// timeToVariant converts a time.Time to a timestamp variant value. The
+// timestamp is stored with time zone (isAdjustedToUTC), which is the natural
+// mapping for time.Time since it represents an instant. Nanosecond precision
+// is used when the value has sub-microsecond components and fits in the
+// nanosecond timestamp range; microsecond precision otherwise.
+func timeToVariant(t time.Time) Value {
+	if t.Nanosecond()%1000 != 0 && t.Year() >= 1678 && t.Year() <= 2261 {
+		return TimestampNanos(t.UnixNano())
+	}
+	return Timestamp(t.UnixMicro())
 }
 
 // fieldName returns the name to use for a struct field, checking variant and
