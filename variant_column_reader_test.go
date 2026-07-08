@@ -147,11 +147,11 @@ func bigEndianDecimal16(b []byte) [16]byte {
 // the value is missing, e.g. an absent object field).
 func reconstructVariantEntry(c *parquet.VariantCursor, e int, typedIdx map[*parquet.VariantCursor][]int32) (variant.Value, bool, error) {
 	switch c.Locs()[e] {
-	case parquet.VariantLocMissing:
+	case variant.LocMissing:
 		return variant.Null(), false, nil
-	case parquet.VariantLocNull:
+	case variant.LocNull:
 		return variant.Null(), true, nil
-	case parquet.VariantLocResidual:
+	case variant.LocResidual:
 		v, ok, err := c.Residual(e)
 		if err != nil {
 			return variant.Null(), false, err
@@ -160,14 +160,14 @@ func reconstructVariantEntry(c *parquet.VariantCursor, e int, typedIdx map[*parq
 			return variant.Null(), false, fmt.Errorf("residual entry %d has no residual value", e)
 		}
 		return v, true, nil
-	case parquet.VariantLocTyped:
+	case variant.LocTyped:
 		d := typedIdx[c][e]
 		if d < 0 {
 			return variant.Null(), false, fmt.Errorf("typed entry %d not in TypedRows", e)
 		}
 		v, err := variantTypedValue(c, int(d))
 		return v, true, err
-	case parquet.VariantLocTypedObject:
+	case variant.LocTypedObject:
 		shredded := c.Fields()
 		var fields []variant.Field
 		for _, name := range shredded {
@@ -195,7 +195,7 @@ func reconstructVariantEntry(c *parquet.VariantCursor, e int, typedIdx map[*parq
 			}
 		}
 		return variant.MakeObject(fields), true, nil
-	case parquet.VariantLocTypedList:
+	case variant.LocTypedList:
 		offsets := c.ListOffsets()
 		el := c.Elements()
 		elems := []variant.Value{}
@@ -524,14 +524,14 @@ func TestVariantReaderLocs(t *testing.T) {
 		t.Fatalf("Next = (%d, %v), want (%d, nil)", n, err, len(values))
 	}
 
-	wantRoot := []parquet.VariantLoc{
-		parquet.VariantLocTypedObject,
-		parquet.VariantLocTypedObject,
-		parquet.VariantLocTypedObject,
-		parquet.VariantLocTypedObject,
-		parquet.VariantLocMissing,
-		parquet.VariantLocResidual,
-		parquet.VariantLocTypedObject,
+	wantRoot := []variant.Loc{
+		variant.LocTypedObject,
+		variant.LocTypedObject,
+		variant.LocTypedObject,
+		variant.LocTypedObject,
+		variant.LocMissing,
+		variant.LocResidual,
+		variant.LocTypedObject,
 	}
 	for i, want := range wantRoot {
 		if got := r.Root().Locs()[i]; got != want {
@@ -539,14 +539,14 @@ func TestVariantReaderLocs(t *testing.T) {
 		}
 	}
 
-	wantA := []parquet.VariantLoc{
-		parquet.VariantLocTyped,
-		parquet.VariantLocResidual,
-		parquet.VariantLocNull,
-		parquet.VariantLocMissing,
-		parquet.VariantLocMissing,
-		parquet.VariantLocMissing,
-		parquet.VariantLocResidual,
+	wantA := []variant.Loc{
+		variant.LocTyped,
+		variant.LocResidual,
+		variant.LocNull,
+		variant.LocMissing,
+		variant.LocMissing,
+		variant.LocMissing,
+		variant.LocResidual,
 	}
 	for i, want := range wantA {
 		if got := a.Locs()[i]; got != want {
@@ -605,12 +605,12 @@ func TestVariantReaderMixedList(t *testing.T) {
 		t.Fatalf("Next = (%d, %v), want (%d, nil)", n, err, len(values))
 	}
 
-	wantRoot := []parquet.VariantLoc{
-		parquet.VariantLocTypedList,
-		parquet.VariantLocTypedList,
-		parquet.VariantLocResidual,
-		parquet.VariantLocMissing,
-		parquet.VariantLocTypedList,
+	wantRoot := []variant.Loc{
+		variant.LocTypedList,
+		variant.LocTypedList,
+		variant.LocResidual,
+		variant.LocMissing,
+		variant.LocTypedList,
 	}
 	for i, want := range wantRoot {
 		if got := root.Locs()[i]; got != want {
@@ -629,9 +629,9 @@ func TestVariantReaderMixedList(t *testing.T) {
 		}
 	}
 
-	wantElems := []parquet.VariantLoc{
-		parquet.VariantLocTyped, parquet.VariantLocTyped, parquet.VariantLocTyped,
-		parquet.VariantLocTyped, parquet.VariantLocResidual, parquet.VariantLocNull,
+	wantElems := []variant.Loc{
+		variant.LocTyped, variant.LocTyped, variant.LocTyped,
+		variant.LocTyped, variant.LocResidual, variant.LocNull,
 	}
 	for i, want := range wantElems {
 		if got := el.Locs()[i]; got != want {
@@ -687,7 +687,7 @@ func TestVariantReaderListSpansPages(t *testing.T) {
 	if nn, err := r.Next(100); err != nil || nn != 1 {
 		t.Fatalf("Next = (%d, %v), want (1, nil)", nn, err)
 	}
-	if got := root.Locs(); len(got) != 1 || got[0] != parquet.VariantLocTypedList {
+	if got := root.Locs(); len(got) != 1 || got[0] != variant.LocTypedList {
 		t.Fatalf("root loc = %v, want [typed-list]", got)
 	}
 	offs := root.ListOffsets()
@@ -740,7 +740,7 @@ func TestVariantReaderNestedLists(t *testing.T) {
 		t.Fatalf("outer ListOffsets = %v, want %v", got, wantOuter)
 	}
 	for i, loc := range el.Locs() {
-		if loc != parquet.VariantLocTypedList {
+		if loc != variant.LocTypedList {
 			t.Fatalf("inner-list loc %d = %v, want typed-list", i, loc)
 		}
 	}
@@ -800,7 +800,7 @@ func TestVariantReaderTypedListOfNulls(t *testing.T) {
 		t.Fatalf("element locs = %v, want 3 nulls", locs)
 	}
 	for i, loc := range locs {
-		if loc != parquet.VariantLocNull {
+		if loc != variant.LocNull {
 			t.Errorf("element %d loc = %v, want null", i, loc)
 		}
 	}
@@ -861,7 +861,7 @@ func TestVariantReaderVirtualNavigation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	check := func(name string, cur *parquet.VariantCursor, want []parquet.VariantLoc) {
+	check := func(name string, cur *parquet.VariantCursor, want []variant.Loc) {
 		t.Helper()
 		for i, w := range want {
 			if got := cur.Locs()[i]; got != w {
@@ -869,33 +869,33 @@ func TestVariantReaderVirtualNavigation(t *testing.T) {
 			}
 		}
 	}
-	check("a.b", b, []parquet.VariantLoc{
-		parquet.VariantLocTyped,
-		parquet.VariantLocResidual, // object where int64 was shredded
-		parquet.VariantLocMissing,  // a is a scalar: no field b
-		parquet.VariantLocMissing,
-		parquet.VariantLocMissing,
+	check("a.b", b, []variant.Loc{
+		variant.LocTyped,
+		variant.LocResidual, // object where int64 was shredded
+		variant.LocMissing,  // a is a scalar: no field b
+		variant.LocMissing,
+		variant.LocMissing,
 	})
-	check("a.c", c, []parquet.VariantLoc{
-		parquet.VariantLocResidual, // from partial object leftover
-		parquet.VariantLocMissing,
-		parquet.VariantLocMissing,
-		parquet.VariantLocResidual,
-		parquet.VariantLocMissing,
+	check("a.c", c, []variant.Loc{
+		variant.LocResidual, // from partial object leftover
+		variant.LocMissing,
+		variant.LocMissing,
+		variant.LocResidual,
+		variant.LocMissing,
 	})
-	check("a.b.d", bd, []parquet.VariantLoc{
-		parquet.VariantLocMissing, // b is int64
-		parquet.VariantLocResidual,
-		parquet.VariantLocMissing,
-		parquet.VariantLocMissing,
-		parquet.VariantLocMissing,
+	check("a.b.d", bd, []variant.Loc{
+		variant.LocMissing, // b is int64
+		variant.LocResidual,
+		variant.LocMissing,
+		variant.LocMissing,
+		variant.LocMissing,
 	})
-	check("a.c.e", ce, []parquet.VariantLoc{
-		parquet.VariantLocMissing, // c is a string
-		parquet.VariantLocMissing,
-		parquet.VariantLocMissing,
-		parquet.VariantLocResidual,
-		parquet.VariantLocMissing,
+	check("a.c.e", ce, []variant.Loc{
+		variant.LocMissing, // c is a string
+		variant.LocMissing,
+		variant.LocMissing,
+		variant.LocResidual,
+		variant.LocMissing,
 	})
 
 	if v, ok, err := bd.Residual(1); err != nil || !ok || v.Int() != 42 {

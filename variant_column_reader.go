@@ -26,58 +26,8 @@ import (
 // tags remain accurate through residuals: LocMissing means the path is
 // missing even after looking inside ancestor residual values, and a type
 // conflict anywhere along the path (a scalar where an object was shredded, a
-// list where a scalar was expected) simply surfaces as VariantLocResidual
+// list where a scalar was expected) simply surfaces as variant.LocResidual
 // with the residual value already navigated to the requested position.
-
-// VariantLoc describes where the value of a variant path lives for one row
-// (or one list element) of the current window.
-type VariantLoc uint8
-
-const (
-	// VariantLocMissing means the path has no value: an enclosing level is
-	// null, the field is absent from its parent object, or the whole variant
-	// column is null for the row.
-	VariantLocMissing VariantLoc = iota
-
-	// VariantLocNull means the path holds the variant null value.
-	VariantLocNull
-
-	// VariantLocTyped means the value is a scalar stored in this cursor's
-	// typed_value column; it appears in the cursor's typed vector.
-	VariantLocTyped
-
-	// VariantLocTypedObject means the value is an object stored (at least
-	// partially) in shredded form; descend with Field. Leftover fields of a
-	// partially shredded object are available through Residual.
-	VariantLocTypedObject
-
-	// VariantLocTypedList means the value is a list stored in shredded form;
-	// descend with Elements and slice per row with ListOffsets.
-	VariantLocTypedList
-
-	// VariantLocResidual means the value exists only as variant binary at
-	// this position; Residual returns it as a decoded variant.Value.
-	VariantLocResidual
-)
-
-func (l VariantLoc) String() string {
-	switch l {
-	case VariantLocMissing:
-		return "missing"
-	case VariantLocNull:
-		return "null"
-	case VariantLocTyped:
-		return "typed"
-	case VariantLocTypedObject:
-		return "typed-object"
-	case VariantLocTypedList:
-		return "typed-list"
-	case VariantLocResidual:
-		return "residual"
-	default:
-		return "unknown"
-	}
-}
 
 // VariantCursorKind is the static (schema-derived) kind of a cursor
 // position. It tells the engine which access pattern the position supports;
@@ -88,7 +38,7 @@ const (
 	// VariantCursorUnshredded is a position with no typed_value column:
 	// either the schema stores only variant binary here, or the cursor
 	// navigates below the shredded schema entirely. All present values are
-	// VariantLocNull or VariantLocResidual.
+	// variant.LocNull or variant.LocResidual.
 	VariantCursorUnshredded VariantCursorKind = iota
 
 	// VariantCursorLeaf is a position shredded as a primitive type; typed
@@ -494,7 +444,7 @@ type VariantCursor struct {
 
 	// Window state. All slices are indexed by entry: one entry per row for
 	// row-level cursors, one per list element for element cursors.
-	locs          []VariantLoc
+	locs          []variant.Loc
 	slotGroup     []int32 // slot group in this node's own columns, -1 if none
 	rows          []int32 // window row of each entry, nil means identity
 	resBytes      [][]byte
@@ -628,17 +578,17 @@ func (c *VariantCursor) Elements() *VariantCursor {
 
 // Locs returns the location tag of every entry of the current window: one
 // per row for row-level cursors, one per element for element cursors.
-func (c *VariantCursor) Locs() []VariantLoc { return c.locs }
+func (c *VariantCursor) Locs() []variant.Loc { return c.locs }
 
 // Rows maps each entry of the current window to its row index within the
 // window. For row-level cursors this is the identity mapping; for element
 // cursors (and cursors below them) several entries may map to one row.
 func (c *VariantCursor) Rows() []int32 { return c.rows }
 
-// ResidualCount returns the number of entries tagged VariantLocResidual in
+// ResidualCount returns the number of entries tagged variant.LocResidual in
 // the current window. A zero count lets an engine skip per-entry residual
 // decoding, though Residual may still return values for entries tagged
-// VariantLocNull or VariantLocTypedObject (partial-object leftovers).
+// variant.LocNull or variant.LocTypedObject (partial-object leftovers).
 func (c *VariantCursor) ResidualCount() int { return c.residualCount }
 
 // TypedRows maps each value of the typed vectors to its entry index in the
@@ -714,8 +664,8 @@ func (c *VariantCursor) FixedLenByteArrays() (slab []byte, size int) {
 func (c *VariantCursor) ListOffsets() []int32 { return c.listOffsets }
 
 // Residual returns the residual variant value of entry i. It is valid for
-// entries tagged VariantLocResidual (the value itself), VariantLocNull (the
-// variant null value), and VariantLocTypedObject when the row is a partially
+// entries tagged variant.LocResidual (the value itself), variant.LocNull (the
+// variant null value), and variant.LocTypedObject when the row is a partially
 // shredded object (the leftover fields not covered by the shredded schema,
 // as a variant object). The boolean result reports whether a residual value
 // exists at the entry.
@@ -724,9 +674,9 @@ func (c *VariantCursor) Residual(i int) (variant.Value, bool, error) {
 		return variant.Null(), false, fmt.Errorf("variant: residual index %d out of range", i)
 	}
 	switch c.locs[i] {
-	case VariantLocNull:
+	case variant.LocNull:
 		return variant.Null(), true, nil
-	case VariantLocResidual, VariantLocTypedObject:
+	case variant.LocResidual, variant.LocTypedObject:
 		if c.resDecoded[i] {
 			return c.resVals[i], true, nil
 		}
@@ -778,7 +728,7 @@ func (c *VariantCursor) resetWindow() {
 }
 
 func (c *VariantCursor) appendEntry(group, row int32) int {
-	c.locs = append(c.locs, VariantLocMissing)
+	c.locs = append(c.locs, variant.LocMissing)
 	c.slotGroup = append(c.slotGroup, group)
 	c.rows = append(c.rows, row)
 	c.resBytes = append(c.resBytes, nil)
@@ -789,9 +739,9 @@ func (c *VariantCursor) appendEntry(group, row int32) int {
 
 func (c *VariantCursor) setNavigated(e int, v variant.Value) {
 	if v.IsNull() {
-		c.locs[e] = VariantLocNull
+		c.locs[e] = variant.LocNull
 	} else {
-		c.locs[e] = VariantLocResidual
+		c.locs[e] = variant.LocResidual
 		c.residualCount++
 	}
 	c.resVals[e] = v
@@ -830,18 +780,18 @@ func (c *VariantCursor) process(n int) error {
 }
 
 // decodeResiduals eagerly decodes the residual values that child cursors
-// navigate through: all VariantLocResidual entries, plus partial-object
+// navigate through: all variant.LocResidual entries, plus partial-object
 // leftovers when a non-shredded field cursor exists below this one.
 func (c *VariantCursor) decodeResiduals() error {
 	for e := range c.locs {
 		switch c.locs[e] {
-		case VariantLocResidual:
+		case variant.LocResidual:
 			if !c.resDecoded[e] && c.resBytes[e] != nil {
 				if _, err := c.decodeResidual(e); err != nil {
 					return err
 				}
 			}
-		case VariantLocTypedObject:
+		case variant.LocTypedObject:
 			if c.hasVirtualChild && !c.resDecoded[e] && c.resBytes[e] != nil {
 				if _, err := c.decodeResidual(e); err != nil {
 					return err
@@ -857,10 +807,10 @@ func (c *VariantCursor) processRoot(n int) error {
 	for row := range n {
 		e := c.appendEntry(int32(row), int32(row))
 		if mw.defs[row] < c.reader.groupMaxDef {
-			c.locs[e] = VariantLocMissing
+			c.locs[e] = variant.LocMissing
 			continue
 		}
-		c.computeOwn(e, int32(row), VariantLocNull)
+		c.computeOwn(e, int32(row), variant.LocNull)
 	}
 	return nil
 }
@@ -870,11 +820,11 @@ func (c *VariantCursor) processShreddedField() error {
 	for e := range p.locs {
 		e2 := c.appendEntry(p.slotGroup[e], p.rowOf(e))
 		switch p.locs[e] {
-		case VariantLocTypedObject:
+		case variant.LocTypedObject:
 			// A typed object always has its own column slots (navigated
 			// residual entries can only be tagged null or residual).
-			c.computeOwn(e2, p.slotGroup[e], VariantLocMissing)
-		case VariantLocResidual:
+			c.computeOwn(e2, p.slotGroup[e], variant.LocMissing)
+		case variant.LocResidual:
 			c.navigateField(e2, p.resVals[e])
 		}
 	}
@@ -886,7 +836,7 @@ func (c *VariantCursor) processVirtualField() error {
 	for e := range p.locs {
 		e2 := c.appendEntry(-1, p.rowOf(e))
 		switch p.locs[e] {
-		case VariantLocResidual, VariantLocTypedObject:
+		case variant.LocResidual, variant.LocTypedObject:
 			if p.resDecoded[e] {
 				c.navigateField(e2, p.resVals[e])
 			}
@@ -920,7 +870,7 @@ func (c *VariantCursor) processElements() error {
 	p.listOffsets = append(p.listOffsets[:0], 0)
 	for e := range p.locs {
 		switch p.locs[e] {
-		case VariantLocTypedList:
+		case variant.LocTypedList:
 			g := p.slotGroup[e]
 			// g beyond the presence column's group count means the file
 			// is corrupt (sibling columns must agree); skip the entry.
@@ -934,11 +884,11 @@ func (c *VariantCursor) processElements() error {
 			if plw.defs[gs] >= p.elemsDefAbs {
 				for h < len(startsE)-1 && startsE[h] < ge {
 					e2 := c.appendEntry(int32(h), p.rowOf(e))
-					c.computeOwn(e2, int32(h), VariantLocNull)
+					c.computeOwn(e2, int32(h), variant.LocNull)
 					h++
 				}
 			}
-		case VariantLocResidual:
+		case variant.LocResidual:
 			if pv := p.resVals[e]; p.resDecoded[e] && pv.Basic() == variant.BasicArray {
 				for _, elem := range pv.ArrayValue().Elements {
 					e2 := c.appendEntry(-1, p.rowOf(e))
@@ -953,10 +903,10 @@ func (c *VariantCursor) processElements() error {
 
 // computeOwn resolves the location of entry e from the node's own value and
 // typed_value columns at slot group g. missingLoc is the tag used when both
-// sides are null: VariantLocMissing for object fields, VariantLocNull for
+// sides are null: variant.LocMissing for object fields, variant.LocNull for
 // the root and list elements (where both-null is invalid per the spec and
 // read as variant null, matching the row-based reader).
-func (c *VariantCursor) computeOwn(e int, g int32, missingLoc VariantLoc) {
+func (c *VariantCursor) computeOwn(e int, g int32, missingLoc variant.Loc) {
 	var vbytes []byte
 	valuePresent := false
 	if c.valueLeaf != nil {
@@ -976,14 +926,14 @@ func (c *VariantCursor) computeOwn(e int, g int32, missingLoc VariantLoc) {
 				// typed_value is present; if a non-compliant writer set
 				// both, the typed side wins (readers may assume data is
 				// written correctly).
-				c.locs[e] = VariantLocTyped
+				c.locs[e] = variant.LocTyped
 				c.typedRows = append(c.typedRows, int32(e))
 				return
 			}
 		case shreddedTypedObject:
 			w := &c.presenceLeaf.win
 			if s, ok := w.slotOf(c.depth, g); ok && w.defs[s] >= c.typedDefAbs {
-				c.locs[e] = VariantLocTypedObject
+				c.locs[e] = variant.LocTypedObject
 				if valuePresent {
 					c.resBytes[e] = vbytes // partially shredded object
 				}
@@ -992,7 +942,7 @@ func (c *VariantCursor) computeOwn(e int, g int32, missingLoc VariantLoc) {
 		case shreddedTypedList:
 			w := &c.presenceLeaf.win
 			if s, ok := w.slotOf(c.depth, g); ok && w.defs[s] >= c.typedDefAbs {
-				c.locs[e] = VariantLocTypedList
+				c.locs[e] = variant.LocTypedList
 				return
 			}
 		}
@@ -1002,9 +952,9 @@ func (c *VariantCursor) computeOwn(e int, g int32, missingLoc VariantLoc) {
 			// Variant null is a one-byte value with a zero header. Empty
 			// bytes are how the plain unshredded write path stores a zero
 			// variant value; the row-based reader reads them as null too.
-			c.locs[e] = VariantLocNull
+			c.locs[e] = variant.LocNull
 		} else {
-			c.locs[e] = VariantLocResidual
+			c.locs[e] = variant.LocResidual
 			c.resBytes[e] = vbytes
 			c.residualCount++
 		}
