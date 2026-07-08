@@ -576,8 +576,7 @@ func BenchmarkMergeVariantRowGroups(b *testing.B) {
 		ID  int32      `parquet:"id"`
 		Var rawVariant `parquet:"var,optional,variant"`
 	}
-	const numRows = 2000
-	mkFile := func(variantNode parquet.Node) []byte {
+	mkFile := func(variantNode parquet.Node, numRows int) []byte {
 		schema := parquet.NewSchema("table", parquet.Group{
 			"id":  parquet.Int(32),
 			"var": parquet.Optional(variantNode),
@@ -600,63 +599,66 @@ func BenchmarkMergeVariantRowGroups(b *testing.B) {
 		}
 		return buf.Bytes()
 	}
-	files := [][]byte{
-		mkFile(shred(parquet.Group{"name": parquet.String(), "age": parquet.Int(64)})),
-		mkFile(shred(parquet.Group{"name": parquet.String()})),
-	}
 	target := parquet.NewSchema("table", parquet.Group{
 		"id":  parquet.Int(32),
 		"var": parquet.Optional(shred(parquet.Group{"name": parquet.String(), "age": parquet.Int(64)})),
 	})
-	open := func() []parquet.RowGroup {
-		var rowGroups []parquet.RowGroup
-		for _, data := range files {
-			f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-			if err != nil {
-				b.Fatal(err)
-			}
-			rowGroups = append(rowGroups, f.RowGroups()...)
+
+	for _, numRows := range []int{2000, 50000} {
+		files := [][]byte{
+			mkFile(shred(parquet.Group{"name": parquet.String(), "age": parquet.Int(64)}), numRows),
+			mkFile(shred(parquet.Group{"name": parquet.String()}), numRows),
 		}
-		return rowGroups
+		open := func() []parquet.RowGroup {
+			var rowGroups []parquet.RowGroup
+			for _, data := range files {
+				f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+				if err != nil {
+					b.Fatal(err)
+				}
+				rowGroups = append(rowGroups, f.RowGroups()...)
+			}
+			return rowGroups
+		}
+
+		b.Run(fmt.Sprintf("columnar/rows=%d", 2*numRows), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				merged, err := parquet.MergeRowGroups(open(), target)
+				if err != nil {
+					b.Fatal(err)
+				}
+				w := parquet.NewWriter(discard{}, target)
+				if _, err := w.WriteRowGroup(merged); err != nil {
+					b.Fatal(err)
+				}
+				if err := w.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+
+		b.Run(fmt.Sprintf("rows/rows=%d", 2*numRows), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				merged, err := parquet.MergeRowGroups(open(), target)
+				if err != nil {
+					b.Fatal(err)
+				}
+				w := parquet.NewWriter(discard{}, target)
+				rows := merged.Rows()
+				if _, err := w.ReadRowsFrom(rows); err != nil {
+					b.Fatal(err)
+				}
+				if err := rows.Close(); err != nil {
+					b.Fatal(err)
+				}
+				if err := w.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
-
-	b.Run("columnar", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			merged, err := parquet.MergeRowGroups(open(), target)
-			if err != nil {
-				b.Fatal(err)
-			}
-			w := parquet.NewWriter(discard{}, target)
-			if _, err := w.WriteRowGroup(merged); err != nil {
-				b.Fatal(err)
-			}
-			if err := w.Close(); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-
-	b.Run("rows", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			merged, err := parquet.MergeRowGroups(open(), target)
-			if err != nil {
-				b.Fatal(err)
-			}
-			w := parquet.NewWriter(discard{}, target)
-			rows := merged.Rows()
-			if _, err := w.ReadRowsFrom(rows); err != nil {
-				b.Fatal(err)
-			}
-			if err := rows.Close(); err != nil {
-				b.Fatal(err)
-			}
-			if err := w.Close(); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
 }
 
 type discard struct{}

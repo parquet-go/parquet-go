@@ -101,6 +101,11 @@ type variantCopier struct {
 	fields     []*variantCopier
 	elems      *variantCopier
 
+	// skipShredded reports whether a residual field name is covered by the
+	// shredded schema, for filtering partial-object leftovers. Built once
+	// so the per-row replay does not allocate a closure.
+	skipShredded func(name string) bool
+
 	// dense is the index of the next typed value of the current window.
 	// Entries are visited in entry order and every variant.LocTyped entry is
 	// visited exactly once (typed entries exist only below typed ancestors,
@@ -127,6 +132,9 @@ func newVariantCopier(c *VariantCursor) (*variantCopier, error) {
 				return nil, err
 			}
 			cp.fields[i] = ch
+		}
+		cp.skipShredded = func(name string) bool {
+			return slices.Contains(cp.fieldNames, name)
 		}
 	case VariantCursorList:
 		ch, err := newVariantCopier(c.Elements())
@@ -174,17 +182,26 @@ func (cp *variantCopier) copyEntry(w *VariantColumnWriter, e int) error {
 		// Leftover fields of a partially shredded object. Fields whose name
 		// is in the shredded schema are ignored like the row-based reader
 		// does: the shredded field wins over a non-compliant residual copy.
-		leftover, ok, err := cp.cur.Residual(e)
-		if err != nil {
-			return err
-		}
-		if ok && leftover.Basic() == variant.BasicObject {
-			for _, f := range leftover.ObjectValue().Fields {
-				if slices.Contains(cp.fieldNames, f.Name) {
-					continue
+		if r := cp.cur.residualAt(e); r != nil {
+			if r.decoded {
+				// Already decoded by the reader for cursor navigation.
+				if v := r.val; v.Basic() == variant.BasicObject {
+					for _, f := range v.ObjectValue().Fields {
+						if cp.skipShredded(f.Name) {
+							continue
+						}
+						w.Field(f.Name)
+						f.Value.Write(w)
+					}
 				}
-				w.Field(f.Name)
-				f.Value.Write(w)
+			} else if r.bytes != nil {
+				m, err := cp.cur.reader.metadataFor(cp.cur.rowOf(e))
+				if err != nil {
+					return err
+				}
+				if _, err := variant.ReplayObjectFields(w, m, r.bytes, cp.skipShredded); err != nil {
+					return err
+				}
 			}
 		}
 		w.EndObject()
@@ -200,15 +217,32 @@ func (cp *variantCopier) copyEntry(w *VariantColumnWriter, e int) error {
 		w.EndArray()
 
 	case variant.LocResidual:
-		v, ok, err := cp.cur.Residual(e)
-		if err != nil {
-			return err
-		}
-		if !ok {
+		r := cp.cur.residualAt(e)
+		if r == nil {
 			w.Null()
 			break
 		}
-		v.Write(w)
+		if r.decoded {
+			// Already decoded by the reader for cursor navigation
+			// (navigated entries and residuals below cursors with
+			// children).
+			r.val.Write(w)
+			break
+		}
+		if r.bytes == nil {
+			w.Null()
+			break
+		}
+		// Replay the residual bytes as events without materializing a
+		// variant.Value; this is the only per-row work of the copy that
+		// would otherwise allocate.
+		m, err := cp.cur.reader.metadataFor(cp.cur.rowOf(e))
+		if err != nil {
+			return err
+		}
+		if err := variant.Replay(w, m, r.bytes); err != nil {
+			return err
+		}
 
 	default: // variant.LocNull, variant.LocMissing
 		w.Null()
