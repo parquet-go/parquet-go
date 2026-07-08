@@ -18,8 +18,11 @@ import (
 //
 // As an optimization, the value passed in v may be reused across multiple calls
 // to Unmarshal, allowing the function to reuse objects referenced by pointer
-// fields of struct values. When reusing objects, the application is responsible
-// for resetting the state of v before calling Unmarshal again.
+// fields of struct values: non-nil pointer fields present in the input have
+// their pointed-to value zeroed and decoded in place, and pointer fields
+// absent from the input are set to nil. When reusing objects, the application
+// remains responsible for resetting non-pointer state of v (scalars, strings,
+// and slice lengths) before calling Unmarshal again.
 func Unmarshal(p Protocol, b []byte, v any) error {
 	pr := p.NewReaderFromBytes(slices.Clone(b))
 
@@ -389,15 +392,32 @@ type structDecoder struct {
 	fields   []structDecoderField
 	minID    int16
 	required []uint64
+	// clears contains the indices (into fields) of pointer-typed and
+	// union-typed fields. Such fields absent from the input are zeroed
+	// after decoding, so that reusing a previously decoded value as the
+	// decode target produces the same result as decoding into a fresh
+	// value. Without this, stale pointers (or stale union members) from a
+	// previous decode would survive, which is invisible for regular
+	// optional fields but corrupts values where "which member is non-nil"
+	// carries meaning.
+	clears []int
+	// seenWords is the size of the bitmap needed to track which of the
+	// (sparse, id-indexed) fields were observed in the input.
+	seenWords int
 }
 
 func (dec *structDecoder) decode(r Reader, v reflect.Value, flags Flags) error {
 	flags = flags.Only(decodeFlags)
 	coalesceBool := flags.Have(coalesceBoolFields)
 
-	seen := make([]uint64, 1)
-	if len(dec.required) > len(seen) {
-		seen = make([]uint64, len(dec.required))
+	var seenBuf [4]uint64
+	seen := seenBuf[:1]
+	if dec.seenWords > 1 {
+		if dec.seenWords <= len(seenBuf) {
+			seen = seenBuf[:dec.seenWords]
+		} else {
+			seen = make([]uint64, dec.seenWords)
+		}
 	}
 
 	// Inlined readStruct loop to avoid closure overhead
@@ -497,6 +517,28 @@ decodeFields:
 		}
 	}
 
+clearUnseen:
+	for _, i := range dec.clears {
+		if seen[i/64]&(1<<(i%64)) != 0 {
+			continue
+		}
+		x := v
+		for _, j := range dec.fields[i].index {
+			if x.Kind() == reflect.Ptr {
+				if x.IsNil() {
+					continue clearUnseen
+				}
+				x = x.Elem()
+			}
+			x = x.Field(j)
+		}
+		// x is either a pointer field or a union struct; zeroing a union
+		// nils its member interface, marking the union unset.
+		if x.Kind() != reflect.Ptr || !x.IsNil() {
+			x.SetZero()
+		}
+	}
+
 	return nil
 }
 
@@ -505,6 +547,7 @@ type structDecoderField struct {
 	id     int16
 	flags  Flags
 	typ    Type
+	isPtr  bool
 	decode DecodeFunc
 }
 
@@ -520,6 +563,7 @@ func decodeFuncStructOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 			id:     f.id,
 			flags:  f.flags,
 			typ:    TypeOf(f.typ),
+			isPtr:  f.typ.Kind() == reflect.Ptr,
 			decode: decodeFuncStructFieldOf(f, seen),
 		})
 	})
@@ -538,7 +582,8 @@ func decodeFuncStructOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 
 	dec.fields = make([]structDecoderField, (maxID-minID)+1)
 	dec.minID = minID
-	dec.required = make([]uint64, len(fields)/64+1)
+	dec.seenWords = (len(dec.fields) + 63) / 64
+	dec.required = make([]uint64, dec.seenWords)
 
 	for _, f := range fields {
 		i := f.id - minID
@@ -549,6 +594,12 @@ func decodeFuncStructOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		dec.fields[i] = f
 		if f.flags.Have(Required) {
 			dec.required[i/64] |= 1 << (i % 64)
+		}
+	}
+
+	for i := range dec.fields {
+		if dec.fields[i].decode != nil && (dec.fields[i].isPtr || dec.fields[i].flags.Have(UnionType)) {
+			dec.clears = append(dec.clears, i)
 		}
 	}
 
@@ -571,6 +622,11 @@ func decodeFuncPtrOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 	return func(r Reader, v reflect.Value, f Flags) error {
 		if v.IsNil() {
 			v.Set(reflect.New(elem))
+		} else {
+			// Reuse the allocation but not the contents: optional fields
+			// of the pointed-to value that are absent from the input must
+			// not survive from a previous decode.
+			v.Elem().SetZero()
 		}
 		return decode(r, v.Elem(), f)
 	}

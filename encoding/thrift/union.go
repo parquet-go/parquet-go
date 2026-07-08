@@ -212,7 +212,10 @@ type unionDecoderMember struct {
 	// interned is a shared *T for zero-sized members, invalid otherwise.
 	interned reflect.Value
 	typ      reflect.Type
-	decode   DecodeFunc
+	// ptrTyp is *typ, kept to test whether a previously decoded member can
+	// be reused as the decode target without allocating.
+	ptrTyp reflect.Type
+	decode DecodeFunc
 }
 
 type unionDecoder struct {
@@ -224,9 +227,16 @@ type unionDecoder struct {
 func (dec *unionDecoder) decode(r Reader, v reflect.Value, flags Flags) error {
 	flags = flags.Only(decodeFlags)
 
-	// Reset so that decoding into a reused value cannot retain a stale member.
+	// Reset so that decoding into a reused value cannot retain a stale
+	// member, but remember the previous member: when the input holds a
+	// member of the same type, its allocation is reused instead of
+	// allocating a fresh value.
 	x := v.Field(dec.field)
-	x.SetZero()
+	prev := reflect.Value{}
+	if !x.IsNil() {
+		prev = x.Elem()
+		x.SetZero()
+	}
 
 	lastFieldID := int16(0)
 	numFields := 0
@@ -273,7 +283,12 @@ func (dec *unionDecoder) decode(r Reader, v reflect.Value, flags Flags) error {
 
 			p := m.interned
 			if !p.IsValid() {
-				p = reflect.New(m.typ)
+				if prev.IsValid() && prev.Type() == m.ptrTyp && !prev.IsNil() {
+					p = prev
+					p.Elem().SetZero()
+				} else {
+					p = reflect.New(m.typ)
+				}
 			}
 			if err := m.decode(r, p.Elem(), flags); err != nil {
 				return with(dontExpectEOF(err), &decodeErrorField{cause: f})
@@ -301,6 +316,7 @@ func decodeFuncUnionOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		dec.members[m.id-layout.minID] = unionDecoderMember{
 			interned: m.interned,
 			typ:      m.typ,
+			ptrTyp:   reflect.PointerTo(m.typ),
 			decode:   DecodeFuncOf(m.typ, seen),
 		}
 	}
