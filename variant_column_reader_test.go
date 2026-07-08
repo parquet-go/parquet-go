@@ -7,12 +7,12 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/variant"
-	"slices"
 )
 
 // This file tests the columnar variant reader (variant_column_reader.go).
@@ -354,6 +354,9 @@ func TestVariantReaderUnshredded(t *testing.T) {
 	}
 
 	got, present := readVariantColumnar(t, buf.Bytes(), 5, "var")
+	if len(got) != len(values) {
+		t.Fatalf("read %d rows, want %d", len(got), len(values))
+	}
 	for j, want := range values {
 		if !present[j] {
 			t.Fatalf("row %d reported missing", j)
@@ -445,6 +448,46 @@ func buildVariantFile(t *testing.T, shred parquet.Node, values []*variant.Value,
 
 func vptr(v variant.Value) *variant.Value { return &v }
 
+// TestVariantReaderErrors exercises the error paths of the constructor and
+// the positioning methods.
+func TestVariantReaderErrors(t *testing.T) {
+	values := []*variant.Value{vptr(variant.Int64(1)), vptr(variant.Int64(2))}
+	data := buildVariantFile(t, parquet.Int(64), values)
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rg := f.RowGroups()[0]
+
+	if _, err := parquet.NewVariantReader(rg); err == nil {
+		t.Error("NewVariantReader with no path: want error")
+	}
+	if _, err := parquet.NewVariantReader(rg, "nope"); err == nil {
+		t.Error("NewVariantReader on a missing column: want error")
+	}
+	if _, err := parquet.NewVariantReader(rg, "id"); err == nil {
+		t.Error("NewVariantReader on a non-variant leaf: want error")
+	}
+
+	r, err := parquet.NewVariantReader(rg, "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.SeekToRow(-1); err == nil {
+		t.Error("SeekToRow(-1): want error")
+	}
+	if err := r.SeekToRow(int64(len(values)) + 1); err == nil {
+		t.Error("SeekToRow past the end: want error")
+	}
+	if n, err := r.Next(10); err != nil || n != len(values) {
+		t.Fatalf("Next = (%d, %v), want (%d, nil)", n, err, len(values))
+	}
+	if _, err := r.Next(1); err != io.EOF {
+		t.Errorf("Next after exhaustion: err = %v, want io.EOF", err)
+	}
+}
+
 // TestVariantReaderLocs checks the per-row location tags of a field
 // shredded as int64 across the full disposition matrix, including type
 // conflicts surfaced through residuals.
@@ -525,7 +568,7 @@ func TestVariantReaderLocs(t *testing.T) {
 	}
 	if v, ok, err := a.Residual(6); err != nil || !ok || v.Basic() != variant.BasicArray {
 		t.Errorf("a.Residual(6) = (%#v, %v, %v), want array", v.GoValue(), ok, err)
-	} else if elems := v.ArrayValue().Elements; len(elems) != 2 || elems[0].Int() != 1 {
+	} else if elems := v.ArrayValue().Elements; len(elems) != 2 || elems[0].Int() != 1 || elems[1].Int() != 2 {
 		t.Errorf("a.Residual(6) elements = %#v", v.GoValue())
 	}
 }
@@ -558,8 +601,8 @@ func TestVariantReaderMixedList(t *testing.T) {
 		t.Fatalf("root kind = %v, want list", root.Kind())
 	}
 	el := root.Elements()
-	if _, err := r.Next(100); err != nil {
-		t.Fatal(err)
+	if n, err := r.Next(100); err != nil || n != len(values) {
+		t.Fatalf("Next = (%d, %v), want (%d, nil)", n, err, len(values))
 	}
 
 	wantRoot := []parquet.VariantLoc{
@@ -613,6 +656,165 @@ func TestVariantReaderMixedList(t *testing.T) {
 	}
 	if v, ok, err := el.Residual(4); err != nil || !ok || !v.Equal(variant.String("x")) {
 		t.Errorf("el.Residual(4) = (%#v, %v, %v), want string x", v.GoValue(), ok, err)
+	}
+}
+
+// TestVariantReaderListSpansPages writes a single very large list with tiny
+// pages so its elements span several pages. readWindow counts rows by rep==0
+// transitions, so a list split across pages must still reconstruct as one
+// row with all elements.
+func TestVariantReaderListSpansPages(t *testing.T) {
+	const n = 2000
+	elems := make([]variant.Value, n)
+	for i := range elems {
+		elems[i] = variant.Int64(int64(i))
+	}
+	values := []*variant.Value{vptr(variant.MakeArray(elems))}
+	data := buildVariantFile(t, parquet.List(parquet.Int(64)), values,
+		parquet.PageBufferSize(64))
+
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	root := r.Root()
+	el := root.Elements()
+	if nn, err := r.Next(100); err != nil || nn != 1 {
+		t.Fatalf("Next = (%d, %v), want (1, nil)", nn, err)
+	}
+	if got := root.Locs(); len(got) != 1 || got[0] != parquet.VariantLocTypedList {
+		t.Fatalf("root loc = %v, want [typed-list]", got)
+	}
+	offs := root.ListOffsets()
+	if len(offs) != 2 || offs[0] != 0 || offs[1] != int32(n) {
+		t.Fatalf("ListOffsets = %v, want [0 %d]", offs, n)
+	}
+	ints := el.Int64s()
+	if len(ints) != n {
+		t.Fatalf("element Int64s len = %d, want %d", len(ints), n)
+	}
+	for i, got := range ints {
+		if got != int64(i) {
+			t.Fatalf("element %d = %d, want %d", i, got, i)
+		}
+	}
+}
+
+// TestVariantReaderNestedLists pins list-of-lists reconstruction, including
+// an outer list holding one empty inner list, which the randomized
+// differential test only reaches by chance.
+func TestVariantReaderNestedLists(t *testing.T) {
+	arr := func(elems ...variant.Value) variant.Value { return variant.MakeArray(elems) }
+	values := []*variant.Value{
+		vptr(arr(arr(variant.Int64(1), variant.Int64(2)), arr(variant.Int64(3)))),
+		vptr(arr(arr(variant.Int64(4)))),
+		vptr(arr(arr())), // outer list with one empty inner list: [[]]
+	}
+	data := buildVariantFile(t, parquet.List(parquet.List(parquet.Int(64))), values)
+
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	root := r.Root()
+	el := root.Elements()
+	intEl := el.Elements()
+	if nn, err := r.Next(100); err != nil || nn != len(values) {
+		t.Fatalf("Next = (%d, %v), want (%d, nil)", nn, err, len(values))
+	}
+
+	// Rows hold 2, 1, and 1 inner lists; the four inner lists are
+	// [1,2], [3], [4], and [].
+	wantOuter := []int32{0, 2, 3, 4}
+	if got := root.ListOffsets(); !slices.Equal(got, wantOuter) {
+		t.Fatalf("outer ListOffsets = %v, want %v", got, wantOuter)
+	}
+	for i, loc := range el.Locs() {
+		if loc != parquet.VariantLocTypedList {
+			t.Fatalf("inner-list loc %d = %v, want typed-list", i, loc)
+		}
+	}
+	wantInner := []int32{0, 2, 3, 4, 4}
+	if got := el.ListOffsets(); !slices.Equal(got, wantInner) {
+		t.Fatalf("inner ListOffsets = %v, want %v", got, wantInner)
+	}
+	wantInts := []int64{1, 2, 3, 4}
+	if got := intEl.Int64s(); !slices.Equal(got, wantInts) {
+		t.Fatalf("int element Int64s = %v, want %v", got, wantInts)
+	}
+
+	typedIdx := make(map[*parquet.VariantCursor][]int32)
+	fillTypedIndexes(root, typedIdx)
+	for e := range values {
+		v, ok, err := reconstructVariantEntry(root, e, typedIdx)
+		if err != nil {
+			t.Fatalf("reconstruct row %d: %v", e, err)
+		}
+		if !ok {
+			t.Fatalf("row %d missing", e)
+		}
+		if !v.Equal(*values[e]) {
+			t.Errorf("row %d mismatch:\n got: %#v\nwant: %#v", e, v.GoValue(), (*values[e]).GoValue())
+		}
+	}
+}
+
+// TestVariantReaderTypedListOfNulls reads a typed list whose elements are
+// all variant nulls: the list itself is typed but every element densifies to
+// the null location, leaving the typed vector empty.
+func TestVariantReaderTypedListOfNulls(t *testing.T) {
+	values := []*variant.Value{
+		vptr(variant.MakeArray([]variant.Value{variant.Null(), variant.Null(), variant.Null()})),
+	}
+	data := buildVariantFile(t, parquet.List(parquet.Int(64)), values)
+
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	root := r.Root()
+	el := root.Elements()
+	if nn, err := r.Next(100); err != nil || nn != 1 {
+		t.Fatalf("Next = (%d, %v), want (1, nil)", nn, err)
+	}
+	if offs := root.ListOffsets(); !slices.Equal(offs, []int32{0, 3}) {
+		t.Fatalf("ListOffsets = %v, want [0 3]", offs)
+	}
+	locs := el.Locs()
+	if len(locs) != 3 {
+		t.Fatalf("element locs = %v, want 3 nulls", locs)
+	}
+	for i, loc := range locs {
+		if loc != parquet.VariantLocNull {
+			t.Errorf("element %d loc = %v, want null", i, loc)
+		}
+	}
+	if got := el.Int64s(); len(got) != 0 {
+		t.Errorf("element Int64s = %v, want empty (all nulls)", got)
+	}
+	typedIdx := make(map[*parquet.VariantCursor][]int32)
+	fillTypedIndexes(root, typedIdx)
+	v, ok, err := reconstructVariantEntry(root, 0, typedIdx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !v.Equal(*values[0]) {
+		t.Errorf("reconstruct = %#v (ok=%v), want %#v", v.GoValue(), ok, (*values[0]).GoValue())
 	}
 }
 
@@ -736,6 +938,9 @@ func TestVariantReaderSeekToRow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Next after seek %d: %v", seek, err)
 		}
+		if want := min(10, int(numRows-seek)); n != want {
+			t.Fatalf("Next after seek %d: %d rows, want %d", seek, n, want)
+		}
 		ints := a.Int64s()
 		if len(ints) != n {
 			t.Fatalf("seek %d: %d typed values for %d rows", seek, len(ints), n)
@@ -745,6 +950,11 @@ func TestVariantReaderSeekToRow(t *testing.T) {
 				t.Fatalf("seek %d: row %d = %d, want %d", seek, i, ints[i], seek+int64(i))
 			}
 		}
+	}
+
+	// The final seek read the last row; the next read must report EOF.
+	if _, err := r.Next(1); err != io.EOF {
+		t.Errorf("Next after last row: err = %v, want io.EOF", err)
 	}
 }
 

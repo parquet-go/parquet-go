@@ -142,6 +142,7 @@ type VariantReader struct {
 	metaLeaf    *variantLeafReader
 	root        *VariantCursor
 	metaCache   map[string]variant.Metadata
+	leafSet     map[*variantLeafReader]struct{} // reused by Next
 	err         error
 
 	// rootValueRequired is set for plain unshredded variant groups, whose
@@ -149,14 +150,15 @@ type VariantReader struct {
 	rootValueRequired bool
 }
 
-// unshreddedVariantGroupOf recognizes the unshredded variant group shape
-// (required binary metadata, required or optional binary value, nothing
-// else) and returns its reconstruction tree.
+// unshreddedVariantGroupOf recognizes the plain unshredded variant group
+// shape (required binary metadata and required binary value, nothing else)
+// and returns its reconstruction tree. Groups with an optional value field
+// are handled by buildShreddedVariantGroup instead.
 func unshreddedVariantGroupOf(node Node) (*shreddedVariantGroup, bool) {
 	g := &shreddedVariantGroup{metadataCol: -1, valueCol: -1}
 	col := 0
 	for _, f := range node.Fields() {
-		if !f.Leaf() || f.Type().Kind() != ByteArray {
+		if !f.Leaf() || f.Type().Kind() != ByteArray || f.Repeated() {
 			return nil, false
 		}
 		switch f.Name() {
@@ -166,6 +168,12 @@ func unshreddedVariantGroupOf(node Node) (*shreddedVariantGroup, bool) {
 			}
 			g.metadataCol = col
 		case "value":
+			if f.Optional() {
+				// An optional value with no typed_value is handled by
+				// buildShreddedVariantGroup; this recognizer exists for
+				// the required-value shape it rejects.
+				return nil, false
+			}
 			g.valueCol = col
 		default:
 			return nil, false
@@ -366,12 +374,12 @@ func (r *VariantReader) Next(n int) (int, error) {
 	if int64(n) > remaining {
 		n = int(remaining)
 	}
-	seen := make(map[*variantLeafReader]struct{})
-	if err := r.collectLeaves(r.root, seen); err != nil {
-		r.err = err
-		return 0, err
+	if r.leafSet == nil {
+		r.leafSet = make(map[*variantLeafReader]struct{})
 	}
-	for l := range seen {
+	clear(r.leafSet)
+	r.collectLeaves(r.root, r.leafSet)
+	for l := range r.leafSet {
 		if err := l.readWindow(n); err != nil {
 			r.err = err
 			return 0, err
@@ -385,21 +393,18 @@ func (r *VariantReader) Next(n int) (int, error) {
 	return n, nil
 }
 
-func (r *VariantReader) collectLeaves(c *VariantCursor, seen map[*variantLeafReader]struct{}) error {
+func (r *VariantReader) collectLeaves(c *VariantCursor, seen map[*variantLeafReader]struct{}) {
 	if c == r.root {
 		seen[r.metaLeaf] = struct{}{}
 	}
-	for _, l := range []*variantLeafReader{c.valueLeaf, c.typedLeaf, c.presenceLeaf} {
+	for _, l := range [...]*variantLeafReader{c.valueLeaf, c.typedLeaf, c.presenceLeaf} {
 		if l != nil {
 			seen[l] = struct{}{}
 		}
 	}
 	for _, ch := range c.childList {
-		if err := r.collectLeaves(ch, seen); err != nil {
-			return err
-		}
+		r.collectLeaves(ch, seen)
 	}
-	return nil
 }
 
 // SeekToRow positions the reader such that the next call to Next starts at
@@ -443,7 +448,7 @@ func (r *VariantReader) metadataFor(row int32) (variant.Metadata, error) {
 	w := &r.metaLeaf.win
 	d := w.denseIdx[row]
 	if d < 0 {
-		return variant.Metadata{}, fmt.Errorf("variant: missing metadata for row")
+		return variant.Metadata{}, fmt.Errorf("variant: missing metadata for window row %d", row)
 	}
 	b := w.slab[w.offsets[d]:w.offsets[d+1]]
 	if m, ok := r.metaCache[string(b)]; ok {
@@ -626,13 +631,14 @@ func (c *VariantCursor) Elements() *VariantCursor {
 func (c *VariantCursor) Locs() []VariantLoc { return c.locs }
 
 // Rows maps each entry of the current window to its row index within the
-// window. It returns nil for cursors whose entries are the window rows
-// themselves (everything except element cursors).
+// window. For row-level cursors this is the identity mapping; for element
+// cursors (and cursors below them) several entries may map to one row.
 func (c *VariantCursor) Rows() []int32 { return c.rows }
 
 // ResidualCount returns the number of entries tagged VariantLocResidual in
-// the current window. A zero count means the typed vectors fully describe
-// the window and the engine can skip per-row residual handling.
+// the current window. A zero count lets an engine skip per-entry residual
+// decoding, though Residual may still return values for entries tagged
+// VariantLocNull or VariantLocTypedObject (partial-object leftovers).
 func (c *VariantCursor) ResidualCount() int { return c.residualCount }
 
 // TypedRows maps each value of the typed vectors to its entry index in the
@@ -916,7 +922,9 @@ func (c *VariantCursor) processElements() error {
 		switch p.locs[e] {
 		case VariantLocTypedList:
 			g := p.slotGroup[e]
-			if g < 0 || c.node == nil {
+			// g beyond the presence column's group count means the file
+			// is corrupt (sibling columns must agree); skip the entry.
+			if g < 0 || c.node == nil || int(g) >= len(startsP)-1 {
 				break
 			}
 			gs, ge := startsP[g], startsP[g+1]
@@ -953,8 +961,7 @@ func (c *VariantCursor) computeOwn(e int, g int32, missingLoc VariantLoc) {
 	valuePresent := false
 	if c.valueLeaf != nil {
 		w := &c.valueLeaf.win
-		s := w.starts(c.depth)[g]
-		if w.defs[s] == c.valueMaxDef {
+		if s, ok := w.slotOf(c.depth, g); ok && w.defs[s] == c.valueMaxDef {
 			d := w.denseIdx[s]
 			vbytes = w.slab[w.offsets[d]:w.offsets[d+1]]
 			valuePresent = true
@@ -964,8 +971,7 @@ func (c *VariantCursor) computeOwn(e int, g int32, missingLoc VariantLoc) {
 		switch t.kind {
 		case shreddedTypedPrimitive:
 			w := &c.typedLeaf.win
-			s := w.starts(c.depth)[g]
-			if w.defs[s] == c.typedMaxDef {
+			if s, ok := w.slotOf(c.depth, g); ok && w.defs[s] == c.typedMaxDef {
 				// The spec requires value to be null when a primitive
 				// typed_value is present; if a non-compliant writer set
 				// both, the typed side wins (readers may assume data is
@@ -976,8 +982,7 @@ func (c *VariantCursor) computeOwn(e int, g int32, missingLoc VariantLoc) {
 			}
 		case shreddedTypedObject:
 			w := &c.presenceLeaf.win
-			s := w.starts(c.depth)[g]
-			if w.defs[s] >= c.typedDefAbs {
+			if s, ok := w.slotOf(c.depth, g); ok && w.defs[s] >= c.typedDefAbs {
 				c.locs[e] = VariantLocTypedObject
 				if valuePresent {
 					c.resBytes[e] = vbytes // partially shredded object
@@ -986,16 +991,17 @@ func (c *VariantCursor) computeOwn(e int, g int32, missingLoc VariantLoc) {
 			}
 		case shreddedTypedList:
 			w := &c.presenceLeaf.win
-			s := w.starts(c.depth)[g]
-			if w.defs[s] >= c.typedDefAbs {
+			if s, ok := w.slotOf(c.depth, g); ok && w.defs[s] >= c.typedDefAbs {
 				c.locs[e] = VariantLocTypedList
 				return
 			}
 		}
 	}
 	if valuePresent {
-		if len(vbytes) > 0 && vbytes[0] == 0x00 {
-			// Variant null is a one-byte value with a zero header.
+		if len(vbytes) == 0 || vbytes[0] == 0x00 {
+			// Variant null is a one-byte value with a zero header. Empty
+			// bytes are how the plain unshredded write path stores a zero
+			// variant value; the row-based reader reads them as null too.
 			c.locs[e] = VariantLocNull
 		} else {
 			c.locs[e] = VariantLocResidual
@@ -1050,6 +1056,18 @@ func (w *variantLeafWindow) reset() {
 	w.slab = w.slab[:0]
 	w.offsets = append(w.offsets[:0], 0)
 	w.flba = w.flba[:0]
+}
+
+// slotOf returns the first slot of depth-d group g and whether the group
+// exists in the window. Sibling columns of a valid file agree on group
+// counts; a missing group means the file is corrupt, and the caller treats
+// the position as missing rather than panicking.
+func (w *variantLeafWindow) slotOf(depth int, g int32) (int32, bool) {
+	starts := w.starts(depth)
+	if int(g) >= len(starts)-1 {
+		return 0, false
+	}
+	return starts[g], true
 }
 
 func (w *variantLeafWindow) starts(depth int) []int32 {
@@ -1200,6 +1218,9 @@ func (l *variantLeafReader) ensurePage() error {
 			return err
 		}
 		if err := l.setPage(p); err != nil {
+			// setPage stored the page in l.page; clear it so Close does
+			// not release it a second time.
+			l.page = nil
 			Release(p)
 			return err
 		}
@@ -1223,7 +1244,10 @@ func (l *variantLeafReader) setPage(p Page) error {
 		// Boolean page data is bit-packed with an internal bit offset that
 		// Data() does not expose for sliced pages, so booleans go through
 		// the page's value reader instead.
-		return l.extractBooleans(p)
+		if err := l.extractBooleans(p); err != nil {
+			return err
+		}
+		return l.checkPageValues()
 	}
 
 	data := p.Data()
@@ -1247,7 +1271,7 @@ func (l *variantLeafReader) setPage(p Page) error {
 			}
 			l.dictSet = true
 		}
-		return nil
+		return l.checkPageValues()
 	}
 	switch l.kind {
 	case Int32:
@@ -1264,6 +1288,46 @@ func (l *variantLeafReader) setPage(p Page) error {
 		l.pflba, l.pflbaN = data.FixedLenByteArray()
 	default:
 		return fmt.Errorf("variant: unsupported page kind %s", l.kind)
+	}
+	return l.checkPageValues()
+}
+
+// checkPageValues verifies that the page decoded at least as many non-null
+// values as its definition levels declare, so that appendValue never indexes
+// past the decoded data. The page decode layer does not enforce this for
+// BYTE_ARRAY, dictionary-encoded, or data page v2 pages, where a corrupt
+// value section can decode short without error.
+func (l *variantLeafReader) checkPageValues() error {
+	needed := l.pcount
+	if l.pdefs != nil {
+		needed = countLevelsEqual(l.pdefs, l.maxDef)
+	}
+	var have int
+	switch {
+	case l.pidx != nil:
+		have = len(l.pidx)
+	case l.kind == Boolean:
+		have = len(l.pbools)
+	case l.kind == Int32:
+		have = len(l.pi32)
+	case l.kind == Int64:
+		have = len(l.pi64)
+	case l.kind == Float:
+		have = len(l.pf32)
+	case l.kind == Double:
+		have = len(l.pf64)
+	case l.kind == ByteArray:
+		if n := len(l.pbaOff); n > 0 {
+			have = n - 1
+		}
+	case l.kind == FixedLenByteArray:
+		if l.pflbaN > 0 {
+			have = len(l.pflba) / l.pflbaN
+		}
+	}
+	if have < needed {
+		return fmt.Errorf("variant: column %d page declares %d non-null values but decoded %d: %w",
+			l.reader.baseColumn+l.relCol, needed, have, ErrCorrupted)
 	}
 	return nil
 }

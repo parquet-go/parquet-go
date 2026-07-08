@@ -170,6 +170,14 @@ func (vc *variantConversion) convert(source [][]Value, scratch *variantScratch) 
 			break
 		}
 
+		// The level mapping tables cover the levels the schema can
+		// produce; corrupt files can carry level bytes beyond them, which
+		// must surface as a decode error rather than a panic.
+		if int(metaVal.repetitionLevel) >= len(vc.repLevels) || int(metaVal.definitionLevel) >= len(vc.defLevels) {
+			return fmt.Errorf("variant: metadata column has levels (r=%d, d=%d) outside the schema's levels",
+				metaVal.repetitionLevel, metaVal.definitionLevel)
+		}
+
 		if int(metaVal.definitionLevel) < vc.sourceGroupDef {
 			// The variant group is null at this occurrence; every leaf
 			// column of the group carries exactly one value at the
