@@ -453,17 +453,24 @@ decodeFields:
 			continue decodeFields
 		}
 		field := &dec.fields[i]
-		seen[i/64] |= 1 << (i % 64)
 
 		// TODO: implement type conversions?
 		if f.Type != field.typ && !(f.Type == TRUE && field.typ == BOOL) {
 			if flags.Have(Strict) {
 				return &TypeMismatch{item: "field value", Expect: field.typ, Found: f.Type}
 			}
+			// Consume the mismatched value so the stream stays aligned, and
+			// leave the field unseen: it was not decoded, so it must not
+			// satisfy the required check nor protect a stale pointer from
+			// clearUnseenPtrs below.
+			if err := skip(r, f.Type); err != nil {
+				return with(dontExpectEOF(err), &decodeErrorField{cause: f})
+			}
 			lastFieldID = f.ID
 			numFields++
 			continue decodeFields
 		}
+		seen[i/64] |= 1 << (i % 64)
 
 		x := v
 		for _, i := range field.index {
@@ -694,11 +701,19 @@ func skipBinary(r Reader) error {
 	if n == 0 {
 		return nil
 	}
-	switch x := r.Reader().(type) {
-	case *bufio.Reader:
+	// The bytes-backed readers implement Discard; their Reader() method
+	// returns a throwaway view that does not advance the read offset, so
+	// discarding through it would silently desynchronize the stream.
+	switch x := r.(type) {
+	case interface{ Discard(int) (int, error) }:
 		_, err = x.Discard(int(n))
 	default:
-		_, err = io.CopyN(io.Discard, x, int64(n))
+		switch x := r.Reader().(type) {
+		case *bufio.Reader:
+			_, err = x.Discard(int(n))
+		default:
+			_, err = io.CopyN(io.Discard, x, int64(n))
+		}
 	}
 	return dontExpectEOF(err)
 }

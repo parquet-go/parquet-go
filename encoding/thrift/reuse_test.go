@@ -105,6 +105,120 @@ func TestUnmarshalReuseZeroesPointee(t *testing.T) {
 	}
 }
 
+// TestUnmarshalReuseTypeMismatchedField checks the non-strict handling of
+// fields whose wire type does not match the target: the value must be
+// consumed (keeping the stream aligned) and the field left untouched, in
+// particular pointer fields populated by a previous decode must be niled
+// exactly as if the field were absent from the input.
+func TestUnmarshalReuseTypeMismatchedField(t *testing.T) {
+	// Same field IDs as reuseOuter but with different wire types.
+	type mismatchedOuter struct {
+		Name  string `thrift:"1"`
+		Inner int32  `thrift:"2,optional"` // STRUCT expected, I32 sent
+		Count string `thrift:"3,optional"` // I64 expected, BINARY sent
+	}
+
+	for _, p := range protocols {
+		t.Run(p.name, func(t *testing.T) {
+			count := int64(42)
+			first, err := thrift.Marshal(p.proto, &reuseOuter{
+				Name:  "first",
+				Inner: &reuseInner{A: 1, B: "one"},
+				Count: &count,
+			})
+			if err != nil {
+				t.Fatal("marshal:", err)
+			}
+			second, err := thrift.Marshal(p.proto, &mismatchedOuter{
+				Name:  "second",
+				Inner: 7,
+				Count: "not an integer",
+			})
+			if err != nil {
+				t.Fatal("marshal:", err)
+			}
+
+			v := new(reuseOuter)
+			if err := thrift.Unmarshal(p.proto, first, v); err != nil {
+				t.Fatal("unmarshal first:", err)
+			}
+			if err := thrift.Unmarshal(p.proto, second, v); err != nil {
+				t.Fatal("unmarshal second:", err)
+			}
+			if v.Name != "second" {
+				t.Errorf("Name = %q, want %q (stream desynchronized?)", v.Name, "second")
+			}
+			if v.Inner != nil {
+				t.Errorf("Inner = %+v, want nil: stale pointer survived a type-mismatched field", v.Inner)
+			}
+			if v.Count != nil {
+				t.Errorf("Count = %d, want nil: stale pointer survived a type-mismatched field", *v.Count)
+			}
+		})
+	}
+}
+
+// TestUnmarshalRequiredTypeMismatch checks that a required field whose wire
+// type does not match is reported as missing rather than silently accepted
+// with a zero value.
+func TestUnmarshalRequiredTypeMismatch(t *testing.T) {
+	type point struct {
+		X float64 `thrift:"1,required"`
+		Y float64 `thrift:"2,required"`
+	}
+	type mismatchedPoint struct {
+		X string  `thrift:"1"` // DOUBLE expected, BINARY sent
+		Y float64 `thrift:"2"`
+	}
+
+	for _, p := range protocols {
+		t.Run(p.name, func(t *testing.T) {
+			b, err := thrift.Marshal(p.proto, &mismatchedPoint{X: "oops", Y: 2})
+			if err != nil {
+				t.Fatal("marshal:", err)
+			}
+			err = thrift.Unmarshal(p.proto, b, new(point))
+			missing := new(thrift.MissingField)
+			if !errors.As(err, &missing) {
+				t.Fatalf("expected MissingField error, got %v", err)
+			}
+			if missing.Field.ID != 1 {
+				t.Errorf("missing field ID = %d, want 1", missing.Field.ID)
+			}
+		})
+	}
+}
+
+// TestUnmarshalSkipsUnknownBinaryField checks that skipping an unknown
+// string/binary field advances the reader correctly, so that known fields
+// following it still decode. This exercises the Discard path of the
+// bytes-backed readers, whose Reader() method returns a positionless view.
+func TestUnmarshalSkipsUnknownBinaryField(t *testing.T) {
+	type withString struct {
+		S string `thrift:"1"`
+		B int64  `thrift:"2"`
+	}
+	type withoutString struct {
+		B int64 `thrift:"2"`
+	}
+
+	for _, p := range protocols {
+		t.Run(p.name, func(t *testing.T) {
+			b, err := thrift.Marshal(p.proto, &withString{S: "skip me entirely", B: 42})
+			if err != nil {
+				t.Fatal("marshal:", err)
+			}
+			v := new(withoutString)
+			if err := thrift.Unmarshal(p.proto, b, v); err != nil {
+				t.Fatal("unmarshal:", err)
+			}
+			if v.B != 42 {
+				t.Errorf("B = %d, want 42 (unknown binary field was not skipped correctly)", v.B)
+			}
+		})
+	}
+}
+
 // sparseIDs has a field ID span (1..100) wider than one 64-bit bitmap word
 // while declaring only two fields, exercising the sparse sizing of the seen
 // and required bitmaps in the struct decoder.
