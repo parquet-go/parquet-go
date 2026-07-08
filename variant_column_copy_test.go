@@ -102,33 +102,6 @@ func TestCopyVariantRowsRandomized(t *testing.T) {
 	}
 }
 
-// buildMultiSchemaVariantSources builds one file per shredding schema in a
-// fixed three-schema mix (two different shreddings and one unshredded) with
-// random values and occasional null rows, returning the files and the
-// concatenated expected values.
-func buildMultiSchemaVariantSources(t *testing.T, r *rand.Rand, rowsPerFile int) ([][]byte, []*variant.Value) {
-	t.Helper()
-	schemas := []parquet.Node{
-		parquet.Group{"a": parquet.Int(64), "b": parquet.String()},
-		parquet.Group{"a": parquet.String(), "c": parquet.List(parquet.Int(64))},
-		nil, // unshredded
-	}
-	var files [][]byte
-	var all []*variant.Value
-	for _, shred := range schemas {
-		values := make([]*variant.Value, rowsPerFile)
-		for j := range values {
-			if r.IntN(6) == 0 {
-				continue // null variant row
-			}
-			values[j] = vptr(randomVariant(r, 0))
-		}
-		files = append(files, buildVariantFile(t, shred, values))
-		all = append(all, values...)
-	}
-	return files, all
-}
-
 // TestCopyVariantRowsMultiFile compacts several files with different
 // shredding schemas (and one unshredded) into a single file, shredded and
 // unshredded.

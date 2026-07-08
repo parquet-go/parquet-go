@@ -61,31 +61,6 @@ func buildVariantFileStreaming(t *testing.T, shred parquet.Node, values []*varia
 	return buf.Bytes()
 }
 
-// assertVariantFile reads a written file back through the columnar reader
-// and asserts every row matches the expected values (nil = null row).
-func assertVariantFile(t *testing.T, data []byte, values []*variant.Value, context string) {
-	t.Helper()
-	got, present := readVariantColumnar(t, data, 1024, "var")
-	if len(got) != len(values) {
-		t.Fatalf("%s: read %d rows, want %d", context, len(got), len(values))
-	}
-	for i, want := range values {
-		if want == nil {
-			if present[i] {
-				t.Errorf("%s: row %d: got %#v, want null row", context, i, got[i].GoValue())
-			}
-			continue
-		}
-		if !present[i] {
-			t.Errorf("%s: row %d: got null row, want %#v", context, i, want.GoValue())
-			continue
-		}
-		if !got[i].Equal(*want) {
-			t.Errorf("%s: row %d mismatch:\n got: %#v\nwant: %#v", context, i, got[i].GoValue(), want.GoValue())
-		}
-	}
-}
-
 // assertRowBasedRead checks a written file through the row-based conversion
 // read path (schema conversion to an unshredded variant), an independent
 // check on files produced by the streaming writer. Nil values are expected
@@ -150,41 +125,6 @@ func readMetadataColumn(t *testing.T, data []byte, col int) [][]byte {
 		parquet.Release(p)
 	}
 	return metas
-}
-
-// assertVariantFieldsTyped opens a written file and asserts that every row
-// of the given shredded fields is stored in the typed_value column (not as
-// residual variant binary), which is how tests verify a copy or merge kept
-// (or re-established) the shredding.
-func assertVariantFieldsTyped(t *testing.T, data []byte, numRows int, fields ...string) {
-	t.Helper()
-	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	cursors := make(map[string]*parquet.VariantCursor, len(fields))
-	for _, name := range fields {
-		cursors[name] = r.Path(name)
-	}
-	n, err := r.Next(numRows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != numRows {
-		t.Fatalf("read %d rows, want %d", n, numRows)
-	}
-	for name, c := range cursors {
-		for e, loc := range c.Locs() {
-			if loc != variant.LocTyped {
-				t.Errorf("field %q row %d: location %v, want typed", name, e, loc)
-			}
-		}
-	}
 }
 
 // TestVariantColumnWriterRandomizedDifferential runs the randomized

@@ -2,9 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
-	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,80 +17,6 @@ import (
 // a shredded variant group; the expected reconstruction of row N is stored
 // in case-*_row-N.variant.bin as serialized variant metadata directly
 // followed by the serialized value.
-
-type rawVariant struct {
-	Metadata []byte `parquet:"metadata"`
-	Value    []byte `parquet:"value"`
-}
-
-type rawVariantRow struct {
-	ID  int32      `parquet:"id"`
-	Var rawVariant `parquet:"var,variant"`
-}
-
-// splitVariantBin splits a .variant.bin golden (metadata directly followed
-// by value) into its two parts by computing the metadata's encoded size
-// from its header.
-func splitVariantBin(data []byte) (metadata, value []byte, err error) {
-	if len(data) == 0 {
-		return nil, nil, fmt.Errorf("empty variant binary")
-	}
-	offsetSize := int(data[0]>>6)&0x03 + 1
-	if len(data) < 1+offsetSize {
-		return nil, nil, fmt.Errorf("variant binary too short for dictionary size")
-	}
-	readUint := func(b []byte) int {
-		var v uint32
-		for i := range offsetSize {
-			v |= uint32(b[i]) << (8 * i)
-		}
-		return int(v)
-	}
-	dictSize := readUint(data[1:])
-	lastOffsetPos := 1 + offsetSize + dictSize*offsetSize
-	if len(data) < lastOffsetPos+offsetSize {
-		return nil, nil, fmt.Errorf("variant binary too short for offsets")
-	}
-	stringsLen := readUint(data[lastOffsetPos:])
-	metadataLen := lastOffsetPos + offsetSize + stringsLen
-	if len(data) < metadataLen {
-		return nil, nil, fmt.Errorf("variant binary too short for dictionary strings")
-	}
-	return data[:metadataLen], data[metadataLen:], nil
-}
-
-func decodeVariantGolden(t *testing.T, path string) variant.Value {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading golden: %v", err)
-	}
-	metaBytes, valBytes, err := splitVariantBin(data)
-	if err != nil {
-		t.Fatalf("splitting golden: %v", err)
-	}
-	m, err := variant.DecodeMetadata(metaBytes)
-	if err != nil {
-		t.Fatalf("decoding golden metadata: %v", err)
-	}
-	v, err := variant.Decode(m, valBytes)
-	if err != nil {
-		t.Fatalf("decoding golden value: %v", err)
-	}
-	return v
-}
-
-func decodeRawVariant(raw rawVariant) (variant.Value, error) {
-	m, err := variant.DecodeMetadata(raw.Metadata)
-	if err != nil {
-		return variant.Null(), fmt.Errorf("metadata: %w", err)
-	}
-	v, err := variant.Decode(m, raw.Value)
-	if err != nil {
-		return variant.Null(), fmt.Errorf("value: %w", err)
-	}
-	return v, nil
-}
 
 // TestShreddedVariantSpecRead reads canonical parquet-java-written shredded
 // variant files with an unshredded reader schema and verifies that
