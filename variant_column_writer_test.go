@@ -554,6 +554,78 @@ func TestVariantColumnWriterFieldRef(t *testing.T) {
 	}
 }
 
+// TestVariantColumnWriterFieldRefAcrossWriters uses one ref on two writers:
+// the ref's cached metadata intern belongs to the first writer's
+// dictionary, and the second writer must not trust it — its own metadata
+// must still contain the field name (VariantShredding.md requires all field
+// names of a row, shredded or not, in the row's metadata).
+func TestVariantColumnWriterFieldRefAcrossWriters(t *testing.T) {
+	shred := parquet.Group{"a": parquet.Int(64)}
+	schema := parquet.NewSchema("table", parquet.Group{
+		"var": parquet.Optional(mustShreddedVariant(t, shred)),
+	})
+
+	var buf1, buf2 bytes.Buffer
+	w1 := parquet.NewWriter(&buf1, schema)
+	w2 := parquet.NewWriter(&buf2, schema)
+	vw1, err := parquet.NewVariantColumnWriter(w1, "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vw2, err := parquet.NewVariantColumnWriter(w2, "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ref := vw1.FieldRef("a")
+	write := func(vw *parquet.VariantColumnWriter) {
+		if err := vw.BeginRow(); err != nil {
+			t.Fatal(err)
+		}
+		vw.BeginObject()
+		vw.FieldByRef(ref)
+		vw.Int64(1)
+		vw.EndObject()
+		if err := vw.EndRow(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(vw1)
+	write(vw2) // ref now holds vw1's intern; vw2 must re-intern
+
+	if err := w1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w2.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for label, data := range map[string][]byte{"writer 1": buf1.Bytes(), "writer 2": buf2.Bytes()} {
+		f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+		p, err := pages.ReadPage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		vals := make([]parquet.Value, 1)
+		if _, err := p.Values().ReadValues(vals); err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		m, err := variant.DecodeMetadata(vals[0].ByteArray())
+		parquet.Release(p)
+		pages.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(m.Strings, "a") {
+			t.Errorf("%s: metadata dictionary %q is missing field name %q", label, m.Strings, "a")
+		}
+	}
+}
+
 // TestVariantColumnWriterMetadataPersistent asserts that rows with the same
 // field set write byte-identical metadata (the dictionary persists across
 // rows), and that the dictionary reset under field-name churn keeps rows
@@ -627,6 +699,46 @@ func TestVariantColumnWriterMetadataPersistent(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertVariantFile(t, buf.Bytes(), churn, "metadata churn")
+
+	// The dictionary reset invalidated nameRef's cached intern mid-run;
+	// every row's metadata must still contain the shredded field name.
+	// This cannot be caught by reconstruction, which recovers shredded
+	// field names from the schema instead of the dictionary.
+	f, err = parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaPages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+	defer metaPages.Close()
+	row := 0
+	for {
+		p, err := metaPages.ReadPage()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		metaVals := make([]parquet.Value, p.NumRows())
+		n, err := p.Values().ReadValues(metaVals)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		for _, v := range metaVals[:n] {
+			m, err := variant.DecodeMetadata(v.ByteArray())
+			if err != nil {
+				t.Fatalf("row %d: decoding metadata: %v", row, err)
+			}
+			if !slices.Contains(m.Strings, "name") {
+				t.Errorf("row %d: metadata is missing shredded field name %q after dictionary reset", row, "name")
+			}
+			row++
+		}
+		parquet.Release(p)
+	}
+	if row != rows {
+		t.Fatalf("read %d metadata values, want %d", row, rows)
+	}
 }
 
 // TestVariantColumnWriterMultiPage writes enough rows through a small page

@@ -568,15 +568,16 @@ func (w *VariantColumnWriter) Field(name string) {
 // schema and its metadata dictionary intern, so hot ingest loops writing
 // the same fields on every row skip the per-event name hashing of Field.
 //
-// A ref belongs to the writer that created it and caches its resolution
-// against one object position at a time: use one ref per writer per field
-// name, and prefer distinct refs for identically named fields of different
-// objects.
+// A ref caches its resolution against one writer and one object position at
+// a time, so any use is correct, but for peak performance use one ref per
+// writer per field name, with distinct refs for identically named fields of
+// different objects.
 type VariantFieldRef struct {
 	name    string
 	node    *shreddedVariantGroup // object node the ref last resolved against
 	idx     int                   // field index in node, -1 when not shredded
-	metaGen uint64                // 1+dictionary generation of the cached intern
+	metaFor *VariantColumnWriter  // writer whose dictionary holds the cached intern
+	metaGen uint64                // dictionary generation of the cached intern
 }
 
 // FieldRef pre-resolves an object field name for use with FieldByRef. The
@@ -595,9 +596,10 @@ func (w *VariantColumnWriter) FieldByRef(ref *VariantFieldRef) {
 	if f == nil {
 		return
 	}
-	if ref.metaGen != w.metaGen+1 {
+	if ref.metaFor != w || ref.metaGen != w.metaGen {
 		w.meta.Add(ref.name)
-		ref.metaGen = w.metaGen + 1
+		ref.metaFor = w
+		ref.metaGen = w.metaGen
 	}
 	if ref.node != f.node {
 		ref.node = f.node
