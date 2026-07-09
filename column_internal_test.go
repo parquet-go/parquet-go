@@ -229,3 +229,106 @@ func TestGroupConvertedTypeFallback(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenColumnsMalformedNumChildren checks that a schema whose NumChildren do
+// not add up produces an error rather than a panic.
+//
+// The column tree is cut out of slabs sized from the schema, so a group that
+// claims more children than the schema holds would run the slab dry. That has
+// to be reported, not indexed past.
+func TestOpenColumnsMalformedNumChildren(t *testing.T) {
+	tests := []struct {
+		scenario string
+		schema   []format.SchemaElement
+	}{
+		{
+			scenario: "root claims more children than the schema has",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](5)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
+		{
+			scenario: "nested group claims more children than remain",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](1)},
+				{Name: "group", NumChildren: thrift.New[int32](4)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
+		{
+			scenario: "children beyond the end of the schema",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](2)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.scenario, func(t *testing.T) {
+			metadata := &format.FileMetaData{
+				Version:   1,
+				Schema:    test.schema,
+				RowGroups: []format.RowGroup{},
+			}
+
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("openColumns panicked instead of returning an error: %v", r)
+				}
+			}()
+
+			if _, err := openColumns(&File{}, metadata, nil, nil); err == nil {
+				t.Error("expected an error for a malformed schema")
+			}
+		})
+	}
+}
+
+// TestOpenColumnsSlabsDoNotOverlap checks that the slices handed to each column
+// out of the shared slabs are disjoint: writing through one must not be visible
+// through another.
+func TestOpenColumnsSlabsDoNotOverlap(t *testing.T) {
+	// root -> (group -> (a, b), c)
+	metadata := &format.FileMetaData{
+		Version: 1,
+		Schema: []format.SchemaElement{
+			{Name: "root", NumChildren: thrift.New[int32](2)},
+			{Name: "group", NumChildren: thrift.New[int32](2)},
+			{Name: "a", Type: thrift.New(format.Int64)},
+			{Name: "b", Type: thrift.New(format.Int64)},
+			{Name: "c", Type: thrift.New(format.Int64)},
+		},
+		RowGroups: []format.RowGroup{},
+	}
+
+	root, err := openColumns(&File{}, metadata, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(root.columns) != 2 {
+		t.Fatalf("root has %d children, want 2", len(root.columns))
+	}
+	group, c := root.columns[0], root.columns[1]
+	if group.Name() != "group" || c.Name() != "c" {
+		t.Fatalf("root children are %q, %q; want \"group\", \"c\"", group.Name(), c.Name())
+	}
+	if len(group.columns) != 2 {
+		t.Fatalf("group has %d children, want 2", len(group.columns))
+	}
+	if group.columns[0].Name() != "a" || group.columns[1].Name() != "b" {
+		t.Fatalf("group children are %q, %q; want \"a\", \"b\"", group.columns[0].Name(), group.columns[1].Name())
+	}
+
+	// Appending to a group's children must not reach into the sibling's slice:
+	// takeSlab clamps the capacity of every slice it hands out.
+	if cap(group.columns) != len(group.columns) {
+		t.Errorf("group children have spare capacity %d; appending would overwrite the next column",
+			cap(group.columns)-len(group.columns))
+	}
+	if cap(root.fields) != len(root.fields) {
+		t.Errorf("root fields have spare capacity %d", cap(root.fields)-len(root.fields))
+	}
+}

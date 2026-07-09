@@ -210,6 +210,7 @@ func (c *Column) forEachLeaf(do func(*Column)) {
 
 func openColumns(file *File, metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex) (*Column, error) {
 	cl := columnLoader{}
+	cl.reserve(metadata, columnIndexes, offsetIndexes)
 
 	c, err := cl.open(file, metadata, columnIndexes, offsetIndexes, nil)
 	if err != nil {
@@ -282,13 +283,73 @@ type columnLoader struct {
 	schemaIndex         int
 	columnOrderIndex    int
 	rowGroupColumnIndex int
+
+	// The shape of the column tree is fully determined by the schema, so its
+	// parts are allocated once here and handed out in slices as the tree is
+	// built. A file with C schema elements, L of them leaves, and R row groups
+	// used to cost C + 2*(C-1) + 3*L allocations; it now costs six.
+	columns     []Column
+	children    []*Column
+	fields      []Field
+	chunks      []*format.ColumnChunk
+	columnIndex []*format.ColumnIndex
+	offsetIndex []*format.OffsetIndex
+}
+
+func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex) {
+	numColumns := len(metadata.Schema)
+	if numColumns == 0 {
+		return
+	}
+	numLeaves := 0
+	for i := range metadata.Schema {
+		if isLeafSchemaElement(&metadata.Schema[i]) {
+			numLeaves++
+		}
+	}
+	numRowGroups := len(metadata.RowGroups)
+
+	cl.columns = make([]Column, numColumns)
+	// Every column but the root is a child of exactly one group, and appears
+	// once in that group's fields.
+	cl.children = make([]*Column, numColumns-1)
+	cl.fields = make([]Field, numColumns-1)
+
+	if n := numLeaves * numRowGroups; n > 0 {
+		cl.chunks = make([]*format.ColumnChunk, n)
+		if len(columnIndexes) > 0 {
+			cl.columnIndex = make([]*format.ColumnIndex, n)
+		}
+		if len(offsetIndexes) > 0 {
+			cl.offsetIndex = make([]*format.OffsetIndex, n)
+		}
+	}
+}
+
+// takeSlab cuts the first n elements off the front of the slab and returns them
+// with their capacity clamped, so that appending to the result cannot reach into
+// the rest of the slab. It returns nil, false when the slab is exhausted, which
+// only happens on a schema whose NumChildren do not add up.
+func takeSlab[T any](slab *[]T, n int) ([]T, bool) {
+	if n == 0 {
+		return nil, true
+	}
+	if n > len(*slab) {
+		return nil, false
+	}
+	taken := (*slab)[:n:n]
+	*slab = (*slab)[n:]
+	return taken, true
 }
 
 func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex, path []string) (*Column, error) {
-	c := &Column{
-		file:   file,
-		schema: &metadata.Schema[cl.schemaIndex],
+	if cl.schemaIndex >= len(cl.columns) {
+		return nil, fmt.Errorf("column schema index %d is out of range: %d >= %d",
+			cl.schemaIndex, cl.schemaIndex, len(cl.columns))
 	}
+	c := &cl.columns[cl.schemaIndex]
+	c.file = file
+	c.schema = &metadata.Schema[cl.schemaIndex]
 	c.path = columnPath(path).append(c.schema.Name)
 
 	cl.schemaIndex++
@@ -309,32 +370,39 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		rowGroupColumnIndex := cl.rowGroupColumnIndex
 		cl.rowGroupColumnIndex++
 
-		c.chunks = make([]*format.ColumnChunk, 0, len(rowGroups))
-		c.columnIndex = make([]*format.ColumnIndex, 0, len(rowGroups))
-		c.offsetIndex = make([]*format.OffsetIndex, 0, len(rowGroups))
+		var ok bool
+		if c.chunks, ok = takeSlab(&cl.chunks, len(rowGroups)); !ok {
+			return nil, fmt.Errorf("column %q has no room left for its column chunks", c.schema.Name)
+		}
 
 		for i, rowGroup := range rowGroups {
 			if rowGroupColumnIndex >= len(rowGroup.Columns) {
 				return nil, fmt.Errorf("row group at index %d does not have enough columns", i)
 			}
-			c.chunks = append(c.chunks, &rowGroup.Columns[rowGroupColumnIndex])
+			c.chunks[i] = &rowGroup.Columns[rowGroupColumnIndex]
 		}
 
 		if len(columnIndexes) > 0 {
+			if c.columnIndex, ok = takeSlab(&cl.columnIndex, len(rowGroups)); !ok {
+				return nil, fmt.Errorf("column %q has no room left for its column index pages", c.schema.Name)
+			}
 			for i := range rowGroups {
 				if rowGroupColumnIndex >= len(columnIndexes) {
 					return nil, fmt.Errorf("row group at index %d does not have enough column index pages", i)
 				}
-				c.columnIndex = append(c.columnIndex, &columnIndexes[rowGroupColumnIndex])
+				c.columnIndex[i] = &columnIndexes[rowGroupColumnIndex]
 			}
 		}
 
 		if len(offsetIndexes) > 0 {
+			if c.offsetIndex, ok = takeSlab(&cl.offsetIndex, len(rowGroups)); !ok {
+				return nil, fmt.Errorf("column %q has no room left for its offset index pages", c.schema.Name)
+			}
 			for i := range rowGroups {
 				if rowGroupColumnIndex >= len(offsetIndexes) {
 					return nil, fmt.Errorf("row group at index %d does not have enough offset index pages", i)
 				}
-				c.offsetIndex = append(c.offsetIndex, &offsetIndexes[rowGroupColumnIndex])
+				c.offsetIndex[i] = &offsetIndexes[rowGroupColumnIndex]
 			}
 		}
 
@@ -391,7 +459,13 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 			c.typ = &listType{}
 		}
 	}
-	c.columns = make([]*Column, numChildren)
+	// Reserve this group's children before recursing, so that a child's own
+	// children are cut from the slab after ours rather than overlapping them.
+	var ok bool
+	if c.columns, ok = takeSlab(&cl.children, numChildren); !ok {
+		return nil, fmt.Errorf("column %q declares %d children but the schema has no room for them",
+			c.schema.Name, numChildren)
+	}
 
 	for i := range c.columns {
 		if cl.schemaIndex >= len(metadata.Schema) {
@@ -406,7 +480,10 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		}
 	}
 
-	c.fields = make([]Field, len(c.columns))
+	if c.fields, ok = takeSlab(&cl.fields, len(c.columns)); !ok {
+		return nil, fmt.Errorf("column %q declares %d fields but the schema has no room for them",
+			c.schema.Name, len(c.columns))
+	}
 	for i, column := range c.columns {
 		c.fields[i] = column
 	}
