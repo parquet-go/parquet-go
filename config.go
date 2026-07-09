@@ -572,7 +572,7 @@ func FileSchema(schema *Schema) FileOption {
 }
 
 // WithFooter is used to open a parquet file from an already-decoded footer,
-// obtained from ReadFooter or DecodeFooter, skipping the footer read and
+// obtained from ReadFooter, skipping the footer read and
 // decode entirely. Programs which open the same parquet files repeatedly can
 // cache footers to amortize the cost of decoding them:
 //
@@ -584,7 +584,7 @@ func FileSchema(schema *Schema) FileOption {
 // back any number of open files at the same time. The footer must correspond
 // to the file passed to OpenFile, and the size passed to OpenFile must be
 // the size of that file. OpenFile reports an error when the footer records a
-// different size, but footers from DecodeFooter carry no size and a footer
+// different size, but footers read from a bare footer section carry no size and a footer
 // applied to the wrong file of the same size is not detected at open time:
 // it results in decode errors or corrupt reads later.
 //
@@ -593,7 +593,7 @@ func FileSchema(schema *Schema) FileOption {
 // they took effect when the footer was constructed instead. In particular
 // decryption is inherited from the footer: WithDecryption passed to OpenFile
 // has no effect, and encrypted files require the DecryptionConfig to be
-// passed to ReadFooter or DecodeFooter. SkipMagicBytes and OptimisticRead
+// passed to ReadFooter. SkipMagicBytes and OptimisticRead
 // only affect the footer read and are likewise ignored; note that without
 // OptimisticRead prefetching, the page index is read directly from r on
 // every open (the footer does not cache it), so footer-cached opens should

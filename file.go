@@ -79,15 +79,14 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	// It is unwrapped before the file is returned.
 	footer, reader := c.Footer, r
 	if footer == nil {
-		if footer, reader, err = readFooter(r, size, c); err != nil {
+		if footer, reader, err = readFooter(r, size, c, false); err != nil {
 			return nil, err
 		}
-		footer.size = size
 	} else {
 		if len(footer.metadata.Schema) == 0 {
 			// The constructors validate the schema, so an empty one means
 			// the footer is a hand-constructed zero value.
-			return nil, fmt.Errorf("opening parquet file with a footer that was not created by ReadFooter, DecodeFooter, or File.Footer")
+			return nil, fmt.Errorf("opening parquet file with a footer that was not created by ReadFooter or File.Footer")
 		}
 		if footer.size != 0 && footer.size != size {
 			// Guards against passing a cached footer with the wrong file: a

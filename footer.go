@@ -19,8 +19,8 @@ import (
 // a single Footer may back any number of Files opened with the WithFooter
 // option, across goroutines, without synchronization. This makes Footer
 // suitable for caching: programs opening the same file repeatedly can read
-// the footer once with ReadFooter (or decode cached footer bytes with
-// DecodeFooter) and amortize the decoding cost across opens.
+// the footer once with ReadFooter (from the file, or from cached raw footer
+// bytes) and amortize the decoding cost across opens.
 //
 // All footer normalization performed by OpenFile happens at construction
 // time: key/value metadata is sorted, row group ordinals are back-filled,
@@ -37,8 +37,8 @@ type Footer struct {
 	data     []byte // backing buffer aliased by metadata strings and byte slices
 	size     int64  // size of the file the footer was read from, 0 if unknown
 
-	// The schema is built eagerly by ReadFooter and DecodeFooter (which
-	// report schema validation errors), and lazily through schemaOnce for
+	// The schema is built eagerly by ReadFooter (which reports schema
+	// validation errors), and lazily through schemaOnce for
 	// footers created internally by OpenFile and exposed via File.Footer.
 	schemaOnce sync.Once
 	schema     *Schema
@@ -62,56 +62,24 @@ type Footer struct {
 // the footer (and the column metadata it contains) is decrypted here, and
 // files later opened from it inherit this decryption configuration
 // regardless of the options passed to OpenFile.
+//
+// ReadFooter also accepts a bare footer section — the last footerSize+8
+// bytes of a file, as cached by programs that store raw footer bytes
+// instead of decoded footers:
+//
+//	footer, err := parquet.ReadFooter(bytes.NewReader(blob), int64(len(blob)))
+//
+// The input is recognized as a bare footer when it is exactly footerSize+8
+// bytes (a complete file is always larger, since at least the 4-byte header
+// magic precedes the footer). In that case the header magic check does not
+// apply and the footer records no file size (see Size). ReadFooter does not
+// retain the input; it makes a private copy of the parts it needs.
 func ReadFooter(r io.ReaderAt, size int64, options ...FileOption) (*Footer, error) {
 	c, err := NewFileConfig(options...)
 	if err != nil {
 		return nil, err
 	}
-	footer, _, err := readFooter(r, size, c)
-	if err != nil {
-		return nil, err
-	}
-	footer.size = size
-	if err := footer.buildSchema(); err != nil {
-		return nil, err
-	}
-	return footer, nil
-}
-
-// DecodeFooter decodes a parquet footer from bytes previously read from the
-// end of a parquet file, as cached by programs that store raw footer bytes
-// instead of decoded footers.
-//
-// The data must be the last footerSize+8 bytes of the file: the
-// thrift-encoded footer (and trailing signature, if any) followed by the
-// 8-byte trailer holding the 4-byte little-endian footer size and the
-// 4-byte magic ("PAR1" or "PARE"). Equivalently: with footerSize the
-// little-endian uint32 stored at offset size-8, data must be
-// file[size-(footerSize+8) : size].
-//
-// The WithDecryption option is required for encrypted or signed footers,
-// and is resolved at construction time like in ReadFooter; I/O related
-// options have no effect since no reads are performed.
-//
-// DecodeFooter does not retain data; it makes a private copy of the parts it
-// needs, and the caller remains free to reuse the slice.
-func DecodeFooter(data []byte, options ...FileOption) (*Footer, error) {
-	c, err := NewFileConfig(options...)
-	if err != nil {
-		return nil, err
-	}
-	if len(data) < 8 {
-		return nil, fmt.Errorf("decoding parquet footer: input of %d bytes is too short", len(data))
-	}
-	trailer := data[len(data)-8:]
-	magic := string(trailer[4:])
-	if magic != "PAR1" && magic != "PARE" {
-		return nil, fmt.Errorf("invalid magic footer of parquet file: %q", trailer[4:])
-	}
-	if footerSize := int64(binary.LittleEndian.Uint32(trailer[:4])); footerSize != int64(len(data)-8) {
-		return nil, fmt.Errorf("decoding parquet footer: input of %d bytes implies a footer of %d bytes, but the trailer records %d", len(data), len(data)-8, footerSize)
-	}
-	footer, err := newFooter(data[:len(data)-8], magic, c)
+	footer, _, err := readFooter(r, size, c, true)
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +101,8 @@ func (f *Footer) Metadata() *format.FileMetaData { return &f.metadata }
 func (f *Footer) NumRows() int64 { return f.metadata.NumRows }
 
 // Size returns the size of the file the footer was read from, or 0 when the
-// size is unknown (footers constructed by DecodeFooter, which only sees the
-// footer bytes).
+// size is unknown (footers read from a bare footer section, which carries no
+// information about the rest of the file).
 func (f *Footer) Size() int64 { return f.size }
 
 // Lookup returns the value associated with the given key in the file
@@ -146,7 +114,7 @@ func (f *Footer) Lookup(key string) (value string, ok bool) {
 // Schema returns the schema of the file the footer was read from.
 //
 // The schema is shared by all callers and safe for concurrent use. For
-// footers returned by ReadFooter and DecodeFooter it was constructed and
+// footers returned by ReadFooter it was constructed and
 // validated when the footer was; for footers obtained from File.Footer it
 // is constructed lazily on first call.
 func (f *Footer) Schema() *Schema {
@@ -156,7 +124,7 @@ func (f *Footer) Schema() *Schema {
 
 // buildSchema constructs the schema from the footer metadata, validating the
 // schema tree in the process. The public footer constructors call it eagerly
-// so that a Footer obtained from ReadFooter or DecodeFooter is guaranteed to
+// so that a Footer obtained from ReadFooter is guaranteed to
 // carry a valid schema; footers created internally by OpenFile skip it
 // because OpenFile builds (and validates) its own file-bound column tree
 // from the same metadata.
@@ -177,25 +145,12 @@ func (f *Footer) buildSchema() error {
 // reads from the prefetched footer region when the OptimisticRead option is
 // enabled (and is r itself otherwise); OpenFile uses it to read the page
 // index without going back to the underlying reader.
-func readFooter(r io.ReaderAt, size int64, c *FileConfig) (*Footer, io.ReaderAt, error) {
-	if !c.SkipMagicBytes {
-		var headerMagic [4]byte
-		if _, err := readAt(r, headerMagic[:], 0); err != nil {
-			return nil, nil, fmt.Errorf("reading magic header of parquet file: %w", err)
-		}
-		switch string(headerMagic[:]) {
-		case "PAR1":
-			// plain or plaintext-footer-with-signature
-		case "PARE":
-			// encrypted footer
-			if c.Decryption == nil {
-				return nil, nil, fmt.Errorf("parquet file has encrypted footer (magic \"PARE\") but no DecryptionConfig was provided")
-			}
-		default:
-			return nil, nil, fmt.Errorf("invalid magic header of parquet file: %q", headerMagic[:])
-		}
-	}
-
+//
+// When allowBareFooter is true and the input is exactly footerSize+8 bytes,
+// it is treated as a bare footer section rather than a complete file: the
+// header magic check is skipped (there is no header) and the returned footer
+// records no file size.
+func readFooter(r io.ReaderAt, size int64, c *FileConfig, allowBareFooter bool) (*Footer, io.ReaderAt, error) {
 	if cast, ok := r.(interface{ SetMagicFooterSection(offset, length int64) }); ok {
 		cast.SetMagicFooterSection(size-8, 8)
 	}
@@ -226,6 +181,31 @@ func readFooter(r io.ReaderAt, size int64, c *FileConfig) (*Footer, io.ReaderAt,
 	}
 
 	footerSize := int64(binary.LittleEndian.Uint32(b[:4]))
+
+	// A complete file is always larger than footerSize+8: at minimum the
+	// 4-byte header magic precedes the footer section. An input of exactly
+	// footerSize+8 bytes is therefore a bare footer section (cached footer
+	// bytes), which has no header to check and no known file size.
+	bareFooter := allowBareFooter && size == footerSize+8
+
+	if !bareFooter && !c.SkipMagicBytes {
+		var headerMagic [4]byte
+		if _, err := readAt(r, headerMagic[:], 0); err != nil {
+			return nil, nil, fmt.Errorf("reading magic header of parquet file: %w", err)
+		}
+		switch string(headerMagic[:]) {
+		case "PAR1":
+			// plain or plaintext-footer-with-signature
+		case "PARE":
+			// encrypted footer
+			if c.Decryption == nil {
+				return nil, nil, fmt.Errorf("parquet file has encrypted footer (magic \"PARE\") but no DecryptionConfig was provided")
+			}
+		default:
+			return nil, nil, fmt.Errorf("invalid magic header of parquet file: %q", headerMagic[:])
+		}
+	}
+
 	footerData := []byte(nil)
 
 	if footerSize <= optimisticFooterSize {
@@ -243,6 +223,9 @@ func readFooter(r io.ReaderAt, size int64, c *FileConfig) (*Footer, io.ReaderAt,
 	footer, err := newFooter(footerData, footerMagic, c)
 	if err != nil {
 		return nil, nil, err
+	}
+	if !bareFooter {
+		footer.size = size
 	}
 	return footer, reader, nil
 }

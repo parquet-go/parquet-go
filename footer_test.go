@@ -176,9 +176,10 @@ func TestOpenFileWithFooterRejectsWrongSize(t *testing.T) {
 	}
 }
 
-// TestDecodeFooter checks that DecodeFooter over cached footer bytes is
-// equivalent to ReadFooter over the file.
-func TestDecodeFooter(t *testing.T) {
+// TestReadFooterFromBareFooter checks that ReadFooter over a bare footer
+// section (the last footerSize+8 bytes of a file, as cached by programs
+// that store raw footer bytes) is equivalent to ReadFooter over the file.
+func TestReadFooterFromBareFooter(t *testing.T) {
 	for _, path := range footerTestFiles(t) {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			data, err := os.ReadFile(path)
@@ -193,7 +194,7 @@ func TestDecodeFooter(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			decoded, err := parquet.DecodeFooter(footerBytes)
+			decoded, err := parquet.ReadFooter(bytes.NewReader(footerBytes), int64(len(footerBytes)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -201,7 +202,7 @@ func TestDecodeFooter(t *testing.T) {
 				t.Errorf("decoded.Size() = %d, want 0 (unknown)", decoded.Size())
 			}
 			if b, w := marshalMetadata(t, read.Metadata()), marshalMetadata(t, decoded.Metadata()); !bytes.Equal(b, w) {
-				t.Error("metadata mismatch between ReadFooter and DecodeFooter")
+				t.Error("metadata mismatch between file and bare footer reads")
 			}
 			if b, w := read.Schema().String(), decoded.Schema().String(); b != w {
 				t.Errorf("schema mismatch:\nread: %s\ndecoded: %s", b, w)
@@ -218,17 +219,23 @@ func TestDecodeFooter(t *testing.T) {
 	}
 }
 
-// TestDecodeFooterRejectsInvalidInput checks the input validation of
-// DecodeFooter.
-func TestDecodeFooterRejectsInvalidInput(t *testing.T) {
-	if _, err := parquet.DecodeFooter([]byte("PAR1")); err == nil {
-		t.Error("expected error for truncated input")
-	}
-	if _, err := parquet.DecodeFooter([]byte("\x00\x00\x00\x00XXXX")); err == nil {
-		t.Error("expected error for invalid magic")
-	}
-	if _, err := parquet.DecodeFooter([]byte("\xff\x00\x00\x00PAR1")); err == nil {
-		t.Error("expected error for footer size mismatch")
+// TestReadFooterRejectsInvalidInput checks the input validation of
+// ReadFooter over invalid bare inputs.
+func TestReadFooterRejectsInvalidInput(t *testing.T) {
+	for _, test := range []struct {
+		scenario string
+		input    string
+	}{
+		{scenario: "truncated input", input: "PAR1"},
+		{scenario: "invalid magic", input: "\x00\x00\x00\x00XXXX"},
+		{scenario: "footer size larger than input", input: "\xff\x00\x00\x00PAR1"},
+	} {
+		t.Run(test.scenario, func(t *testing.T) {
+			r := bytes.NewReader([]byte(test.input))
+			if _, err := parquet.ReadFooter(r, int64(len(test.input))); err == nil {
+				t.Error("expected error")
+			}
+		})
 	}
 }
 
@@ -367,10 +374,10 @@ func TestFileFooter(t *testing.T) {
 	assertFilesEquivalent(t, base, reopened)
 }
 
-// TestDecodeFooterDoesNotRetainInput checks the documented ownership
-// contract: mutating the input slice after DecodeFooter returns must not
-// corrupt the footer.
-func TestDecodeFooterDoesNotRetainInput(t *testing.T) {
+// TestReadFooterDoesNotRetainInput checks the documented ownership
+// contract: mutating the bare footer bytes after ReadFooter returns must
+// not corrupt the footer.
+func TestReadFooterDoesNotRetainInput(t *testing.T) {
 	data, err := os.ReadFile("testdata/alltypes_tiny_pages_plain.parquet")
 	if err != nil {
 		t.Fatal(err)
@@ -379,7 +386,7 @@ func TestDecodeFooterDoesNotRetainInput(t *testing.T) {
 	footerSize := binary.LittleEndian.Uint32(data[size-8 : size-4])
 	footerBytes := slices.Clone(data[size-int64(footerSize)-8 : size])
 
-	decoded, err := parquet.DecodeFooter(footerBytes)
+	decoded, err := parquet.ReadFooter(bytes.NewReader(footerBytes), int64(len(footerBytes)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,11 +402,11 @@ func TestDecodeFooterDoesNotRetainInput(t *testing.T) {
 	}
 }
 
-// TestDecodeFooterValidatesRowCounts checks that footer-level validation
-// runs at construction: ReadFooter and DecodeFooter are standalone APIs, so
-// inconsistent row counts must be rejected even though OpenFile would also
-// catch them later.
-func TestDecodeFooterValidatesRowCounts(t *testing.T) {
+// TestReadFooterValidatesRowCounts checks that footer-level validation
+// runs at construction: ReadFooter is a standalone API, so inconsistent
+// row counts must be rejected even though OpenFile would also catch them
+// later.
+func TestReadFooterValidatesRowCounts(t *testing.T) {
 	data, err := os.ReadFile("testdata/file.parquet")
 	if err != nil {
 		t.Fatal(err)
@@ -408,7 +415,7 @@ func TestDecodeFooterValidatesRowCounts(t *testing.T) {
 	footerSize := binary.LittleEndian.Uint32(data[size-8 : size-4])
 	footerBytes := data[size-int64(footerSize)-8 : size]
 
-	valid, err := parquet.DecodeFooter(footerBytes)
+	valid, err := parquet.ReadFooter(bytes.NewReader(footerBytes), int64(len(footerBytes)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +428,7 @@ func TestDecodeFooterValidatesRowCounts(t *testing.T) {
 	corrupt = binary.LittleEndian.AppendUint32(corrupt, uint32(len(corrupt)))
 	corrupt = append(corrupt, "PAR1"...)
 
-	if _, err := parquet.DecodeFooter(corrupt); err == nil {
+	if _, err := parquet.ReadFooter(bytes.NewReader(corrupt), int64(len(corrupt))); err == nil {
 		t.Error("expected error decoding a footer with a negative row count")
 	}
 }
@@ -489,10 +496,10 @@ func TestFooterEncrypted(t *testing.T) {
 			}
 			assertFilesEquivalent(t, base, f)
 
-			// DecodeFooter over the raw footer region must work as well.
+			// ReadFooter over the raw footer region must work as well.
 			footerSize := binary.LittleEndian.Uint32(data[size-8 : size-4])
 			footerBytes := data[size-int64(footerSize)-8 : size]
-			decoded, err := parquet.DecodeFooter(footerBytes, parquet.WithDecryption(keys))
+			decoded, err := parquet.ReadFooter(bytes.NewReader(footerBytes), int64(len(footerBytes)), parquet.WithDecryption(keys))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -501,7 +508,7 @@ func TestFooterEncrypted(t *testing.T) {
 				t.Fatal(err)
 			}
 			if got := readTypedRows(t, f2); !reflect.DeepEqual(got, rows) {
-				t.Errorf("rows mismatch after DecodeFooter: got %+v, want %+v", got, rows)
+				t.Errorf("rows mismatch after bare footer read: got %+v, want %+v", got, rows)
 			}
 		})
 	}

@@ -128,10 +128,13 @@ func BenchmarkOpenFooter(b *testing.B) {
 				}
 			})
 
-			b.Run("DecodeFooter", func(b *testing.B) {
+			// ReadFooter over cached bare footer bytes instead of the file.
+			b.Run("ReadFooter/bareFooter", func(b *testing.B) {
+				r := bytes.NewReader(footerBytes)
+				blobSize := int64(len(footerBytes))
 				b.ReportAllocs()
 				for b.Loop() {
-					if _, err := parquet.DecodeFooter(footerBytes); err != nil {
+					if _, err := parquet.ReadFooter(r, blobSize); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -139,7 +142,7 @@ func BenchmarkOpenFooter(b *testing.B) {
 
 			// The zero-allocation transient decode path: what a pooled
 			// decoder pays per decode when re-decoding cached footer bytes.
-			// Not equivalent work to DecodeFooter above, which additionally
+			// Not equivalent work to ReadFooter above, which additionally
 			// validates the trailer, normalizes the metadata, and builds
 			// the schema; the delta between the two is mostly schema
 			// construction, not decoder overhead.
