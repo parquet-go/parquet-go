@@ -382,7 +382,36 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 
 	columnIndexes := make([]format.ColumnIndex, numColumnChunks)
 	offsetIndexes := make([]format.OffsetIndex, numColumnChunks)
-	indexBuffer := make([]byte, max(int(columnIndexLength), int(offsetIndexLength)))
+
+	// The column index and the offset index get separate buffers because the
+	// values decoded below alias them: ColumnIndex.MinValues and MaxValues are
+	// sub-slices of the bytes they were decoded from. A single shared buffer
+	// would be overwritten by the offset index read, corrupting the min/max
+	// statistics of every column.
+	var columnIndexBuffer, offsetIndexBuffer []byte
+	if columnIndexOffset > 0 {
+		columnIndexBuffer = make([]byte, columnIndexLength)
+	}
+	if offsetIndexOffset > 0 {
+		offsetIndexBuffer = make([]byte, offsetIndexLength)
+	}
+
+	// One reader and one decoder are reused across every column chunk. Decoding
+	// each chunk with thrift.Unmarshal instead would clone the chunk's bytes and
+	// allocate a reader for it, twice per column chunk.
+	reader := f.protocol.NewReaderFromBytes(nil).(thrift.BytesReader)
+	decoder := thrift.NewDecoder(reader)
+
+	decode := func(b []byte, v any) error {
+		reader.ResetBytes(b)
+		if err := decoder.Decode(v); err != nil {
+			return err
+		}
+		if n := len(b) - reader.BytesRead(); n != 0 {
+			return fmt.Errorf("unexpected trailing bytes at the end of thrift input: %d", n)
+		}
+		return nil
+	}
 
 	// pageIndexKey returns the AES key used to decrypt this column's
 	// page-index modules, or nil for plaintext columns.  We resolve keys here
@@ -404,7 +433,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 	}
 
 	if columnIndexOffset > 0 {
-		columnIndexData := indexBuffer[:columnIndexLength]
+		columnIndexData := columnIndexBuffer
 
 		if cast, ok := f.reader.(interface{ SetColumnIndexSection(offset, length int64) }); ok {
 			cast.SetColumnIndexSection(columnIndexOffset, columnIndexLength)
@@ -437,7 +466,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 					}
 					buffer = plain
 				}
-				if err := thrift.Unmarshal(&f.protocol, buffer, &columnIndexes[(i*numColumns)+j]); err != nil {
+				if err := decode(buffer, &columnIndexes[(i*numColumns)+j]); err != nil {
 					return fmt.Errorf("decoding column index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
 				}
 			}
@@ -449,7 +478,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 	}
 
 	if offsetIndexOffset > 0 {
-		offsetIndexData := indexBuffer[:offsetIndexLength]
+		offsetIndexData := offsetIndexBuffer
 
 		if cast, ok := f.reader.(interface{ SetOffsetIndexSection(offset, length int64) }); ok {
 			cast.SetOffsetIndexSection(offsetIndexOffset, offsetIndexLength)
@@ -478,7 +507,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 					}
 					buffer = plain
 				}
-				if err := thrift.Unmarshal(&f.protocol, buffer, &offsetIndexes[(i*numColumns)+j]); err != nil {
+				if err := decode(buffer, &offsetIndexes[(i*numColumns)+j]); err != nil {
 					return fmt.Errorf("decoding offset index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
 				}
 			}

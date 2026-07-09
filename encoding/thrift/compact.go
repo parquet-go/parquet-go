@@ -372,6 +372,11 @@ type compactBytesReader struct {
 	offset   int
 }
 
+func (r *compactBytesReader) ResetBytes(b []byte) {
+	r.data = b
+	r.offset = 0
+}
+
 func (r *compactBytesReader) Protocol() Protocol {
 	return r.protocol
 }

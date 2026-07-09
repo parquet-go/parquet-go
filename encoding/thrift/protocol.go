@@ -53,6 +53,26 @@ type Reader interface {
 	BytesRead() int
 }
 
+// BytesReader is a Reader positioned over a fixed byte slice.
+//
+// ResetBytes repoints the reader at b and rewinds it, so a caller decoding many
+// values from a byte buffer can reuse one reader instead of allocating one per
+// value.
+//
+// Values decoded through a BytesReader may alias b: ReadBytes and ReadString
+// return sub-slices of it rather than copies. Callers must keep b alive and
+// unmodified for as long as the decoded values are used. This is why Unmarshal,
+// which makes no such demand of its caller, clones its input.
+type BytesReader interface {
+	Reader
+	ResetBytes(b []byte)
+}
+
+var (
+	_ BytesReader = (*compactBytesReader)(nil)
+	_ BytesReader = (*binaryBytesReader)(nil)
+)
+
 // Writer represents a low-level writer of values encoded according to one of
 // the thrift protocols.
 type Writer interface {

@@ -400,6 +400,11 @@ type binaryBytesReader struct {
 	offset int
 }
 
+func (r *binaryBytesReader) ResetBytes(b []byte) {
+	r.data = b
+	r.offset = 0
+}
+
 func (r *binaryBytesReader) Protocol() Protocol {
 	return r.p
 }
