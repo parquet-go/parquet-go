@@ -3,6 +3,7 @@ package parquet
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/parquet-go/parquet-go/variant"
@@ -444,15 +445,30 @@ type VariantCursor struct {
 
 	// Window state. All slices are indexed by entry: one entry per row for
 	// row-level cursors, one per list element for element cursors.
+	//
+	// Residual state is stored sparsely: entries holding residual bytes or
+	// values are rare in shredded-heavy data, and per-entry storage of a
+	// variant.Value (144 bytes) plus a byte-slice header dominated the
+	// reader's memory footprint and window-reset cost.
+	identityRows  bool // entry i is row i; rows stays nil
+	identitySlots bool // entry i is slot group i; slotGroup stays nil
 	locs          []variant.Loc
-	slotGroup     []int32 // slot group in this node's own columns, -1 if none
-	rows          []int32 // window row of each entry, nil means identity
-	resBytes      [][]byte
-	resVals       []variant.Value
-	resDecoded    []bool
+	slotGroup     []int32           // slot group in this node's own columns, -1 if none
+	rows          []int32           // window row of each entry, nil means identity
+	res           []variantResidual // residual state of tagged entries, ascending by entry
 	typedRows     []int32
 	listOffsets   []int32
 	residualCount int
+}
+
+// variantResidual is the residual state of one entry: the raw bytes from the
+// value column (nil for navigated entries, which are born decoded) and the
+// lazily decoded value.
+type variantResidual struct {
+	bytes   []byte
+	val     variant.Value
+	entry   int32
+	decoded bool
 }
 
 func (r *VariantReader) newNodeCursor(parent *VariantCursor, node *shreddedVariantGroup, name string, elements bool) *VariantCursor {
@@ -465,6 +481,8 @@ func (r *VariantReader) newNodeCursor(parent *VariantCursor, node *shreddedVaria
 		depth:      node.repDepth,
 		children:   make(map[string]*VariantCursor),
 	}
+	c.identityRows = parent == nil || (!elements && parent.identityRows)
+	c.identitySlots = parent == nil || (!elements && parent.identitySlots)
 	if node.valueCol >= 0 {
 		c.valueLeaf = r.leafFor(node.valueCol)
 		c.valueMaxDef = r.leafInfo[node.valueCol].maxDef
@@ -492,13 +510,18 @@ func (r *VariantReader) newNodeCursor(parent *VariantCursor, node *shreddedVaria
 
 func (r *VariantReader) newVirtualCursor(parent *VariantCursor, name string, elements bool) *VariantCursor {
 	return &VariantCursor{
-		reader:     r,
-		parent:     parent,
-		kind:       VariantCursorUnshredded,
-		fieldName:  name,
-		isElements: elements,
-		depth:      parent.depth,
-		children:   make(map[string]*VariantCursor),
+		reader:       r,
+		parent:       parent,
+		kind:         VariantCursorUnshredded,
+		fieldName:    name,
+		isElements:   elements,
+		depth:        parent.depth,
+		children:     make(map[string]*VariantCursor),
+		identityRows: !elements && parent.identityRows,
+		// Virtual cursors have no columns of their own, so their slot
+		// groups are never read; leaving identitySlots set skips the
+		// per-entry slotGroup appends.
+		identitySlots: true,
 	}
 }
 
@@ -581,8 +604,9 @@ func (c *VariantCursor) Elements() *VariantCursor {
 func (c *VariantCursor) Locs() []variant.Loc { return c.locs }
 
 // Rows maps each entry of the current window to its row index within the
-// window. For row-level cursors this is the identity mapping; for element
-// cursors (and cursors below them) several entries may map to one row.
+// window. For row-level cursors the mapping is the identity and Rows returns
+// nil; for element cursors (and cursors below them) it returns one row index
+// per entry, and several entries may map to one row.
 func (c *VariantCursor) Rows() []int32 { return c.rows }
 
 // ResidualCount returns the number of entries tagged variant.LocResidual in
@@ -677,13 +701,14 @@ func (c *VariantCursor) Residual(i int) (variant.Value, bool, error) {
 	case variant.LocNull:
 		return variant.Null(), true, nil
 	case variant.LocResidual, variant.LocTypedObject:
-		if c.resDecoded[i] {
-			return c.resVals[i], true, nil
-		}
-		if c.resBytes[i] == nil {
+		r := c.residualAt(i)
+		if r == nil {
 			return variant.Null(), false, nil
 		}
-		v, err := c.decodeResidual(i)
+		if r.decoded {
+			return r.val, true, nil
+		}
+		v, err := c.decodeResidual(r)
 		if err != nil {
 			return variant.Null(), false, err
 		}
@@ -693,17 +718,37 @@ func (c *VariantCursor) Residual(i int) (variant.Value, bool, error) {
 	}
 }
 
-func (c *VariantCursor) decodeResidual(i int) (variant.Value, error) {
-	m, err := c.reader.metadataFor(c.rowOf(i))
+// residualAt returns the residual state of entry e, or nil if the entry has
+// none. res is sorted by entry (windows are built in entry order).
+func (c *VariantCursor) residualAt(e int) *variantResidual {
+	i, ok := slices.BinarySearchFunc(c.res, int32(e), func(r variantResidual, e int32) int {
+		return int(r.entry) - int(e)
+	})
+	if !ok {
+		return nil
+	}
+	return &c.res[i]
+}
+
+// addResidual appends residual state for entry e, which must be greater than
+// the entry of any state added to this window before it. The pointer is
+// valid only until the next call to addResidual.
+func (c *VariantCursor) addResidual(e int) *variantResidual {
+	c.res = append(c.res, variantResidual{entry: int32(e)})
+	return &c.res[len(c.res)-1]
+}
+
+func (c *VariantCursor) decodeResidual(r *variantResidual) (variant.Value, error) {
+	m, err := c.reader.metadataFor(c.rowOf(int(r.entry)))
 	if err != nil {
 		return variant.Null(), err
 	}
-	v, err := variant.Decode(m, c.resBytes[i])
+	v, err := variant.Decode(m, r.bytes)
 	if err != nil {
 		return variant.Null(), fmt.Errorf("variant: decoding residual value: %w", err)
 	}
-	c.resVals[i] = v
-	c.resDecoded[i] = true
+	r.val = v
+	r.decoded = true
 	return v, nil
 }
 
@@ -714,27 +759,44 @@ func (c *VariantCursor) rowOf(i int) int32 {
 	return c.rows[i]
 }
 
-// resetWindow clears the per-window state, retaining slice capacity.
+// resetWindow clears the per-window state, retaining slice capacity. The
+// residual entries are cleared so that references to window slabs and
+// decoded values do not outlive the window.
 func (c *VariantCursor) resetWindow() {
 	c.locs = c.locs[:0]
 	c.slotGroup = c.slotGroup[:0]
 	c.rows = c.rows[:0]
-	c.resBytes = c.resBytes[:0]
-	c.resVals = c.resVals[:0]
-	c.resDecoded = c.resDecoded[:0]
+	clear(c.res)
+	c.res = c.res[:0]
 	c.typedRows = c.typedRows[:0]
 	c.listOffsets = c.listOffsets[:0]
 	c.residualCount = 0
 }
 
+// growEntries bulk-extends the window to n entries, all tagged
+// variant.LocMissing, for the flat window paths that fill locs in place.
+func (c *VariantCursor) growEntries(n int) {
+	c.locs = slices.Grow(c.locs, n)[:n]
+	clear(c.locs)
+}
+
 func (c *VariantCursor) appendEntry(group, row int32) int {
 	c.locs = append(c.locs, variant.LocMissing)
-	c.slotGroup = append(c.slotGroup, group)
-	c.rows = append(c.rows, row)
-	c.resBytes = append(c.resBytes, nil)
-	c.resVals = append(c.resVals, variant.Value{})
-	c.resDecoded = append(c.resDecoded, false)
+	if !c.identitySlots {
+		c.slotGroup = append(c.slotGroup, group)
+	}
+	if !c.identityRows {
+		c.rows = append(c.rows, row)
+	}
 	return len(c.locs) - 1
+}
+
+// groupOf returns the slot group of entry e in this node's own columns.
+func (c *VariantCursor) groupOf(e int) int32 {
+	if c.identitySlots {
+		return int32(e)
+	}
+	return c.slotGroup[e]
 }
 
 func (c *VariantCursor) setNavigated(e int, v variant.Value) {
@@ -744,8 +806,9 @@ func (c *VariantCursor) setNavigated(e int, v variant.Value) {
 		c.locs[e] = variant.LocResidual
 		c.residualCount++
 	}
-	c.resVals[e] = v
-	c.resDecoded[e] = true
+	r := c.addResidual(e)
+	r.val = v
+	r.decoded = true
 }
 
 // process recomputes the cursor's window state from its leaf windows (or its
@@ -783,27 +846,39 @@ func (c *VariantCursor) process(n int) error {
 // navigate through: all variant.LocResidual entries, plus partial-object
 // leftovers when a non-shredded field cursor exists below this one.
 func (c *VariantCursor) decodeResiduals() error {
-	for e := range c.locs {
-		switch c.locs[e] {
-		case variant.LocResidual:
-			if !c.resDecoded[e] && c.resBytes[e] != nil {
-				if _, err := c.decodeResidual(e); err != nil {
-					return err
-				}
-			}
-		case variant.LocTypedObject:
-			if c.hasVirtualChild && !c.resDecoded[e] && c.resBytes[e] != nil {
-				if _, err := c.decodeResidual(e); err != nil {
-					return err
-				}
-			}
+	for i := range c.res {
+		r := &c.res[i]
+		if r.decoded || r.bytes == nil {
+			continue
+		}
+		if c.locs[r.entry] == variant.LocTypedObject && !c.hasVirtualChild {
+			continue
+		}
+		if _, err := c.decodeResidual(r); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
+// flatWindow reports whether the cursor can use the bulk window path: no
+// slot or row indirection, and one slot per entry in every leaf window it
+// reads. The value and primitive typed_value leaves of a depth-0 cursor are
+// never repeated, but the presence leaf can be: it is the first leaf under
+// an object or list typed_value, which may sit below a repeated level (a
+// list typed_value always does).
+func (c *VariantCursor) flatWindow() bool {
+	return c.depth == 0 && c.identitySlots && c.identityRows &&
+		(c.presenceLeaf == nil || c.presenceLeaf.maxRep == 0)
+}
+
 func (c *VariantCursor) processRoot(n int) error {
 	mw := &c.reader.metaLeaf.win
+	if c.flatWindow() {
+		c.growEntries(n)
+		c.computeOwnFlat(n, mw.defs, byte(c.reader.groupDef), variant.LocNull)
+		return nil
+	}
 	for row := range n {
 		e := c.appendEntry(int32(row), int32(row))
 		if mw.defs[row] < c.reader.groupMaxDef {
@@ -817,15 +892,28 @@ func (c *VariantCursor) processRoot(n int) error {
 
 func (c *VariantCursor) processShreddedField() error {
 	p := c.parent
-	for e := range p.locs {
-		e2 := c.appendEntry(p.slotGroup[e], p.rowOf(e))
+	n := len(p.locs)
+	if c.flatWindow() && p.residualCount == 0 {
+		// No parent entry needs residual navigation, so every entry is
+		// resolved from this node's own columns: entries below an absent
+		// parent read as missing there too (their definition levels are
+		// below the maxima).
+		c.growEntries(n)
+		c.computeOwnFlat(n, nil, 0, variant.LocMissing)
+		return nil
+	}
+	for e := range n {
+		g := p.groupOf(e)
+		e2 := c.appendEntry(g, p.rowOf(e))
 		switch p.locs[e] {
 		case variant.LocTypedObject:
 			// A typed object always has its own column slots (navigated
 			// residual entries can only be tagged null or residual).
-			c.computeOwn(e2, p.slotGroup[e], variant.LocMissing)
+			c.computeOwn(e2, g, variant.LocMissing)
 		case variant.LocResidual:
-			c.navigateField(e2, p.resVals[e])
+			if r := p.residualAt(e); r != nil && r.decoded {
+				c.navigateField(e2, r.val)
+			}
 		}
 	}
 	return nil
@@ -833,12 +921,19 @@ func (c *VariantCursor) processShreddedField() error {
 
 func (c *VariantCursor) processVirtualField() error {
 	p := c.parent
-	for e := range p.locs {
+	n := len(p.locs)
+	if c.identityRows && len(p.res) == 0 {
+		// Virtual fields exist only inside residual values; with none in
+		// the parent window every entry is missing.
+		c.growEntries(n)
+		return nil
+	}
+	for e := range n {
 		e2 := c.appendEntry(-1, p.rowOf(e))
 		switch p.locs[e] {
 		case variant.LocResidual, variant.LocTypedObject:
-			if p.resDecoded[e] {
-				c.navigateField(e2, p.resVals[e])
+			if r := p.residualAt(e); r != nil && r.decoded {
+				c.navigateField(e2, r.val)
 			}
 		}
 	}
@@ -871,7 +966,7 @@ func (c *VariantCursor) processElements() error {
 	for e := range p.locs {
 		switch p.locs[e] {
 		case variant.LocTypedList:
-			g := p.slotGroup[e]
+			g := p.groupOf(e)
 			// g beyond the presence column's group count means the file
 			// is corrupt (sibling columns must agree); skip the entry.
 			if g < 0 || c.node == nil || int(g) >= len(startsP)-1 {
@@ -889,8 +984,8 @@ func (c *VariantCursor) processElements() error {
 				}
 			}
 		case variant.LocResidual:
-			if pv := p.resVals[e]; p.resDecoded[e] && pv.Basic() == variant.BasicArray {
-				for _, elem := range pv.ArrayValue().Elements {
+			if r := p.residualAt(e); r != nil && r.decoded && r.val.Basic() == variant.BasicArray {
+				for _, elem := range r.val.ArrayValue().Elements {
 					e2 := c.appendEntry(-1, p.rowOf(e))
 					c.setNavigated(e2, elem)
 				}
@@ -935,7 +1030,7 @@ func (c *VariantCursor) computeOwn(e int, g int32, missingLoc variant.Loc) {
 			if s, ok := w.slotOf(c.depth, g); ok && w.defs[s] >= c.typedDefAbs {
 				c.locs[e] = variant.LocTypedObject
 				if valuePresent {
-					c.resBytes[e] = vbytes // partially shredded object
+					c.addResidual(e).bytes = vbytes // partially shredded object
 				}
 				return
 			}
@@ -955,12 +1050,93 @@ func (c *VariantCursor) computeOwn(e int, g int32, missingLoc variant.Loc) {
 			c.locs[e] = variant.LocNull
 		} else {
 			c.locs[e] = variant.LocResidual
-			c.resBytes[e] = vbytes
+			c.addResidual(e).bytes = vbytes
 			c.residualCount++
 		}
 		return
 	}
 	c.locs[e] = missingLoc
+}
+
+// computeOwnFlat is the bulk equivalent of computeOwn for flat cursors (see
+// flatWindow): entry e reads slot e of every leaf window directly. Entries
+// whose gate level (the metadata column for the root) is below gateDef stay
+// variant.LocMissing; growEntries pre-tagged every entry that way, so the
+// loops only write the other locations.
+func (c *VariantCursor) computeOwnFlat(n int, gate []byte, gateDef byte, missingLoc variant.Loc) {
+	locs := c.locs
+	switch {
+	case c.typedLeaf != nil: // primitive typed_value
+		tdefs := c.typedLeaf.win.defs
+		for e := range n {
+			if gate != nil && gate[e] < gateDef {
+				continue
+			}
+			if tdefs[e] == c.typedMaxDef {
+				locs[e] = variant.LocTyped
+				c.typedRows = append(c.typedRows, int32(e))
+				continue
+			}
+			c.resolveValueFlat(e, missingLoc, false)
+		}
+	case c.presenceLeaf != nil: // object or list typed_value
+		typedLoc := variant.LocTypedObject
+		isObject := c.node.typed.kind == shreddedTypedObject
+		if !isObject {
+			typedLoc = variant.LocTypedList
+		}
+		pdefs := c.presenceLeaf.win.defs
+		for e := range n {
+			if gate != nil && gate[e] < gateDef {
+				continue
+			}
+			if pdefs[e] >= c.typedDefAbs {
+				locs[e] = typedLoc
+				if isObject {
+					// A present value column holds the leftover fields of
+					// a partially shredded object.
+					c.resolveValueFlat(e, typedLoc, true)
+				}
+				continue
+			}
+			c.resolveValueFlat(e, missingLoc, false)
+		}
+	default: // no typed_value column
+		for e := range n {
+			if gate != nil && gate[e] < gateDef {
+				continue
+			}
+			c.resolveValueFlat(e, missingLoc, false)
+		}
+	}
+}
+
+// resolveValueFlat resolves entry e of a flat cursor from the value column
+// alone: fallbackLoc when the column is null there, variant.LocNull or
+// variant.LocResidual otherwise. With partialObject set (entry already
+// tagged variant.LocTypedObject) a present value only records its leftover
+// bytes.
+func (c *VariantCursor) resolveValueFlat(e int, fallbackLoc variant.Loc, partialObject bool) {
+	if c.valueLeaf != nil {
+		w := &c.valueLeaf.win
+		if w.defs[e] == c.valueMaxDef {
+			d := w.denseIdx[e]
+			vbytes := w.slab[w.offsets[d]:w.offsets[d+1]]
+			switch {
+			case partialObject:
+				c.addResidual(e).bytes = vbytes
+			case len(vbytes) == 0 || vbytes[0] == 0x00:
+				// See computeOwn: zero or empty bytes read as variant null.
+				c.locs[e] = variant.LocNull
+			default:
+				c.locs[e] = variant.LocResidual
+				c.addResidual(e).bytes = vbytes
+				c.residualCount++
+			}
+			return
+		}
+	}
+	c.locs[e] = fallbackLoc
 }
 
 // variantLeafWindow holds the current window of one leaf column in columnar
@@ -1013,6 +1189,14 @@ func (w *variantLeafWindow) reset() {
 // counts; a missing group means the file is corrupt, and the caller treats
 // the position as missing rather than panicking.
 func (w *variantLeafWindow) slotOf(depth int, g int32) (int32, bool) {
+	if len(w.reps) == 0 {
+		// Non-repeated window: every slot is its own group at every depth,
+		// so the starts mapping is the identity.
+		if int(g) >= len(w.defs) {
+			return 0, false
+		}
+		return g, true
+	}
 	starts := w.starts(depth)
 	if int(g) >= len(starts)-1 {
 		return 0, false
