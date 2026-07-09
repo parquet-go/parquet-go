@@ -471,6 +471,164 @@ func TestVariantColumnWriterMetadataInterned(t *testing.T) {
 
 func ptrTo[T any](v T) *T { return &v }
 
+// TestVariantColumnWriterFieldRef writes the same rows through Field and
+// through pre-resolved FieldByRef refs and asserts the two files are
+// byte-identical, covering shredded fields, a non-shredded (residual)
+// field, and a ref reused across two different object nodes carrying the
+// same field name.
+func TestVariantColumnWriterFieldRef(t *testing.T) {
+	shred := parquet.Group{
+		"a":      parquet.Int(64),
+		"nested": parquet.Group{"a": parquet.String()},
+	}
+	schema := parquet.NewSchema("table", parquet.Group{
+		"var": parquet.Optional(mustShreddedVariant(t, shred)),
+	})
+
+	build := func(byRef bool) []byte {
+		buf := new(bytes.Buffer)
+		w := parquet.NewWriter(buf, schema)
+		vw, err := parquet.NewVariantColumnWriter(w, "var")
+		if err != nil {
+			t.Fatalf("NewVariantColumnWriter: %v", err)
+		}
+		field := vw.Field
+		if byRef {
+			refs := map[string]*parquet.VariantFieldRef{}
+			field = func(name string) {
+				ref := refs[name]
+				if ref == nil {
+					ref = vw.FieldRef(name)
+					refs[name] = ref
+				}
+				vw.FieldByRef(ref)
+			}
+		}
+		for i := range 10 {
+			if err := vw.BeginRow(); err != nil {
+				t.Fatal(err)
+			}
+			vw.BeginObject()
+			field("a") // shredded int64 at the root object
+			vw.Int64(int64(i))
+			field("nested")
+			vw.BeginObject()
+			field("a") // same name, different node: shredded string
+			vw.String("s")
+			field("extra") // not shredded: partial-object residual
+			vw.Bool(true)
+			vw.EndObject()
+			vw.EndObject()
+			if err := vw.EndRow(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+
+	plain, byRef := build(false), build(true)
+	if !bytes.Equal(plain, byRef) {
+		t.Errorf("FieldByRef produced a different file than Field (%d vs %d bytes)", len(byRef), len(plain))
+	}
+
+	// Duplicate detection must work through refs too.
+	w := parquet.NewWriter(io.Discard, schema)
+	vw, err := parquet.NewVariantColumnWriter(w, "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := vw.FieldRef("a")
+	if err := vw.BeginRow(); err != nil {
+		t.Fatal(err)
+	}
+	vw.BeginObject()
+	vw.FieldByRef(ref)
+	vw.Int64(1)
+	vw.FieldByRef(ref)
+	vw.Int64(2)
+	if vw.Err() == nil {
+		t.Error("duplicate field through FieldByRef did not fail")
+	}
+}
+
+// TestVariantColumnWriterMetadataPersistent asserts that rows with the same
+// field set write byte-identical metadata (the dictionary persists across
+// rows), and that the dictionary reset under field-name churn keeps rows
+// correct, including refs whose cached interns the reset invalidates.
+func TestVariantColumnWriterMetadataPersistent(t *testing.T) {
+	obj := func(fields ...variant.Field) variant.Value { return variant.MakeObject(fields) }
+	field := func(name string, v variant.Value) variant.Field { return variant.Field{Name: name, Value: v} }
+	shred := parquet.Group{"name": parquet.String(), "age": parquet.Int(64)}
+	values := []*variant.Value{
+		ptrTo(obj(field("name", variant.String("alice")), field("age", variant.Int64(30)))),
+		ptrTo(obj(field("age", variant.Int64(31)), field("name", variant.String("bob")))),
+	}
+	data := buildVariantFileStreaming(t, shred, values)
+
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Leaf column 1 of the file is the variant group's metadata column
+	// (the id column sorts first).
+	pages := f.RowGroups()[0].ColumnChunks()[1].Pages()
+	defer pages.Close()
+	p, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parquet.Release(p)
+	vals := make([]parquet.Value, 2)
+	if _, err := p.Values().ReadValues(vals); err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(vals[0].ByteArray(), vals[1].ByteArray()) {
+		t.Errorf("rows with the same field set wrote different metadata:\n row 0: %x\n row 1: %x",
+			vals[0].ByteArray(), vals[1].ByteArray())
+	}
+
+	// Churn: every row carries unique long residual field names, forcing
+	// periodic dictionary resets, through refs that cache their interns.
+	schema := parquet.NewSchema("table", parquet.Group{
+		"var": parquet.Optional(mustShreddedVariant(t, shred)),
+	})
+	buf := new(bytes.Buffer)
+	w := parquet.NewWriter(buf, schema)
+	vw, err := parquet.NewVariantColumnWriter(w, "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameRef := vw.FieldRef("name")
+	const rows = 50
+	churn := make([]*variant.Value, rows)
+	for i := range rows {
+		uniq := fmt.Sprintf("field_with_a_rather_long_unique_name_%0150d", i)
+		churn[i] = ptrTo(obj(
+			field("name", variant.String("alice")),
+			field(uniq, variant.Int64(int64(i))),
+		))
+		if err := vw.BeginRow(); err != nil {
+			t.Fatal(err)
+		}
+		vw.BeginObject()
+		vw.FieldByRef(nameRef)
+		vw.String("alice")
+		vw.Field(uniq)
+		vw.Int64(int64(i))
+		vw.EndObject()
+		if err := vw.EndRow(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertVariantFile(t, buf.Bytes(), churn, "metadata churn")
+}
+
 // TestVariantColumnWriterMultiPage writes enough rows through a small page
 // buffer that every column flushes multiple pages, verifying flushes land
 // on row boundaries.
@@ -939,23 +1097,26 @@ func BenchmarkVariantColumnWriter(b *testing.B) {
 
 	// Wide objects exercise the per-event field lookup: with a linear scan
 	// this case is quadratic in the field count and dominated field
-	// resolution from a few dozen fields up.
+	// resolution from a few dozen fields up. The refs variant resolves
+	// each field name once through FieldRef instead of hashing it on
+	// every event.
+	const numFields = 100
+	names := make([]string, numFields)
+	wideShred := parquet.Group{}
+	for j := range numFields {
+		names[j] = fmt.Sprintf("f%03d", j)
+		wideShred[names[j]] = parquet.Int(64)
+	}
+	wideShredded, err := parquet.ShreddedVariant(wideShred)
+	if err != nil {
+		b.Fatalf("ShreddedVariant: %v", err)
+	}
+	wideSchema := parquet.NewSchema("table", parquet.Group{
+		"var": parquet.Optional(wideShredded),
+	})
+
 	b.Run("streaming-wide", func(b *testing.B) {
-		const numFields = 100
-		names := make([]string, numFields)
-		wideShred := parquet.Group{}
-		for j := range numFields {
-			names[j] = fmt.Sprintf("f%03d", j)
-			wideShred[names[j]] = parquet.Int(64)
-		}
-		shredded, err := parquet.ShreddedVariant(wideShred)
-		if err != nil {
-			b.Fatalf("ShreddedVariant: %v", err)
-		}
-		schema := parquet.NewSchema("table", parquet.Group{
-			"var": parquet.Optional(shredded),
-		})
-		w := parquet.NewWriter(io.Discard, schema)
+		w := parquet.NewWriter(io.Discard, wideSchema)
 		vw, err := parquet.NewVariantColumnWriter(w, "var")
 		if err != nil {
 			b.Fatalf("NewVariantColumnWriter: %v", err)
@@ -969,6 +1130,35 @@ func BenchmarkVariantColumnWriter(b *testing.B) {
 				vw.BeginObject()
 				for j := range numFields {
 					vw.Field(names[j])
+					vw.Int64(int64(i + j))
+				}
+				vw.EndObject()
+				if err := vw.EndRow(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
+
+	b.Run("streaming-wide-refs", func(b *testing.B) {
+		w := parquet.NewWriter(io.Discard, wideSchema)
+		vw, err := parquet.NewVariantColumnWriter(w, "var")
+		if err != nil {
+			b.Fatalf("NewVariantColumnWriter: %v", err)
+		}
+		refs := make([]*parquet.VariantFieldRef, numFields)
+		for j := range refs {
+			refs[j] = vw.FieldRef(names[j])
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			for i := range rowsPerIter {
+				if err := vw.BeginRow(); err != nil {
+					b.Fatal(err)
+				}
+				vw.BeginObject()
+				for j := range numFields {
+					vw.FieldByRef(refs[j])
 					vw.Int64(int64(i + j))
 				}
 				vw.EndObject()

@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go/variant"
@@ -14,7 +15,9 @@ import (
 // consumes variant.ValueWriter events and shreds them as they arrive: values
 // matching the shredded type are appended directly to the typed_value column
 // buffers, and everything else is encoded to variant binary residuals with a
-// streaming variant.Builder, sharing one metadata dictionary per row. No
+// streaming variant.Builder. All rows share one metadata dictionary (reset
+// only when it outgrows a bound), so a stable field set interns each name
+// once and every row writes byte-identical metadata. No
 // intermediate tree, map, or []parquet.Value is ever built, so transcoding
 // e.g. JSON into a shredded variant column runs allocation-free per row once
 // the writer's buffers are warm.
@@ -71,8 +74,13 @@ type VariantColumnWriter struct {
 	rootValueRequired bool
 
 	meta     variant.MetadataBuilder
+	metaGen  uint64 // bumped when meta resets; invalidates VariantFieldRef interns
 	metaBuf  []byte
 	builders map[*shreddedVariantGroup]*variant.Builder
+
+	// flushCountdown spaces out the page-size scan of flush, which is
+	// O(columns) and dominates wide schemas when run every row.
+	flushCountdown int
 
 	// Row state. cur is the shredded node awaiting a value event, nil when
 	// no value is expected (inside an object before a Field call, or after
@@ -216,6 +224,19 @@ func (w *VariantColumnWriter) fail(format string, args ...any) {
 	}
 }
 
+// variantMetadataResetSize bounds the interned name bytes of the writer's
+// metadata dictionary. The dictionary persists across rows so that a stable
+// field set interns each name once and every row writes byte-identical
+// metadata (which encodes and compresses well); the bound keeps workloads
+// with unbounded field-name churn from bloating every row's metadata with
+// names of earlier rows.
+const variantMetadataResetSize = 4096
+
+// variantFlushCheckRows is how many rows may pass between page-size checks
+// of the variant group's columns. Pages can overshoot the configured buffer
+// size by up to this many rows of values.
+const variantFlushCheckRows = 16
+
 // BeginRow starts a new row. Exactly one value — a single scalar event, or
 // a single balanced object or array — must be written before the matching
 // EndRow.
@@ -231,12 +252,16 @@ func (w *VariantColumnWriter) BeginRow() error {
 	w.rowHasValue = false
 	w.cur = w.group
 	w.curLevels = shredLevels{baseDef: w.groupDef}
-	w.meta.Reset()
+	if w.meta.Size() > variantMetadataResetSize {
+		w.meta.Reset()
+		w.metaGen++
+	}
 	return nil
 }
 
 // EndRow completes the current row: it writes the row's metadata dictionary
-// and flushes any column whose buffered page reached the writer's page size.
+// and periodically flushes columns whose buffered page reached the writer's
+// page size.
 func (w *VariantColumnWriter) EndRow() error {
 	if w.err == nil && !w.inRow {
 		w.fail("EndRow outside of a row")
@@ -308,8 +333,14 @@ func (w *VariantColumnWriter) levels(def, rep byte) columnLevels {
 }
 
 // flush flushes any column whose buffer reached the configured page size.
-// It only runs at row boundaries, since a row cannot span two pages.
+// It only runs at row boundaries, since a row cannot span two pages, and
+// polls the column sizes every variantFlushCheckRows rows.
 func (w *VariantColumnWriter) flush() error {
+	if w.flushCountdown > 0 {
+		w.flushCountdown--
+		return nil
+	}
+	w.flushCountdown = variantFlushCheckRows - 1
 	for _, c := range w.columns {
 		if c.columnBuffer != nil && c.columnBuffer.Size() >= int64(c.bufferSize) {
 			if err := c.Flush(); err != nil {
@@ -518,40 +549,105 @@ func (w *VariantColumnWriter) Field(name string) {
 		w.residual.b.Field(name)
 		return
 	}
-	if w.err != nil {
-		return
-	}
-	n := len(w.frames)
-	if n == 0 || w.frames[n-1].isList {
-		w.fail("Field %q outside of an object", name)
-		return
-	}
-	f := &w.frames[n-1]
-	if w.cur != nil {
-		w.fail("Field %q: previous field has no value", name)
+	f := w.fieldFrame(name)
+	if f == nil {
 		return
 	}
 	// VariantShredding.md requires all field names, shredded or not, to be
 	// present in the metadata dictionary.
 	w.meta.Add(name)
-	node := f.node
-	if i, ok := node.typed.index[name]; ok {
-		if f.seen[i] {
+	idx, ok := f.node.typed.index[name]
+	if !ok {
+		idx = -1
+	}
+	w.beginField(f, name, idx)
+}
+
+// VariantFieldRef is a pre-resolved object field name for FieldByRef. In
+// steady state a ref caches both the field's position in the shredded
+// schema and its metadata dictionary intern, so hot ingest loops writing
+// the same fields on every row skip the per-event name hashing of Field.
+//
+// A ref belongs to the writer that created it and caches its resolution
+// against one object position at a time: use one ref per writer per field
+// name, and prefer distinct refs for identically named fields of different
+// objects.
+type VariantFieldRef struct {
+	name    string
+	node    *shreddedVariantGroup // object node the ref last resolved against
+	idx     int                   // field index in node, -1 when not shredded
+	metaGen uint64                // 1+dictionary generation of the cached intern
+}
+
+// FieldRef pre-resolves an object field name for use with FieldByRef. The
+// name is copied; the caller may reuse its backing memory.
+func (w *VariantColumnWriter) FieldRef(name string) *VariantFieldRef {
+	return &VariantFieldRef{name: strings.Clone(name)}
+}
+
+// FieldByRef is Field with a pre-resolved name; see FieldRef.
+func (w *VariantColumnWriter) FieldByRef(ref *VariantFieldRef) {
+	if w.forward() {
+		w.residual.b.Field(ref.name)
+		return
+	}
+	f := w.fieldFrame(ref.name)
+	if f == nil {
+		return
+	}
+	if ref.metaGen != w.metaGen+1 {
+		w.meta.Add(ref.name)
+		ref.metaGen = w.metaGen + 1
+	}
+	if ref.node != f.node {
+		ref.node = f.node
+		if i, ok := f.node.typed.index[ref.name]; ok {
+			ref.idx = i
+		} else {
+			ref.idx = -1
+		}
+	}
+	w.beginField(f, ref.name, ref.idx)
+}
+
+// fieldFrame validates that a field event is legal here and returns the
+// innermost open object frame, or nil after recording the error.
+func (w *VariantColumnWriter) fieldFrame(name string) *variantWriterFrame {
+	if w.err != nil {
+		return nil
+	}
+	n := len(w.frames)
+	if n == 0 || w.frames[n-1].isList {
+		w.fail("Field %q outside of an object", name)
+		return nil
+	}
+	if w.cur != nil {
+		w.fail("Field %q: previous field has no value", name)
+		return nil
+	}
+	return &w.frames[n-1]
+}
+
+// beginField positions the writer at shredded field idx of the open object
+// frame, or at the partial-object residual when idx is -1.
+func (w *VariantColumnWriter) beginField(f *variantWriterFrame, name string, idx int) {
+	if idx >= 0 {
+		if f.seen[idx] {
 			w.fail("duplicate object field %q", name)
 			return
 		}
-		f.seen[i] = true
-		w.cur = node.typed.fields[i].group
+		f.seen[idx] = true
+		w.cur = f.node.typed.fields[idx].group
 		w.curLevels = f.levels
 		return
 	}
 	// Not a shredded field: it goes into the partial-object residual.
 	if f.partial == nil {
-		f.partial = w.builder(node)
+		f.partial = w.builder(f.node)
 		f.partial.BeginObject()
 	}
 	f.partial.Field(name)
-	w.residual = variantResidualState{b: f.partial, node: node, levels: f.levels, depth: 1, base: 1}
+	w.residual = variantResidualState{b: f.partial, node: f.node, levels: f.levels, depth: 1, base: 1}
 }
 
 // EndObject closes the innermost open object, recording shredded fields

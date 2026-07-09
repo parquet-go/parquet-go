@@ -105,9 +105,10 @@ func (m Metadata) Lookup(id int) (string, error) {
 // interned into a single contiguous byte buffer so a high-cardinality key
 // set pays for buffer growth rather than a heap string per key.
 type MetadataBuilder struct {
-	buf   []byte // concatenated dictionary strings
-	offs  []int  // start offset of each string in buf; end is offs[i+1] or len(buf)
-	index map[string]int
+	buf      []byte // concatenated dictionary strings
+	offs     []int  // start offset of each string in buf; end is offs[i+1] or len(buf)
+	index    map[string]int
+	unsorted bool // some entry compares below its predecessor
 }
 
 // Add interns s into the dictionary and returns its stable index. The
@@ -119,6 +120,9 @@ func (b *MetadataBuilder) Add(s string) int {
 	}
 	if idx, ok := b.index[s]; ok {
 		return idx
+	}
+	if n := len(b.offs); n > 0 && !b.unsorted && b.stringAt(n-1) > s {
+		b.unsorted = true
 	}
 	start := len(b.buf)
 	old := unsafe.SliceData(b.buf)
@@ -215,19 +219,20 @@ func (b *MetadataBuilder) AppendTo(dst []byte) []byte {
 }
 
 // sorted reports whether the dictionary strings are in lexicographic order.
+// The order is tracked incrementally by Add, so building the binary
+// representation of a large dictionary need not re-compare every entry.
 func (b *MetadataBuilder) sorted() bool {
-	for i := 1; i < len(b.offs); i++ {
-		if b.stringAt(i-1) > b.stringAt(i) {
-			return false
-		}
-	}
-	return true
+	return !b.unsorted
 }
+
+// Size returns the total number of bytes of interned dictionary strings.
+func (b *MetadataBuilder) Size() int { return len(b.buf) }
 
 // Reset clears the builder for reuse, retaining the string buffer's capacity.
 func (b *MetadataBuilder) Reset() {
 	b.buf = b.buf[:0]
 	b.offs = b.offs[:0]
+	b.unsorted = false
 	clear(b.index)
 }
 
