@@ -72,10 +72,15 @@ func extractRawVariantStruct(value reflect.Value) (metadata, val []byte, ok bool
 	return m, va, true
 }
 
+// isUnshreddedVariant returns true if the variant node has only metadata and value
+// (no typed_value field), indicating an unshredded variant.
 func isUnshreddedVariant(node Node) bool {
 	return fieldByName(node, "typed_value") == nil
 }
 
+// deconstructFuncOfVariant handles deconstruction of Go values into variant
+// columns. Dispatches to unshredded or shredded variant handling.
+//
 //go:noinline
 func deconstructFuncOfVariant(columnIndex uint16, node Node) (uint16, deconstructFunc) {
 	if isUnshreddedVariant(node) {
@@ -84,6 +89,9 @@ func deconstructFuncOfVariant(columnIndex uint16, node Node) (uint16, deconstruc
 	return deconstructFuncOfShreddedVariant(columnIndex, node)
 }
 
+// deconstructFuncOfUnshreddedVariant handles the simple 2-column variant:
+// metadata (required ByteArray) and value (required ByteArray).
+//
 //go:noinline
 func deconstructFuncOfUnshreddedVariant(columnIndex uint16, node Node) (uint16, deconstructFunc) {
 	metadataColumnIndex := columnIndex
@@ -200,6 +208,9 @@ func extractGoValue(value reflect.Value) any {
 	return v.Interface()
 }
 
+// reconstructFuncOfVariant handles reconstruction of variant columns back into
+// Go values. Dispatches to unshredded or shredded variant handling.
+//
 //go:noinline
 func reconstructFuncOfVariant(columnIndex uint16, node Node) (uint16, reconstructFunc) {
 	if isUnshreddedVariant(node) {
@@ -208,6 +219,8 @@ func reconstructFuncOfVariant(columnIndex uint16, node Node) (uint16, reconstruc
 	return reconstructFuncOfShreddedVariant(columnIndex, node)
 }
 
+// reconstructFuncOfUnshreddedVariant handles the simple 2-column variant.
+//
 //go:noinline
 func reconstructFuncOfUnshreddedVariant(columnIndex uint16, node Node) (uint16, reconstructFunc) {
 	nextColumnIndex := columnIndex + 2
