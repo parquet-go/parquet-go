@@ -936,4 +936,46 @@ func BenchmarkVariantColumnWriter(b *testing.B) {
 			}
 		}
 	})
+
+	// Wide objects exercise the per-event field lookup: with a linear scan
+	// this case is quadratic in the field count and dominated field
+	// resolution from a few dozen fields up.
+	b.Run("streaming-wide", func(b *testing.B) {
+		const numFields = 100
+		names := make([]string, numFields)
+		wideShred := parquet.Group{}
+		for j := range numFields {
+			names[j] = fmt.Sprintf("f%03d", j)
+			wideShred[names[j]] = parquet.Int(64)
+		}
+		shredded, err := parquet.ShreddedVariant(wideShred)
+		if err != nil {
+			b.Fatalf("ShreddedVariant: %v", err)
+		}
+		schema := parquet.NewSchema("table", parquet.Group{
+			"var": parquet.Optional(shredded),
+		})
+		w := parquet.NewWriter(io.Discard, schema)
+		vw, err := parquet.NewVariantColumnWriter(w, "var")
+		if err != nil {
+			b.Fatalf("NewVariantColumnWriter: %v", err)
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			for i := range rowsPerIter {
+				if err := vw.BeginRow(); err != nil {
+					b.Fatal(err)
+				}
+				vw.BeginObject()
+				for j := range numFields {
+					vw.Field(names[j])
+					vw.Int64(int64(i + j))
+				}
+				vw.EndObject()
+				if err := vw.EndRow(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
 }

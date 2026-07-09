@@ -535,17 +535,15 @@ func (w *VariantColumnWriter) Field(name string) {
 	// present in the metadata dictionary.
 	w.meta.Add(name)
 	node := f.node
-	for i := range node.typed.fields {
-		if node.typed.fields[i].name == name {
-			if f.seen[i] {
-				w.fail("duplicate object field %q", name)
-				return
-			}
-			f.seen[i] = true
-			w.cur = node.typed.fields[i].group
-			w.curLevels = f.levels
+	if i, ok := node.typed.index[name]; ok {
+		if f.seen[i] {
+			w.fail("duplicate object field %q", name)
 			return
 		}
+		f.seen[i] = true
+		w.cur = node.typed.fields[i].group
+		w.curLevels = f.levels
+		return
 	}
 	// Not a shredded field: it goes into the partial-object residual.
 	if f.partial == nil {
