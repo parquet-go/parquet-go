@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"math"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -263,6 +264,15 @@ func TestOpenColumnsMalformedNumChildren(t *testing.T) {
 				{Name: "a", Type: thrift.New(format.Int64)},
 			},
 		},
+		{
+			// A corrupt NumChildren must be rejected before it is used to size a
+			// slice, or the fallback in allocate would try to make one of it.
+			scenario: "absurd number of children",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](math.MaxInt32)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -330,5 +340,54 @@ func TestOpenColumnsSlabsDoNotOverlap(t *testing.T) {
 	}
 	if cap(root.fields) != len(root.fields) {
 		t.Errorf("root fields have spare capacity %d", cap(root.fields)-len(root.fields))
+	}
+}
+
+// TestAllocate covers the slab cutter directly: exact reservations come out of
+// the slab, and an exhausted slab falls back to a slice of its own.
+func TestAllocate(t *testing.T) {
+	slab := make([]int, 4)
+	for i := range slab {
+		slab[i] = i + 1
+	}
+	backing := slab
+
+	first := allocate(&slab, 2)
+	if len(first) != 2 || cap(first) != 2 {
+		t.Fatalf("first = len %d cap %d, want 2/2", len(first), cap(first))
+	}
+	if &first[0] != &backing[0] {
+		t.Error("first slice did not come out of the slab")
+	}
+
+	second := allocate(&slab, 2)
+	if &second[0] != &backing[2] {
+		t.Error("second slice overlaps the first")
+	}
+	if len(slab) != 0 {
+		t.Errorf("slab has %d elements left, want 0", len(slab))
+	}
+
+	// Exhausted: allocate must still return a usable slice.
+	third := allocate(&slab, 3)
+	if len(third) != 3 || cap(third) != 3 {
+		t.Fatalf("third = len %d cap %d, want 3/3", len(third), cap(third))
+	}
+	for i, v := range third {
+		if v != 0 {
+			t.Errorf("third[%d] = %d, want a zero value", i, v)
+		}
+	}
+
+	// Zero elements never allocate.
+	if got := allocate(&slab, 0); got != nil {
+		t.Errorf("allocate(_, 0) = %v, want nil", got)
+	}
+
+	// Writing through the returned slices must not disturb their neighbours.
+	first[0], first[1] = -1, -2
+	second[0], second[1] = -3, -4
+	if backing[0] != -1 || backing[1] != -2 || backing[2] != -3 || backing[3] != -4 {
+		t.Errorf("slab = %v, want [-1 -2 -3 -4]", backing)
 	}
 }

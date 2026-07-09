@@ -328,18 +328,21 @@ func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []f
 
 // allocate cuts the first n elements off the front of the slab and returns them
 // with their capacity clamped, so that appending to the result cannot reach into
-// the rest of the slab. It returns nil, false when the slab is exhausted, which
-// only happens on a schema whose NumChildren do not add up.
-func allocate[T any](slab *[]T, n int) ([]T, bool) {
+// the rest of the slab.
+//
+// A slab is a reservation, not a guarantee: when it cannot cover n, allocate
+// falls back to a slice of its own. Callers therefore never have to know whether
+// the reservation was exact.
+func allocate[T any](slab *[]T, n int) []T {
 	if n == 0 {
-		return nil, true
+		return nil
 	}
 	if n > len(*slab) {
-		return nil, false
+		return make([]T, n)
 	}
 	taken := (*slab)[:n:n]
 	*slab = (*slab)[n:]
-	return taken, true
+	return taken
 }
 
 func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex, path []string) (*Column, error) {
@@ -370,10 +373,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		rowGroupColumnIndex := cl.rowGroupColumnIndex
 		cl.rowGroupColumnIndex++
 
-		var ok bool
-		if c.chunks, ok = allocate(&cl.chunks, len(rowGroups)); !ok {
-			return nil, fmt.Errorf("column %q has no room left for its column chunks", c.schema.Name)
-		}
+		c.chunks = allocate(&cl.chunks, len(rowGroups))
 
 		for i, rowGroup := range rowGroups {
 			if rowGroupColumnIndex >= len(rowGroup.Columns) {
@@ -383,9 +383,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		}
 
 		if len(columnIndexes) > 0 {
-			if c.columnIndex, ok = allocate(&cl.columnIndex, len(rowGroups)); !ok {
-				return nil, fmt.Errorf("column %q has no room left for its column index pages", c.schema.Name)
-			}
+			c.columnIndex = allocate(&cl.columnIndex, len(rowGroups))
 			for i := range rowGroups {
 				if rowGroupColumnIndex >= len(columnIndexes) {
 					return nil, fmt.Errorf("row group at index %d does not have enough column index pages", i)
@@ -395,9 +393,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		}
 
 		if len(offsetIndexes) > 0 {
-			if c.offsetIndex, ok = allocate(&cl.offsetIndex, len(rowGroups)); !ok {
-				return nil, fmt.Errorf("column %q has no room left for its offset index pages", c.schema.Name)
-			}
+			c.offsetIndex = allocate(&cl.offsetIndex, len(rowGroups))
 			for i := range rowGroups {
 				if rowGroupColumnIndex >= len(offsetIndexes) {
 					return nil, fmt.Errorf("row group at index %d does not have enough offset index pages", i)
@@ -459,13 +455,17 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 			c.typ = &listType{}
 		}
 	}
+	// A group cannot have more children than there are schema elements left to
+	// describe them. Checking here keeps a corrupt NumChildren from reaching the
+	// allocation below, which would otherwise size a slice from it.
+	if remaining := len(metadata.Schema) - cl.schemaIndex; numChildren > remaining {
+		return nil, fmt.Errorf("column %q declares %d children but only %d schema elements remain",
+			c.schema.Name, numChildren, remaining)
+	}
+
 	// Reserve this group's children before recursing, so that a child's own
 	// children are cut from the slab after ours rather than overlapping them.
-	var ok bool
-	if c.columns, ok = allocate(&cl.children, numChildren); !ok {
-		return nil, fmt.Errorf("column %q declares %d children but the schema has no room for them",
-			c.schema.Name, numChildren)
-	}
+	c.columns = allocate(&cl.children, numChildren)
 
 	for i := range c.columns {
 		if cl.schemaIndex >= len(metadata.Schema) {
@@ -480,10 +480,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		}
 	}
 
-	if c.fields, ok = allocate(&cl.fields, len(c.columns)); !ok {
-		return nil, fmt.Errorf("column %q declares %d fields but the schema has no room for them",
-			c.schema.Name, len(c.columns))
-	}
+	c.fields = allocate(&cl.fields, len(c.columns))
 	for i, column := range c.columns {
 		c.fields[i] = column
 	}
