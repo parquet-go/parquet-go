@@ -38,7 +38,7 @@ func TestBytesReaderResetBytes(t *testing.T) {
 			}
 
 			// One reader and one decoder, reused across every input.
-			reader := p.protocol.NewReaderFromBytes(nil).(thrift.BytesReader)
+			reader := p.protocol.NewReaderFromBytes(nil)
 			decoder := thrift.NewDecoder(reader)
 
 			for i, b := range encoded {
@@ -67,7 +67,7 @@ func TestBytesReaderDecodedValuesAliasInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reader := new(thrift.CompactProtocol).NewReaderFromBytes(nil).(thrift.BytesReader)
+	reader := new(thrift.CompactProtocol).NewReaderFromBytes(nil)
 	var out bytesReaderStruct
 	reader.ResetBytes(b)
 	if err := thrift.NewDecoder(reader).Decode(&out); err != nil {

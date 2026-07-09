@@ -25,7 +25,10 @@ const (
 // However, the readers and writer that they instantiates are intended to be
 // used by a single goroutine.
 type Protocol interface {
-	NewReaderFromBytes(b []byte) Reader
+	// NewReaderFromBytes returns a reader over b. Every reader constructed from
+	// a byte slice can be repointed at another one, so the concrete BytesReader
+	// is returned rather than the wider Reader.
+	NewReaderFromBytes(b []byte) BytesReader
 	NewReader(r io.Reader) Reader
 	NewWriter(w io.Writer) Writer
 	Features() Features
@@ -67,11 +70,6 @@ type BytesReader interface {
 	Reader
 	ResetBytes(b []byte)
 }
-
-var (
-	_ BytesReader = (*compactBytesReader)(nil)
-	_ BytesReader = (*binaryBytesReader)(nil)
-)
 
 // Writer represents a low-level writer of values encoded according to one of
 // the thrift protocols.

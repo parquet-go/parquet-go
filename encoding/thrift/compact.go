@@ -16,7 +16,7 @@ import (
 // https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#integer-encoding
 type CompactProtocol struct{}
 
-func (p *CompactProtocol) NewReaderFromBytes(b []byte) Reader {
+func (p *CompactProtocol) NewReaderFromBytes(b []byte) BytesReader {
 	return &compactBytesReader{protocol: p, data: b}
 }
 

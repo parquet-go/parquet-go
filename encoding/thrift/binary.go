@@ -18,7 +18,7 @@ type BinaryProtocol struct {
 	NonStrict bool
 }
 
-func (p *BinaryProtocol) NewReaderFromBytes(b []byte) Reader {
+func (p *BinaryProtocol) NewReaderFromBytes(b []byte) BytesReader {
 	return &binaryBytesReader{p: p, data: b}
 }
 

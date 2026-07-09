@@ -399,7 +399,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 	// One reader and one decoder are reused across every column chunk. Decoding
 	// each chunk with thrift.Unmarshal instead would clone the chunk's bytes and
 	// allocate a reader for it, twice per column chunk.
-	reader := f.protocol.NewReaderFromBytes(nil).(thrift.BytesReader)
+	reader := f.protocol.NewReaderFromBytes(nil)
 	decoder := thrift.NewDecoder(reader)
 
 	decode := func(b []byte, v any) error {
