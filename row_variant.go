@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
+	"github.com/parquet-go/parquet-go/format"
 	"github.com/parquet-go/parquet-go/variant"
 )
 
@@ -248,11 +249,11 @@ func (m *shreddedMatcher) isGroup() bool     { return len(m.fields) > 0 }
 func (m *shreddedMatcher) kind() Kind        { return m.typ.Kind() }
 func (m *shreddedMatcher) isString() bool {
 	lt := m.typ.LogicalType()
-	return lt != nil && lt.UTF8 != nil
+	return logicalTypeIs[*format.StringType](lt)
 }
 func (m *shreddedMatcher) isUUID() bool {
 	lt := m.typ.LogicalType()
-	return lt != nil && lt.UUID != nil
+	return logicalTypeIs[*format.UUIDType](lt)
 }
 
 type shreddedFieldMatcher struct {
@@ -808,11 +809,11 @@ func (e *shreddedExtractor) isGroup() bool     { return len(e.fields) > 0 }
 func (e *shreddedExtractor) kind() Kind        { return e.typ.Kind() }
 func (e *shreddedExtractor) isString() bool {
 	lt := e.typ.LogicalType()
-	return lt != nil && lt.UTF8 != nil
+	return logicalTypeIs[*format.StringType](lt)
 }
 func (e *shreddedExtractor) isUUID() bool {
 	lt := e.typ.LogicalType()
-	return lt != nil && lt.UUID != nil
+	return logicalTypeIs[*format.UUIDType](lt)
 }
 
 type shreddedFieldExtractor struct {

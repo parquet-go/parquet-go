@@ -24,17 +24,17 @@ func writeProtoTimestamp(col ColumnBuffer, levels columnLevels, ts *timestamppb.
 	}
 	var typ = node.Type()
 	var unit format.TimeUnit
-	if lt := typ.LogicalType(); lt != nil && lt.Timestamp != nil {
-		unit = lt.Timestamp.Unit
+	if timestamp, ok := logicalTypeOf[*format.TimestampType](typ.LogicalType()); ok {
+		unit = timestamp.Unit
 	} else {
 		unit = Nanosecond.TimeUnit()
 	}
 	var t = ts.AsTime()
 	var value int64
 	switch {
-	case unit.Millis != nil:
+	case isMillis(unit):
 		value = t.UnixMilli()
-	case unit.Micros != nil:
+	case isMicros(unit):
 		value = t.UnixMicro()
 	default:
 		value = t.UnixNano()

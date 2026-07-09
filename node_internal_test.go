@@ -83,16 +83,16 @@ func TestListElementOfWithOpenColumns(t *testing.T) {
 			{
 				Name: "name",
 				Type: thrift.New(format.ByteArray),
-				LogicalType: thrift.New(format.LogicalType{
-					UTF8: new(format.StringType),
-				}),
+				LogicalType: format.LogicalType{
+					Value: &format.StringType{},
+				},
 			},
 			{
 				Name:        "favorite_numbers",
 				NumChildren: thrift.New[int32](1),
-				LogicalType: thrift.New(format.LogicalType{
-					List: new(format.ListType),
-				}),
+				LogicalType: format.LogicalType{
+					Value: &format.ListType{},
+				},
 				ConvertedType: thrift.New(deprecated.List),
 			},
 			{

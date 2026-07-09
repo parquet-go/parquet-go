@@ -142,13 +142,13 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 
 		// Extract AAD parameters from the encryption algorithm.
 		var fileUnique, aadPrefix []byte
-		switch {
-		case cryptoMeta.EncryptionAlgorithm.AesGcmV1 != nil:
-			fileUnique = cryptoMeta.EncryptionAlgorithm.AesGcmV1.AadFileUnique
-			aadPrefix = cryptoMeta.EncryptionAlgorithm.AesGcmV1.AadPrefix
-		case cryptoMeta.EncryptionAlgorithm.AesGcmCtrV1 != nil:
-			fileUnique = cryptoMeta.EncryptionAlgorithm.AesGcmCtrV1.AadFileUnique
-			aadPrefix = cryptoMeta.EncryptionAlgorithm.AesGcmCtrV1.AadPrefix
+		switch algo := cryptoMeta.EncryptionAlgorithm.Value.(type) {
+		case *format.AesGcmV1:
+			fileUnique = algo.AadFileUnique
+			aadPrefix = algo.AadPrefix
+		case *format.AesGcmCtrV1:
+			fileUnique = algo.AadFileUnique
+			aadPrefix = algo.AadPrefix
 		}
 
 		footerKey, err := c.Decryption.Keys.FooterKey(cryptoMeta.KeyMetadata)
@@ -184,15 +184,14 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 			if c.Decryption == nil {
 				return nil, fmt.Errorf("parquet file has a signed footer but no DecryptionConfig was provided")
 			}
-			algo := &f.metadata.EncryptionAlgorithm
 			var fileUnique, aadPrefix []byte
-			switch {
-			case algo.AesGcmV1 != nil:
-				fileUnique = algo.AesGcmV1.AadFileUnique
-				aadPrefix = algo.AesGcmV1.AadPrefix
-			case algo.AesGcmCtrV1 != nil:
-				fileUnique = algo.AesGcmCtrV1.AadFileUnique
-				aadPrefix = algo.AesGcmCtrV1.AadPrefix
+			switch algo := f.metadata.EncryptionAlgorithm.Value.(type) {
+			case *format.AesGcmV1:
+				fileUnique = algo.AadFileUnique
+				aadPrefix = algo.AadPrefix
+			case *format.AesGcmCtrV1:
+				fileUnique = algo.AadFileUnique
+				aadPrefix = algo.AadPrefix
 			}
 			plainFooterBytes := footerData[:pr.BytesRead()]
 			sig := footerData[pr.BytesRead():]
@@ -392,12 +391,11 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 		if f.decryption == nil {
 			return nil, nil
 		}
-		switch {
-		case c.CryptoMetadata.EncryptionWithFooterKey != nil:
+		switch crypto := c.CryptoMetadata.Value.(type) {
+		case *format.EncryptionWithFooterKey:
 			return f.decryption.Keys.FooterKey(nil)
-		case c.CryptoMetadata.EncryptionWithColumnKey != nil:
-			colKey := c.CryptoMetadata.EncryptionWithColumnKey
-			return f.decryption.Keys.ColumnKey(colKey.PathInSchema, colKey.KeyMetadata)
+		case *format.EncryptionWithColumnKey:
+			return f.decryption.Keys.ColumnKey(crypto.PathInSchema, crypto.KeyMetadata)
 		default:
 			return nil, nil
 		}
@@ -513,17 +511,16 @@ func (f *File) decryptAllColumnMetadata() error {
 				continue
 			}
 			var key []byte
-			switch {
-			case chunk.CryptoMetadata.EncryptionWithFooterKey != nil:
+			switch crypto := chunk.CryptoMetadata.Value.(type) {
+			case *format.EncryptionWithFooterKey:
 				var err error
 				key, err = f.decryption.Keys.FooterKey(nil)
 				if err != nil {
 					return fmt.Errorf("resolving footer key for column metadata: %w", err)
 				}
-			case chunk.CryptoMetadata.EncryptionWithColumnKey != nil:
-				colKey := chunk.CryptoMetadata.EncryptionWithColumnKey
+			case *format.EncryptionWithColumnKey:
 				var err error
-				key, err = f.decryption.Keys.ColumnKey(colKey.PathInSchema, colKey.KeyMetadata)
+				key, err = f.decryption.Keys.ColumnKey(crypto.PathInSchema, crypto.KeyMetadata)
 				if err != nil {
 					// Only treat an explicit ErrKeyNotFound as non-fatal: the
 					// caller intentionally omitted this column's key.  Any other
@@ -664,16 +661,15 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 		}
 		if file.decryption != nil {
 			chunk := &rowGroup.Columns[i]
-			switch {
-			case chunk.CryptoMetadata.EncryptionWithFooterKey != nil:
+			switch crypto := chunk.CryptoMetadata.Value.(type) {
+			case *format.EncryptionWithFooterKey:
 				key, err := file.decryption.Keys.FooterKey(nil)
 				if err != nil {
 					return fmt.Errorf("resolving footer key for column %q: %w", columnPathString(columns[i].Path()), err)
 				}
 				fileColumnChunks[i].decryptionKey = key
-			case chunk.CryptoMetadata.EncryptionWithColumnKey != nil:
-				colKey := chunk.CryptoMetadata.EncryptionWithColumnKey
-				key, err := file.decryption.Keys.ColumnKey(colKey.PathInSchema, colKey.KeyMetadata)
+			case *format.EncryptionWithColumnKey:
+				key, err := file.decryption.Keys.ColumnKey(crypto.PathInSchema, crypto.KeyMetadata)
 				switch {
 				case err == nil:
 					fileColumnChunks[i].decryptionKey = key
@@ -685,7 +681,7 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 					// Real error (KMS failure, bad metadata, …) must surface so
 					// the caller learns the cause instead of seeing later
 					// "decode page header" errors masking the missing key.
-					return fmt.Errorf("resolving column key for %q: %w", columnPathString(colKey.PathInSchema), err)
+					return fmt.Errorf("resolving column key for %q: %w", columnPathString(crypto.PathInSchema), err)
 				}
 			}
 		}

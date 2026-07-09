@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 const (
@@ -2612,12 +2613,12 @@ func TestMergeRowGroupsJSONAndByteArrayConversion(t *testing.T) {
 	}
 
 	// Plain schema should NOT have JSON logical type
-	if plainDataField.Node.Type().LogicalType() != nil && plainDataField.Node.Type().LogicalType().Json != nil {
+	if hasLogicalType[*format.JsonType](plainDataField.Node.Type().LogicalType()) {
 		t.Error("Plain schema should not have JSON logical type")
 	}
 
 	// JSON schema SHOULD have JSON logical type
-	if jsonDataField.Node.Type().LogicalType() == nil || jsonDataField.Node.Type().LogicalType().Json == nil {
+	if !hasLogicalType[*format.JsonType](jsonDataField.Node.Type().LogicalType()) {
 		t.Error("JSON schema should have JSON logical type")
 	}
 
@@ -2659,7 +2660,7 @@ func TestMergeRowGroupsJSONAndByteArrayConversion(t *testing.T) {
 		if !ok {
 			t.Fatal("'data' field not found in merged schema")
 		}
-		if mergedDataField.Node.Type().LogicalType() == nil || mergedDataField.Node.Type().LogicalType().Json == nil {
+		if !hasLogicalType[*format.JsonType](mergedDataField.Node.Type().LogicalType()) {
 			t.Error("Expected merged schema to have JSON logical type for 'data' field")
 		}
 

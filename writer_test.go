@@ -3451,7 +3451,7 @@ func TestIssue449DecimalReadWrite(t *testing.T) {
 				}
 				// Compare at decimal precision since binary floats can't exactly represent
 				// decimal fractions like 0.12
-				scale := int(tt.typ.Type().LogicalType().Decimal.Scale)
+				scale := int(tt.typ.Type().LogicalType().Value.(*format.DecimalType).Scale)
 				expText := expFloat.Text('f', scale)
 				actualText := actualFloat.Text('f', scale)
 				if expText != actualText {

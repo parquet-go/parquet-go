@@ -17,6 +17,7 @@ import (
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 var testdataFiles []string
@@ -128,6 +129,15 @@ func TestOpenFileWithoutPageIndex(t *testing.T) {
 	}
 }
 
+// hasLogicalType reports whether lt carries a T annotation, tolerating a nil lt.
+func hasLogicalType[T format.LogicalTypeValue](lt *format.LogicalType) bool {
+	if lt == nil {
+		return false
+	}
+	_, ok := lt.Value.(T)
+	return ok
+}
+
 func printColumns(t *testing.T, col *parquet.Column, indent string) {
 	if t.Failed() {
 		return
@@ -146,11 +156,11 @@ func printColumns(t *testing.T, col *parquet.Column, indent string) {
 	if col.Leaf() {
 		colType := col.Type()
 		if logicalType := colType.LogicalType(); logicalType != nil {
-			if logicalType.Json != nil {
+			if hasLogicalType[*format.JsonType](logicalType) {
 				isJSONColumn = true
 			}
 			// Validate UUID logical type is only applied to FIXED_LEN_BYTE_ARRAY(16)
-			if logicalType.UUID != nil {
+			if hasLogicalType[*format.UUIDType](logicalType) {
 				if colType.Kind() != parquet.FixedLenByteArray {
 					t.Errorf("UUID logical type at path %s must be applied to FIXED_LEN_BYTE_ARRAY, got %v", path, colType.Kind())
 				} else if colType.Length() != 16 {

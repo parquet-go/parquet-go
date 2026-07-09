@@ -1583,9 +1583,9 @@ func timestamp(v Value, u format.TimeUnit, tz *time.Location) time.Time {
 
 func timeUnitDuration(unit format.TimeUnit) time.Duration {
 	switch {
-	case unit.Millis != nil:
+	case isMillis(unit):
 		return time.Millisecond
-	case unit.Micros != nil:
+	case isMicros(unit):
 		return time.Microsecond
 	default:
 		return time.Nanosecond

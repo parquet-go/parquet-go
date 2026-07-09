@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 func TestVariantWriteRead(t *testing.T) {
@@ -1047,7 +1048,7 @@ func TestVariantSchemaTag(t *testing.T) {
 	for _, f := range fields {
 		if f.Name() == "data" {
 			lt := f.Type().LogicalType()
-			if lt == nil || lt.Variant == nil {
+			if !hasLogicalType[*format.VariantType](lt) {
 				t.Error("expected variant logical type for data field")
 			}
 			found = true

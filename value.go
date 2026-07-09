@@ -269,16 +269,16 @@ func makeValue(k Kind, lt *format.LogicalType, v reflect.Value) Value {
 	switch v.Type() {
 	case reflect.TypeOf(time.Time{}):
 		unit := Nanosecond.TimeUnit()
-		if lt != nil && lt.Timestamp != nil {
-			unit = lt.Timestamp.Unit
+		if ts, ok := logicalTypeOf[*format.TimestampType](lt); ok {
+			unit = ts.Unit
 		}
 
 		t := v.Interface().(time.Time)
 		var val int64
 		switch {
-		case unit.Millis != nil:
+		case isMillis(unit):
 			val = t.UnixMilli()
-		case unit.Micros != nil:
+		case isMicros(unit):
 			val = t.UnixMicro()
 		default:
 			val = t.UnixNano()
@@ -337,7 +337,7 @@ func makeValue(k Kind, lt *format.LogicalType, v reflect.Value) Value {
 	case FixedLenByteArray:
 		switch v.Kind() {
 		case reflect.String:
-			if lt.UUID != nil { // uuid
+			if logicalTypeIs[*format.UUIDType](lt) { // uuid
 				uuidStr := v.String()
 				encoded, err := uuid.MustParse(uuidStr).MarshalBinary()
 				if err != nil {

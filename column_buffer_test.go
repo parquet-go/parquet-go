@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/parquet-go/parquet-go/format"
 )
 
 func TestBroadcastValueInt32(t *testing.T) {
@@ -217,7 +219,7 @@ func TestWhatActuallyHappensWithMapField(t *testing.T) {
 
 	// Verify that the natural schema is a MAP type, not a GROUP
 	nestedField := naturalSchema.Fields()[0]
-	if nestedField.Type().LogicalType() == nil || nestedField.Type().LogicalType().Map == nil {
+	if _, ok := nestedField.Type().LogicalType().Value.(*format.MapType); !ok {
 		t.Fatalf("expected Nested field to have MAP logical type, got: %v", nestedField.Type().LogicalType())
 	}
 

@@ -15,7 +15,7 @@ import (
 func Date() Node { return Leaf(&dateType{}) }
 
 var dateLogicalType = format.LogicalType{
-	Date: new(format.DateType),
+	Value: &format.DateType{},
 }
 
 type dateType format.DateType

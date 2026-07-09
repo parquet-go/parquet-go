@@ -878,12 +878,12 @@ func mergeTwoNodes(a, b Node) Node {
 		merged = group
 
 		if logicalType := b.Type().LogicalType(); logicalType != nil {
-			switch {
-			case logicalType.List != nil:
+			switch logicalType.Value.(type) {
+			case *format.ListType:
 				merged = &listNode{group}
-			case logicalType.Map != nil:
+			case *format.MapType:
 				merged = &mapNode{group}
-			case logicalType.Variant != nil:
+			case *format.VariantType:
 				merged = &variantNode{group}
 			}
 		}

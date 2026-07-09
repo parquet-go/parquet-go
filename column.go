@@ -366,18 +366,23 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 	}
 
 	c.typ = &groupType{}
-	if lt := c.schema.LogicalType; lt.Valid && lt.V.Map != nil {
+	switch c.schema.LogicalType.Value.(type) {
+	case *format.MapType:
 		c.typ = &mapType{}
-	} else if lt.Valid && lt.V.List != nil {
+	case *format.ListType:
 		c.typ = &listType{}
-	} else if lt.Valid && lt.V.Variant != nil {
+	case *format.VariantType:
 		c.typ = &variantType{}
-	} else if ct := c.schema.ConvertedType; ct.Valid {
-		switch ct.V {
-		case deprecated.Map:
-			c.typ = &mapType{}
-		case deprecated.List:
-			c.typ = &listType{}
+	default:
+		// Fall back on the deprecated converted type when the schema element
+		// carries no logical type annotation we recognize.
+		if ct := c.schema.ConvertedType; ct.Valid {
+			switch ct.V {
+			case deprecated.Map:
+				c.typ = &mapType{}
+			case deprecated.List:
+				c.typ = &listType{}
+			}
 		}
 	}
 	c.columns = make([]*Column, numChildren)
@@ -414,66 +419,63 @@ func isLeafSchemaElement(element *format.SchemaElement) bool {
 }
 
 func schemaElementTypeOf(s *format.SchemaElement) Type {
-	if s.LogicalType.Valid {
-		lt := &s.LogicalType.V
-		// A logical type exists, the Type interface implementations in this
-		// package are all based on the logical parquet types declared in the
-		// format sub-package so we can return them directly via a pointer type
-		// conversion.
-		switch {
-		case lt.UTF8 != nil:
-			return (*stringType)(lt.UTF8)
-		case lt.Map != nil:
-			return (*mapType)(lt.Map)
-		case lt.List != nil:
-			return (*listType)(lt.List)
-		case lt.Enum != nil:
-			return (*enumType)(lt.Enum)
-		case lt.Decimal != nil:
-			// A parquet decimal can be one of several different physical types.
-			if s.Type.Valid {
-				var typ Type
-				switch kind := Kind(s.Type.V); kind {
-				case Int32:
-					typ = Int32Type
-				case Int64:
-					typ = Int64Type
-				case ByteArray:
-					typ = ByteArrayType
-				case FixedLenByteArray:
-					if !s.TypeLength.Valid {
-						panic("DECIMAL using FIXED_LEN_BYTE_ARRAY must specify a length")
-					}
-					typ = FixedLenByteArrayType(int(s.TypeLength.V))
-				default:
-					panic("DECIMAL must be of type INT32, INT64, BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY but got " + kind.String())
+	// A logical type exists, the Type interface implementations in this
+	// package are all based on the logical parquet types declared in the
+	// format sub-package so we can return them directly via a pointer type
+	// conversion.
+	switch lt := s.LogicalType.Value.(type) {
+	case *format.StringType:
+		return (*stringType)(lt)
+	case *format.MapType:
+		return (*mapType)(lt)
+	case *format.ListType:
+		return (*listType)(lt)
+	case *format.EnumType:
+		return (*enumType)(lt)
+	case *format.DecimalType:
+		// A parquet decimal can be one of several different physical types.
+		if s.Type.Valid {
+			var typ Type
+			switch kind := Kind(s.Type.V); kind {
+			case Int32:
+				typ = Int32Type
+			case Int64:
+				typ = Int64Type
+			case ByteArray:
+				typ = ByteArrayType
+			case FixedLenByteArray:
+				if !s.TypeLength.Valid {
+					panic("DECIMAL using FIXED_LEN_BYTE_ARRAY must specify a length")
 				}
-				return &decimalType{
-					decimal: *lt.Decimal,
-					Type:    typ,
-				}
+				typ = FixedLenByteArrayType(int(s.TypeLength.V))
+			default:
+				panic("DECIMAL must be of type INT32, INT64, BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY but got " + kind.String())
 			}
-		case lt.Date != nil:
-			return (*dateType)(lt.Date)
-		case lt.Time != nil:
-			return (*timeType)(lt.Time)
-		case lt.Timestamp != nil:
-			return (*timestampType)(lt.Timestamp)
-		case lt.Integer != nil:
-			return (*intType)(lt.Integer)
-		case lt.Unknown != nil:
-			return (*nullType)(lt.Unknown)
-		case lt.Json != nil:
-			return (*jsonType)(lt.Json)
-		case lt.Bson != nil:
-			return (*bsonType)(lt.Bson)
-		case lt.UUID != nil:
-			return (*uuidType)(lt.UUID)
-		case lt.Geometry != nil:
-			return (*geometryType)(lt.Geometry)
-		case lt.Geography != nil:
-			return (*geographyType)(lt.Geography)
+			return &decimalType{
+				decimal: *lt,
+				Type:    typ,
+			}
 		}
+	case *format.DateType:
+		return (*dateType)(lt)
+	case *format.TimeType:
+		return canonicalTimeType(lt)
+	case *format.TimestampType:
+		return canonicalTimestampType(lt)
+	case *format.IntType:
+		return canonicalIntType(lt)
+	case *format.NullType:
+		return (*nullType)(lt)
+	case *format.JsonType:
+		return (*jsonType)(lt)
+	case *format.BsonType:
+		return (*bsonType)(lt)
+	case *format.UUIDType:
+		return (*uuidType)(lt)
+	case *format.GeometryType:
+		return (*geometryType)(lt)
+	case *format.GeographyType:
+		return (*geographyType)(lt)
 	}
 
 	if s.ConvertedType.Valid {

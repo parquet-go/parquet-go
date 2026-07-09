@@ -14,7 +14,7 @@ import (
 func Enum() Node { return Leaf(&enumType{}) }
 
 var enumLogicalType = format.LogicalType{
-	Enum: new(format.EnumType),
+	Value: &format.EnumType{},
 }
 
 type enumType format.EnumType
