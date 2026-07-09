@@ -18,7 +18,7 @@ type BinaryProtocol struct {
 	NonStrict bool
 }
 
-func (p *BinaryProtocol) NewReaderFromBytes(b []byte) Reader {
+func (p *BinaryProtocol) NewReaderFromBytes(b []byte) BytesReader {
 	return &binaryBytesReader{p: p, data: b}
 }
 
@@ -398,6 +398,11 @@ type binaryBytesReader struct {
 	p      *BinaryProtocol
 	data   []byte
 	offset int
+}
+
+func (r *binaryBytesReader) ResetBytes(b []byte) {
+	r.data = b
+	r.offset = 0
 }
 
 func (r *binaryBytesReader) Protocol() Protocol {
