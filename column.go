@@ -326,11 +326,11 @@ func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []f
 	}
 }
 
-// takeSlab cuts the first n elements off the front of the slab and returns them
+// allocate cuts the first n elements off the front of the slab and returns them
 // with their capacity clamped, so that appending to the result cannot reach into
 // the rest of the slab. It returns nil, false when the slab is exhausted, which
 // only happens on a schema whose NumChildren do not add up.
-func takeSlab[T any](slab *[]T, n int) ([]T, bool) {
+func allocate[T any](slab *[]T, n int) ([]T, bool) {
 	if n == 0 {
 		return nil, true
 	}
@@ -371,7 +371,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		cl.rowGroupColumnIndex++
 
 		var ok bool
-		if c.chunks, ok = takeSlab(&cl.chunks, len(rowGroups)); !ok {
+		if c.chunks, ok = allocate(&cl.chunks, len(rowGroups)); !ok {
 			return nil, fmt.Errorf("column %q has no room left for its column chunks", c.schema.Name)
 		}
 
@@ -383,7 +383,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		}
 
 		if len(columnIndexes) > 0 {
-			if c.columnIndex, ok = takeSlab(&cl.columnIndex, len(rowGroups)); !ok {
+			if c.columnIndex, ok = allocate(&cl.columnIndex, len(rowGroups)); !ok {
 				return nil, fmt.Errorf("column %q has no room left for its column index pages", c.schema.Name)
 			}
 			for i := range rowGroups {
@@ -395,7 +395,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		}
 
 		if len(offsetIndexes) > 0 {
-			if c.offsetIndex, ok = takeSlab(&cl.offsetIndex, len(rowGroups)); !ok {
+			if c.offsetIndex, ok = allocate(&cl.offsetIndex, len(rowGroups)); !ok {
 				return nil, fmt.Errorf("column %q has no room left for its offset index pages", c.schema.Name)
 			}
 			for i := range rowGroups {
@@ -462,7 +462,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 	// Reserve this group's children before recursing, so that a child's own
 	// children are cut from the slab after ours rather than overlapping them.
 	var ok bool
-	if c.columns, ok = takeSlab(&cl.children, numChildren); !ok {
+	if c.columns, ok = allocate(&cl.children, numChildren); !ok {
 		return nil, fmt.Errorf("column %q declares %d children but the schema has no room for them",
 			c.schema.Name, numChildren)
 	}
@@ -480,7 +480,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		}
 	}
 
-	if c.fields, ok = takeSlab(&cl.fields, len(c.columns)); !ok {
+	if c.fields, ok = allocate(&cl.fields, len(c.columns)); !ok {
 		return nil, fmt.Errorf("column %q declares %d fields but the schema has no room for them",
 			c.schema.Name, len(c.columns))
 	}

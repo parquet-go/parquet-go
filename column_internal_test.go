@@ -323,7 +323,7 @@ func TestOpenColumnsSlabsDoNotOverlap(t *testing.T) {
 	}
 
 	// Appending to a group's children must not reach into the sibling's slice:
-	// takeSlab clamps the capacity of every slice it hands out.
+	// allocate clamps the capacity of every slice it hands out.
 	if cap(group.columns) != len(group.columns) {
 		t.Errorf("group children have spare capacity %d; appending would overwrite the next column",
 			cap(group.columns)-len(group.columns))
