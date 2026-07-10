@@ -479,22 +479,22 @@ func TestSchemaElementTypeIsCanonical(t *testing.T) {
 		},
 		{
 			scenario:    "TIME(micros,utc)",
-			decoded:     &format.TimeType{IsAdjustedToUTC: true, Unit: format.TimeUnit{Value: &format.MicroSeconds{}}},
+			decoded:     &format.TimeType{IsAdjustedToUTC: true, Unit: format.TimeUnit{Value: new(format.MicroSeconds)}},
 			constructed: Time(Microsecond).Type(),
 		},
 		{
 			scenario:    "TIME(millis,local)",
-			decoded:     &format.TimeType{IsAdjustedToUTC: false, Unit: format.TimeUnit{Value: &format.MilliSeconds{}}},
+			decoded:     &format.TimeType{IsAdjustedToUTC: false, Unit: format.TimeUnit{Value: new(format.MilliSeconds)}},
 			constructed: TimeAdjusted(Millisecond, false).Type(),
 		},
 		{
 			scenario:    "TIMESTAMP(nanos,utc)",
-			decoded:     &format.TimestampType{IsAdjustedToUTC: true, Unit: format.TimeUnit{Value: &format.NanoSeconds{}}},
+			decoded:     &format.TimestampType{IsAdjustedToUTC: true, Unit: format.TimeUnit{Value: new(format.NanoSeconds)}},
 			constructed: Timestamp(Nanosecond).Type(),
 		},
 		{
 			scenario:    "TIMESTAMP(millis,local)",
-			decoded:     &format.TimestampType{IsAdjustedToUTC: false, Unit: format.TimeUnit{Value: &format.MilliSeconds{}}},
+			decoded:     &format.TimestampType{IsAdjustedToUTC: false, Unit: format.TimeUnit{Value: new(format.MilliSeconds)}},
 			constructed: TimestampAdjusted(Millisecond, false).Type(),
 		},
 	}

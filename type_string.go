@@ -15,7 +15,7 @@ import (
 func String() Node { return Leaf(&stringType{}) }
 
 var stringLogicalType = format.LogicalType{
-	Value: &format.StringType{},
+	Value: new(format.StringType),
 }
 
 type stringType format.StringType

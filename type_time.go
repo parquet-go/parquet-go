@@ -91,32 +91,32 @@ func TimeAdjusted(unit TimeUnit, isAdjustedToUTC bool) Node {
 
 var timeMilliAdjustedToUTC = timeType{
 	IsAdjustedToUTC: true,
-	Unit:            format.TimeUnit{Value: &format.MilliSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.MilliSeconds)},
 }
 
 var timeMicroAdjustedToUTC = timeType{
 	IsAdjustedToUTC: true,
-	Unit:            format.TimeUnit{Value: &format.MicroSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.MicroSeconds)},
 }
 
 var timeNanoAdjustedToUTC = timeType{
 	IsAdjustedToUTC: true,
-	Unit:            format.TimeUnit{Value: &format.NanoSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.NanoSeconds)},
 }
 
 var timeMilliNotAdjustedToUTC = timeType{
 	IsAdjustedToUTC: false,
-	Unit:            format.TimeUnit{Value: &format.MilliSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.MilliSeconds)},
 }
 
 var timeMicroNotAdjustedToUTC = timeType{
 	IsAdjustedToUTC: false,
-	Unit:            format.TimeUnit{Value: &format.MicroSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.MicroSeconds)},
 }
 
 var timeNanoNotAdjustedToUTC = timeType{
 	IsAdjustedToUTC: false,
-	Unit:            format.TimeUnit{Value: &format.NanoSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.NanoSeconds)},
 }
 
 var timeMilliAdjustedToUTCLogicalType = format.LogicalType{

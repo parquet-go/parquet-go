@@ -14,7 +14,7 @@ import (
 func UUID() Node { return Leaf(&uuidType{}) }
 
 var uuidLogicaType = format.LogicalType{
-	Value: &format.UUIDType{},
+	Value: new(format.UUIDType),
 }
 
 type uuidType format.UUIDType

@@ -271,7 +271,7 @@ func logicalTypeValueOf(lt *format.LogicalType) format.LogicalTypeValue {
 // In the current parquet version supported by this library, only type-defined
 // orders are supported.
 var typeDefinedColumnOrder = format.ColumnOrder{
-	Value: &format.TypeDefinedOrder{},
+	Value: new(format.TypeDefinedOrder),
 }
 
 var physicalTypes = [...]format.Type{

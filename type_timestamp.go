@@ -49,32 +49,32 @@ func TimestampAdjusted(unit TimeUnit, isAdjustedToUTC bool) Node {
 
 var timestampMilliAdjustedToUTC = timestampType{
 	IsAdjustedToUTC: true,
-	Unit:            format.TimeUnit{Value: &format.MilliSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.MilliSeconds)},
 }
 
 var timestampMicroAdjustedToUTC = timestampType{
 	IsAdjustedToUTC: true,
-	Unit:            format.TimeUnit{Value: &format.MicroSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.MicroSeconds)},
 }
 
 var timestampNanoAdjustedToUTC = timestampType{
 	IsAdjustedToUTC: true,
-	Unit:            format.TimeUnit{Value: &format.NanoSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.NanoSeconds)},
 }
 
 var timestampMilliNotAdjustedToUTC = timestampType{
 	IsAdjustedToUTC: false,
-	Unit:            format.TimeUnit{Value: &format.MilliSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.MilliSeconds)},
 }
 
 var timestampMicroNotAdjustedToUTC = timestampType{
 	IsAdjustedToUTC: false,
-	Unit:            format.TimeUnit{Value: &format.MicroSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.MicroSeconds)},
 }
 
 var timestampNanoNotAdjustedToUTC = timestampType{
 	IsAdjustedToUTC: false,
-	Unit:            format.TimeUnit{Value: &format.NanoSeconds{}},
+	Unit:            format.TimeUnit{Value: new(format.NanoSeconds)},
 }
 
 var timestampMilliAdjustedToUTCLogicalType = format.LogicalType{

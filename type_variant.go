@@ -190,7 +190,7 @@ func (variantNode) Type() Type { return &variantType{} }
 
 type variantType format.VariantType
 
-var variantLogicalType = format.LogicalType{Value: &format.VariantType{}}
+var variantLogicalType = format.LogicalType{Value: new(format.VariantType)}
 
 func (t *variantType) String() string { return (*format.VariantType)(t).String() }
 
