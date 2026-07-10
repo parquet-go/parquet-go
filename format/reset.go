@@ -135,6 +135,12 @@ func (c *ColumnMetaData) Reset() {
 // The thrift.Null sub-headers must be cleared recursively: the decoder
 // writes only the fields present in its input, and decoding into a Null
 // value does not zero it first.
+//
+// As with FileMetaData.Reset, statistics byte slices absent from the next
+// decoded input are left empty but non-nil after reuse, whereas a fresh
+// decode leaves them nil. Both states are semantically equivalent
+// (zero-length), but programs distinguishing nil from empty slices, or
+// re-encoding the value, can observe the difference.
 func (h *PageHeader) Reset() {
 	h.Type = 0
 	h.UncompressedPageSize = 0

@@ -1325,6 +1325,10 @@ func TestFilePagesLazyDictionaryWithReusedHeader(t *testing.T) {
 	chunk := f.RowGroups()[0].ColumnChunks()[0]
 
 	vals := make([]parquet.Value, 1)
+	// Seeking to numRows-1 and numRows/2 jumps past the dictionary page and
+	// exercises the lazy load; seeking to row 3 lands on the first data page
+	// with the stream still positioned at the dictionary page, covering the
+	// eager in-loop dictionary decode through the reused header instead.
 	for _, seekTo := range []int64{numRows - 1, numRows / 2, 3} {
 		pages := chunk.Pages()
 		if err := pages.SeekToRow(seekTo); err != nil {
@@ -1333,6 +1337,9 @@ func TestFilePagesLazyDictionaryWithReusedHeader(t *testing.T) {
 		page, err := pages.ReadPage()
 		if err != nil {
 			t.Fatalf("ReadPage after SeekToRow(%d): %v", seekTo, err)
+		}
+		if page.NumValues() <= 0 {
+			t.Errorf("SeekToRow(%d): page has %d values, want > 0", seekTo, page.NumValues())
 		}
 		if _, err := page.Values().ReadValues(vals); err != nil && !errors.Is(err, io.EOF) {
 			t.Fatalf("ReadValues after SeekToRow(%d): %v", seekTo, err)
