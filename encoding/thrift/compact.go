@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 )
@@ -101,14 +102,13 @@ func (r *compactReader) ReadBytesAppend(b []byte) ([]byte, error) {
 	if err != nil {
 		return b, err
 	}
-	off := len(b)
-	if b == nil || cap(b)-off < n {
-		grown := make([]byte, off+n)
-		copy(grown, b)
-		b = grown
-	} else {
-		b = b[:off+n]
+	if b == nil && n == 0 {
+		// slices.Grow(nil, 0) stays nil, but ReadBytes returns a non-nil
+		// empty slice for zero-length values and this method must match.
+		return []byte{}, nil
 	}
+	off := len(b)
+	b = slices.Grow(b, n)[:off+n]
 	if _, err = io.ReadFull(r.Reader(), b[off:]); err != nil {
 		return b[:off], err
 	}
