@@ -64,8 +64,8 @@ func ExampleVariant_schema() {
 	// message Shredded {
 	// 	optional group data (VARIANT) {
 	// 		required binary metadata;
-	// 		optional binary typed_value (STRING);
 	// 		optional binary value;
+	// 		optional binary typed_value (STRING);
 	// 	}
 	// }
 }

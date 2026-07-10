@@ -462,11 +462,11 @@ func TestVariantSchemaEvolution(t *testing.T) {
 		}
 	})
 
-	t.Run("write shredded, read unshredded does not panic", func(t *testing.T) {
+	t.Run("write shredded, read unshredded", func(t *testing.T) {
 		// Write with ShreddedVariant(String()) — some values are shredded into
-		// typed_value. Read with unshredded Variant() — typed_value columns are
-		// dropped by the conversion. Values that were only in typed_value become
-		// nil (data loss), but the read must not panic or return errors.
+		// typed_value. Read with unshredded Variant() — the conversion
+		// reconstructs shredded values (see convert_variant.go), so both the
+		// typed and the fallback value survive.
 		writeNode, err := parquet.ShreddedVariant(parquet.String())
 		if err != nil {
 			t.Fatal(err)
@@ -507,12 +507,9 @@ func TestVariantSchemaEvolution(t *testing.T) {
 			t.Fatalf("read %d records, want %d", n, len(records))
 		}
 
-		// Record 0 was shredded — typed_value columns are dropped by conversion,
-		// so the data is lost. The value should be nil, not a panic.
-		if readRecords[0].Data != nil {
-			// If reconstruction happens to preserve it, that's even better,
-			// but nil is acceptable for this lossy conversion.
-			t.Logf("record 0: Data = %v (%T) — preserved despite lossy conversion", readRecords[0].Data, readRecords[0].Data)
+		// Record 0 was shredded into typed_value and must be reconstructed.
+		if s, ok := readRecords[0].Data.(string); !ok || s != "hello" {
+			t.Errorf("record 0: Data = %v (%T), want string %q", readRecords[0].Data, readRecords[0].Data, "hello")
 		}
 
 		// Record 1 was in the value column — should survive the conversion.
@@ -892,7 +889,7 @@ func TestShreddedVariantUUID(t *testing.T) {
 	records := []Record{
 		{Data: id},           // uuid.UUID — should be shredded
 		{Data: "not a uuid"}, // string — should NOT be shredded (type mismatch)
-		{Data: [16]byte(id)}, // [16]byte — should also be shredded
+		{Data: [16]byte(id)}, // [16]byte — Binary, not UUID; falls back to value
 	}
 
 	buf := new(bytes.Buffer)
@@ -928,11 +925,10 @@ func TestShreddedVariantUUID(t *testing.T) {
 		t.Errorf("record 1: got %v (%T), want string %q", readRecords[1].Data, readRecords[1].Data, "not a uuid")
 	}
 
-	// Record 2: [16]byte input → shredded into UUID column → uuid.UUID output
-	if u, ok := readRecords[2].Data.(uuid.UUID); !ok {
-		t.Errorf("record 2: got %v (%T), want uuid.UUID", readRecords[2].Data, readRecords[2].Data)
-	} else if u != id {
-		t.Errorf("record 2: got %v, want %v", u, id)
+	// Record 2: [16]byte input is Binary, not UUID, so it falls back to the
+	// value column and reads back as []byte.
+	if b, ok := readRecords[2].Data.([]byte); !ok || !bytes.Equal(b, id[:]) {
+		t.Errorf("record 2: got %v (%T), want []byte %v", readRecords[2].Data, readRecords[2].Data, id[:])
 	}
 }
 

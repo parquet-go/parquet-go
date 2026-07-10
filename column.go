@@ -210,6 +210,7 @@ func (c *Column) forEachLeaf(do func(*Column)) {
 
 func openColumns(file *File, metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex) (*Column, error) {
 	cl := columnLoader{}
+	cl.reserve(metadata, columnIndexes, offsetIndexes)
 
 	c, err := cl.open(file, metadata, columnIndexes, offsetIndexes, nil)
 	if err != nil {
@@ -282,13 +283,71 @@ type columnLoader struct {
 	schemaIndex         int
 	columnOrderIndex    int
 	rowGroupColumnIndex int
+
+	// The shape of the column tree is fully determined by the schema, so its
+	// parts are allocated once here and handed out in slices as the tree is
+	// built. A file with C schema elements, L of them leaves, and R row groups
+	// used to cost C + 2*(C-1) + 3*L allocations; it now costs six.
+	columns     []Column
+	children    []*Column
+	fields      []Field
+	chunks      []*format.ColumnChunk
+	columnIndex []*format.ColumnIndex
+	offsetIndex []*format.OffsetIndex
+}
+
+func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex) {
+	numColumns := len(metadata.Schema)
+	if numColumns == 0 {
+		return
+	}
+	numLeaves := 0
+	for i := range metadata.Schema {
+		if isLeafSchemaElement(&metadata.Schema[i]) {
+			numLeaves++
+		}
+	}
+	numRowGroups := len(metadata.RowGroups)
+
+	cl.columns = make([]Column, numColumns)
+	// Every column but the root is a child of exactly one group, and appears
+	// once in that group's fields.
+	cl.children = make([]*Column, numColumns-1)
+	cl.fields = make([]Field, numColumns-1)
+
+	if n := numLeaves * numRowGroups; n > 0 {
+		cl.chunks = make([]*format.ColumnChunk, n)
+		if len(columnIndexes) > 0 {
+			cl.columnIndex = make([]*format.ColumnIndex, n)
+		}
+		if len(offsetIndexes) > 0 {
+			cl.offsetIndex = make([]*format.OffsetIndex, n)
+		}
+	}
+}
+
+// allocate cuts the first n elements off the front of the slab and returns them
+// with their capacity clamped, so that appending to the result cannot reach into
+// the rest of the slab.
+//
+// The caller must have reserved room for n; a slab shorter than that is a
+// programming error and panics. Every slab is sized from the schema, and the
+// only value the schema does not bound is a group's NumChildren, which open
+// checks against the children slab before allocating from it.
+func allocate[T any](slab *[]T, n int) []T {
+	taken := (*slab)[:n:n]
+	*slab = (*slab)[n:]
+	return taken
 }
 
 func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex, path []string) (*Column, error) {
-	c := &Column{
-		file:   file,
-		schema: &metadata.Schema[cl.schemaIndex],
+	if cl.schemaIndex >= len(cl.columns) {
+		return nil, fmt.Errorf("column schema index %d is out of range: %d >= %d",
+			cl.schemaIndex, cl.schemaIndex, len(cl.columns))
 	}
+	c := &cl.columns[cl.schemaIndex]
+	c.file = file
+	c.schema = &metadata.Schema[cl.schemaIndex]
 	c.path = columnPath(path).append(c.schema.Name)
 
 	cl.schemaIndex++
@@ -309,32 +368,32 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		rowGroupColumnIndex := cl.rowGroupColumnIndex
 		cl.rowGroupColumnIndex++
 
-		c.chunks = make([]*format.ColumnChunk, 0, len(rowGroups))
-		c.columnIndex = make([]*format.ColumnIndex, 0, len(rowGroups))
-		c.offsetIndex = make([]*format.OffsetIndex, 0, len(rowGroups))
+		c.chunks = allocate(&cl.chunks, len(rowGroups))
 
 		for i, rowGroup := range rowGroups {
 			if rowGroupColumnIndex >= len(rowGroup.Columns) {
 				return nil, fmt.Errorf("row group at index %d does not have enough columns", i)
 			}
-			c.chunks = append(c.chunks, &rowGroup.Columns[rowGroupColumnIndex])
+			c.chunks[i] = &rowGroup.Columns[rowGroupColumnIndex]
 		}
 
 		if len(columnIndexes) > 0 {
+			c.columnIndex = allocate(&cl.columnIndex, len(rowGroups))
 			for i := range rowGroups {
 				if rowGroupColumnIndex >= len(columnIndexes) {
 					return nil, fmt.Errorf("row group at index %d does not have enough column index pages", i)
 				}
-				c.columnIndex = append(c.columnIndex, &columnIndexes[rowGroupColumnIndex])
+				c.columnIndex[i] = &columnIndexes[rowGroupColumnIndex]
 			}
 		}
 
 		if len(offsetIndexes) > 0 {
+			c.offsetIndex = allocate(&cl.offsetIndex, len(rowGroups))
 			for i := range rowGroups {
 				if rowGroupColumnIndex >= len(offsetIndexes) {
 					return nil, fmt.Errorf("row group at index %d does not have enough offset index pages", i)
 				}
-				c.offsetIndex = append(c.offsetIndex, &offsetIndexes[rowGroupColumnIndex])
+				c.offsetIndex[i] = &offsetIndexes[rowGroupColumnIndex]
 			}
 		}
 
@@ -351,6 +410,17 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 			// the page headers to determine which compression and encodings are
 			// applied.
 			for _, encoding := range c.chunks[0].MetaData.Encoding {
+				// BIT_PACKED appears in the encodings list when the
+				// deprecated bit-packed encoding was used for repetition
+				// or definition levels. Encodings.md: "Note that the
+				// BIT_PACKED encoding method is only supported for
+				// encoding repetition and definition levels." It is never
+				// a data page encoding, so it must not be reported as the
+				// column encoding (it would make schemas derived from
+				// this file unwritable).
+				if encoding == format.BitPacked {
+					continue
+				}
 				if c.encoding == nil {
 					c.encoding = LookupEncoding(encoding)
 				}
@@ -385,7 +455,18 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 			}
 		}
 	}
-	c.columns = make([]*Column, numChildren)
+	// Bound NumChildren by what the children slab has left rather than by the
+	// schema elements that remain. Only the slab bounds the total across every
+	// group: a schema where each group's claim fits the elements after it can
+	// still claim more children in total than the schema has to give.
+	if numChildren > len(cl.children) {
+		return nil, fmt.Errorf("column %q declares %d children but only %d schema elements are left to be children",
+			c.schema.Name, numChildren, len(cl.children))
+	}
+
+	// Reserve this group's children before recursing, so that a child's own
+	// children are cut from the slab after ours rather than overlapping them.
+	c.columns = allocate(&cl.children, numChildren)
 
 	for i := range c.columns {
 		if cl.schemaIndex >= len(metadata.Schema) {
@@ -400,7 +481,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 		}
 	}
 
-	c.fields = make([]Field, len(c.columns))
+	c.fields = allocate(&cl.fields, len(c.columns))
 	for i, column := range c.columns {
 		c.fields[i] = column
 	}

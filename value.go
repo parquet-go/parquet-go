@@ -802,12 +802,66 @@ func (v Value) GoString() string { return fmt.Sprintf("%#v", v) }
 // Level returns v with the repetition level, definition level, and column index
 // set to the values passed as arguments.
 //
-// The method panics if either argument is negative.
+// The method panics if any argument is negative or exceeds its maximum
+// (MaxRepetitionLevel, MaxDefinitionLevel, MaxColumnIndex respectively).
+//
+// To mutate a single level field in place, see SetRepetitionLevel,
+// SetDefinitionLevel, and SetColumnIndex, which the compiler can inline.
 func (v Value) Level(repetitionLevel, definitionLevel, columnIndex int) Value {
-	v.repetitionLevel = makeRepetitionLevel(repetitionLevel)
-	v.definitionLevel = makeDefinitionLevel(definitionLevel)
-	v.columnIndex = ^makeColumnIndex(columnIndex)
+	// MaxRepetitionLevel and MaxDefinitionLevel are both math.MaxUint8, so the
+	// two levels are bounds-checked with a single comparison: ORing them keeps
+	// the result in range only if both operands are; a negative value converts
+	// to a large uint and trips the check as well.
+	if uint(repetitionLevel)|uint(definitionLevel) > MaxRepetitionLevel ||
+		uint(columnIndex) > MaxColumnIndex {
+		panicLevelOutOfRange(repetitionLevel, definitionLevel, columnIndex)
+	}
+	v.repetitionLevel = byte(repetitionLevel)
+	v.definitionLevel = byte(definitionLevel)
+	v.columnIndex = ^uint16(columnIndex)
 	return v
+}
+
+// SetRepetitionLevel sets the repetition level of v to the given value.
+//
+// Unlike Level, which sets all three level fields and returns a new Value, this
+// method mutates a single field in place through a pointer receiver. Avoiding
+// the value copy keeps it small enough for the compiler to inline, which lets
+// the bounds check be eliminated entirely when the argument is provably in range
+// (for example when forwarding an existing repetition level). Mutating a slice
+// element in place (values[i].SetRepetitionLevel(...)) makes it a good fit for
+// hot loops.
+//
+// The method panics if level is negative or greater than MaxRepetitionLevel.
+func (v *Value) SetRepetitionLevel(level int) {
+	if uint(level) > MaxRepetitionLevel {
+		panicRepetitionLevelOutOfRange(level)
+	}
+	v.repetitionLevel = byte(level)
+}
+
+// SetDefinitionLevel sets the definition level of v to the given value.
+//
+// See SetRepetitionLevel for the rationale behind the single-field setters.
+//
+// The method panics if level is negative or greater than MaxDefinitionLevel.
+func (v *Value) SetDefinitionLevel(level int) {
+	if uint(level) > MaxDefinitionLevel {
+		panicDefinitionLevelOutOfRange(level)
+	}
+	v.definitionLevel = byte(level)
+}
+
+// SetColumnIndex sets the column index of v to the given value.
+//
+// See SetRepetitionLevel for the rationale behind the single-field setters.
+//
+// The method panics if columnIndex is negative or greater than MaxColumnIndex.
+func (v *Value) SetColumnIndex(columnIndex int) {
+	if uint(columnIndex) > MaxColumnIndex {
+		panicColumnIndexOutOfRange(columnIndex)
+	}
+	v.columnIndex = ^uint16(columnIndex)
 }
 
 // Clone returns a copy of v which does not share any pointers with it.

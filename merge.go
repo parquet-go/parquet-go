@@ -278,6 +278,12 @@ type mergedRowGroup struct {
 	dropDuplicatedRows bool
 }
 
+// rowGroupSegments opts out of segment splitting: a mergedRowGroup interleaves
+// rows from overlapping row groups via a heap merge, so its row groups cannot be
+// written independently without losing the merged ordering. It overrides the
+// method promoted from the embedded multiRowGroup.
+func (m *mergedRowGroup) rowGroupSegments() []RowGroup { return nil }
+
 func (m *mergedRowGroup) Rows() Rows {
 	// The row group needs to respect a sorting order; the merged row reader
 	// uses a heap to merge rows from the row groups.
@@ -305,6 +311,18 @@ type sortedSegmentRowGroup struct {
 	segments           []RowGroup
 	compare            func(Row, Row) int
 	dropDuplicatedRows bool
+}
+
+// rowGroupSegments implements orderedRowGroupSegments: the segments are already
+// in sorted order and each segment's own Rows() preserves its internal ordering,
+// so writing them in sequence preserves the global order. It returns nil when
+// dropping duplicates, because deduplication spans segment boundaries and would
+// be lost if segments were written independently.
+func (s *sortedSegmentRowGroup) rowGroupSegments() []RowGroup {
+	if s.dropDuplicatedRows {
+		return nil
+	}
+	return s.segments
 }
 
 func (s *sortedSegmentRowGroup) Rows() Rows {

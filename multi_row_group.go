@@ -126,6 +126,11 @@ func (m *multiRowGroup) Schema() *Schema { return m.schema }
 
 func (m *multiRowGroup) Rows() Rows { return NewRowGroupRowReader(m) }
 
+// rowGroupSegments implements orderedRowGroupSegments: a multiRowGroup is the
+// in-order concatenation of its row groups, so each may be written independently
+// while preserving row order.
+func (m *multiRowGroup) rowGroupSegments() []RowGroup { return m.rowGroups }
+
 type multiColumnChunk struct {
 	rowGroup  *multiRowGroup
 	column    int

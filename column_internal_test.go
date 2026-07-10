@@ -1,11 +1,13 @@
 package parquet
 
 import (
+	"math"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
+	"slices"
 )
 
 // TestRootSchemaRepeatedType verifies that a Parquet file with the root schema
@@ -228,6 +230,226 @@ func TestGroupConvertedTypeFallback(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOpenColumnsMalformedNumChildren checks that a schema whose NumChildren do
+// not add up produces an error rather than a panic.
+//
+// The column tree is cut out of slabs sized from the schema, so a group that
+// claims more children than the schema holds would run the slab dry. That has
+// to be reported, not indexed past.
+func TestOpenColumnsMalformedNumChildren(t *testing.T) {
+	tests := []struct {
+		scenario string
+		schema   []format.SchemaElement
+	}{
+		{
+			scenario: "root claims more children than the schema has",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](5)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
+		{
+			scenario: "nested group claims more children than remain",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](1)},
+				{Name: "group", NumChildren: thrift.New[int32](4)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
+		{
+			scenario: "children beyond the end of the schema",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](2)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
+		{
+			// Each group's claim fits the schema elements that follow it, but the
+			// total claimed across both groups exceeds what the schema has to
+			// give. Only a bound against the children slab catches this.
+			scenario: "children fit individually but not in total",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](2)},
+				{Name: "group", NumChildren: thrift.New[int32](1)},
+				{Name: "leaf", Type: thrift.New(format.Int64)},
+			},
+		},
+		{
+			// A corrupt NumChildren must be rejected before it is used to slice
+			// the children slab.
+			scenario: "absurd number of children",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](math.MaxInt32)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.scenario, func(t *testing.T) {
+			metadata := &format.FileMetaData{
+				Version:   1,
+				Schema:    test.schema,
+				RowGroups: []format.RowGroup{},
+			}
+
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("openColumns panicked instead of returning an error: %v", r)
+				}
+			}()
+
+			if _, err := openColumns(&File{}, metadata, nil, nil); err == nil {
+				t.Error("expected an error for a malformed schema")
+			}
+		})
+	}
+}
+
+// TestOpenColumnsSlabsDoNotOverlap checks that the slices handed to each column
+// out of the shared slabs are disjoint: writing through one must not be visible
+// through another.
+func TestOpenColumnsSlabsDoNotOverlap(t *testing.T) {
+	// root -> (group -> (a, b), c)
+	metadata := &format.FileMetaData{
+		Version: 1,
+		Schema: []format.SchemaElement{
+			{Name: "root", NumChildren: thrift.New[int32](2)},
+			{Name: "group", NumChildren: thrift.New[int32](2)},
+			{Name: "a", Type: thrift.New(format.Int64)},
+			{Name: "b", Type: thrift.New(format.Int64)},
+			{Name: "c", Type: thrift.New(format.Int64)},
+		},
+		RowGroups: []format.RowGroup{},
+	}
+
+	root, err := openColumns(&File{}, metadata, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(root.columns) != 2 {
+		t.Fatalf("root has %d children, want 2", len(root.columns))
+	}
+	group, c := root.columns[0], root.columns[1]
+	if group.Name() != "group" || c.Name() != "c" {
+		t.Fatalf("root children are %q, %q; want \"group\", \"c\"", group.Name(), c.Name())
+	}
+	if len(group.columns) != 2 {
+		t.Fatalf("group has %d children, want 2", len(group.columns))
+	}
+	if group.columns[0].Name() != "a" || group.columns[1].Name() != "b" {
+		t.Fatalf("group children are %q, %q; want \"a\", \"b\"", group.columns[0].Name(), group.columns[1].Name())
+	}
+
+	// Appending to a group's children must not reach into the sibling's slice:
+	// allocate clamps the capacity of every slice it hands out.
+	if cap(group.columns) != len(group.columns) {
+		t.Errorf("group children have spare capacity %d; appending would overwrite the next column",
+			cap(group.columns)-len(group.columns))
+	}
+	if cap(root.fields) != len(root.fields) {
+		t.Errorf("root fields have spare capacity %d", cap(root.fields)-len(root.fields))
+	}
+}
+
+// TestAllocate covers the slab cutter directly. It does not handle an exhausted
+// slab: callers reserve room first, and open bounds the only unbounded input.
+func TestAllocate(t *testing.T) {
+	slab := make([]int, 4)
+	for i := range slab {
+		slab[i] = i + 1
+	}
+	backing := slab
+
+	first := allocate(&slab, 2)
+	if len(first) != 2 || cap(first) != 2 {
+		t.Fatalf("first = len %d cap %d, want 2/2", len(first), cap(first))
+	}
+	if &first[0] != &backing[0] {
+		t.Error("first slice did not come out of the slab")
+	}
+
+	second := allocate(&slab, 2)
+	if &second[0] != &backing[2] {
+		t.Error("second slice overlaps the first")
+	}
+	if len(slab) != 0 {
+		t.Errorf("slab has %d elements left, want 0", len(slab))
+	}
+
+	// Zero elements needs no special case: the slicing handles it, on an
+	// exhausted slab and on a nil one.
+	if got := allocate(&slab, 0); len(got) != 0 || cap(got) != 0 {
+		t.Errorf("allocate(exhausted, 0) = len %d cap %d, want 0/0", len(got), cap(got))
+	}
+	var empty []int
+	if got := allocate(&empty, 0); got != nil {
+		t.Errorf("allocate(nil, 0) = %v, want nil", got)
+	}
+
+	// Writing through the returned slices must not disturb their neighbours.
+	first[0], first[1] = -1, -2
+	second[0], second[1] = -3, -4
+	if backing[0] != -1 || backing[1] != -2 || backing[2] != -3 || backing[3] != -4 {
+		t.Errorf("slab = %v, want [-1 -2 -3 -4]", backing)
+	}
+}
+
+// TestOpenColumnsNeverPanics exhaustively builds every schema of up to four
+// elements, where each element is either a leaf or a group claiming zero to four
+// children, and asserts openColumns always either succeeds or returns an error.
+//
+// allocate slices its slab without checking, so this is the property the single
+// NumChildren bound in open has to buy. Removing that bound makes 1772 of these
+// schemas panic; bounding by the schema elements that remain, rather than by the
+// children slab, still leaves 276 of them panicking.
+func TestOpenColumnsNeverPanics(t *testing.T) {
+	const maxElements = 4
+	const maxChildren = 5
+
+	rowGroups := [][]format.RowGroup{
+		{},
+		{{Columns: []format.ColumnChunk{{}, {}}}},
+	}
+
+	var schema []format.SchemaElement
+	var walk func(n int)
+
+	walk = func(n int) {
+		for _, rg := range rowGroups {
+			if n == 0 {
+				continue
+			}
+			metadata := &format.FileMetaData{
+				Schema:    slices.Clone(schema),
+				RowGroups: rg,
+			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("openColumns panicked on a %d element schema: %v", n, r)
+					}
+				}()
+				openColumns(&File{}, metadata, nil, nil) //nolint:errcheck // only panics matter here
+			}()
+		}
+		if n == maxElements {
+			return
+		}
+		schema = append(schema, format.SchemaElement{Name: "leaf", Type: thrift.New(format.Int64)})
+		walk(n + 1)
+		schema = schema[:len(schema)-1]
+
+		for children := range maxChildren {
+			schema = append(schema, format.SchemaElement{Name: "group", NumChildren: thrift.New(int32(children))})
+			walk(n + 1)
+			schema = schema[:len(schema)-1]
+		}
+	}
+	walk(0)
 }
 
 func schemaElementOf(lt format.LogicalTypeValue) *format.SchemaElement {

@@ -379,6 +379,73 @@ func TestOpenFileOptimisticReadWithPrefetchBloomFilters(t *testing.T) {
 	}
 }
 
+// Verifies that lazily loading a bloom filter (SkipBloomFilters(true)) issues
+// read calls within the bloom filter's section in the file. Before the fix,
+// readBloomFilter passed a section-relative offset to newBloomFilter as if it
+// were an absolute file offset, so the underlying reads happened near byte 0 of
+// the file instead of inside the bloom filter section, resulting in always
+// returning false negative matches.
+func TestBloomFilterMatchesWhenLoadedOnOpenOrLazyLoad(t *testing.T) {
+	type Row struct {
+		Name string `parquet:"name"`
+	}
+
+	// Write enough rows to push offset past the 1024-byte bufio buffer used by
+	// readBloomFilter.
+	rows := make([]Row, 600)
+	for range 200 {
+		rows = append(rows,
+			Row{Name: "alice"},
+			Row{Name: "bob"},
+			Row{Name: "charlie"},
+		)
+	}
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[Row](buf,
+		parquet.BloomFilters(parquet.SplitBlockFilter(12, "name")),
+	)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data := buf.Bytes()
+	size := int64(len(data))
+
+	for _, tt := range []struct {
+		skipBloomFilters bool
+	}{
+		{skipBloomFilters: false},
+		{skipBloomFilters: true},
+	} {
+		t.Run(fmt.Sprintf("skipBloomFilters=%t", tt.skipBloomFilters), func(t *testing.T) {
+			pf, err := parquet.OpenFile(bytes.NewReader(data), size,
+				parquet.SkipBloomFilters(tt.skipBloomFilters),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bf := pf.RowGroups()[0].ColumnChunks()[0].BloomFilter()
+			if bf == nil {
+				t.Fatal("expected bloom filter on 'name' column")
+			}
+			if maybeMatch, err := bf.Check(parquet.ValueOf("charlie")); err != nil {
+				t.Fatal(err)
+			} else if !maybeMatch {
+				t.Errorf("bloom filter should have matched 'charlie' but didn't")
+			}
+			if maybeMatch, err := bf.Check(parquet.ValueOf("james")); err != nil {
+				t.Fatal(err)
+			} else if maybeMatch {
+				t.Errorf("bloom filter should not match 'james' but did")
+			}
+		})
+	}
+}
+
 func TestIssue229(t *testing.T) {
 	// https://github.com/grafana/tempo/blob/5cae77c9cf8da51e0db7c5556b19d305130ea9c4/tempodb/encoding/vparquet2/schema.go
 	type Attribute struct {
@@ -1222,6 +1289,30 @@ func TestRepeatedEmptyGroup(t *testing.T) {
 		}
 		// Note: We cannot verify Empties array length because empty groups
 		// have no columns to store repetition levels
+	}
+}
+
+// TestIssue537NegativeRowGroupNumRows verifies that OpenFile rejects a footer
+// whose row-group num_rows is negative, rather than letting the value reach
+// callers who would panic.
+func TestIssue537NegativeRowGroupNumRows(t *testing.T) {
+	f, err := os.Open("testdata/malformed/negative_row_group_num_rows.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	s, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = parquet.OpenFile(f, s.Size())
+	if err == nil {
+		t.Fatal("OpenFile: expected error for negative row-group num_rows, got nil")
+	}
+	if !strings.Contains(err.Error(), "num_rows") {
+		t.Fatalf("OpenFile: expected num_rows validation error, got %v", err)
 	}
 }
 

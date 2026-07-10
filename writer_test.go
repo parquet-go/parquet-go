@@ -4460,3 +4460,49 @@ func TestWriteOptionalListWithGenericWriterReflectionPath(t *testing.T) {
 		t.Errorf("data mismatch:\nwant: %+v\ngot:  %+v", expectedRows, output)
 	}
 }
+
+// TestWriterPlainDictionaryEncoding verifies that a column configured with
+// the deprecated PLAIN_DICTIONARY encoding (typical of schemas derived from
+// files written by legacy parquet-java writers) produces data pages readers
+// understand. plain.DictionaryEncoding lays dictionary indices out as plain
+// int32s, but readers — including this package's own — decode both
+// dictionary encodings with the RLE_DICTIONARY data page layout (bit-width
+// prefix + RLE/bit-packed runs), so pages written with the plain layout
+// silently decoded every row as dictionary entry 0. The writer normalizes
+// PLAIN_DICTIONARY to RLE_DICTIONARY instead.
+func TestWriterPlainDictionaryEncoding(t *testing.T) {
+	type row struct{ Name string }
+	schema := parquet.NewSchema("root", parquet.Group{
+		"Name": parquet.Encoded(parquet.String(), &parquet.PlainDictionary),
+	})
+
+	rows := []row{{"alpha"}, {"beta"}, {"gamma"}}
+	buffer := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[row](buffer, schema)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := parquet.Read[row](bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, rows) {
+		t.Errorf("rows read back = %v, want %v", got, rows)
+	}
+
+	// The chunk metadata must advertise RLE_DICTIONARY so the pages are
+	// readable by other implementations; a reader-side workaround for the
+	// plain int32 layout would pass the round-trip above but break interop.
+	pf, err := parquet.OpenFile(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodings := pf.Metadata().RowGroups[0].Columns[0].MetaData.Encoding
+	if slices.Contains(encodings, format.PlainDictionary) || !slices.Contains(encodings, format.RLEDictionary) {
+		t.Errorf("column chunk encodings = %v, want RLE_DICTIONARY and no PLAIN_DICTIONARY", encodings)
+	}
+}
