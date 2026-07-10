@@ -7,6 +7,7 @@ import (
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
+	"slices"
 )
 
 // TestRootSchemaRepeatedType verifies that a Parquet file with the root schema
@@ -265,8 +266,19 @@ func TestOpenColumnsMalformedNumChildren(t *testing.T) {
 			},
 		},
 		{
-			// A corrupt NumChildren must be rejected before it is used to size a
-			// slice, or the fallback in allocate would try to make one of it.
+			// Each group's claim fits the schema elements that follow it, but the
+			// total claimed across both groups exceeds what the schema has to
+			// give. Only a bound against the children slab catches this.
+			scenario: "children fit individually but not in total",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](2)},
+				{Name: "group", NumChildren: thrift.New[int32](1)},
+				{Name: "leaf", Type: thrift.New(format.Int64)},
+			},
+		},
+		{
+			// A corrupt NumChildren must be rejected before it is used to slice
+			// the children slab.
 			scenario: "absurd number of children",
 			schema: []format.SchemaElement{
 				{Name: "root", NumChildren: thrift.New[int32](math.MaxInt32)},
@@ -343,8 +355,8 @@ func TestOpenColumnsSlabsDoNotOverlap(t *testing.T) {
 	}
 }
 
-// TestAllocate covers the slab cutter directly: exact reservations come out of
-// the slab, and an exhausted slab falls back to a slice of its own.
+// TestAllocate covers the slab cutter directly. It does not handle an exhausted
+// slab: callers reserve room first, and open bounds the only unbounded input.
 func TestAllocate(t *testing.T) {
 	slab := make([]int, 4)
 	for i := range slab {
@@ -368,20 +380,14 @@ func TestAllocate(t *testing.T) {
 		t.Errorf("slab has %d elements left, want 0", len(slab))
 	}
 
-	// Exhausted: allocate must still return a usable slice.
-	third := allocate(&slab, 3)
-	if len(third) != 3 || cap(third) != 3 {
-		t.Fatalf("third = len %d cap %d, want 3/3", len(third), cap(third))
+	// Zero elements needs no special case: the slicing handles it, on an
+	// exhausted slab and on a nil one.
+	if got := allocate(&slab, 0); len(got) != 0 || cap(got) != 0 {
+		t.Errorf("allocate(exhausted, 0) = len %d cap %d, want 0/0", len(got), cap(got))
 	}
-	for i, v := range third {
-		if v != 0 {
-			t.Errorf("third[%d] = %d, want a zero value", i, v)
-		}
-	}
-
-	// Zero elements never allocate.
-	if got := allocate(&slab, 0); got != nil {
-		t.Errorf("allocate(_, 0) = %v, want nil", got)
+	var empty []int
+	if got := allocate(&empty, 0); got != nil {
+		t.Errorf("allocate(nil, 0) = %v, want nil", got)
 	}
 
 	// Writing through the returned slices must not disturb their neighbours.
@@ -390,4 +396,58 @@ func TestAllocate(t *testing.T) {
 	if backing[0] != -1 || backing[1] != -2 || backing[2] != -3 || backing[3] != -4 {
 		t.Errorf("slab = %v, want [-1 -2 -3 -4]", backing)
 	}
+}
+
+// TestOpenColumnsNeverPanics exhaustively builds every schema of up to four
+// elements, where each element is either a leaf or a group claiming zero to four
+// children, and asserts openColumns always either succeeds or returns an error.
+//
+// allocate slices its slab without checking, so this is the property the single
+// NumChildren bound in open has to buy. Removing that bound makes 1772 of these
+// schemas panic; bounding by the schema elements that remain, rather than by the
+// children slab, still leaves 276 of them panicking.
+func TestOpenColumnsNeverPanics(t *testing.T) {
+	const maxElements = 4
+	const maxChildren = 5
+
+	rowGroups := [][]format.RowGroup{
+		{},
+		{{Columns: []format.ColumnChunk{{}, {}}}},
+	}
+
+	var schema []format.SchemaElement
+	var walk func(n int)
+
+	walk = func(n int) {
+		for _, rg := range rowGroups {
+			if n == 0 {
+				continue
+			}
+			metadata := &format.FileMetaData{
+				Schema:    slices.Clone(schema),
+				RowGroups: rg,
+			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("openColumns panicked on a %d element schema: %v", n, r)
+					}
+				}()
+				openColumns(&File{}, metadata, nil, nil) //nolint:errcheck // only panics matter here
+			}()
+		}
+		if n == maxElements {
+			return
+		}
+		schema = append(schema, format.SchemaElement{Name: "leaf", Type: thrift.New(format.Int64)})
+		walk(n + 1)
+		schema = schema[:len(schema)-1]
+
+		for children := range maxChildren {
+			schema = append(schema, format.SchemaElement{Name: "group", NumChildren: thrift.New(int32(children))})
+			walk(n + 1)
+			schema = schema[:len(schema)-1]
+		}
+	}
+	walk(0)
 }

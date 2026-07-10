@@ -330,16 +330,11 @@ func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []f
 // with their capacity clamped, so that appending to the result cannot reach into
 // the rest of the slab.
 //
-// A slab is a reservation, not a guarantee: when it cannot cover n, allocate
-// falls back to a slice of its own. Callers therefore never have to know whether
-// the reservation was exact.
+// The caller must have reserved room for n; a slab shorter than that is a
+// programming error and panics. Every slab is sized from the schema, and the
+// only value the schema does not bound is a group's NumChildren, which open
+// checks against the children slab before allocating from it.
 func allocate[T any](slab *[]T, n int) []T {
-	if n == 0 {
-		return nil
-	}
-	if n > len(*slab) {
-		return make([]T, n)
-	}
 	taken := (*slab)[:n:n]
 	*slab = (*slab)[n:]
 	return taken
@@ -455,12 +450,13 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 			c.typ = &listType{}
 		}
 	}
-	// A group cannot have more children than there are schema elements left to
-	// describe them. Checking here keeps a corrupt NumChildren from reaching the
-	// allocation below, which would otherwise size a slice from it.
-	if remaining := len(metadata.Schema) - cl.schemaIndex; numChildren > remaining {
-		return nil, fmt.Errorf("column %q declares %d children but only %d schema elements remain",
-			c.schema.Name, numChildren, remaining)
+	// Bound NumChildren by what the children slab has left rather than by the
+	// schema elements that remain. Only the slab bounds the total across every
+	// group: a schema where each group's claim fits the elements after it can
+	// still claim more children in total than the schema has to give.
+	if numChildren > len(cl.children) {
+		return nil, fmt.Errorf("column %q declares %d children but only %d schema elements are left to be children",
+			c.schema.Name, numChildren, len(cl.children))
 	}
 
 	// Reserve this group's children before recursing, so that a child's own
