@@ -122,3 +122,45 @@ func (c *ColumnMetaData) Reset() {
 	c.GeospatialStatistics.BBox = BoundingBox{}
 	c.GeospatialStatistics.GeoSpatialTypes = c.GeospatialStatistics.GeoSpatialTypes[:0]
 }
+
+// Reset clears h in place, retaining the capacity of the statistics byte
+// slices for reuse in subsequent thrift decodes.
+//
+// Unlike footers, page headers are decoded from streaming readers (see
+// parquet.FilePages), which copy bytes fields into the destination slice
+// when its capacity allows. The statistics slices are therefore truncated
+// rather than niled — the opposite choice from Statistics.Reset, whose
+// values alias a decode input buffer and are replaced, never reused.
+//
+// The thrift.Null sub-headers must be cleared recursively: the decoder
+// writes only the fields present in its input, and decoding into a Null
+// value does not zero it first.
+func (h *PageHeader) Reset() {
+	h.Type = 0
+	h.UncompressedPageSize = 0
+	h.CompressedPageSize = 0
+	h.CRC = 0
+	h.DataPageHeader.V = DataPageHeader{
+		Statistics: truncatedStatistics(h.DataPageHeader.V.Statistics),
+	}
+	h.DataPageHeader.Valid = false
+	h.IndexPageHeader.V = IndexPageHeader{}
+	h.IndexPageHeader.Valid = false
+	h.DictionaryPageHeader.V = DictionaryPageHeader{}
+	h.DictionaryPageHeader.Valid = false
+	h.DataPageHeaderV2.V = DataPageHeaderV2{
+		Statistics: truncatedStatistics(h.DataPageHeaderV2.V.Statistics),
+	}
+	h.DataPageHeaderV2.Valid = false
+}
+
+// truncatedStatistics clears s, retaining the capacity of its byte slices
+// for reuse by streaming thrift decodes.
+func truncatedStatistics(s Statistics) Statistics {
+	return Statistics{
+		Max:      s.Max[:0],
+		Min:      s.Min[:0],
+		MaxValue: s.MaxValue[:0],
+		MinValue: s.MinValue[:0],
+	}
+}

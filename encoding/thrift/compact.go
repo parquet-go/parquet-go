@@ -92,6 +92,27 @@ func (r *compactReader) ReadBytes() ([]byte, error) {
 	return b, err
 }
 
+// ReadBytesInto reads a length-prefixed byte sequence into dst, reusing its
+// capacity when large enough and allocating a fresh slice otherwise. The
+// decoder uses it to make streaming decodes into reused targets allocation
+// free; see the reuse semantics documented on Unmarshal.
+func (r *compactReader) ReadBytesInto(dst []byte) ([]byte, error) {
+	n, err := r.ReadLength()
+	if err != nil {
+		return nil, err
+	}
+	if n <= cap(dst) {
+		dst = dst[:n]
+	} else {
+		dst = make([]byte, n)
+	}
+	_, err = io.ReadFull(r.Reader(), dst)
+	if err == nil {
+		r.binary.n += n
+	}
+	return dst, err
+}
+
 func (r *compactReader) ReadString() (string, error) {
 	b, err := r.ReadBytes()
 	return unsafecast.String(b), err

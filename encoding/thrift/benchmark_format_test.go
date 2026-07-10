@@ -1,6 +1,7 @@
 package thrift_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -81,6 +82,54 @@ func BenchmarkDecodePageHeader(b *testing.B) {
 	for b.Loop() {
 		var decoded format.PageHeader
 		if err := thrift.Unmarshal(protocol, data, &decoded); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkDecodePageHeaderReused benchmarks the zero-allocation page header
+// decode path used by parquet.FilePages: a streaming reader decoding into a
+// reused header that is Reset between decodes, so that the header struct and
+// the capacity of its statistics byte slices are retained across pages.
+func BenchmarkDecodePageHeaderReused(b *testing.B) {
+	header := format.PageHeader{
+		Type:                 format.DataPage,
+		UncompressedPageSize: 4096,
+		CompressedPageSize:   2048,
+		CRC:                  12345,
+		DataPageHeader: thrift.Null[format.DataPageHeader]{
+			V: format.DataPageHeader{
+				NumValues:               1000,
+				Encoding:                format.Plain,
+				DefinitionLevelEncoding: format.RLE,
+				RepetitionLevelEncoding: format.RLE,
+				Statistics: format.Statistics{
+					NullCount:     10,
+					DistinctCount: 100,
+					MinValue:      []byte{0, 0, 0, 0},
+					MaxValue:      []byte{255, 255, 255, 255},
+				},
+			},
+			Valid: true,
+		},
+	}
+
+	protocol := &thrift.CompactProtocol{}
+	data, err := thrift.Marshal(protocol, header)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	rd := bytes.NewReader(data)
+	decoder := thrift.NewDecoder(protocol.NewReader(rd))
+	decoded := new(format.PageHeader)
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		rd.Reset(data)
+		decoded.Reset()
+		if err := decoder.Decode(decoded); err != nil {
 			b.Fatal(err)
 		}
 	}

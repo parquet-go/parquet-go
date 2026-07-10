@@ -1,6 +1,7 @@
 package thrift_test
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -235,6 +236,65 @@ func TestUnmarshalSkipsUnknownBinaryField(t *testing.T) {
 			mustUnmarshal(t, p.proto, b, v)
 			if v.B != 42 {
 				t.Errorf("B = %d, want 42 (unknown binary field was not skipped correctly)", v.B)
+			}
+		})
+	}
+}
+
+// TestStreamingDecodeReusesBytesCapacity checks that the streaming readers
+// copy bytes fields into the capacity retained by a reused decode target
+// (via ReadBytesInto), instead of allocating a fresh slice per decode, and
+// that doing so never leaks bytes from a previous decode: shorter values
+// truncate the slice, longer values grow it.
+func TestStreamingDecodeReusesBytesCapacity(t *testing.T) {
+	type blob struct {
+		Data []byte `thrift:"1"`
+		Tail int64  `thrift:"2"`
+	}
+
+	marshal := func(t *testing.T, proto thrift.Protocol, v *blob) []byte {
+		b, err := thrift.Marshal(proto, v)
+		if err != nil {
+			t.Fatal("marshal:", err)
+		}
+		return b
+	}
+
+	for _, p := range protocols {
+		t.Run(p.name, func(t *testing.T) {
+			long := marshal(t, p.proto, &blob{Data: bytes.Repeat([]byte{0xAB}, 64), Tail: 1})
+			short := marshal(t, p.proto, &blob{Data: []byte("hi"), Tail: 2})
+			longer := marshal(t, p.proto, &blob{Data: bytes.Repeat([]byte{0xCD}, 128), Tail: 3})
+
+			rd := bytes.NewReader(long)
+			dec := thrift.NewDecoder(p.proto.NewReader(rd))
+
+			v := new(blob)
+			if err := dec.Decode(v); err != nil {
+				t.Fatal("decode long:", err)
+			}
+			if !bytes.Equal(v.Data, bytes.Repeat([]byte{0xAB}, 64)) || v.Tail != 1 {
+				t.Fatalf("first decode corrupted: %+v", v)
+			}
+			backing := &v.Data[0]
+
+			rd.Reset(short)
+			if err := dec.Decode(v); err != nil {
+				t.Fatal("decode short:", err)
+			}
+			if string(v.Data) != "hi" || v.Tail != 2 {
+				t.Errorf("reused decode leaked stale bytes: Data=%q Tail=%d", v.Data, v.Tail)
+			}
+			if cap(v.Data) < 64 || &v.Data[:1][0] != backing {
+				t.Errorf("expected the retained backing array to be reused, cap=%d", cap(v.Data))
+			}
+
+			rd.Reset(longer)
+			if err := dec.Decode(v); err != nil {
+				t.Fatal("decode longer:", err)
+			}
+			if !bytes.Equal(v.Data, bytes.Repeat([]byte{0xCD}, 128)) || v.Tail != 3 {
+				t.Errorf("growing decode corrupted: len=%d Tail=%d", len(v.Data), v.Tail)
 			}
 		})
 	}
