@@ -185,9 +185,10 @@ var marshalTestValues = [...]struct {
 		scenario: "Union",
 		values: []any{
 			Union{},
-			Union{A: true, F: newBool(true)},
-			Union{B: 42, F: newInt(42)},
-			Union{C: "hello world!", F: newString("hello world!")},
+			Union{Value: &UnionBool{V: true}},
+			Union{Value: &UnionInt{V: 42}},
+			Union{Value: &UnionString{V: "hello world!"}},
+			Union{Value: &UnionEmpty{}},
 		},
 	},
 }
@@ -215,12 +216,46 @@ type StructWithEmbeddedStrutPointerWithPointerToPointer struct {
 	*StructWithPointerToPointerToBool
 }
 
-type Union struct {
-	A bool   `thrift:"1"`
-	B int    `thrift:"2"`
-	C string `thrift:"3"`
-	F any    `thrift:",union"`
+// UnionValue is the member interface of Union. The FieldID method that
+// thrift.UnionMember requires is what closes the interface: bare types cannot
+// satisfy it by accident.
+type UnionValue interface {
+	thrift.UnionMember
 }
+
+type Union struct {
+	Value UnionValue
+}
+
+var unionMembers = []thrift.UnionMember{
+	(*UnionBool)(nil),
+	(*UnionInt)(nil),
+	(*UnionString)(nil),
+	(*UnionEmpty)(nil),
+}
+
+func (*Union) UnionMembers() []thrift.UnionMember { return unionMembers }
+
+type UnionBool struct {
+	V bool `thrift:"1"`
+}
+
+type UnionInt struct {
+	V int64 `thrift:"1"`
+}
+
+type UnionString struct {
+	V string `thrift:"1"`
+}
+
+// UnionEmpty is zero-sized, so the codec hands out an interned instance rather
+// than allocating one per decode.
+type UnionEmpty struct{}
+
+func (*UnionBool) FieldID() int16   { return 1 }
+func (*UnionInt) FieldID() int16    { return 2 }
+func (*UnionString) FieldID() int16 { return 3 }
+func (*UnionEmpty) FieldID() int16  { return 4 }
 
 func newBool(b bool) *bool       { return &b }
 func newInt(i int) *int          { return &i }

@@ -805,7 +805,7 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 			dictionaryMaxBytes:        config.DictionaryMaxBytes,
 		}
 
-		if lt := leaf.node.Type().LogicalType(); lt != nil && (lt.Geometry != nil || lt.Geography != nil) {
+		if lt := leaf.node.Type().LogicalType(); logicalTypeIs[*format.GeometryType](lt) || logicalTypeIs[*format.GeographyType](lt) {
 			c.geospatialAccumulator = newGeospatialBBoxAccumulator()
 		}
 
@@ -1082,10 +1082,10 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 		// column is of logical type decimal.
 		logicalType := nodeType.LogicalType()
 		if logicalType != nil {
-			elem.LogicalType.Set(*logicalType)
-			if logicalType.Decimal != nil {
-				elem.Scale.Set(logicalType.Decimal.Scale)
-				elem.Precision.Set(logicalType.Decimal.Precision)
+			elem.LogicalType = *logicalType
+			if decimal, ok := logicalType.Value.(*format.DecimalType); ok {
+				elem.Scale.Set(decimal.Scale)
+				elem.Precision.Set(decimal.Precision)
 			}
 		}
 
@@ -1277,11 +1277,11 @@ func (w *writer) writeFileFooter() error {
 		if w.encryption == nil {
 			return nil
 		}
-		switch {
-		case c.CryptoMetadata.EncryptionWithFooterKey != nil:
+		switch crypto := c.CryptoMetadata.Value.(type) {
+		case *format.EncryptionWithFooterKey:
 			return w.encryption.cfg.FooterKey
-		case c.CryptoMetadata.EncryptionWithColumnKey != nil:
-			return w.encryption.columnKeyFor(columnPathString(c.CryptoMetadata.EncryptionWithColumnKey.PathInSchema))
+		case *format.EncryptionWithColumnKey:
+			return w.encryption.columnKeyFor(columnPathString(crypto.PathInSchema))
 		default:
 			return nil
 		}
@@ -1364,7 +1364,7 @@ func (w *writer) writeFileFooter() error {
 	if w.encryption != nil {
 		enc := w.encryption
 		algo := format.EncryptionAlgorithm{
-			AesGcmV1: &format.AesGcmV1{
+			Value: &format.AesGcmV1{
 				AadFileUnique: enc.fileUnique,
 				AadPrefix:     enc.cfg.AadPrefix,
 			},
@@ -1620,12 +1620,12 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 			_, hasColumnKey := w.encryption.cfg.ColumnKeys[path]
 			if !hasColumnKey {
 				c.columnChunk.CryptoMetadata = format.ColumnCryptoMetaData{
-					EncryptionWithFooterKey: &format.EncryptionWithFooterKey{},
+					Value: &format.EncryptionWithFooterKey{},
 				}
 			} else {
 				c.columnChunk.CryptoMetadata = format.ColumnCryptoMetaData{
-					EncryptionWithColumnKey: &format.EncryptionWithColumnKey{
-						PathInSchema: c.columnPath,
+					Value: &format.EncryptionWithColumnKey{
+						PathInSchema: thrift.Slice[string](c.columnPath),
 					},
 				}
 			}

@@ -3,6 +3,7 @@ package parquet
 import (
 	"math/bits"
 
+	"github.com/parquet-go/parquet-go/format"
 	"github.com/parquet-go/parquet-go/variant"
 )
 
@@ -193,6 +194,17 @@ func findVariantField(fields []variant.Field, name string) (variant.Value, bool)
 	return variant.Value{}, false
 }
 
+// isSignedIntOrNil reports whether lt is absent, or carries a signed INT
+// annotation of the given bit width. A physical int column with no annotation
+// is treated as a signed integer of its natural width.
+func isSignedIntOrNil(lt *format.LogicalType, bitWidth int8) bool {
+	if lt == nil {
+		return true
+	}
+	it, ok := logicalTypeOf[*format.IntType](lt)
+	return ok && it.IsSigned && it.BitWidth == bitWidth
+}
+
 // variantToParquetValue converts a variant value to a parquet value of the
 // given shredded column type when the types match exactly (following
 // parquet-java's strict matching semantics: no numeric widening or
@@ -208,19 +220,19 @@ func variantToParquetValue(v variant.Value, typ Type) (Value, bool) {
 			return BooleanValue(v.BoolValue()), true
 		}
 	case variant.PrimitiveInt8:
-		if lt != nil && lt.Integer != nil && lt.Integer.IsSigned && lt.Integer.BitWidth == 8 {
+		if it, ok := logicalTypeOf[*format.IntType](lt); ok && it.IsSigned && it.BitWidth == 8 {
 			return Int32Value(int32(v.Int())), true
 		}
 	case variant.PrimitiveInt16:
-		if lt != nil && lt.Integer != nil && lt.Integer.IsSigned && lt.Integer.BitWidth == 16 {
+		if it, ok := logicalTypeOf[*format.IntType](lt); ok && it.IsSigned && it.BitWidth == 16 {
 			return Int32Value(int32(v.Int())), true
 		}
 	case variant.PrimitiveInt32:
-		if typ.Kind() == Int32 && (lt == nil || (lt.Integer != nil && lt.Integer.IsSigned && lt.Integer.BitWidth == 32)) {
+		if typ.Kind() == Int32 && isSignedIntOrNil(lt, 32) {
 			return Int32Value(int32(v.Int())), true
 		}
 	case variant.PrimitiveInt64:
-		if typ.Kind() == Int64 && (lt == nil || (lt.Integer != nil && lt.Integer.IsSigned && lt.Integer.BitWidth == 64)) {
+		if typ.Kind() == Int64 && isSignedIntOrNil(lt, 64) {
 			return Int64Value(v.Int()), true
 		}
 	case variant.PrimitiveFloat:
@@ -232,7 +244,7 @@ func variantToParquetValue(v variant.Value, typ Type) (Value, bool) {
 			return DoubleValue(v.FloatValue()), true
 		}
 	case variant.PrimitiveString:
-		if lt != nil && lt.UTF8 != nil {
+		if logicalTypeIs[*format.StringType](lt) {
 			// Viewing the immutable string data in place avoids an
 			// allocation per string. Callers either copy the value into
 			// column buffers or expose it as a read-only parquet.Value
@@ -245,43 +257,43 @@ func variantToParquetValue(v variant.Value, typ Type) (Value, bool) {
 			return ByteArrayValue(v.Bytes()), true
 		}
 	case variant.PrimitiveDate:
-		if lt != nil && lt.Date != nil {
+		if logicalTypeIs[*format.DateType](lt) {
 			return Int32Value(int32(v.Int())), true
 		}
 	case variant.PrimitiveTime:
-		if lt != nil && lt.Time != nil && lt.Time.Unit.Micros != nil {
+		if tt, ok := logicalTypeOf[*format.TimeType](lt); ok && isMicros(tt.Unit) {
 			return Int64Value(v.Int()), true
 		}
 	case variant.PrimitiveTimestamp:
-		if lt != nil && lt.Timestamp != nil && lt.Timestamp.Unit.Micros != nil && lt.Timestamp.IsAdjustedToUTC {
+		if ts, ok := logicalTypeOf[*format.TimestampType](lt); ok && isMicros(ts.Unit) && ts.IsAdjustedToUTC {
 			return Int64Value(v.Int()), true
 		}
 	case variant.PrimitiveTimestampNTZ:
-		if lt != nil && lt.Timestamp != nil && lt.Timestamp.Unit.Micros != nil && !lt.Timestamp.IsAdjustedToUTC {
+		if ts, ok := logicalTypeOf[*format.TimestampType](lt); ok && isMicros(ts.Unit) && !ts.IsAdjustedToUTC {
 			return Int64Value(v.Int()), true
 		}
 	case variant.PrimitiveTimestampNanos:
-		if lt != nil && lt.Timestamp != nil && lt.Timestamp.Unit.Nanos != nil && lt.Timestamp.IsAdjustedToUTC {
+		if ts, ok := logicalTypeOf[*format.TimestampType](lt); ok && isNanos(ts.Unit) && ts.IsAdjustedToUTC {
 			return Int64Value(v.Int()), true
 		}
 	case variant.PrimitiveTimestampNTZNanos:
-		if lt != nil && lt.Timestamp != nil && lt.Timestamp.Unit.Nanos != nil && !lt.Timestamp.IsAdjustedToUTC {
+		if ts, ok := logicalTypeOf[*format.TimestampType](lt); ok && isNanos(ts.Unit) && !ts.IsAdjustedToUTC {
 			return Int64Value(v.Int()), true
 		}
 	case variant.PrimitiveDecimal4:
-		if lt != nil && lt.Decimal != nil && typ.Kind() == Int32 && lt.Decimal.Scale == int32(v.Scale()) &&
-			decimal64FitsPrecision(v.Int(), lt.Decimal.Precision) {
+		if d, ok := logicalTypeOf[*format.DecimalType](lt); ok && typ.Kind() == Int32 && d.Scale == int32(v.Scale()) &&
+			decimal64FitsPrecision(v.Int(), d.Precision) {
 			return Int32Value(int32(v.Int())), true
 		}
 	case variant.PrimitiveDecimal8:
-		if lt != nil && lt.Decimal != nil && typ.Kind() == Int64 && lt.Decimal.Scale == int32(v.Scale()) &&
-			decimal64FitsPrecision(v.Int(), lt.Decimal.Precision) {
+		if d, ok := logicalTypeOf[*format.DecimalType](lt); ok && typ.Kind() == Int64 && d.Scale == int32(v.Scale()) &&
+			decimal64FitsPrecision(v.Int(), d.Precision) {
 			return Int64Value(v.Int()), true
 		}
 	case variant.PrimitiveDecimal16:
-		if lt != nil && lt.Decimal != nil && lt.Decimal.Scale == int32(v.Scale()) &&
+		if dec, ok := logicalTypeOf[*format.DecimalType](lt); ok && dec.Scale == int32(v.Scale()) &&
 			(typ.Kind() == ByteArray || (typ.Kind() == FixedLenByteArray && typ.Length() == 16)) &&
-			decimal128FitsPrecision(v.Decimal16Value(), lt.Decimal.Precision) {
+			decimal128FitsPrecision(v.Decimal16Value(), dec.Precision) {
 			d := v.Decimal16Value()
 			be := littleEndianToBigEndian16(d)
 			if typ.Kind() == ByteArray {
@@ -290,7 +302,7 @@ func variantToParquetValue(v variant.Value, typ Type) (Value, bool) {
 			return FixedLenByteArrayValue(be[:]), true
 		}
 	case variant.PrimitiveUUID:
-		if lt != nil && lt.UUID != nil {
+		if logicalTypeIs[*format.UUIDType](lt) {
 			u := v.UUIDValue()
 			return FixedLenByteArrayValue(u[:]), true
 		}

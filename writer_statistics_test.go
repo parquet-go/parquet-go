@@ -256,7 +256,7 @@ func TestBloomFilterCompression(t *testing.T) {
 	if err := thrift.NewDecoder(compact.NewReader(section)).Decode(&header); err != nil {
 		t.Fatalf("decoding bloom filter header: %v", err)
 	}
-	if header.Compression.GZip == nil {
+	if _, ok := header.Compression.Value.(*format.BloomFilterGzip); !ok {
 		t.Errorf("expected GZip compression in bloom filter header, got %+v", header.Compression)
 	}
 }

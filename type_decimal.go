@@ -49,7 +49,7 @@ type decimalType struct {
 func (t *decimalType) String() string { return t.decimal.String() }
 
 func (t *decimalType) LogicalType() *format.LogicalType {
-	return &format.LogicalType{Decimal: &t.decimal}
+	return &format.LogicalType{Value: &t.decimal}
 }
 
 func (t *decimalType) ConvertedType() *deprecated.ConvertedType {

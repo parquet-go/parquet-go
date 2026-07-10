@@ -21,14 +21,11 @@ func BenchmarkDecodeSchemaElement(b *testing.B) {
 		Scale:          thrift.New[int32](0),
 		Precision:      thrift.New[int32](18),
 		FieldID:        1,
-		LogicalType: thrift.Null[format.LogicalType]{
-			V: format.LogicalType{
-				Integer: &format.IntType{
-					BitWidth: 64,
-					IsSigned: true,
-				},
+		LogicalType: format.LogicalType{
+			Value: &format.IntType{
+				BitWidth: 64,
+				IsSigned: true,
 			},
-			Valid: true,
 		},
 	}
 

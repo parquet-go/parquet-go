@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 	"github.com/parquet-go/parquet-go/variant"
 )
 
@@ -57,8 +58,12 @@ func variantTypedIndexes(c *parquet.VariantCursor) []int32 {
 func variantTypedValue(c *parquet.VariantCursor, d int) (variant.Value, error) {
 	typ := c.LeafType()
 	lt := typ.LogicalType()
-	switch {
-	case lt == nil:
+	var value format.LogicalTypeValue
+	if lt != nil {
+		value = lt.Value
+	}
+	switch value := value.(type) {
+	case nil:
 		switch typ.Kind() {
 		case parquet.Boolean:
 			return variant.Bool(c.Booleans()[d]), nil
@@ -74,11 +79,11 @@ func variantTypedValue(c *parquet.VariantCursor, d int) (variant.Value, error) {
 			slab, offsets := c.ByteArrays()
 			return variant.Binary(slab[offsets[d]:offsets[d+1]]), nil
 		}
-	case lt.UTF8 != nil:
+	case *format.StringType:
 		slab, offsets := c.ByteArrays()
 		return variant.String(string(slab[offsets[d]:offsets[d+1]])), nil
-	case lt.Integer != nil:
-		switch lt.Integer.BitWidth {
+	case *format.IntType:
+		switch value.BitWidth {
 		case 8:
 			return variant.Int8(int8(c.Int32s()[d])), nil
 		case 16:
@@ -88,26 +93,26 @@ func variantTypedValue(c *parquet.VariantCursor, d int) (variant.Value, error) {
 		case 64:
 			return variant.Int64(c.Int64s()[d]), nil
 		}
-	case lt.Date != nil:
+	case *format.DateType:
 		return variant.Date(c.Int32s()[d]), nil
-	case lt.Time != nil:
+	case *format.TimeType:
 		return variant.Time(c.Int64s()[d]), nil
-	case lt.Timestamp != nil:
+	case *format.TimestampType:
 		v := c.Int64s()[d]
-		switch {
-		case lt.Timestamp.Unit.Micros != nil:
-			if lt.Timestamp.IsAdjustedToUTC {
+		switch value.Unit.Value.(type) {
+		case *format.MicroSeconds:
+			if value.IsAdjustedToUTC {
 				return variant.Timestamp(v), nil
 			}
 			return variant.TimestampNTZ(v), nil
-		case lt.Timestamp.Unit.Nanos != nil:
-			if lt.Timestamp.IsAdjustedToUTC {
+		case *format.NanoSeconds:
+			if value.IsAdjustedToUTC {
 				return variant.TimestampNanos(v), nil
 			}
 			return variant.TimestampNTZNanos(v), nil
 		}
-	case lt.Decimal != nil:
-		scale := byte(lt.Decimal.Scale)
+	case *format.DecimalType:
+		scale := byte(value.Scale)
 		switch typ.Kind() {
 		case parquet.Int32:
 			return variant.Decimal4(c.Int32s()[d], scale), nil
@@ -120,7 +125,7 @@ func variantTypedValue(c *parquet.VariantCursor, d int) (variant.Value, error) {
 			slab, offsets := c.ByteArrays()
 			return variant.Decimal16(bigEndianDecimal16(slab[offsets[d]:offsets[d+1]]), scale), nil
 		}
-	case lt.UUID != nil:
+	case *format.UUIDType:
 		slab, size := c.FixedLenByteArrays()
 		return variant.UUID(uuid.UUID(slab[d*size : (d+1)*size])), nil
 	}

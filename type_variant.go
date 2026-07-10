@@ -117,7 +117,7 @@ func variantTypedValueNode(node Node, fieldPath ...string) (typed Node, err erro
 		return nil, errors.New("repeated types are not allowed unless they are part of a 3-level LIST logical type")
 	}
 	if lt := node.Type().LogicalType(); lt != nil {
-		switch lt := getLogicalType(lt).(type) {
+		switch lt := lt.Value.(type) {
 		case *format.ListType:
 			// We must first extract the inner list.element field of the 3-level LIST type.
 			children := node.Fields()
@@ -153,6 +153,8 @@ func variantTypedValueNode(node Node, fieldPath ...string) (typed Node, err erro
 		case *format.TimestampType:
 		case *format.StringType:
 		case *format.UUIDType:
+		case nil:
+			// No logical type annotation.
 		default:
 			// No other logical types are allowed.
 			return nil, fmt.Errorf("%s logical types are not allowed", lt)
@@ -182,27 +184,13 @@ func variantTypedValueNode(node Node, fieldPath ...string) (typed Node, err erro
 	return group, nil
 }
 
-func getLogicalType(lt *format.LogicalType) any {
-	// We use reflection so we can always catch a logical type annotation. If a
-	// new one is added, we don't have to remember to update the switch above (unless
-	// a new one is added that is also supported as a variant value).
-	refVal := reflect.Indirect(reflect.ValueOf(lt))
-	for i := range refVal.NumField() {
-		field := refVal.Field(i)
-		if field.CanInterface() && !field.IsZero() {
-			return field.Interface()
-		}
-	}
-	return nil
-}
-
 type variantNode struct{ Node }
 
 func (variantNode) Type() Type { return &variantType{} }
 
 type variantType format.VariantType
 
-var variantLogicalType = format.LogicalType{Variant: new(format.VariantType)}
+var variantLogicalType = format.LogicalType{Value: new(format.VariantType)}
 
 func (t *variantType) String() string { return (*format.VariantType)(t).String() }
 

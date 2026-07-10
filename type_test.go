@@ -822,8 +822,8 @@ func TestShreddedVariant(t *testing.T) {
 		parquet.Geometry(format.GeometryDefaultCRS),
 		parquet.Geography(format.GeographyDefaultCRS, format.Spherical),
 		// Also test some logical types that we don't yet support or provide API to construct
-		parquet.Leaf(logicalType{Type: parquet.ByteArrayType, lt: format.LogicalType{Unknown: &format.NullType{}}}),
-		parquet.Leaf(logicalType{Type: parquet.ByteArrayType, lt: format.LogicalType{Float16: &format.Float16Type{}}}),
+		parquet.Leaf(logicalType{Type: parquet.ByteArrayType, lt: format.LogicalType{Value: &format.NullType{}}}),
+		parquet.Leaf(logicalType{Type: parquet.ByteArrayType, lt: format.LogicalType{Value: &format.Float16Type{}}}),
 	}
 	for _, testCase := range errTestCases {
 		// Direct

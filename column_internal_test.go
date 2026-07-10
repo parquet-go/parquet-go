@@ -451,3 +451,102 @@ func TestOpenColumnsNeverPanics(t *testing.T) {
 	}
 	walk(0)
 }
+
+func schemaElementOf(lt format.LogicalTypeValue) *format.SchemaElement {
+	return &format.SchemaElement{Name: "x", LogicalType: format.LogicalType{Value: lt}}
+}
+
+// TestSchemaElementTypeIsCanonical asserts that a logical type recovered from a
+// decoded schema element is the same instance this package hands out for the
+// equivalent constructed node. Types are compared by pointer on purpose: the
+// canonicalIntType, canonicalTimeType and canonicalTimestampType lookups exist
+// so that the identity switches in LogicalType find them.
+func TestSchemaElementTypeIsCanonical(t *testing.T) {
+	tests := []struct {
+		scenario    string
+		decoded     format.LogicalTypeValue
+		constructed Type
+	}{
+		{
+			scenario:    "INT(64,true)",
+			decoded:     &format.IntType{BitWidth: 64, IsSigned: true},
+			constructed: Int(64).Type(),
+		},
+		{
+			scenario:    "INT(8,false)",
+			decoded:     &format.IntType{BitWidth: 8, IsSigned: false},
+			constructed: Uint(8).Type(),
+		},
+		{
+			scenario:    "TIME(micros,utc)",
+			decoded:     &format.TimeType{IsAdjustedToUTC: true, Unit: format.TimeUnit{Value: new(format.MicroSeconds)}},
+			constructed: Time(Microsecond).Type(),
+		},
+		{
+			scenario:    "TIME(millis,local)",
+			decoded:     &format.TimeType{IsAdjustedToUTC: false, Unit: format.TimeUnit{Value: new(format.MilliSeconds)}},
+			constructed: TimeAdjusted(Millisecond, false).Type(),
+		},
+		{
+			scenario:    "TIMESTAMP(nanos,utc)",
+			decoded:     &format.TimestampType{IsAdjustedToUTC: true, Unit: format.TimeUnit{Value: new(format.NanoSeconds)}},
+			constructed: Timestamp(Nanosecond).Type(),
+		},
+		{
+			scenario:    "TIMESTAMP(millis,local)",
+			decoded:     &format.TimestampType{IsAdjustedToUTC: false, Unit: format.TimeUnit{Value: new(format.MilliSeconds)}},
+			constructed: TimestampAdjusted(Millisecond, false).Type(),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.scenario, func(t *testing.T) {
+			decoded := schemaElementTypeOf(schemaElementOf(test.decoded))
+
+			if decoded != test.constructed {
+				t.Fatalf("decoded type %p is not the canonical instance %p", decoded, test.constructed)
+			}
+			// Being canonical is what lets LogicalType return a shared value
+			// instead of building one on every call.
+			if n := testing.AllocsPerRun(100, func() { _ = decoded.LogicalType() }); n != 0 {
+				t.Errorf("LogicalType allocates %v times per call on a decoded type", n)
+			}
+		})
+	}
+}
+
+// TestSchemaElementTypePreservesUncanonicalValues checks that a value outside
+// the set the spec allows is carried through unchanged rather than silently
+// rewritten to the nearest canonical instance.
+func TestSchemaElementTypePreservesUncanonicalValues(t *testing.T) {
+	tests := []struct {
+		scenario string
+		decoded  format.LogicalTypeValue
+		want     string
+	}{
+		{
+			scenario: "bit width the spec does not allow",
+			decoded:  &format.IntType{BitWidth: 7, IsSigned: true},
+			want:     "INT(7,true)",
+		},
+		{
+			scenario: "time with no unit",
+			decoded:  &format.TimeType{IsAdjustedToUTC: true},
+			want:     "TIME(isAdjustedToUTC=true,unit=)",
+		},
+		{
+			scenario: "timestamp with no unit",
+			decoded:  &format.TimestampType{IsAdjustedToUTC: false},
+			want:     "TIMESTAMP(isAdjustedToUTC=false,unit=)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.scenario, func(t *testing.T) {
+			decoded := schemaElementTypeOf(schemaElementOf(test.decoded))
+			if got := decoded.LogicalType().String(); got != test.want {
+				t.Errorf("logical type = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

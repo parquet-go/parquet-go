@@ -108,6 +108,10 @@ func DecodeFuncOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		return f
 	}
 
+	if isUnion(t) {
+		return decodeFuncUnionOf(t, seen)
+	}
+
 	// Check if type implements Value interface first
 	if t.Implements(valueType) {
 		zv := reflect.Zero(t).Interface().(Value)
@@ -383,9 +387,7 @@ func decodeFuncMapAsSetOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 
 type structDecoder struct {
 	fields   []structDecoderField
-	union    []int
 	minID    int16
-	zero     reflect.Value
 	required []uint64
 }
 
@@ -393,8 +395,6 @@ func (dec *structDecoder) decode(r Reader, v reflect.Value, flags Flags) error {
 	flags = flags.Only(decodeFlags)
 	coalesceBool := flags.Have(coalesceBoolFields)
 
-	lastField := reflect.Value{}
-	union := len(dec.union) > 0
 	seen := make([]uint64, 1)
 	if len(dec.required) > len(seen) {
 		seen = make([]uint64, len(dec.required))
@@ -457,12 +457,6 @@ decodeFields:
 			}
 		}
 
-		if union {
-			v.Set(dec.zero)
-		}
-
-		lastField = x
-
 		if coalesceBool && (f.Type == TRUE || f.Type == FALSE) {
 			for x.Kind() == reflect.Ptr {
 				if x.IsNil() {
@@ -503,10 +497,6 @@ decodeFields:
 		}
 	}
 
-	if union && lastField.IsValid() {
-		v.FieldByIndex(dec.union).Set(lastField.Addr())
-	}
-
 	return nil
 }
 
@@ -519,25 +509,19 @@ type structDecoderField struct {
 }
 
 func decodeFuncStructOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
-	dec := &structDecoder{
-		zero: reflect.Zero(t),
-	}
+	dec := &structDecoder{}
 	decode := dec.decode
 	seen[t] = decode
 
 	fields := make([]structDecoderField, 0, t.NumField())
 	forEachStructField(t, nil, func(f structField) {
-		if f.flags.Have(Union) {
-			dec.union = f.index
-		} else {
-			fields = append(fields, structDecoderField{
-				index:  f.index,
-				id:     f.id,
-				flags:  f.flags,
-				typ:    TypeOf(f.typ),
-				decode: decodeFuncStructFieldOf(f, seen),
-			})
-		}
+		fields = append(fields, structDecoderField{
+			index:  f.index,
+			id:     f.id,
+			flags:  f.flags,
+			typ:    TypeOf(f.typ),
+			decode: decodeFuncStructFieldOf(f, seen),
+		})
 	})
 
 	minID := int16(0)

@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
+	"github.com/parquet-go/parquet-go/format"
 	"github.com/parquet-go/parquet-go/variant"
 )
 
@@ -416,38 +417,39 @@ func (t *shreddedTypedValue) readObject(r *variantColumnReader, m variant.Metada
 // (e.g. unsigned integers and non-UUID fixed-length byte arrays are not).
 func validateShreddedPrimitiveType(typ Type) error {
 	lt := typ.LogicalType()
-	switch {
-	case lt == nil:
+	switch value := logicalTypeValueOf(lt).(type) {
+	case nil:
 		switch typ.Kind() {
 		case Boolean, Int32, Int64, Float, Double, ByteArray:
 			return nil
 		}
-	case lt.UTF8 != nil:
+	case *format.StringType:
 		return nil
-	case lt.Integer != nil:
-		if !lt.Integer.IsSigned {
+	case *format.IntType:
+		if !value.IsSigned {
 			return fmt.Errorf("variant: unsupported shredded type %s (unsigned integer)", typ)
 		}
-		switch lt.Integer.BitWidth {
+		switch value.BitWidth {
 		case 8, 16, 32, 64:
 			return nil
 		}
-	case lt.Date != nil:
+	case *format.DateType:
 		return nil
-	case lt.Time != nil:
-		if lt.Time.Unit.Micros != nil {
+	case *format.TimeType:
+		if _, ok := value.Unit.Value.(*format.MicroSeconds); ok {
 			return nil
 		}
-	case lt.Timestamp != nil:
-		if lt.Timestamp.Unit.Micros != nil || lt.Timestamp.Unit.Nanos != nil {
+	case *format.TimestampType:
+		switch value.Unit.Value.(type) {
+		case *format.MicroSeconds, *format.NanoSeconds:
 			return nil
 		}
-	case lt.Decimal != nil:
+	case *format.DecimalType:
 		switch typ.Kind() {
 		case Int32, Int64, FixedLenByteArray, ByteArray:
 			return nil
 		}
-	case lt.UUID != nil:
+	case *format.UUIDType:
 		return nil
 	}
 	return fmt.Errorf("variant: unsupported shredded type %s", typ)
@@ -458,8 +460,8 @@ func validateShreddedPrimitiveType(typ Type) error {
 // types table of the Variant Shredding specification.
 func parquetToVariantValue(v Value, typ Type) (variant.Value, error) {
 	lt := typ.LogicalType()
-	switch {
-	case lt == nil:
+	switch value := logicalTypeValueOf(lt).(type) {
+	case nil:
 		switch typ.Kind() {
 		case Boolean:
 			return variant.Bool(v.Boolean()), nil
@@ -475,11 +477,11 @@ func parquetToVariantValue(v Value, typ Type) (variant.Value, error) {
 			return variant.Binary(copyBytes(v.ByteArray())), nil
 		}
 
-	case lt.UTF8 != nil:
+	case *format.StringType:
 		return variant.String(string(v.ByteArray())), nil
 
-	case lt.Integer != nil:
-		switch lt.Integer.BitWidth {
+	case *format.IntType:
+		switch value.BitWidth {
 		case 8:
 			return variant.Int8(int8(v.Int32())), nil
 		case 16:
@@ -490,30 +492,30 @@ func parquetToVariantValue(v Value, typ Type) (variant.Value, error) {
 			return variant.Int64(v.Int64()), nil
 		}
 
-	case lt.Date != nil:
+	case *format.DateType:
 		return variant.Date(v.Int32()), nil
 
-	case lt.Time != nil:
-		if lt.Time.Unit.Micros != nil {
+	case *format.TimeType:
+		if _, ok := value.Unit.Value.(*format.MicroSeconds); ok {
 			return variant.Time(v.Int64()), nil
 		}
 
-	case lt.Timestamp != nil:
-		switch {
-		case lt.Timestamp.Unit.Micros != nil:
-			if lt.Timestamp.IsAdjustedToUTC {
+	case *format.TimestampType:
+		switch value.Unit.Value.(type) {
+		case *format.MicroSeconds:
+			if value.IsAdjustedToUTC {
 				return variant.Timestamp(v.Int64()), nil
 			}
 			return variant.TimestampNTZ(v.Int64()), nil
-		case lt.Timestamp.Unit.Nanos != nil:
-			if lt.Timestamp.IsAdjustedToUTC {
+		case *format.NanoSeconds:
+			if value.IsAdjustedToUTC {
 				return variant.TimestampNanos(v.Int64()), nil
 			}
 			return variant.TimestampNTZNanos(v.Int64()), nil
 		}
 
-	case lt.Decimal != nil:
-		scale := uint8(lt.Decimal.Scale)
+	case *format.DecimalType:
+		scale := uint8(value.Scale)
 		switch typ.Kind() {
 		case Int32:
 			return variant.Decimal4(v.Int32(), scale), nil
@@ -527,7 +529,7 @@ func parquetToVariantValue(v Value, typ Type) (variant.Value, error) {
 			return variant.Decimal16(bigEndianToLittleEndian16(b), scale), nil
 		}
 
-	case lt.UUID != nil:
+	case *format.UUIDType:
 		b := v.ByteArray()
 		if len(b) != 16 {
 			return variant.Null(), fmt.Errorf("variant: UUID value must be 16 bytes, got %d", len(b))
