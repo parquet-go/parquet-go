@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -17,13 +18,51 @@ import (
 // *Experimental*: Support for the VARIANT type is still being developed and subject to
 // change.
 //
-// Initial support does not attempt to process the variant data. So reading and writing
-// data of this type behaves as if it were just a group with two byte array fields, as
-// if the logical type annotation were absent. This may change in the future.
+// Go values written to a variant column with the "variant" struct tag are encoded
+// with the variant binary encoding (see the variant subpackage); structs with
+// Metadata and Value []byte fields pass the raw encoding through unchanged. When
+// reading, files that store the column shredded are reconstructed automatically.
 //
 // [VARIANT logical type]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#variant
 func Variant() Node {
-	return variantNode{Group{"metadata": Required(Leaf(ByteArrayType)), "value": Required(Leaf(ByteArrayType))}}
+	return variantNode{variantOrderedGroup(Group{
+		"metadata": Required(Leaf(ByteArrayType)),
+		"value":    Required(Leaf(ByteArrayType)),
+	})}
+}
+
+// variantOrderedGroup wraps a group so its fields are returned in the
+// canonical variant order (metadata, value, typed_value; value before
+// typed_value in nested groups) instead of alphabetically. Other engines
+// (e.g. DuckDB) require the metadata and value columns to come first in
+// the variant group.
+func variantOrderedGroup(g Group) Node {
+	return orderedGroup{Group: g, order: []string{"metadata", "value", "typed_value"}}
+}
+
+// orderedGroup is a Group whose fields are returned in an explicit order.
+// Fields not listed in order come last, in alphabetical order.
+type orderedGroup struct {
+	Group
+	order []string
+}
+
+func (g orderedGroup) Fields() []Field {
+	fields := g.Group.Fields()
+	rank := func(name string) int {
+		for i, n := range g.order {
+			if n == name {
+				return i
+			}
+		}
+		return len(g.order)
+	}
+	sortedFields := make([]Field, len(fields))
+	copy(sortedFields, fields)
+	slices.SortStableFunc(sortedFields, func(a, b Field) int {
+		return rank(a.Name()) - rank(b.Name())
+	})
+	return sortedFields
 }
 
 // ShreddedVariant constructs a node of shredded [VARIANT logical type]. It is a group
@@ -48,9 +87,10 @@ func Variant() Node {
 // *Experimental*: Support for the VARIANT type is still being developed and subject to
 // change.
 //
-// Initial support does not attempt to process the variant data. So reading and writing
-// data of this type behaves as if it were just a group with the three described fields,
-// as if the logical type annotation were absent. This may change in the future.
+// Go values written to a shredded variant column with the "variant" struct tag are
+// shredded per the [Parquet documentation]: values matching the shredded type are
+// stored in the typed_value columns, and everything else is encoded into the
+// appropriate value column. Reading reconstructs the variant from all columns.
 //
 // [VARIANT logical type]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#variant
 // [variant value types]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#shredded-value-types
@@ -60,11 +100,11 @@ func ShreddedVariant(shreddedType Node) (Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	return variantNode{Group{
+	return variantNode{variantOrderedGroup(Group{
 		"metadata":    Required(Leaf(ByteArrayType)),
 		"value":       Optional(Leaf(ByteArrayType)),
 		"typed_value": Optional(typedNode),
-	}}, nil
+	})}, nil
 }
 
 func variantTypedValueNode(node Node, fieldPath ...string) (typed Node, err error) {
@@ -92,10 +132,10 @@ func variantTypedValueNode(node Node, fieldPath ...string) (typed Node, err erro
 			if err != nil {
 				return nil, err
 			}
-			list := List(Required(Group{
+			list := List(Required(variantOrderedGroup(Group{
 				"value":       Optional(Leaf(ByteArrayType)),
 				"typed_value": Optional(elementNode),
-			}))
+			})))
 			if node.ID() != 0 {
 				return FieldID(list, node.ID()), nil
 			}
@@ -131,10 +171,10 @@ func variantTypedValueNode(node Node, fieldPath ...string) (typed Node, err erro
 		if err != nil {
 			return nil, err
 		}
-		group[child.Name()] = Required(Group{
+		group[child.Name()] = Required(variantOrderedGroup(Group{
 			"value":       Optional(Leaf(ByteArrayType)),
 			"typed_value": Optional(childNode),
-		})
+		}))
 	}
 	if node.ID() != 0 {
 		return FieldID(group, node.ID()), nil
@@ -156,7 +196,7 @@ func getLogicalType(lt *format.LogicalType) any {
 	return nil
 }
 
-type variantNode struct{ Group }
+type variantNode struct{ Node }
 
 func (variantNode) Type() Type { return &variantType{} }
 
