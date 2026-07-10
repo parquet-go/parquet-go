@@ -1,7 +1,6 @@
 package thrift
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"maps"
@@ -701,19 +700,18 @@ func skipBinary(r Reader) error {
 	if n == 0 {
 		return nil
 	}
-	// The bytes-backed readers implement Discard; their Reader() method
-	// returns a throwaway view that does not advance the read offset, so
-	// discarding through it would silently desynchronize the stream.
-	switch x := r.(type) {
-	case interface{ Discard(int) (int, error) }:
-		_, err = x.Discard(int(n))
-	default:
-		switch x := r.Reader().(type) {
-		case *bufio.Reader:
-			_, err = x.Discard(int(n))
-		default:
-			_, err = io.CopyN(io.Discard, x, int64(n))
-		}
+	// The bytes-backed readers implement Discard themselves; their Reader()
+	// method returns a throwaway view that does not advance the read offset,
+	// so discarding through it would silently desynchronize the stream.
+	// Streaming readers discard through the underlying io.Reader when it
+	// supports it (*bufio.Reader does).
+	type discarder interface{ Discard(int) (int, error) }
+	if d, ok := r.(discarder); ok {
+		_, err = d.Discard(int(n))
+	} else if d, ok := r.Reader().(discarder); ok {
+		_, err = d.Discard(int(n))
+	} else {
+		_, err = io.CopyN(io.Discard, r.Reader(), int64(n))
 	}
 	return dontExpectEOF(err)
 }
