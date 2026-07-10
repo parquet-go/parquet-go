@@ -203,6 +203,57 @@ func testProtocolReadWriteValues(t *testing.T, p thrift.Protocol) {
 	}
 }
 
+// TestReadBytesAppend pins the append contract of Reader.ReadBytesAppend for
+// both the streaming and bytes-backed readers: b[:len(b)] is never
+// overwritten, the value lands in b's spare capacity when it fits, and a
+// zero-length value appended to a nil slice yields a non-nil empty slice
+// (matching ReadBytes).
+func TestReadBytesAppend(t *testing.T) {
+	for _, p := range protocols {
+		t.Run(p.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			w := p.proto.NewWriter(buf)
+			for _, v := range [][]byte{[]byte("hello"), {}} {
+				if err := w.WriteBytes(v); err != nil {
+					t.Fatal("encoding:", err)
+				}
+			}
+			data := buf.Bytes()
+
+			readers := []struct {
+				name   string
+				reader thrift.Reader
+			}{
+				{"stream", p.proto.NewReader(bytes.NewReader(data))},
+				{"bytes", p.proto.NewReaderFromBytes(data)},
+			}
+			for _, r := range readers {
+				t.Run(r.name, func(t *testing.T) {
+					prefix := append(make([]byte, 0, 32), "keep:"...)
+					b, err := r.reader.ReadBytesAppend(prefix)
+					if err != nil {
+						t.Fatal("decoding:", err)
+					}
+					if string(b) != "keep:hello" {
+						t.Errorf("got %q, want %q", b, "keep:hello")
+					}
+					if &b[0] != &prefix[0] {
+						t.Error("value did not land in the spare capacity of b")
+					}
+
+					e, err := r.reader.ReadBytesAppend(nil)
+					if err != nil {
+						t.Fatal("decoding:", err)
+					}
+					if e == nil || len(e) != 0 {
+						t.Errorf("zero-length value appended to nil = %#v, want non-nil empty slice", e)
+					}
+				})
+			}
+		})
+	}
+}
+
 // TestBoolDecoding tests that the boolean decoder treats both 0 and 2 as false.
 func TestBoolDecoding(t *testing.T) {
 	for _, test := range protocols {

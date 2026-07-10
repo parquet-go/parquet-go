@@ -82,6 +82,12 @@ func (d *debugReader) ReadBytes() ([]byte, error) {
 	return v, err
 }
 
+func (d *debugReader) ReadBytesAppend(b []byte) ([]byte, error) {
+	v, err := d.r.ReadBytesAppend(b)
+	d.log("ReadBytesAppend", v, err)
+	return v, err
+}
+
 func (d *debugReader) ReadString() (string, error) {
 	v, err := d.r.ReadString()
 	d.log("ReadString", v, err)

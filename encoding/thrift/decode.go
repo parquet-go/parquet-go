@@ -226,27 +226,14 @@ func decodeString(r Reader, v reflect.Value, _ Flags) error {
 	return nil
 }
 
-// bytesIntoReader is implemented by the streaming readers, which must copy
-// bytes values out of the underlying io.Reader and can therefore copy them
-// into a caller-provided slice, reusing its capacity. The bytes-backed
-// readers deliberately do not implement it: they return aliases into their
-// input buffer, which is cheaper than copying.
-type bytesIntoReader interface {
-	ReadBytesInto(dst []byte) ([]byte, error)
-}
-
 func decodeBytes(r Reader, v reflect.Value, _ Flags) error {
-	var b []byte
-	var err error
-	// Reusing the destination slice's capacity is only observable under the
+	// Appending to the destination sliced to zero length reuses its retained
+	// capacity on streaming readers, and preserves the zero-copy aliasing of
+	// bytes-backed readers. The reuse is only observable under the
 	// decode-target reuse contract documented on Unmarshal: fresh targets
-	// hold a nil slice, for which ReadBytesInto allocates exactly like
+	// hold a nil slice, for which ReadBytesAppend allocates exactly like
 	// ReadBytes.
-	if br, ok := r.(bytesIntoReader); ok {
-		b, err = br.ReadBytesInto(v.Bytes()[:0])
-	} else {
-		b, err = r.ReadBytes()
-	}
+	b, err := r.ReadBytesAppend(v.Bytes()[:0])
 	if err != nil {
 		return err
 	}

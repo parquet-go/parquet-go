@@ -243,7 +243,7 @@ func TestUnmarshalSkipsUnknownBinaryField(t *testing.T) {
 
 // TestStreamingDecodeReusesBytesCapacity checks that the streaming readers
 // copy bytes fields into the capacity retained by a reused decode target
-// (via ReadBytesInto), instead of allocating a fresh slice per decode, and
+// (via ReadBytesAppend), instead of allocating a fresh slice per decode, and
 // that doing so never leaks bytes from a previous decode: shorter values
 // truncate the slice, longer values grow it.
 func TestStreamingDecodeReusesBytesCapacity(t *testing.T) {

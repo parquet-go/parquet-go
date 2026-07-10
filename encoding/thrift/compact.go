@@ -92,30 +92,28 @@ func (r *compactReader) ReadBytes() ([]byte, error) {
 	return b, err
 }
 
-// ReadBytesInto reads a length-prefixed byte sequence into dst, reusing its
-// capacity when large enough and allocating a fresh slice otherwise. The
-// decoder uses it to make streaming decodes into reused targets allocation
-// free; see the reuse semantics documented on Unmarshal.
-//
-// A nil dst behaves exactly like ReadBytes, including returning a non-nil
-// empty slice for a zero-length value. If an error occurs, the contents of
-// dst's backing array are unspecified: a partial read may have overwritten
-// them.
-func (r *compactReader) ReadBytesInto(dst []byte) ([]byte, error) {
+// ReadBytesAppend reads a length-prefixed byte sequence and appends it to b,
+// writing into b's spare capacity when the value fits and never overwriting
+// b[:len(b)]. The decoder uses it to make streaming decodes into reused
+// targets allocation free; see the reuse semantics documented on Unmarshal.
+func (r *compactReader) ReadBytesAppend(b []byte) ([]byte, error) {
 	n, err := r.ReadLength()
 	if err != nil {
-		return nil, err
+		return b, err
 	}
-	if dst != nil && n <= cap(dst) {
-		dst = dst[:n]
+	off := len(b)
+	if b == nil || cap(b)-off < n {
+		grown := make([]byte, off+n)
+		copy(grown, b)
+		b = grown
 	} else {
-		dst = make([]byte, n)
+		b = b[:off+n]
 	}
-	_, err = io.ReadFull(r.Reader(), dst)
-	if err == nil {
-		r.binary.n += n
+	if _, err = io.ReadFull(r.Reader(), b[off:]); err != nil {
+		return b[:off], err
 	}
-	return dst, err
+	r.binary.n += n
+	return b, nil
 }
 
 func (r *compactReader) ReadString() (string, error) {
@@ -468,6 +466,21 @@ func (r *compactBytesReader) ReadBytes() ([]byte, error) {
 	b := r.data[r.offset : r.offset+n]
 	r.offset += n
 	return b, nil
+}
+
+// ReadBytesAppend reads a length-prefixed byte sequence and appends it to b.
+// When len(b) == 0 the value is returned as an alias into the reader's input
+// buffer instead of being copied, preserving the zero-copy behavior of
+// ReadBytes.
+func (r *compactBytesReader) ReadBytesAppend(b []byte) ([]byte, error) {
+	v, err := r.ReadBytes()
+	if err != nil {
+		return b, err
+	}
+	if len(b) == 0 {
+		return v, nil
+	}
+	return append(b, v...), nil
 }
 
 func (r *compactBytesReader) ReadString() (string, error) {

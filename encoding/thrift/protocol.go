@@ -46,6 +46,20 @@ type Reader interface {
 	ReadInt64() (int64, error)
 	ReadFloat64() (float64, error)
 	ReadBytes() ([]byte, error)
+	// ReadBytesAppend reads a length-prefixed byte sequence and returns the
+	// result of appending it to b, following the contract of the append
+	// built-in: b[:len(b)] is never overwritten, and the value is written
+	// into b's spare capacity when it fits or into a newly allocated slice
+	// otherwise. The decoder relies on this to reuse the capacity retained
+	// by []byte fields of reused decode targets.
+	//
+	// A nil b behaves like ReadBytes, including returning a non-nil empty
+	// slice for a zero-length value. Readers decoding from an in-memory
+	// buffer may return an alias into that buffer instead of copying when
+	// len(b) == 0. If an error occurs, b's spare capacity may have been
+	// partially overwritten, but the returned slice preserves b's original
+	// length and contents.
+	ReadBytesAppend(b []byte) ([]byte, error)
 	ReadString() (string, error)
 	ReadLength() (int, error)
 	ReadMessage() (Message, error)
