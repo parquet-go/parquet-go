@@ -1292,6 +1292,61 @@ func TestRepeatedEmptyGroup(t *testing.T) {
 	}
 }
 
+// TestFilePagesLazyDictionaryWithReusedHeader exercises the interleave that
+// excludes readDictionary from FilePages' page header reuse: seeking past the
+// dictionary page leaves the dictionary unloaded, so the first data page read
+// triggers a lazy dictionary load (through decodeDataPageV1/V2) while the
+// header decoded by ReadPage is still in use. If readDictionary shared the
+// reused header, the in-flight data page header would be corrupted.
+func TestFilePagesLazyDictionaryWithReusedHeader(t *testing.T) {
+	type Row struct {
+		Value string `parquet:",dict"`
+	}
+
+	const numRows = 500
+	rows := make([]Row, numRows)
+	for i := range rows {
+		rows[i] = Row{Value: fmt.Sprintf("value-%03d", i%50)}
+	}
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[Row](buf, parquet.PageBufferSize(256))
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := f.RowGroups()[0].ColumnChunks()[0]
+
+	vals := make([]parquet.Value, 1)
+	for _, seekTo := range []int64{numRows - 1, numRows / 2, 3} {
+		pages := chunk.Pages()
+		if err := pages.SeekToRow(seekTo); err != nil {
+			t.Fatalf("SeekToRow(%d): %v", seekTo, err)
+		}
+		page, err := pages.ReadPage()
+		if err != nil {
+			t.Fatalf("ReadPage after SeekToRow(%d): %v", seekTo, err)
+		}
+		if _, err := page.Values().ReadValues(vals); err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("ReadValues after SeekToRow(%d): %v", seekTo, err)
+		}
+		if got, want := vals[0].String(), rows[seekTo].Value; got != want {
+			t.Errorf("SeekToRow(%d): first value = %q, want %q", seekTo, got, want)
+		}
+		parquet.Release(page)
+		if err := pages.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // TestIssue537NegativeRowGroupNumRows verifies that OpenFile rejects a footer
 // whose row-group num_rows is negative, rather than letting the value reach
 // callers who would panic.

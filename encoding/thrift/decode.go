@@ -22,6 +22,13 @@ import (
 // absent from the input are set to nil. When reusing objects, the application
 // remains responsible for resetting non-pointer state of v (scalars, strings,
 // and slice lengths) before calling Unmarshal again.
+//
+// Reuse extends to the backing arrays of []byte fields when decoding from a
+// streaming reader (a Decoder over Protocol.NewReader): bytes values are
+// copied into the capacity retained by the field, overwriting its previous
+// contents in place. Applications that hand decoded byte slices to other
+// consumers must not reuse the decode target while those slices are still
+// referenced.
 func Unmarshal(p Protocol, b []byte, v any) error {
 	pr := p.NewReaderFromBytes(slices.Clone(b))
 

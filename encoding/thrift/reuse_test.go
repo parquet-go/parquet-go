@@ -300,6 +300,46 @@ func TestStreamingDecodeReusesBytesCapacity(t *testing.T) {
 	}
 }
 
+// TestStreamingDecodeEmptyBytesNonNil pins the historical semantics of
+// streaming decodes for present-but-empty bytes values: the decoded slice is
+// empty but non-nil, whether the target is fresh or reused. Optional-field
+// encoding distinguishes nil from empty on re-encode, so this must not
+// change silently.
+func TestStreamingDecodeEmptyBytesNonNil(t *testing.T) {
+	type blob struct {
+		Data []byte `thrift:"1,required"`
+	}
+
+	for _, p := range protocols {
+		t.Run(p.name, func(t *testing.T) {
+			b, err := thrift.Marshal(p.proto, &blob{Data: []byte{}})
+			if err != nil {
+				t.Fatal("marshal:", err)
+			}
+
+			rd := bytes.NewReader(b)
+			dec := thrift.NewDecoder(p.proto.NewReader(rd))
+
+			fresh := new(blob)
+			if err := dec.Decode(fresh); err != nil {
+				t.Fatal("decode into fresh target:", err)
+			}
+			if fresh.Data == nil {
+				t.Error("empty bytes value decoded to nil in a fresh target, want non-nil empty slice")
+			}
+
+			reused := &blob{Data: []byte("previous")}
+			rd.Reset(b)
+			if err := dec.Decode(reused); err != nil {
+				t.Fatal("decode into reused target:", err)
+			}
+			if reused.Data == nil || len(reused.Data) != 0 {
+				t.Errorf("empty bytes value decoded to %#v in a reused target, want non-nil empty slice", reused.Data)
+			}
+		})
+	}
+}
+
 // sparseIDs has a field ID span (1..100) wider than one 64-bit bitmap word
 // while declaring only two fields, exercising the sparse sizing of the seen
 // and required bitmaps in the struct decoder.

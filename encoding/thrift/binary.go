@@ -109,12 +109,17 @@ func (r *binaryReader) ReadBytes() ([]byte, error) {
 // capacity when large enough and allocating a fresh slice otherwise. The
 // decoder uses it to make streaming decodes into reused targets allocation
 // free; see the reuse semantics documented on Unmarshal.
+//
+// A nil dst behaves exactly like ReadBytes, including returning a non-nil
+// empty slice for a zero-length value. If an error occurs, the contents of
+// dst's backing array are unspecified: a partial read may have overwritten
+// them.
 func (r *binaryReader) ReadBytesInto(dst []byte) ([]byte, error) {
 	n, err := r.ReadLength()
 	if err != nil {
 		return nil, err
 	}
-	if n <= cap(dst) {
+	if dst != nil && n <= cap(dst) {
 		dst = dst[:n]
 	} else {
 		dst = make([]byte, n)

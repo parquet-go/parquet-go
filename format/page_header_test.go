@@ -84,6 +84,22 @@ var pageHeaderFixtures = []format.PageHeader{
 			Valid: true,
 		},
 	},
+	// A v2 header directly after a v2 header carrying IsCompressed and
+	// statistics: the absent optional fields must not inherit the previous
+	// decode's values.
+	{
+		Type:                 format.DataPageV2,
+		UncompressedPageSize: 64,
+		CompressedPageSize:   64,
+		DataPageHeaderV2: thrift.Null[format.DataPageHeaderV2]{
+			V: format.DataPageHeaderV2{
+				NumValues: 4,
+				NumRows:   4,
+				Encoding:  format.Plain,
+			},
+			Valid: true,
+		},
+	},
 }
 
 // TestPageHeaderDecodeReuse checks that decoding a sequence of page headers
