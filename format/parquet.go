@@ -3,6 +3,7 @@ package format
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
@@ -230,10 +231,21 @@ func (*MilliSeconds) FieldID() int16 { return 1 }
 func (*MicroSeconds) FieldID() int16 { return 2 }
 func (*NanoSeconds) FieldID() int16  { return 3 }
 
-// TimeUnitValue is the set of time units a TimeUnit union may hold.
+// Duration returns the precision of the time unit. It is the length of one
+// step, so a value stored in this unit is that many of these durations since
+// the epoch or midnight.
+func (*MilliSeconds) Duration() time.Duration { return time.Millisecond }
+func (*MicroSeconds) Duration() time.Duration { return time.Microsecond }
+func (*NanoSeconds) Duration() time.Duration  { return time.Nanosecond }
+
+// TimeUnitValue is the set of time units a TimeUnit union may hold. Duration is
+// intrinsic to a unit (like its name) and closes the interface: types that are
+// not time units, though they satisfy thrift.UnionMember and String, do not
+// have a Duration and so cannot be mistaken for a member here.
 type TimeUnitValue interface {
 	thrift.UnionMember
 	String() string
+	Duration() time.Duration
 }
 
 var timeUnitMembers = []thrift.UnionMember{

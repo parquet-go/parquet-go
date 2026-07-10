@@ -275,10 +275,10 @@ func makeValue(k Kind, lt *format.LogicalType, v reflect.Value) Value {
 
 		t := v.Interface().(time.Time)
 		var val int64
-		switch {
-		case isMillis(unit):
+		switch unit.Value.(type) {
+		case *format.MilliSeconds:
 			val = t.UnixMilli()
-		case isMicros(unit):
+		case *format.MicroSeconds:
 			val = t.UnixMicro()
 		default:
 			val = t.UnixNano()

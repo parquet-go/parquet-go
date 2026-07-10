@@ -31,10 +31,10 @@ func writeProtoTimestamp(col ColumnBuffer, levels columnLevels, ts *timestamppb.
 	}
 	var t = ts.AsTime()
 	var value int64
-	switch {
-	case isMillis(unit):
+	switch unit.Value.(type) {
+	case *format.MilliSeconds:
 		value = t.UnixMilli()
-	case isMicros(unit):
+	case *format.MicroSeconds:
 		value = t.UnixMicro()
 	default:
 		value = t.UnixNano()

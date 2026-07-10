@@ -67,21 +67,21 @@ func TimeAdjusted(unit TimeUnit, isAdjustedToUTC bool) Node {
 	// Use pre-allocated instances for common cases
 	timeUnit := unit.TimeUnit()
 	if isAdjustedToUTC {
-		switch {
-		case isMillis(timeUnit):
+		switch timeUnit.Value.(type) {
+		case *format.MilliSeconds:
 			return Leaf(&timeMilliAdjustedToUTC)
-		case isMicros(timeUnit):
+		case *format.MicroSeconds:
 			return Leaf(&timeMicroAdjustedToUTC)
-		case isNanos(timeUnit):
+		case *format.NanoSeconds:
 			return Leaf(&timeNanoAdjustedToUTC)
 		}
 	} else {
-		switch {
-		case isMillis(timeUnit):
+		switch timeUnit.Value.(type) {
+		case *format.MilliSeconds:
 			return Leaf(&timeMilliNotAdjustedToUTC)
-		case isMicros(timeUnit):
+		case *format.MicroSeconds:
 			return Leaf(&timeMicroNotAdjustedToUTC)
-		case isNanos(timeUnit):
+		case *format.NanoSeconds:
 			return Leaf(&timeNanoNotAdjustedToUTC)
 		}
 	}
@@ -273,17 +273,7 @@ func (t *timeType) AssignValue(dst reflect.Value, src Value) error {
 	// Handle time.Duration specially to convert from the stored time unit to nanoseconds
 	if dst.Type() == reflect.TypeFor[time.Duration]() {
 		v := src.int64()
-		var nanos int64
-		switch {
-		case isMillis(t.Unit):
-			nanos = v * int64(time.Millisecond)
-		case isMicros(t.Unit):
-			nanos = v * int64(time.Microsecond)
-		case isNanos(t.Unit):
-			nanos = v
-		default:
-			nanos = v
-		}
+		nanos := v * int64(timeUnitDuration(t.Unit))
 		dst.SetInt(nanos)
 		return nil
 	}

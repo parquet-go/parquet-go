@@ -1663,15 +1663,13 @@ func timestamp(v Value, u format.TimeUnit, tz *time.Location) time.Time {
 	return unixEpoch.In(tz).Add(time.Duration(v.int64()) * timeUnitDuration(u))
 }
 
+// timeUnitDuration returns the precision of unit, defaulting to nanoseconds
+// when the unit is unset (an unknown unit written by a newer implementation).
 func timeUnitDuration(unit format.TimeUnit) time.Duration {
-	switch {
-	case isMillis(unit):
-		return time.Millisecond
-	case isMicros(unit):
-		return time.Microsecond
-	default:
+	if unit.Value == nil {
 		return time.Nanosecond
 	}
+	return unit.Value.Duration()
 }
 
 func invalidConversion(value Value, from, to string) error {

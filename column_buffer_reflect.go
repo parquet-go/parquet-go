@@ -224,10 +224,10 @@ func writeTime(col ColumnBuffer, levels columnLevels, t time.Time, node Node) {
 			// TIMESTAMP logical type -> write to int64
 			unit := lt.Unit
 			var val int64
-			switch {
-			case isMillis(unit):
+			switch unit.Value.(type) {
+			case *format.MilliSeconds:
 				val = t.UnixMilli()
-			case isMicros(unit):
+			case *format.MicroSeconds:
 				val = t.UnixMicro()
 			default:
 				val = t.UnixNano()
@@ -244,10 +244,10 @@ func writeTime(col ColumnBuffer, levels columnLevels, t time.Time, node Node) {
 			// TIME logical type -> write time of day
 			unit := lt.Unit
 			nanos := timeOfDayNanos(t)
-			switch {
-			case isMillis(unit):
+			switch unit.Value.(type) {
+			case *format.MilliSeconds:
 				col.writeInt32(levels, int32(nanos/1e6))
-			case isMicros(unit):
+			case *format.MicroSeconds:
 				col.writeInt64(levels, nanos/1e3)
 			default:
 				col.writeInt64(levels, nanos)
@@ -285,10 +285,10 @@ func writeDuration(col ColumnBuffer, levels columnLevels, d time.Duration, node 
 	if lt, ok := logicalTypeOf[*format.TimeType](typ.LogicalType()); ok {
 		// TIME logical type
 		unit := lt.Unit
-		switch {
-		case isMillis(unit):
+		switch unit.Value.(type) {
+		case *format.MilliSeconds:
 			col.writeInt32(levels, int32(d.Milliseconds()))
-		case isMicros(unit):
+		case *format.MicroSeconds:
 			col.writeInt64(levels, d.Microseconds())
 		default:
 			col.writeInt64(levels, d.Nanoseconds())

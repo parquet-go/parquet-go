@@ -954,12 +954,12 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagRep
 		defer wideIntBufPool.Put(buf)
 
 		times := rows.TimeArray()
-		switch {
-		case isMillis(unit):
+		switch unit.Value.(type) {
+		case *format.MilliSeconds:
 			for i := range n {
 				buf.values[i] = times.Index(i).UnixMilli()
 			}
-		case isMicros(unit):
+		case *format.MicroSeconds:
 			for i := range n {
 				buf.values[i] = times.Index(i).UnixMicro()
 			}

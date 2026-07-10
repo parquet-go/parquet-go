@@ -25,21 +25,21 @@ func TimestampAdjusted(unit TimeUnit, isAdjustedToUTC bool) Node {
 	// Use pre-allocated instances for common cases
 	timeUnit := unit.TimeUnit()
 	if isAdjustedToUTC {
-		switch {
-		case isMillis(timeUnit):
+		switch timeUnit.Value.(type) {
+		case *format.MilliSeconds:
 			return Leaf(&timestampMilliAdjustedToUTC)
-		case isMicros(timeUnit):
+		case *format.MicroSeconds:
 			return Leaf(&timestampMicroAdjustedToUTC)
-		case isNanos(timeUnit):
+		case *format.NanoSeconds:
 			return Leaf(&timestampNanoAdjustedToUTC)
 		}
 	} else {
-		switch {
-		case isMillis(timeUnit):
+		switch timeUnit.Value.(type) {
+		case *format.MilliSeconds:
 			return Leaf(&timestampMilliNotAdjustedToUTC)
-		case isMicros(timeUnit):
+		case *format.MicroSeconds:
 			return Leaf(&timestampMicroNotAdjustedToUTC)
-		case isNanos(timeUnit):
+		case *format.NanoSeconds:
 			return Leaf(&timestampNanoNotAdjustedToUTC)
 		}
 	}
@@ -173,10 +173,10 @@ func (t *timestampType) LogicalType() *format.LogicalType {
 }
 
 func (t *timestampType) ConvertedType() *deprecated.ConvertedType {
-	switch {
-	case isMillis(t.Unit):
+	switch t.Unit.Value.(type) {
+	case *format.MilliSeconds:
 		return &convertedTypes[deprecated.TimestampMillis]
-	case isMicros(t.Unit):
+	case *format.MicroSeconds:
 		return &convertedTypes[deprecated.TimestampMicros]
 	default:
 		return nil
@@ -230,13 +230,7 @@ func (t *timestampType) AssignValue(dst reflect.Value, src Value) error {
 			unit = ts.Unit
 		}
 
-		nanos := src.int64()
-		switch {
-		case isMillis(unit):
-			nanos = nanos * 1e6
-		case isMicros(unit):
-			nanos = nanos * 1e3
-		}
+		nanos := src.int64() * int64(timeUnitDuration(unit))
 
 		val := time.Unix(0, nanos).UTC()
 		dst.Set(reflect.ValueOf(val))
@@ -255,13 +249,7 @@ func (t *timestampType) AssignValue(dst reflect.Value, src Value) error {
 			unit = ts.Unit
 		}
 
-		nanos := src.int64()
-		switch {
-		case isMillis(unit):
-			nanos = nanos * 1e6
-		case isMicros(unit):
-			nanos = nanos * 1e3
-		}
+		nanos := src.int64() * int64(timeUnitDuration(unit))
 
 		val := time.Unix(0, nanos).UTC()
 		ptr := &val
