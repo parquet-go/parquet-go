@@ -1080,7 +1080,15 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					if t == reflect.TypeFor[json.RawMessage]() {
 						throwInvalidTag(t, name, option)
 					}
-					element := makeNodeOf(append(path, "list", "element"), t.Elem(), t.Name(), tags.getListElementNodeTags(), tagReplacements)
+					elementTags := tags.getListElementNodeTags()
+					if elem := t.Elem(); elem.Kind() == reflect.Slice && elem.Elem().Kind() != reflect.Uint8 && !strings.Contains(elementTags.parquet, "list") {
+						// A nested slice under a list is itself a list: recurse the
+						// list option implicitly so any nesting depth is expressible
+						// with a single `list` tag on the field. An explicit
+						// parquet-element tag still takes precedence.
+						elementTags.parquet += ",list"
+					}
+					element := makeNodeOf(append(path, "list", "element"), t.Elem(), t.Name(), elementTags, tagReplacements)
 					setNode(element)
 					setList()
 				default:

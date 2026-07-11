@@ -352,6 +352,38 @@ func TestSchemaOf(t *testing.T) {
 	}
 }`,
 		},
+		// Test that nested slices under a `list` tag become LIST at every
+		// level implicitly, with no explicit parquet-element tag needed.
+		{
+			value: new(struct {
+				Matrix [][]int32   `parquet:"matrix,list"`
+				Cube   [][][]int64 `parquet:"cube,list"`
+			}),
+			print: `message {
+	required group matrix (LIST) {
+		repeated group list {
+			required group element (LIST) {
+				repeated group list {
+					required int32 element (INT(32,true));
+				}
+			}
+		}
+	}
+	required group cube (LIST) {
+		repeated group list {
+			required group element (LIST) {
+				repeated group list {
+					required group element (LIST) {
+						repeated group list {
+							required int64 element (INT(64,true));
+						}
+					}
+				}
+			}
+		}
+	}
+}`,
+		},
 		{
 			value: new(struct {
 				A [16]byte `parquet:",uuid"`
@@ -537,6 +569,53 @@ func TestSchemaOf(t *testing.T) {
 				t.Errorf("\nexpected:\n\n%s\n\nfound:\n\n%s\n", test.print, s)
 			}
 		})
+	}
+}
+
+// Nested slices tagged `list` round-trip exactly at every depth, including
+// the empty-inner shapes that distinguish LIST from bare repetition.
+func TestNestedSliceListRoundTrip(t *testing.T) {
+	type Row struct {
+		Matrix [][]int32   `parquet:"matrix,list"`
+		Cube   [][][]int64 `parquet:"cube,list"`
+	}
+	rows := []Row{
+		{
+			Matrix: [][]int32{{1, 2}, {}, {3}},
+			Cube:   [][][]int64{{{1}, {2, 3}}, {{4, 5, 6}}},
+		},
+		{
+			Matrix: [][]int32{},
+			Cube:   [][][]int64{{}},
+		},
+		{
+			Matrix: [][]int32{{}},
+			Cube:   [][][]int64{{{}}},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[Row](buf)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	r := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+	got := make([]Row, len(rows))
+	n, err := r.Read(got)
+	if err != nil && err != io.EOF {
+		t.Fatalf("read: %v", err)
+	}
+	if n != len(rows) {
+		t.Fatalf("read %d rows, want %d", n, len(rows))
+	}
+	for i := range rows {
+		if !reflect.DeepEqual(rows[i], got[i]) {
+			t.Errorf("row %d mismatch:\nwant %+v\ngot  %+v", i, rows[i], got[i])
+		}
 	}
 }
 
