@@ -27,7 +27,7 @@ func makeCopyTestRows(n int) []copyTestRow {
 	return rows
 }
 
-func writeCopyTestFile(t *testing.T, rows []copyTestRow, opts ...WriterOption) *File {
+func writeCopyTestFile(t testing.TB, rows []copyTestRow, opts ...WriterOption) *File {
 	t.Helper()
 	var buf bytes.Buffer
 	w := NewGenericWriter[copyTestRow](&buf, opts...)
@@ -572,7 +572,7 @@ func BenchmarkWriteRowGroupReencodeWide(b *testing.B) {
 // buildIDFile writes a single-row-group file whose rows are sorted by id. The
 // caller must pass ids in ascending order. Other fields are derived from id so
 // that the fully-sorted sequence of rows is uniquely determined by the id set.
-func buildIDFile(t *testing.T, ids []int64) *File {
+func buildIDFile(t testing.TB, ids []int64) *File {
 	t.Helper()
 	rows := make([]copyTestRow, len(ids))
 	for i, id := range ids {
@@ -944,4 +944,78 @@ func TestWriteRowGroupMergePacksWithBloomFilters(t *testing.T) {
 			t.Fatalf("row %d has id %d, want %d", i, r.ID, i)
 		}
 	}
+}
+
+// BenchmarkWriteRowGroupMergePackPaths compares the row-oriented packed merge
+// path against the optimized column-oriented packed merge path for the same
+// scenario as TestWriteRowGroupMergePacksWithBloomFilters:
+//
+//   - many small sorted, non-overlapping file-backed row groups
+//   - destination packs them into larger row groups
+//   - destination rebuilds a bloom filter for "id"
+//
+// "rowpath" disables both write fast paths, so WriteRowGroup(merged) falls back
+// to reading merged.Rows() and writing rows. "columnpack" leaves the fast paths
+// enabled, so ordered segments are packed column-by-column.
+func BenchmarkWriteRowGroupMergePackPaths(b *testing.B) {
+	const (
+		numFiles = 20
+		perFile  = 1_000
+		maxRows  = 5_000
+	)
+
+	files := make([]*File, numFiles)
+	for i := range files {
+		files[i] = buildIDFile(b, idSeq(int64(i*perFile), int64(i*perFile+perFile-1)))
+	}
+
+	rowGroups := make([]RowGroup, numFiles)
+	for i, f := range files {
+		rowGroups[i] = f.RowGroups()[0]
+	}
+
+	merged, err := MergeRowGroups(
+		rowGroups,
+		SortingRowGroupConfig(SortingColumns(Ascending("id"))),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	writerOptions := []WriterOption{
+		SortingWriterConfig(SortingColumns(Ascending("id"))),
+		MaxRowsPerRowGroup(maxRows),
+		BloomFilters(SplitBlockFilter(10, "id")),
+	}
+
+	run := func(b *testing.B, fastPaths bool) {
+		defer func(copyDisabled, reencodeDisabled bool) {
+			disableWriteCopy = copyDisabled
+			disableWriteReencode = reencodeDisabled
+		}(disableWriteCopy, disableWriteReencode)
+
+		disableWriteCopy = !fastPaths
+		disableWriteReencode = !fastPaths
+
+		b.ReportAllocs()
+		b.SetBytes(int64(numFiles * perFile))
+		b.ResetTimer()
+
+		for b.Loop() {
+			w := NewGenericWriter[copyTestRow](io.Discard, writerOptions...)
+			if _, err := w.WriteRowGroup(merged); err != nil {
+				b.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	b.Run("rowpath", func(b *testing.B) {
+		run(b, false)
+	})
+	b.Run("columnpack", func(b *testing.B) {
+		run(b, true)
+	})
 }
