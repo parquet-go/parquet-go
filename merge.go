@@ -535,8 +535,9 @@ type mergedRowReader2 struct {
 	compare     func(Row, Row) int
 	readers     [2]*bufferedRowReader
 	buffers     [2]bufferedRowReader
+	prev        int   // <0 if r0 won the previous game, >0 if r1 won, 0 otherwise
+	streak      int32 // consecutive games won by the same reader
 	initialized bool
-	noGallop    bool // disables run galloping, used to test against per-row merging
 }
 
 func (m *mergedRowReader2) initialize() error {
@@ -609,19 +610,17 @@ func (m *mergedRowReader2) ReadRows(rows []Row) (n int, err error) {
 	default:
 		var hasNext0 bool
 		var hasNext1 bool
-		var prev int     // <0 if r0 won the previous game, >0 if r1 won, 0 otherwise
-		var streak int32 // consecutive games won by the same reader
 
 		for n < len(rows) {
 			switch cmp := m.compare(r0.head(), r1.head()); {
 			case cmp < 0:
-				if prev < 0 {
-					streak++
+				if m.prev < 0 {
+					m.streak++
 				} else {
-					streak = 0
+					m.streak = 0
 				}
-				prev = -1
-				if streak >= runDetectionStreak && !m.noGallop {
+				m.prev = -1
+				if m.streak >= runDetectionStreak {
 					// r0 has been winning: gallop through its buffered rows
 					// for the run that sorts strictly before r1's head (ties
 					// are emitted pairwise by the case below) and emit it in
@@ -636,13 +635,13 @@ func (m *mergedRowReader2) ReadRows(rows []Row) (n int, err error) {
 					hasNext1 = true
 				}
 			case cmp > 0:
-				if prev > 0 {
-					streak++
+				if m.prev > 0 {
+					m.streak++
 				} else {
-					streak = 0
+					m.streak = 0
 				}
-				prev = 1
-				if streak >= runDetectionStreak && !m.noGallop {
+				m.prev = 1
+				if m.streak >= runDetectionStreak {
 					n, hasNext1 = m.emitRun(rows, n, r1, r0.head())
 					hasNext0 = true
 				} else {
@@ -660,8 +659,8 @@ func (m *mergedRowReader2) ReadRows(rows []Row) (n int, err error) {
 					n++
 					hasNext1 = r1.next()
 				}
-				prev = 0
-				streak = 0
+				m.prev = 0
+				m.streak = 0
 			}
 			if !hasNext0 || !hasNext1 {
 				break

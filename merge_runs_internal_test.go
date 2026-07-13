@@ -206,18 +206,16 @@ func TestMergedRowReader2RunDetection(t *testing.T) {
 				inputs[r] = rows
 			}
 
-			newMerge := func(noGallop bool) RowReader {
+			newMerge := func() *mergedRowReader2 {
 				readers := make([]RowReader, 2)
 				for i := range readers {
 					readers[i] = &sliceRowReader{rows: inputs[i]}
 				}
-				m := mergeRowReaders(readers, compare).(*mergedRowReader2)
-				m.noGallop = noGallop
-				return m
+				return mergeRowReaders(readers, compare).(*mergedRowReader2)
 			}
 
-			refOut := drainMerged(t, newMerge(true))
-			got := drainMerged(t, newMerge(false))
+			refOut := drainReference2(t, newMerge())
+			got := drainMerged(t, newMerge())
 
 			if len(got) != len(refOut) {
 				t.Fatalf("row count %d, want %d", len(got), len(refOut))
@@ -229,6 +227,30 @@ func TestMergedRowReader2RunDetection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// drainReference2 drains m with run galloping suppressed (streak reset before
+// every batch), reproducing pure per-row two-way merging.
+func drainReference2(t *testing.T, m *mergedRowReader2) []Row {
+	t.Helper()
+	var out []Row
+	buf := make([]Row, 7)
+	for {
+		m.streak = -1 << 30 // never reaches runDetectionStreak within a batch
+		n, err := m.ReadRows(buf)
+		for _, row := range buf[:n] {
+			out = append(out, slices.Clone(row))
+		}
+		if err == io.EOF {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			t.Fatal("no progress")
+		}
 	}
 }
 
@@ -339,8 +361,10 @@ func benchmarkMergedRowReader2(b *testing.B, mode string, gallop bool) {
 			readers[i] = &sliceRowReader{rows: inputs[i]}
 		}
 		m := mergeRowReaders(readers, compare).(*mergedRowReader2)
-		m.noGallop = !gallop
 		for {
+			if !gallop {
+				m.streak = -1 << 30
+			}
 			_, err := m.ReadRows(buf)
 			if err == io.EOF {
 				break
