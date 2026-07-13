@@ -294,6 +294,10 @@ type columnLoader struct {
 	chunks      []*format.ColumnChunk
 	columnIndex []*format.ColumnIndex
 	offsetIndex []*format.OffsetIndex
+	// paths backs every column's path. A column's path is its parent's path
+	// plus its own name, so the segments across the whole tree sum to a size
+	// the schema determines up front.
+	paths []string
 }
 
 func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex) {
@@ -301,10 +305,31 @@ func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []f
 	if numColumns == 0 {
 		return
 	}
+	// Walk the schema in its depth-first order to count leaves and to sum the
+	// path lengths: a node at depth d has a path of d+1 names, and remaining
+	// tracks how many children are still open at each ancestor level, so its
+	// length is the current depth.
 	numLeaves := 0
+	pathSegments := 0
+	// remaining tracks the open-children counts per ancestor level; its cap
+	// keeps the common shallow schema on the stack, a deeper one grows to heap.
+	remaining := make([]int32, 0, 16)
 	for i := range metadata.Schema {
+		pathSegments += len(remaining) + 1
 		if isLeafSchemaElement(&metadata.Schema[i]) {
 			numLeaves++
+		}
+		if n := metadata.Schema[i].NumChildren; n.Valid && n.V > 0 {
+			remaining = append(remaining, n.V)
+		} else {
+			// A leaf closes itself and any ancestors whose last child it was.
+			for len(remaining) > 0 {
+				remaining[len(remaining)-1]--
+				if remaining[len(remaining)-1] > 0 {
+					break
+				}
+				remaining = remaining[:len(remaining)-1]
+			}
 		}
 	}
 	numRowGroups := len(metadata.RowGroups)
@@ -314,6 +339,7 @@ func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []f
 	// once in that group's fields.
 	cl.children = make([]*Column, numColumns-1)
 	cl.fields = make([]Field, numColumns-1)
+	cl.paths = make([]string, pathSegments)
 
 	if n := numLeaves * numRowGroups; n > 0 {
 		cl.chunks = make([]*format.ColumnChunk, n)
@@ -348,7 +374,13 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 	c := &cl.columns[cl.schemaIndex]
 	c.file = file
 	c.schema = &metadata.Schema[cl.schemaIndex]
-	c.path = columnPath(path).append(c.schema.Name)
+
+	// A column's path is its parent's path plus its own name, cut from the
+	// shared slab rather than concatenated into a fresh slice per column.
+	p := allocate(&cl.paths, len(path)+1)
+	copy(p, path)
+	p[len(path)] = c.schema.Name
+	c.path = columnPath(p)
 
 	cl.schemaIndex++
 	numChildren := 0
