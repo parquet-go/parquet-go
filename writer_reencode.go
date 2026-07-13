@@ -31,16 +31,18 @@ var reencodePathCounter atomic.Int64
 // baseline.
 var disableWriteReencode bool
 
-// fileBackedRowGroup reports whether every column of rowGroup is a file-backed
-// chunk and the row count fits the configured row group size. File-backed
-// columns guarantee that reading column-wise preserves row order (this excludes
-// overlapping heap merges, whose order depends on cross-column row
-// interleaving); the size check ensures column-wise writing does not produce a
+// columnOrientedRowGroup reports whether every column of rowGroup can be read
+// column-wise while preserving row order, and the row count fits the configured
+// row group size. This holds for file-backed chunks (a single row group of a
+// parquet file) and for in-memory column buffers (parquet.Buffer /
+// GenericBuffer, whose columns are reordered together when sorted); it excludes
+// overlapping heap merges, whose row order depends on cross-column
+// interleaving. The size check ensures column-wise writing does not produce a
 // row group larger than the row path would. Row groups whose Rows() adds
 // semantics on top of the chunks (deduplication, value conversion) are rejected
 // by chunkTransparentRowGroup — reading their chunks directly would bypass
 // those semantics.
-func (w *Writer) fileBackedRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool) {
+func (w *Writer) columnOrientedRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool) {
 	if !chunkTransparentRowGroup(rowGroup) {
 		return nil, false
 	}
@@ -50,7 +52,10 @@ func (w *Writer) fileBackedRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool) {
 		return nil, false
 	}
 	for _, col := range columns {
-		if _, ok := col.(*FileColumnChunk); !ok {
+		switch col.(type) {
+		case *FileColumnChunk:
+		case ColumnBuffer:
+		default:
 			return nil, false
 		}
 	}
@@ -66,7 +71,7 @@ func (w *Writer) reencodableRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool) {
 	if disableWriteReencode {
 		return nil, false
 	}
-	return w.fileBackedRowGroup(rowGroup)
+	return w.columnOrientedRowGroup(rowGroup)
 }
 
 // writeSegmentsPacked writes the segments of a split merge, packing consecutive
@@ -106,7 +111,7 @@ func (w *Writer) writeSegmentsPacked(segments []RowGroup, schema *Schema, sortin
 	}
 
 	for _, seg := range segments {
-		if _, ok := w.fileBackedRowGroup(seg); ok {
+		if _, ok := w.columnOrientedRowGroup(seg); ok {
 			if pendingRows > 0 && pendingRows+seg.NumRows() > maxRows {
 				if err := flushPending(); err != nil {
 					return total, err

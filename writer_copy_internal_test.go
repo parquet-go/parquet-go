@@ -1252,3 +1252,67 @@ func TestWriteRowGroupCopyBloomFilter(t *testing.T) {
 		checkFilter(t, out)
 	})
 }
+
+// TestWriteRowGroupBufferUsesL3 verifies that writing an in-memory
+// parquet.Buffer through WriteRowGroup takes the L3 column-oriented path
+// (buffers are columnar and order-consistent across columns) and produces the
+// same data as the row-oriented path, including optional columns.
+func TestWriteRowGroupBufferUsesL3(t *testing.T) {
+	type optRow struct {
+		ID   int64    `parquet:"id"`
+		Name string   `parquet:"name,dict"`
+		Opt  *float64 `parquet:"opt,optional"`
+	}
+
+	rows := make([]optRow, 500)
+	for i := range rows {
+		rows[i] = optRow{ID: int64(i), Name: fmt.Sprintf("n%d", i%7)}
+		if i%3 != 0 {
+			v := float64(i) * 0.5
+			rows[i].Opt = &v
+		}
+	}
+
+	write := func(l3 bool) []byte {
+		defer func(prev bool) { disableWriteReencode = prev }(disableWriteReencode)
+		disableWriteReencode = !l3
+
+		buffer := NewGenericBuffer[optRow]()
+		if _, err := buffer.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		var dst bytes.Buffer
+		w := NewGenericWriter[optRow](&dst)
+		before := reencodePathCounter.Load()
+		if _, err := w.WriteRowGroup(buffer); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if fired := reencodePathCounter.Load() > before; fired != l3 {
+			t.Fatalf("L3 fired=%v, want %v", fired, l3)
+		}
+		return dst.Bytes()
+	}
+
+	l3Out := write(true)
+	rowOut := write(false)
+
+	readAll := func(b []byte) []optRow {
+		r := NewGenericReader[optRow](bytes.NewReader(b))
+		defer r.Close()
+		out := make([]optRow, len(rows)+1)
+		n, _ := r.Read(out)
+		return out[:n]
+	}
+
+	gotL3 := readAll(l3Out)
+	gotRow := readAll(rowOut)
+	if !reflect.DeepEqual(gotL3, rows) {
+		t.Fatal("L3 buffer output differs from source rows")
+	}
+	if !reflect.DeepEqual(gotL3, gotRow) {
+		t.Fatal("L3 buffer output differs from row-path output")
+	}
+}
