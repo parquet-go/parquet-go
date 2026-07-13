@@ -536,6 +536,7 @@ type mergedRowReader2 struct {
 	readers     [2]*bufferedRowReader
 	buffers     [2]bufferedRowReader
 	initialized bool
+	noGallop    bool // disables run galloping, used to test against per-row merging
 }
 
 func (m *mergedRowReader2) initialize() error {
@@ -608,19 +609,48 @@ func (m *mergedRowReader2) ReadRows(rows []Row) (n int, err error) {
 	default:
 		var hasNext0 bool
 		var hasNext1 bool
+		var prev int     // <0 if r0 won the previous game, >0 if r1 won, 0 otherwise
+		var streak int32 // consecutive games won by the same reader
 
 		for n < len(rows) {
 			switch cmp := m.compare(r0.head(), r1.head()); {
 			case cmp < 0:
-				rows[n] = append(rows[n][:0], r0.head()...)
-				n++
-				hasNext0 = r0.next()
-				hasNext1 = true
+				if prev < 0 {
+					streak++
+				} else {
+					streak = 0
+				}
+				prev = -1
+				if streak >= runDetectionStreak && !m.noGallop {
+					// r0 has been winning: gallop through its buffered rows
+					// for the run that sorts strictly before r1's head (ties
+					// are emitted pairwise by the case below) and emit it in
+					// bulk. Interleaved inputs rarely reach the streak
+					// threshold and pay only the cost of the counter.
+					n, hasNext0 = m.emitRun(rows, n, r0, r1.head())
+					hasNext1 = true
+				} else {
+					rows[n] = append(rows[n][:0], r0.head()...)
+					n++
+					hasNext0 = r0.next()
+					hasNext1 = true
+				}
 			case cmp > 0:
-				rows[n] = append(rows[n][:0], r1.head()...)
-				n++
-				hasNext0 = true
-				hasNext1 = r1.next()
+				if prev > 0 {
+					streak++
+				} else {
+					streak = 0
+				}
+				prev = 1
+				if streak >= runDetectionStreak && !m.noGallop {
+					n, hasNext1 = m.emitRun(rows, n, r1, r0.head())
+					hasNext0 = true
+				} else {
+					rows[n] = append(rows[n][:0], r1.head()...)
+					n++
+					hasNext0 = true
+					hasNext1 = r1.next()
+				}
 			default:
 				rows[n] = append(rows[n][:0], r0.head()...)
 				n++
@@ -630,6 +660,8 @@ func (m *mergedRowReader2) ReadRows(rows []Row) (n int, err error) {
 					n++
 					hasNext1 = r1.next()
 				}
+				prev = 0
+				streak = 0
 			}
 			if !hasNext0 || !hasNext1 {
 				break
@@ -638,6 +670,25 @@ func (m *mergedRowReader2) ReadRows(rows []Row) (n int, err error) {
 	}
 
 	return n, nil
+}
+
+// emitRun bulk-emits the run of buffered rows of r that sort strictly before
+// bound; the head of r must already be known to. It returns the new number of
+// rows produced and whether r has more rows buffered.
+func (m *mergedRowReader2) emitRun(rows []Row, n int, r *bufferedRowReader, bound Row) (int, bool) {
+	window := r.window()
+	if max := len(rows) - n; len(window) > max {
+		window = window[:max]
+	}
+	run := 1
+	if len(window) > 1 {
+		run += runLength(window[1:], bound, m.compare, -1)
+	}
+	for _, row := range window[:run] {
+		rows[n] = append(rows[n][:0], row...)
+		n++
+	}
+	return n, r.advance(int32(run))
 }
 
 // mergedRowReader merges k buffered row readers using a tournament tree of
@@ -749,13 +800,30 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 			// winner keeps winning as long as its head does not exceed it
 			// (ties favor the incumbent, matching the strict comparison in
 			// replayGames). Other readers are not consumed during the run, so
-			// the bound remains valid until it is crossed.
+			// the bound remains valid until it is crossed. The length of the
+			// run within the buffered window is found with O(log n)
+			// comparisons: a single comparison of the last buffered row
+			// settles the common case where the whole window is part of the
+			// run.
 			bound := m.runBound()
-			for n < len(rows) && (bound == nil || m.compare(c.head(), bound) <= 0) {
-				rows[n] = append(rows[n][:0], c.head()...)
-				n++
-				if !c.next() {
+			for n < len(rows) {
+				window := c.window()
+				if max := len(rows) - n; len(window) > max {
+					window = window[:max]
+				}
+				run := len(window)
+				if bound != nil {
+					run = runLength(window, bound, m.compare, 0)
+				}
+				for _, row := range window[:run] {
+					rows[n] = append(rows[n][:0], row...)
+					n++
+				}
+				if !c.advance(int32(run)) {
 					return n, nil
+				}
+				if run < len(window) {
+					break // the run bound was crossed
 				}
 			}
 			m.streak = 0
@@ -852,11 +920,23 @@ func (m *mergedRowReader) replayGames() {
 	m.winnerLeaf = int32(len(m.buffers)) + winner
 }
 
+// minRowBufferSize is the initial buffer size of a bufferedRowReader, and
+// maxRowBufferSize the size it can grow to. Buffers grow exponentially as
+// long as the underlying reader keeps filling them completely, so merges of
+// small row groups do not pay for full-size buffers while sustained merges
+// amortize refills and extend the reach of the bulk run emission paths,
+// which are bounded by the buffered window.
+const (
+	minRowBufferSize = 24
+	maxRowBufferSize = 192
+)
+
 type bufferedRowReader struct {
 	rows RowReader
 	off  int32
 	end  int32
-	buf  [24]Row
+	full bool // the last read filled the buffer completely
+	buf  []Row
 }
 
 func (r *bufferedRowReader) empty() bool {
@@ -868,7 +948,17 @@ func (r *bufferedRowReader) head() Row {
 }
 
 func (r *bufferedRowReader) next() bool {
-	r.off++
+	return r.advance(1)
+}
+
+// window returns the buffered rows that have not been consumed yet.
+func (r *bufferedRowReader) window() []Row {
+	return r.buf[r.off:r.end]
+}
+
+// advance consumes n buffered rows and reports whether more remain buffered.
+func (r *bufferedRowReader) advance(n int32) bool {
+	r.off += n
 	hasNext := r.off < r.end
 	if !hasNext {
 		// We need to read more rows, however it is unsafe to do so here because we haven't
@@ -880,12 +970,53 @@ func (r *bufferedRowReader) next() bool {
 }
 
 func (r *bufferedRowReader) read() error {
+	if r.buf == nil {
+		r.buf = make([]Row, minRowBufferSize)
+	} else if r.full && r.off == 0 && r.end == 0 && len(r.buf) < maxRowBufferSize {
+		// The reader keeps filling the buffer completely: grow it to amortize
+		// refills and extend the bulk run emission paths. The previous rows
+		// are carried over so their backing arrays keep being reused.
+		buf := make([]Row, min(2*len(r.buf), maxRowBufferSize))
+		copy(buf, r.buf)
+		r.buf = buf
+	}
 	n, err := r.rows.ReadRows(r.buf[r.end:])
 	if err != nil && n == 0 {
 		return err
 	}
 	r.end += int32(n)
+	r.full = r.end == int32(len(r.buf))
 	return nil
+}
+
+// runLength returns the number of leading rows of window whose comparison
+// against bound is at most max (0 to include ties, -1 to exclude them). The
+// window must be sorted by the same comparison function, so the qualifying
+// rows form a prefix; the function checks the first and last rows to settle
+// empty and complete runs with a single comparison, then gallops with a
+// binary search refinement, costing O(log n) comparisons instead of the O(n)
+// of a linear scan.
+func runLength(window []Row, bound Row, compare func(Row, Row) int, max int) int {
+	if len(window) == 0 || compare(window[0], bound) > max {
+		return 0
+	}
+	if compare(window[len(window)-1], bound) <= max {
+		return len(window)
+	}
+	lo, hi := 0, 1
+	for hi < len(window) && compare(window[hi], bound) <= max {
+		lo = hi
+		hi *= 2
+	}
+	hi = min(hi, len(window))
+	for lo+1 < hi {
+		if mid := int(uint(lo+hi) >> 1); compare(window[mid], bound) <= max {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return hi
 }
 
 var (

@@ -3462,7 +3462,7 @@ func TestMergeRowReadersPageReuse(t *testing.T) {
 		return parquet.ByteArrayType.Compare(a[0], b[0])
 	}
 
-	for _, numReaders := range []int{3, 4, 7, 16} {
+	for _, numReaders := range []int{2, 3, 4, 7, 16} {
 		t.Run(fmt.Sprintf("readers=%d", numReaders), func(t *testing.T) {
 			const rowsPerReader = 500
 			expect := make([]string, 0, numReaders*rowsPerReader)
