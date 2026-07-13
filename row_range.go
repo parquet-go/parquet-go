@@ -38,11 +38,13 @@ func newRowRangeRowGroup(base RowGroup, off, length int64) *rowRangeRowGroup {
 	// The value count of a row range is only knowable from metadata when each
 	// row holds exactly one value, i.e. for non-repeated columns.
 	repeated := make([]bool, len(baseChunks))
-	forEachLeafColumnOf(base.Schema(), func(leaf leafColumn) {
-		if int(leaf.columnIndex) < len(repeated) {
-			repeated[leaf.columnIndex] = leaf.maxRepetitionLevel > 0
-		}
-	})
+	if schema := base.Schema(); schema != nil {
+		forEachLeafColumnOf(schema, func(leaf leafColumn) {
+			if int(leaf.columnIndex) < len(repeated) {
+				repeated[leaf.columnIndex] = leaf.maxRepetitionLevel > 0
+			}
+		})
+	}
 
 	for i, chunk := range baseChunks {
 		rg.chunks[i] = &rangeColumnChunk{
