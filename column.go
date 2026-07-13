@@ -311,7 +311,9 @@ func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []f
 	// length is the current depth.
 	numLeaves := 0
 	pathSegments := 0
-	var remaining []int32
+	// remaining tracks the open-children counts per ancestor level; its cap
+	// keeps the common shallow schema on the stack, a deeper one grows to heap.
+	remaining := make([]int32, 0, 16)
 	for i := range metadata.Schema {
 		pathSegments += len(remaining) + 1
 		if isLeafSchemaElement(&metadata.Schema[i]) {
