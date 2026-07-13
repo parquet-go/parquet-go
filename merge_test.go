@@ -3471,3 +3471,84 @@ func BenchmarkMergeRowReaders(b *testing.B) {
 		})
 	}
 }
+
+// TestMergeRowGroupsDescendingSortingColumns is a regression test for
+// https://github.com/parquet-go/parquet-go/issues/564: the non-overlapping
+// segment optimization computed row group bounds in value order, which
+// inverted the first/last rows of row groups sorted in descending order.
+func TestMergeRowGroupsDescendingSortingColumns(t *testing.T) {
+	type Record struct {
+		Value int64 `parquet:"value"`
+	}
+
+	sortingOptions := []parquet.RowGroupOption{
+		parquet.SortingRowGroupConfig(
+			parquet.SortingColumns(
+				parquet.Descending("value"),
+			),
+		),
+	}
+
+	t.Run("overlapping", func(t *testing.T) {
+		// Group1: [40,20,10] overlaps Group2: [20]
+		group1 := fileRowGroup(sortedRowGroup(sortingOptions, Record{40}, Record{20}, Record{10}))
+		group2 := fileRowGroup(sortedRowGroup(sortingOptions, Record{20}))
+
+		merged, err := parquet.MergeRowGroups([]parquet.RowGroup{group1, group2}, sortingOptions...)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rows := merged.Rows()
+		defer rows.Close()
+
+		got := readAllInt64Values(t, rows)
+		expected := []int64{40, 20, 20, 10}
+		if !slices.Equal(got, expected) {
+			t.Errorf("got %v, want %v", got, expected)
+		}
+	})
+
+	t.Run("non-overlapping", func(t *testing.T) {
+		// Group1: [20,10] and Group2: [40,30] do not overlap; the merged
+		// output must start with the segment holding the largest values.
+		group1 := fileRowGroup(sortedRowGroup(sortingOptions, Record{20}, Record{10}))
+		group2 := fileRowGroup(sortedRowGroup(sortingOptions, Record{40}, Record{30}))
+
+		merged, err := parquet.MergeRowGroups([]parquet.RowGroup{group1, group2}, sortingOptions...)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rows := merged.Rows()
+		defer rows.Close()
+
+		got := readAllInt64Values(t, rows)
+		expected := []int64{40, 30, 20, 10}
+		if !slices.Equal(got, expected) {
+			t.Errorf("got %v, want %v", got, expected)
+		}
+	})
+
+	t.Run("chained overlap", func(t *testing.T) {
+		// Group1: [50,30,10] overlaps Group2: [40,20] which overlaps
+		// Group3: [15,5]; Group1 and Group3 also overlap through Group2.
+		group1 := fileRowGroup(sortedRowGroup(sortingOptions, Record{50}, Record{30}, Record{10}))
+		group2 := fileRowGroup(sortedRowGroup(sortingOptions, Record{40}, Record{20}))
+		group3 := fileRowGroup(sortedRowGroup(sortingOptions, Record{15}, Record{5}))
+
+		merged, err := parquet.MergeRowGroups([]parquet.RowGroup{group1, group2, group3}, sortingOptions...)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rows := merged.Rows()
+		defer rows.Close()
+
+		got := readAllInt64Values(t, rows)
+		expected := []int64{50, 40, 30, 20, 15, 10, 5}
+		if !slices.Equal(got, expected) {
+			t.Errorf("got %v, want %v", got, expected)
+		}
+	})
+}

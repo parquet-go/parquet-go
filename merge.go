@@ -222,18 +222,26 @@ func rowGroupRangeOfSortedColumns(rg RowGroup, schema *Schema, sorting []Sorting
 			return nil, nil, fmt.Errorf("column index not available for sorting column %s", sortingColumnPath)
 		}
 
-		// Since data is sorted by sorting columns, we can efficiently get min/max:
-		// - Min value = min of first non-null page
-		// - Max value = max of last non-null page
+		// Since data is sorted by sorting columns, we can bound the first and
+		// last rows of the row group from the first and last non-null pages of
+		// the column index. The bounds are expressed in sort order: when the
+		// column is sorted in descending order, the first row holds the
+		// largest value and the last row holds the smallest one, so the page
+		// statistics to read are inverted.
 		numPages := columnIndex.NumPages()
+		descending := sortingColumn.Descending()
 
-		// Find first non-null page for min value
-		var globalMin Value
+		// Bound the first row in sort order from the first non-null page
+		var firstValue Value
 		var found bool
 		for pageIdx := range numPages {
 			if !columnIndex.NullPage(pageIdx) {
-				if minValue := columnIndex.MinValue(pageIdx); !minValue.IsNull() {
-					globalMin, found = minValue, true
+				value := columnIndex.MinValue(pageIdx)
+				if descending {
+					value = columnIndex.MaxValue(pageIdx)
+				}
+				if !value.IsNull() {
+					firstValue, found = value, true
 					break
 				}
 			}
@@ -242,20 +250,24 @@ func rowGroupRangeOfSortedColumns(rg RowGroup, schema *Schema, sorting []Sorting
 			return nil, nil, fmt.Errorf("no valid pages found in column index for column %s", sortingColumnPath)
 		}
 
-		// Find last non-null page for max value
-		var globalMax Value
+		// Bound the last row in sort order from the last non-null page
+		var lastValue Value
 		for pageIdx := numPages - 1; pageIdx >= 0; pageIdx-- {
 			if !columnIndex.NullPage(pageIdx) {
-				if maxValue := columnIndex.MaxValue(pageIdx); !maxValue.IsNull() {
-					globalMax = maxValue
+				value := columnIndex.MaxValue(pageIdx)
+				if descending {
+					value = columnIndex.MinValue(pageIdx)
+				}
+				if !value.IsNull() {
+					lastValue = value
 					break
 				}
 			}
 		}
 
 		// Set the min/max values with proper levels
-		minValues[sortingColumnIndex] = globalMin.Level(0, 1, sortingColumnIndex)
-		maxValues[sortingColumnIndex] = globalMax.Level(0, 1, sortingColumnIndex)
+		minValues[sortingColumnIndex] = firstValue.Level(0, 1, sortingColumnIndex)
+		maxValues[sortingColumnIndex] = lastValue.Level(0, 1, sortingColumnIndex)
 	}
 
 	minRow = Row(minValues)
