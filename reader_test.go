@@ -2,11 +2,13 @@ package parquet_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -1155,4 +1157,83 @@ func TestIssue522(t *testing.T) {
 			t.Errorf("row %d: Opt = %q, want %q", i, *got.Opt, want)
 		}
 	}
+}
+
+// TestIssue566ByteSliceDecimalRead reproduces issue #566: reading a
+// FIXED_LEN_BYTE_ARRAY decimal column into a []byte or [N]byte struct field
+// used to panic with "reflect.Set: value of type *big.Float is not assignable
+// to type []uint8" because decimalType.AssignValue unconditionally converted
+// the value to *big.Float. Byte destinations must receive the raw big-endian
+// two's-complement bytes, as they did before v0.28.0.
+func TestIssue566ByteSliceDecimalRead(t *testing.T) {
+	type writeRow struct {
+		ID [16]byte `parquet:"id,decimal(6:38)"`
+	}
+
+	// Encode integer 480 as decimal(38,6): unscaled = 480 * 10^6,
+	// stored big-endian in the upper 8 bytes of a 16-byte array.
+	var id [16]byte
+	binary.BigEndian.PutUint64(id[8:], 480_000_000)
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[writeRow](&buf)
+	if _, err := w.Write([]writeRow{{ID: id}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("byte slice", func(t *testing.T) {
+		type row struct {
+			ID []byte `parquet:"id,decimal(6:38)"`
+		}
+		r := parquet.NewGenericReader[row](bytes.NewReader(buf.Bytes()))
+		defer r.Close()
+		rows := make([]row, 1)
+		n, err := r.Read(rows)
+		if n != 1 || (err != nil && err != io.EOF) {
+			t.Fatalf("unexpected read result: n=%d err=%v", n, err)
+		}
+		if !bytes.Equal(rows[0].ID, id[:]) {
+			t.Errorf("ID = %x, want %x", rows[0].ID, id)
+		}
+	})
+
+	t.Run("byte array", func(t *testing.T) {
+		type row struct {
+			ID [16]byte `parquet:"id,decimal(6:38)"`
+		}
+		r := parquet.NewGenericReader[row](bytes.NewReader(buf.Bytes()))
+		defer r.Close()
+		rows := make([]row, 1)
+		n, err := r.Read(rows)
+		if n != 1 || (err != nil && err != io.EOF) {
+			t.Fatalf("unexpected read result: n=%d err=%v", n, err)
+		}
+		if rows[0].ID != id {
+			t.Errorf("ID = %x, want %x", rows[0].ID, id)
+		}
+	})
+
+	t.Run("big float", func(t *testing.T) {
+		r := parquet.NewGenericReader[any](bytes.NewReader(buf.Bytes()))
+		defer r.Close()
+		rows := make([]any, 1)
+		n, err := r.Read(rows)
+		if n != 1 || (err != nil && err != io.EOF) {
+			t.Fatalf("unexpected read result: n=%d err=%v", n, err)
+		}
+		row, ok := rows[0].(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected row type: %T", rows[0])
+		}
+		f, ok := row["id"].(*big.Float)
+		if !ok {
+			t.Fatalf("expected *big.Float, got %T", row["id"])
+		}
+		if v, _ := f.Float64(); v != 480 {
+			t.Errorf("id = %v, want 480", v)
+		}
+	})
 }
