@@ -1092,3 +1092,72 @@ func BenchmarkWriteRowGroupMergePackPaths(b *testing.B) {
 		run(b, true)
 	})
 }
+
+// TestSortingWriterUsesFastPaths verifies that SortingWriter's close-time merge
+// goes through WriteRowGroup and benefits from the chunk-level fast paths when
+// the sorted flushes do not overlap (packing them toward MaxRowsPerRowGroup),
+// while producing correctly sorted output.
+func TestSortingWriterUsesFastPaths(t *testing.T) {
+	var buf bytes.Buffer
+	sw := NewSortingWriter[copyTestRow](&buf, 1000, SortingWriterConfig(SortingColumns(Ascending("id"))))
+	rows := make([]copyTestRow, 5000)
+	for i := range rows {
+		rows[i] = copyTestRow{ID: int64(i), Name: fmt.Sprintf("n%d", i%13), Val: float64(i)}
+	}
+
+	beforeCopy, beforeL3 := copyPathCounter.Load(), reencodePathCounter.Load()
+	if _, err := sw.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Already-sorted input produces non-overlapping flush row groups, which the
+	// writer packs column-wise (or copies verbatim) instead of heap-merging rows.
+	if copyPathCounter.Load() == beforeCopy && reencodePathCounter.Load() == beforeL3 {
+		t.Fatal("expected SortingWriter close to use a chunk-level fast path for non-overlapping flushes")
+	}
+
+	got := readCopyTestRows(t, buf.Bytes(), 5000)
+	if len(got) != 5000 {
+		t.Fatalf("read %d rows, want 5000", len(got))
+	}
+	for i := range got {
+		if got[i].ID != int64(i) {
+			t.Fatalf("row %d has id %d, want %d", i, got[i].ID, i)
+		}
+	}
+}
+
+// TestSortingWriterDropDuplicatedRows verifies dedup still applies through the
+// WriteRowGroup-based close path, for both overlapping and non-overlapping
+// flushes.
+func TestSortingWriterDropDuplicatedRows(t *testing.T) {
+	var buf bytes.Buffer
+	sw := NewSortingWriter[copyTestRow](&buf, 4,
+		SortingWriterConfig(SortingColumns(Ascending("id")), DropDuplicatedRows(true)))
+	// Duplicates within a flush and across flushes (flush size 4).
+	ids := []int64{3, 1, 2, 3, 3, 4, 5, 5, 6, 7, 8, 8}
+	rows := make([]copyTestRow, len(ids))
+	for i, id := range ids {
+		rows[i] = copyTestRow{ID: id, Name: "x", Val: float64(id)}
+	}
+	if _, err := sw.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := readCopyTestRows(t, buf.Bytes(), len(ids))
+	want := []int64{1, 2, 3, 4, 5, 6, 7, 8}
+	if len(got) != len(want) {
+		t.Fatalf("read %d rows, want %d deduplicated", len(got), len(want))
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Fatalf("row %d has id %d, want %d", i, got[i].ID, id)
+		}
+	}
+}
