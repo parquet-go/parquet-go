@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync/atomic"
 
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -44,6 +45,8 @@ type copiedChunk struct {
 	dictLength    int64       // length of the dictionary page, 0 if none
 	dataOffset    int64       // byte offset of the first data page in the source
 	dataLength    int64       // length of all data pages
+	bloomOffset   int64       // byte offset of the bloom filter in the source
+	bloomLength   int64       // length of the bloom filter (header + bitset), 0 if not copied
 	columnIndex   format.ColumnIndex
 	sizeStats     format.SizeStatistics
 	statistics    format.Statistics
@@ -116,6 +119,11 @@ func (w *Writer) copyableColumnChunks(rowGroup RowGroup) ([]*FileColumnChunk, bo
 	if rowGroup.NumRows() > w.writer.currentRowGroup.maxRows {
 		return nil, false
 	}
+	// Row groups whose Rows() implements semantics beyond reading the column
+	// chunks in order cannot be handled at the chunk level.
+	if !chunkTransparentRowGroup(rowGroup) {
+		return nil, false
+	}
 
 	dst := w.writer.currentRowGroup.columns
 	columns := rowGroup.ColumnChunks()
@@ -125,13 +133,7 @@ func (w *Writer) copyableColumnChunks(rowGroup RowGroup) ([]*FileColumnChunk, bo
 
 	srcs := make([]*FileColumnChunk, len(columns))
 	for i, col := range columns {
-		// Unwrap to the underlying file-backed chunk. This handles both directly
-		// file-backed row groups (plain file rewrites) and ConvertRowGroup's
-		// positional remap wrapper (column reordering produced by MergeNodes,
-		// e.g. a single source row group passed through MergeRowGroups). A
-		// genuine type conversion would be caught and demoted by the type check
-		// in columnChunkIsCopyable.
-		fc, ok := fileColumnChunkOf(col)
+		fc, ok := col.(*FileColumnChunk)
 		if !ok {
 			return nil, false
 		}
@@ -143,20 +145,41 @@ func (w *Writer) copyableColumnChunks(rowGroup RowGroup) ([]*FileColumnChunk, bo
 	return srcs, true
 }
 
-// fileColumnChunkOf unwraps positional-remap wrappers to reach the underlying
-// file-backed column chunk, returning false if the chunk is not (or does not
-// wrap) a *FileColumnChunk.
-func fileColumnChunkOf(col ColumnChunk) (*FileColumnChunk, bool) {
-	for {
-		switch c := col.(type) {
-		case *FileColumnChunk:
-			return c, true
-		case *convertedColumnChunk:
-			col = c.chunk
-		default:
-			return nil, false
-		}
-	}
+// chunkTransparentMarker is implemented by row group types for which reading
+// the column chunks in order is equivalent to reading Rows(). The method is
+// unexported on purpose: row group implementations outside this package cannot
+// opt in, so they always take the row-oriented path, which honors whatever
+// semantics their Rows() implements.
+type chunkTransparentMarker interface {
+	chunkTransparentRowGroup()
+}
+
+// chunkTransparentRowGroup reports whether reading rowGroup's column chunks in
+// order is equivalent to reading its Rows(). The fast paths in this file and in
+// writer_reencode.go operate on the column chunks directly, so they must only
+// be applied to row group types that explicitly opt in via
+// chunkTransparentMarker. Everything else — including application-defined
+// RowGroup implementations — is conservatively assumed to implement semantics
+// in Rows() and handled through the row-oriented path.
+//
+// Known examples of wrappers whose Rows() adds semantics on top of the chunks:
+//
+//   - dedupRowGroup drops duplicated rows in Rows(); its ColumnChunks() are
+//     promoted unchanged from the wrapped row group, so a chunk-level copy
+//     would silently retain the duplicates.
+//   - convertedRowGroup applies value conversion in Rows() (e.g. numeric or
+//     time unit conversions); its ColumnChunks() expose the unconverted source
+//     chunks, so a chunk-level copy would emit pre-conversion values under the
+//     post-conversion schema. Note that a physical type check is not sufficient
+//     to detect this: conversions such as timestamp millis→micros change values
+//     while preserving the INT64 physical type.
+//
+// Identity conversions never produce wrappers (ConvertRowGroup returns the row
+// group unwrapped when schemas are equal), so requiring the marker does not
+// cost the fast paths anything in the matched-schema case.
+func chunkTransparentRowGroup(rowGroup RowGroup) bool {
+	_, ok := rowGroup.(chunkTransparentMarker)
+	return ok
 }
 
 // loadCopiedChunks stages every source column chunk into its destination
@@ -197,9 +220,10 @@ func columnChunkIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	if meta.Codec != dst.compression.CompressionCodec() {
 		return false
 	}
-	// A writer-requested bloom filter would have to be recomputed from decoded
-	// values, which a verbatim copy cannot do. Demote.
-	if dst.columnFilter != nil {
+	// A writer-requested bloom filter can only be satisfied by a verbatim copy
+	// when the source chunk carries a filter equivalent to the one the writer
+	// would build; otherwise the filter must be recomputed from decoded values.
+	if dst.columnFilter != nil && !bloomFilterIsCopyable(dst, src) {
 		return false
 	}
 	// We copy statistics and the page index from the source; require both to be
@@ -251,6 +275,46 @@ func encodingStatsMatch(stats []format.PageEncodingStats, dst *ColumnWriter) boo
 		return false
 	}
 	return true
+}
+
+// bloomFilterIsCopyable reports whether the source chunk carries a bloom filter
+// equivalent to the one the destination column writer is configured to build,
+// so that copying its bytes verbatim is indistinguishable from recomputing it:
+//
+//   - the source records the filter location and length (older files omit the
+//     length, in which case the byte range is unknown);
+//   - both source and destination use the uncompressed filter representation
+//     (this library's default; compressed filters would require comparing
+//     post-compression content);
+//   - the source header describes the same algorithm and hash the writer would
+//     use (split-block, xxhash — the only ones supported); and
+//   - the source bitset has exactly the size the destination filter would
+//     allocate for this chunk's value count, i.e. the same bits-per-value.
+func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
+	meta := &src.chunk.MetaData
+	if meta.BloomFilterOffset == 0 || meta.BloomFilterLength <= 0 {
+		return false
+	}
+	if dst.bloomFilterCompression != nil && dst.bloomFilterCompression.CompressionCodec() != format.Uncompressed {
+		return false
+	}
+
+	section := io.NewSectionReader(src.file.reader, meta.BloomFilterOffset, int64(meta.BloomFilterLength))
+	rbuf, rbufpool := getBufioReader(section, 1024)
+	defer putBufioReader(rbuf, rbufpool)
+
+	var header format.BloomFilterHeader
+	compact := thrift.CompactProtocol{}
+	if err := thrift.NewDecoder(compact.NewReader(rbuf)).Decode(&header); err != nil {
+		return false
+	}
+	if !isSplitBlockAlgorithm(&header) || !isXxHash(&header) {
+		return false
+	}
+	if _, ok := header.Compression.Value.(*format.BloomFilterUncompressed); !ok {
+		return false
+	}
+	return int(header.NumBytes) == dst.columnFilter.Size(meta.NumValues)
 }
 
 // loadCopiedChunk prepares the destination ColumnWriter to emit a source column
@@ -310,6 +374,14 @@ func (c *ColumnWriter) loadCopiedChunk(src *FileColumnChunk) error {
 		numRows:               src.rowGroup.NumRows,
 		totalUncompressedSize: meta.TotalUncompressedSize,
 		totalCompressedSize:   meta.TotalCompressedSize,
+	}
+
+	// When the destination column is configured with a bloom filter, the copy
+	// predicate has already verified that the source carries an equivalent one;
+	// record its byte range so it is copied verbatim during assembly.
+	if c.columnFilter != nil {
+		cc.bloomOffset = meta.BloomFilterOffset
+		cc.bloomLength = int64(meta.BloomFilterLength)
 	}
 
 	c.copied = cc

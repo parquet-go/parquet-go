@@ -322,25 +322,98 @@ func BenchmarkWriteRowGroupReencode(b *testing.B) {
 	benchmarkWriteRowGroupRewrite(b, true)
 }
 
-// TestFileColumnChunkOfUnwrap verifies that the copy path can see through a
-// positional-remap wrapper to the underlying file-backed chunk, while rejecting
-// non-file chunks.
-func TestFileColumnChunkOfUnwrap(t *testing.T) {
-	rows := makeCopyTestRows(100)
-	src := writeCopyTestFile(t, rows)
-	fc := src.RowGroups()[0].ColumnChunks()[0].(*FileColumnChunk)
+// TestWriteRowGroupDedupNotBypassed is a regression test: WriteRowGroup of a
+// dedup-wrapped merge (single sorted source with DropDuplicatedRows) must not
+// take the chunk-level fast paths, which would silently retain the duplicates
+// (dedupRowGroup's ColumnChunks are promoted unchanged from the wrapped row
+// group).
+func TestWriteRowGroupDedupNotBypassed(t *testing.T) {
+	ids := []int64{1, 1, 2, 2, 3, 4, 5, 5}
+	rows := make([]copyTestRow, len(ids))
+	for i, id := range ids {
+		rows[i] = copyTestRow{ID: id, Name: "x", Val: float64(id)}
+	}
+	f := writeCopyTestFile(t, rows, SortingWriterConfig(SortingColumns(Ascending("id"))))
 
-	if got, ok := fileColumnChunkOf(fc); !ok || got != fc {
-		t.Fatal("expected direct *FileColumnChunk to unwrap to itself")
+	merged, err := MergeRowGroups(
+		[]RowGroup{f.RowGroups()[0]},
+		SortingRowGroupConfig(SortingColumns(Ascending("id")), DropDuplicatedRows(true)),
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	wrapped := &convertedColumnChunk{chunk: fc, targetColumnIndex: ^uint16(2)}
-	if got, ok := fileColumnChunkOf(wrapped); !ok || got != fc {
-		t.Fatal("expected convertedColumnChunk to unwrap to inner *FileColumnChunk")
+	var dst bytes.Buffer
+	w := NewGenericWriter[copyTestRow](&dst, SortingWriterConfig(SortingColumns(Ascending("id"))))
+	if _, err := w.WriteRowGroup(merged); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := OpenFile(bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := out.NumRows(); got != 5 {
+		t.Fatalf("deduplicated output has %d rows, want 5 (fast path bypassed dedup)", got)
+	}
+}
+
+// TestWriteRowGroupConversionNotBypassed is a regression test: WriteRowGroup of
+// a converted merge (source schema differs from the target, requiring value
+// conversion) must not take the chunk-level fast paths, which would emit the
+// unconverted source values under the converted schema (convertedRowGroup's
+// ColumnChunks expose the raw source chunks; conversion only happens in Rows()).
+func TestWriteRowGroupConversionNotBypassed(t *testing.T) {
+	type rowStr struct {
+		ID string `parquet:"id"`
+	}
+	type rowInt struct {
+		ID int64 `parquet:"id"`
 	}
 
-	if _, ok := fileColumnChunkOf(&emptyColumnChunk{}); ok {
-		t.Fatal("expected non-file chunk to fail unwrap")
+	var src bytes.Buffer
+	sw := NewGenericWriter[rowStr](&src, SortingWriterConfig(SortingColumns(Ascending("id"))))
+	if _, err := sw.Write([]rowStr{{"1"}, {"2"}, {"3"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenFile(bytes.NewReader(src.Bytes()), int64(src.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := MergeRowGroups(f.RowGroups(),
+		&RowGroupConfig{Schema: SchemaOf(rowInt{})},
+		SortingRowGroupConfig(SortingColumns(Ascending("id"))),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var dst bytes.Buffer
+	w := NewGenericWriter[rowInt](&dst)
+	if _, err := w.WriteRowGroup(merged); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewGenericReader[rowInt](bytes.NewReader(dst.Bytes()))
+	defer r.Close()
+	out := make([]rowInt, 4)
+	n, _ := r.Read(out)
+	if n != 3 {
+		t.Fatalf("read %d rows, want 3", n)
+	}
+	for i, want := range []int64{1, 2, 3} {
+		if out[i].ID != want {
+			t.Fatalf("row %d = %d, want %d (fast path bypassed value conversion)", i, out[i].ID, want)
+		}
 	}
 }
 
@@ -1018,4 +1091,298 @@ func BenchmarkWriteRowGroupMergePackPaths(b *testing.B) {
 	b.Run("columnpack", func(b *testing.B) {
 		run(b, true)
 	})
+}
+
+// TestSortingWriterUsesFastPaths verifies that SortingWriter's close-time merge
+// goes through WriteRowGroup and benefits from the chunk-level fast paths when
+// the sorted flushes do not overlap (packing them toward MaxRowsPerRowGroup),
+// while producing correctly sorted output.
+func TestSortingWriterUsesFastPaths(t *testing.T) {
+	var buf bytes.Buffer
+	sw := NewSortingWriter[copyTestRow](&buf, 1000, SortingWriterConfig(SortingColumns(Ascending("id"))))
+	rows := make([]copyTestRow, 5000)
+	for i := range rows {
+		rows[i] = copyTestRow{ID: int64(i), Name: fmt.Sprintf("n%d", i%13), Val: float64(i)}
+	}
+
+	beforeCopy, beforeL3 := copyPathCounter.Load(), reencodePathCounter.Load()
+	if _, err := sw.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Already-sorted input produces non-overlapping flush row groups, which the
+	// writer packs column-wise (or copies verbatim) instead of heap-merging rows.
+	if copyPathCounter.Load() == beforeCopy && reencodePathCounter.Load() == beforeL3 {
+		t.Fatal("expected SortingWriter close to use a chunk-level fast path for non-overlapping flushes")
+	}
+
+	got := readCopyTestRows(t, buf.Bytes(), 5000)
+	if len(got) != 5000 {
+		t.Fatalf("read %d rows, want 5000", len(got))
+	}
+	for i := range got {
+		if got[i].ID != int64(i) {
+			t.Fatalf("row %d has id %d, want %d", i, got[i].ID, i)
+		}
+	}
+}
+
+// TestSortingWriterDropDuplicatedRows verifies dedup still applies through the
+// WriteRowGroup-based close path, for both overlapping and non-overlapping
+// flushes.
+func TestSortingWriterDropDuplicatedRows(t *testing.T) {
+	var buf bytes.Buffer
+	sw := NewSortingWriter[copyTestRow](&buf, 4,
+		SortingWriterConfig(SortingColumns(Ascending("id")), DropDuplicatedRows(true)))
+	// Duplicates within a flush and across flushes (flush size 4).
+	ids := []int64{3, 1, 2, 3, 3, 4, 5, 5, 6, 7, 8, 8}
+	rows := make([]copyTestRow, len(ids))
+	for i, id := range ids {
+		rows[i] = copyTestRow{ID: id, Name: "x", Val: float64(id)}
+	}
+	if _, err := sw.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := readCopyTestRows(t, buf.Bytes(), len(ids))
+	want := []int64{1, 2, 3, 4, 5, 6, 7, 8}
+	if len(got) != len(want) {
+		t.Fatalf("read %d rows, want %d deduplicated", len(got), len(want))
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Fatalf("row %d has id %d, want %d", i, got[i].ID, id)
+		}
+	}
+}
+
+// TestWriteRowGroupCopyBloomFilter verifies that a writer configured with a
+// bloom filter still takes the verbatim copy path when the source chunk carries
+// an equivalent filter, that the copied filter works in the output file, and
+// that mismatched or absent source filters demote to a rebuild.
+func TestWriteRowGroupCopyBloomFilter(t *testing.T) {
+	rows := makeCopyTestRows(1000)
+	filter10 := SplitBlockFilter(10, "id")
+
+	rewrite := func(src *File, opts ...WriterOption) (*File, int64, int64) {
+		beforeCopy, beforeL3 := copyPathCounter.Load(), reencodePathCounter.Load()
+		var dst bytes.Buffer
+		w := NewGenericWriter[copyTestRow](&dst, opts...)
+		for _, rg := range src.RowGroups() {
+			if _, err := w.WriteRowGroup(rg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		out, err := OpenFile(bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out, copyPathCounter.Load() - beforeCopy, reencodePathCounter.Load() - beforeL3
+	}
+
+	checkFilter := func(t *testing.T, out *File) {
+		t.Helper()
+		bf := out.RowGroups()[0].ColumnChunks()[0].BloomFilter()
+		if bf == nil {
+			t.Fatal("output column has no bloom filter")
+		}
+		for _, id := range []int64{0, 1, 500, 999} {
+			ok, err := bf.Check(ValueOf(id))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatalf("bloom filter misses present value %d", id)
+			}
+		}
+		misses := 0
+		for id := int64(10_000); id < 10_100; id++ {
+			ok, err := bf.Check(ValueOf(id))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				misses++
+			}
+		}
+		if misses == 0 {
+			t.Fatal("bloom filter matches every absent value; likely bogus")
+		}
+	}
+
+	t.Run("matching_filter_copies", func(t *testing.T) {
+		src := writeCopyTestFile(t, rows, BloomFilters(filter10))
+		out, copied, _ := rewrite(src, BloomFilters(filter10))
+		if copied == 0 {
+			t.Fatal("expected verbatim copy with matching source bloom filter")
+		}
+		checkFilter(t, out)
+	})
+
+	t.Run("missing_source_filter_demotes", func(t *testing.T) {
+		src := writeCopyTestFile(t, rows) // no filter in source
+		out, copied, l3 := rewrite(src, BloomFilters(filter10))
+		if copied != 0 {
+			t.Fatalf("expected demotion when source lacks a bloom filter, %d chunks copied", copied)
+		}
+		if l3 == 0 {
+			t.Fatal("expected L3 rebuild when source lacks a bloom filter")
+		}
+		checkFilter(t, out)
+	})
+
+	t.Run("different_bits_per_value_demotes", func(t *testing.T) {
+		src := writeCopyTestFile(t, rows, BloomFilters(SplitBlockFilter(2, "id")))
+		out, copied, l3 := rewrite(src, BloomFilters(filter10))
+		if copied != 0 {
+			t.Fatalf("expected demotion on bits-per-value mismatch, %d chunks copied", copied)
+		}
+		if l3 == 0 {
+			t.Fatal("expected L3 rebuild on bits-per-value mismatch")
+		}
+		checkFilter(t, out)
+	})
+}
+
+// TestWriteRowGroupBufferUsesL3 verifies that writing an in-memory
+// parquet.Buffer through WriteRowGroup takes the L3 column-oriented path
+// (buffers are columnar and order-consistent across columns) and produces the
+// same data as the row-oriented path, including optional columns.
+func TestWriteRowGroupBufferUsesL3(t *testing.T) {
+	type optRow struct {
+		ID   int64    `parquet:"id"`
+		Name string   `parquet:"name,dict"`
+		Opt  *float64 `parquet:"opt,optional"`
+	}
+
+	rows := make([]optRow, 500)
+	for i := range rows {
+		rows[i] = optRow{ID: int64(i), Name: fmt.Sprintf("n%d", i%7)}
+		if i%3 != 0 {
+			v := float64(i) * 0.5
+			rows[i].Opt = &v
+		}
+	}
+
+	write := func(l3 bool) []byte {
+		defer func(prev bool) { disableWriteReencode = prev }(disableWriteReencode)
+		disableWriteReencode = !l3
+
+		buffer := NewGenericBuffer[optRow]()
+		if _, err := buffer.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		var dst bytes.Buffer
+		w := NewGenericWriter[optRow](&dst)
+		before := reencodePathCounter.Load()
+		if _, err := w.WriteRowGroup(buffer); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if fired := reencodePathCounter.Load() > before; fired != l3 {
+			t.Fatalf("L3 fired=%v, want %v", fired, l3)
+		}
+		return dst.Bytes()
+	}
+
+	l3Out := write(true)
+	rowOut := write(false)
+
+	readAll := func(b []byte) []optRow {
+		r := NewGenericReader[optRow](bytes.NewReader(b))
+		defer r.Close()
+		out := make([]optRow, len(rows)+1)
+		n, _ := r.Read(out)
+		return out[:n]
+	}
+
+	gotL3 := readAll(l3Out)
+	gotRow := readAll(rowOut)
+	if !reflect.DeepEqual(gotL3, rows) {
+		t.Fatal("L3 buffer output differs from source rows")
+	}
+	if !reflect.DeepEqual(gotL3, gotRow) {
+		t.Fatal("L3 buffer output differs from row-path output")
+	}
+}
+
+// filteringRowGroup simulates an application-defined RowGroup implementation
+// whose Rows() adds semantics (here: keeping only even ids) while ColumnChunks
+// exposes the unfiltered file chunks. Such implementations must never take the
+// chunk-level fast paths.
+type filteringRowGroup struct {
+	RowGroup
+}
+
+func (f *filteringRowGroup) Rows() Rows {
+	return &filteringRows{Rows: f.RowGroup.Rows()}
+}
+
+type filteringRows struct {
+	Rows
+}
+
+func (f *filteringRows) ReadRows(rows []Row) (int, error) {
+	for {
+		n, err := f.Rows.ReadRows(rows)
+		kept := 0
+		for j := range n {
+			if rows[j][0].Int64()%2 == 0 {
+				if kept != j {
+					// Copy the values rather than the slice header so each slot
+					// keeps its own backing array (the reader reuses them).
+					rows[kept] = append(rows[kept][:0], rows[j]...)
+				}
+				kept++
+			}
+		}
+		if kept > 0 || err != nil {
+			return kept, err
+		}
+	}
+}
+
+// TestWriteRowGroupCustomImplementationNotBypassed verifies that the fast paths
+// are opt-in: an application-defined RowGroup (which cannot implement the
+// unexported chunkTransparentMarker) is written through its Rows()
+// implementation, preserving whatever semantics it adds.
+func TestWriteRowGroupCustomImplementationNotBypassed(t *testing.T) {
+	rows := makeCopyTestRows(100) // ids 0..99
+	src := writeCopyTestFile(t, rows)
+
+	beforeCopy, beforeL3 := copyPathCounter.Load(), reencodePathCounter.Load()
+
+	var dst bytes.Buffer
+	w := NewGenericWriter[copyTestRow](&dst)
+	if _, err := w.WriteRowGroup(&filteringRowGroup{RowGroup: src.RowGroups()[0]}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if copyPathCounter.Load() != beforeCopy || reencodePathCounter.Load() != beforeL3 {
+		t.Fatal("custom RowGroup implementation took a chunk-level fast path")
+	}
+
+	got := readCopyTestRows(t, dst.Bytes(), len(rows))
+	if len(got) != 50 {
+		t.Fatalf("filtered output has %d rows, want 50 (custom Rows() semantics bypassed)", len(got))
+	}
+	for i, r := range got {
+		if r.ID != int64(i*2) {
+			t.Fatalf("row %d has id %d, want %d", i, r.ID, i*2)
+		}
+	}
 }

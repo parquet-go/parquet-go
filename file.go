@@ -764,6 +764,11 @@ func (g *FileRowGroup) Rows() Rows {
 	return NewRowGroupRowReader(rowGroup)
 }
 
+// chunkTransparentRowGroup marks FileRowGroup as safe for the chunk-level write
+// fast paths: its Rows() reads the file column chunks in order with no
+// additional semantics.
+func (g *FileRowGroup) chunkTransparentRowGroup() {}
+
 type fileSortingColumn struct {
 	column     *Column
 	descending bool
