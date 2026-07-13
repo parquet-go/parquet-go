@@ -322,25 +322,98 @@ func BenchmarkWriteRowGroupReencode(b *testing.B) {
 	benchmarkWriteRowGroupRewrite(b, true)
 }
 
-// TestFileColumnChunkOfUnwrap verifies that the copy path can see through a
-// positional-remap wrapper to the underlying file-backed chunk, while rejecting
-// non-file chunks.
-func TestFileColumnChunkOfUnwrap(t *testing.T) {
-	rows := makeCopyTestRows(100)
-	src := writeCopyTestFile(t, rows)
-	fc := src.RowGroups()[0].ColumnChunks()[0].(*FileColumnChunk)
+// TestWriteRowGroupDedupNotBypassed is a regression test: WriteRowGroup of a
+// dedup-wrapped merge (single sorted source with DropDuplicatedRows) must not
+// take the chunk-level fast paths, which would silently retain the duplicates
+// (dedupRowGroup's ColumnChunks are promoted unchanged from the wrapped row
+// group).
+func TestWriteRowGroupDedupNotBypassed(t *testing.T) {
+	ids := []int64{1, 1, 2, 2, 3, 4, 5, 5}
+	rows := make([]copyTestRow, len(ids))
+	for i, id := range ids {
+		rows[i] = copyTestRow{ID: id, Name: "x", Val: float64(id)}
+	}
+	f := writeCopyTestFile(t, rows, SortingWriterConfig(SortingColumns(Ascending("id"))))
 
-	if got, ok := fileColumnChunkOf(fc); !ok || got != fc {
-		t.Fatal("expected direct *FileColumnChunk to unwrap to itself")
+	merged, err := MergeRowGroups(
+		[]RowGroup{f.RowGroups()[0]},
+		SortingRowGroupConfig(SortingColumns(Ascending("id")), DropDuplicatedRows(true)),
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	wrapped := &convertedColumnChunk{chunk: fc, targetColumnIndex: ^uint16(2)}
-	if got, ok := fileColumnChunkOf(wrapped); !ok || got != fc {
-		t.Fatal("expected convertedColumnChunk to unwrap to inner *FileColumnChunk")
+	var dst bytes.Buffer
+	w := NewGenericWriter[copyTestRow](&dst, SortingWriterConfig(SortingColumns(Ascending("id"))))
+	if _, err := w.WriteRowGroup(merged); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := OpenFile(bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := out.NumRows(); got != 5 {
+		t.Fatalf("deduplicated output has %d rows, want 5 (fast path bypassed dedup)", got)
+	}
+}
+
+// TestWriteRowGroupConversionNotBypassed is a regression test: WriteRowGroup of
+// a converted merge (source schema differs from the target, requiring value
+// conversion) must not take the chunk-level fast paths, which would emit the
+// unconverted source values under the converted schema (convertedRowGroup's
+// ColumnChunks expose the raw source chunks; conversion only happens in Rows()).
+func TestWriteRowGroupConversionNotBypassed(t *testing.T) {
+	type rowStr struct {
+		ID string `parquet:"id"`
+	}
+	type rowInt struct {
+		ID int64 `parquet:"id"`
 	}
 
-	if _, ok := fileColumnChunkOf(&emptyColumnChunk{}); ok {
-		t.Fatal("expected non-file chunk to fail unwrap")
+	var src bytes.Buffer
+	sw := NewGenericWriter[rowStr](&src, SortingWriterConfig(SortingColumns(Ascending("id"))))
+	if _, err := sw.Write([]rowStr{{"1"}, {"2"}, {"3"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenFile(bytes.NewReader(src.Bytes()), int64(src.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := MergeRowGroups(f.RowGroups(),
+		&RowGroupConfig{Schema: SchemaOf(rowInt{})},
+		SortingRowGroupConfig(SortingColumns(Ascending("id"))),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var dst bytes.Buffer
+	w := NewGenericWriter[rowInt](&dst)
+	if _, err := w.WriteRowGroup(merged); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewGenericReader[rowInt](bytes.NewReader(dst.Bytes()))
+	defer r.Close()
+	out := make([]rowInt, 4)
+	n, _ := r.Read(out)
+	if n != 3 {
+		t.Fatalf("read %d rows, want 3", n)
+	}
+	for i, want := range []int64{1, 2, 3} {
+		if out[i].ID != want {
+			t.Fatalf("row %d = %d, want %d (fast path bypassed value conversion)", i, out[i].ID, want)
+		}
 	}
 }
 

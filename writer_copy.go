@@ -116,6 +116,11 @@ func (w *Writer) copyableColumnChunks(rowGroup RowGroup) ([]*FileColumnChunk, bo
 	if rowGroup.NumRows() > w.writer.currentRowGroup.maxRows {
 		return nil, false
 	}
+	// Row groups whose Rows() implements semantics beyond reading the column
+	// chunks in order cannot be handled at the chunk level.
+	if !chunkTransparentRowGroup(rowGroup) {
+		return nil, false
+	}
 
 	dst := w.writer.currentRowGroup.columns
 	columns := rowGroup.ColumnChunks()
@@ -125,13 +130,7 @@ func (w *Writer) copyableColumnChunks(rowGroup RowGroup) ([]*FileColumnChunk, bo
 
 	srcs := make([]*FileColumnChunk, len(columns))
 	for i, col := range columns {
-		// Unwrap to the underlying file-backed chunk. This handles both directly
-		// file-backed row groups (plain file rewrites) and ConvertRowGroup's
-		// positional remap wrapper (column reordering produced by MergeNodes,
-		// e.g. a single source row group passed through MergeRowGroups). A
-		// genuine type conversion would be caught and demoted by the type check
-		// in columnChunkIsCopyable.
-		fc, ok := fileColumnChunkOf(col)
+		fc, ok := col.(*FileColumnChunk)
 		if !ok {
 			return nil, false
 		}
@@ -143,19 +142,31 @@ func (w *Writer) copyableColumnChunks(rowGroup RowGroup) ([]*FileColumnChunk, bo
 	return srcs, true
 }
 
-// fileColumnChunkOf unwraps positional-remap wrappers to reach the underlying
-// file-backed column chunk, returning false if the chunk is not (or does not
-// wrap) a *FileColumnChunk.
-func fileColumnChunkOf(col ColumnChunk) (*FileColumnChunk, bool) {
-	for {
-		switch c := col.(type) {
-		case *FileColumnChunk:
-			return c, true
-		case *convertedColumnChunk:
-			col = c.chunk
-		default:
-			return nil, false
-		}
+// chunkTransparentRowGroup reports whether reading rowGroup's column chunks in
+// order is equivalent to reading its Rows(). The fast paths in this file and in
+// writer_reencode.go operate on the column chunks directly, so they must not be
+// applied to row group wrappers whose Rows() adds semantics on top of the
+// chunks:
+//
+//   - dedupRowGroup drops duplicated rows in Rows(); its ColumnChunks() are
+//     promoted unchanged from the wrapped row group, so a chunk-level copy
+//     would silently retain the duplicates.
+//   - convertedRowGroup applies value conversion in Rows() (e.g. numeric or
+//     time unit conversions); its ColumnChunks() expose the unconverted source
+//     chunks, so a chunk-level copy would emit pre-conversion values under the
+//     post-conversion schema. Note that a physical type check is not sufficient
+//     to detect this: conversions such as timestamp millis→micros change values
+//     while preserving the INT64 physical type.
+//
+// Identity conversions never produce these wrappers (ConvertRowGroup returns
+// the row group unwrapped when schemas are equal), so rejecting them does not
+// cost the fast paths anything in the matched-schema case.
+func chunkTransparentRowGroup(rowGroup RowGroup) bool {
+	switch rowGroup.(type) {
+	case *dedupRowGroup, *convertedRowGroup:
+		return false
+	default:
+		return true
 	}
 }
 

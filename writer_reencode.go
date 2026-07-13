@@ -31,20 +31,26 @@ var reencodePathCounter atomic.Int64
 // baseline.
 var disableWriteReencode bool
 
-// fileBackedRowGroup reports whether every column of rowGroup unwraps to a
-// file-backed chunk and the row count fits the configured row group size.
-// File-backed columns guarantee that reading column-wise preserves row order
-// (this excludes overlapping heap merges, whose order depends on cross-column
-// row interleaving); the size check ensures column-wise writing does not produce
-// a row group larger than the row path would.
+// fileBackedRowGroup reports whether every column of rowGroup is a file-backed
+// chunk and the row count fits the configured row group size. File-backed
+// columns guarantee that reading column-wise preserves row order (this excludes
+// overlapping heap merges, whose order depends on cross-column row
+// interleaving); the size check ensures column-wise writing does not produce a
+// row group larger than the row path would. Row groups whose Rows() adds
+// semantics on top of the chunks (deduplication, value conversion) are rejected
+// by chunkTransparentRowGroup — reading their chunks directly would bypass
+// those semantics.
 func (w *Writer) fileBackedRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool) {
+	if !chunkTransparentRowGroup(rowGroup) {
+		return nil, false
+	}
 	dst := w.writer.currentRowGroup.columns
 	columns := rowGroup.ColumnChunks()
 	if len(columns) == 0 || len(columns) != len(dst) {
 		return nil, false
 	}
 	for _, col := range columns {
-		if _, ok := fileColumnChunkOf(col); !ok {
+		if _, ok := col.(*FileColumnChunk); !ok {
 			return nil, false
 		}
 	}
