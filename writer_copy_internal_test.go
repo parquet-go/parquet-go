@@ -1316,3 +1316,73 @@ func TestWriteRowGroupBufferUsesL3(t *testing.T) {
 		t.Fatal("L3 buffer output differs from row-path output")
 	}
 }
+
+// filteringRowGroup simulates an application-defined RowGroup implementation
+// whose Rows() adds semantics (here: keeping only even ids) while ColumnChunks
+// exposes the unfiltered file chunks. Such implementations must never take the
+// chunk-level fast paths.
+type filteringRowGroup struct {
+	RowGroup
+}
+
+func (f *filteringRowGroup) Rows() Rows {
+	return &filteringRows{Rows: f.RowGroup.Rows()}
+}
+
+type filteringRows struct {
+	Rows
+}
+
+func (f *filteringRows) ReadRows(rows []Row) (int, error) {
+	for {
+		n, err := f.Rows.ReadRows(rows)
+		kept := 0
+		for j := range n {
+			if rows[j][0].Int64()%2 == 0 {
+				if kept != j {
+					// Copy the values rather than the slice header so each slot
+					// keeps its own backing array (the reader reuses them).
+					rows[kept] = append(rows[kept][:0], rows[j]...)
+				}
+				kept++
+			}
+		}
+		if kept > 0 || err != nil {
+			return kept, err
+		}
+	}
+}
+
+// TestWriteRowGroupCustomImplementationNotBypassed verifies that the fast paths
+// are opt-in: an application-defined RowGroup (which cannot implement the
+// unexported chunkTransparentMarker) is written through its Rows()
+// implementation, preserving whatever semantics it adds.
+func TestWriteRowGroupCustomImplementationNotBypassed(t *testing.T) {
+	rows := makeCopyTestRows(100) // ids 0..99
+	src := writeCopyTestFile(t, rows)
+
+	beforeCopy, beforeL3 := copyPathCounter.Load(), reencodePathCounter.Load()
+
+	var dst bytes.Buffer
+	w := NewGenericWriter[copyTestRow](&dst)
+	if _, err := w.WriteRowGroup(&filteringRowGroup{RowGroup: src.RowGroups()[0]}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if copyPathCounter.Load() != beforeCopy || reencodePathCounter.Load() != beforeL3 {
+		t.Fatal("custom RowGroup implementation took a chunk-level fast path")
+	}
+
+	got := readCopyTestRows(t, dst.Bytes(), len(rows))
+	if len(got) != 50 {
+		t.Fatalf("filtered output has %d rows, want 50 (custom Rows() semantics bypassed)", len(got))
+	}
+	for i, r := range got {
+		if r.ID != int64(i*2) {
+			t.Fatalf("row %d has id %d, want %d", i, r.ID, i*2)
+		}
+	}
+}

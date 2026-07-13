@@ -145,11 +145,24 @@ func (w *Writer) copyableColumnChunks(rowGroup RowGroup) ([]*FileColumnChunk, bo
 	return srcs, true
 }
 
+// chunkTransparentMarker is implemented by row group types for which reading
+// the column chunks in order is equivalent to reading Rows(). The method is
+// unexported on purpose: row group implementations outside this package cannot
+// opt in, so they always take the row-oriented path, which honors whatever
+// semantics their Rows() implements.
+type chunkTransparentMarker interface {
+	chunkTransparentRowGroup()
+}
+
 // chunkTransparentRowGroup reports whether reading rowGroup's column chunks in
 // order is equivalent to reading its Rows(). The fast paths in this file and in
-// writer_reencode.go operate on the column chunks directly, so they must not be
-// applied to row group wrappers whose Rows() adds semantics on top of the
-// chunks:
+// writer_reencode.go operate on the column chunks directly, so they must only
+// be applied to row group types that explicitly opt in via
+// chunkTransparentMarker. Everything else — including application-defined
+// RowGroup implementations — is conservatively assumed to implement semantics
+// in Rows() and handled through the row-oriented path.
+//
+// Known examples of wrappers whose Rows() adds semantics on top of the chunks:
 //
 //   - dedupRowGroup drops duplicated rows in Rows(); its ColumnChunks() are
 //     promoted unchanged from the wrapped row group, so a chunk-level copy
@@ -161,16 +174,12 @@ func (w *Writer) copyableColumnChunks(rowGroup RowGroup) ([]*FileColumnChunk, bo
 //     to detect this: conversions such as timestamp millis→micros change values
 //     while preserving the INT64 physical type.
 //
-// Identity conversions never produce these wrappers (ConvertRowGroup returns
-// the row group unwrapped when schemas are equal), so rejecting them does not
+// Identity conversions never produce wrappers (ConvertRowGroup returns the row
+// group unwrapped when schemas are equal), so requiring the marker does not
 // cost the fast paths anything in the matched-schema case.
 func chunkTransparentRowGroup(rowGroup RowGroup) bool {
-	switch rowGroup.(type) {
-	case *dedupRowGroup, *convertedRowGroup:
-		return false
-	default:
-		return true
-	}
+	_, ok := rowGroup.(chunkTransparentMarker)
+	return ok
 }
 
 // loadCopiedChunks stages every source column chunk into its destination
