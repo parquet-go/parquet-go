@@ -888,8 +888,34 @@ func (rg *ConcurrentRowGroupWriter) reset() {
 func (rg *ConcurrentRowGroupWriter) configureBloomFilters(columnChunks []ColumnChunk) {
 	for i, c := range rg.columns {
 		if c.columnFilter != nil {
+			// When the source only knows an upper bound of its value count
+			// (row-range views of repeated columns), leave the filter
+			// unallocated: flushFilterPages then builds it from the actual
+			// number of values written, keeping the filter exactly the size
+			// the configuration prescribes.
+			if !chunkNumValuesIsExact(columnChunks[i]) {
+				continue
+			}
 			c.resizeBloomFilter(columnChunks[i].NumValues())
 		}
+	}
+}
+
+// chunkNumValuesIsExact reports whether chunk.NumValues() is the exact number
+// of values, as opposed to an upper bound (see rangeColumnChunk).
+func chunkNumValuesIsExact(chunk ColumnChunk) bool {
+	switch c := chunk.(type) {
+	case *rangeColumnChunk:
+		return c.exactNumValues()
+	case *multiColumnChunk:
+		for _, part := range c.chunks {
+			if !chunkNumValuesIsExact(part) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
 	}
 }
 
