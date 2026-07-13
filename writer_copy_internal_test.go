@@ -1161,3 +1161,94 @@ func TestSortingWriterDropDuplicatedRows(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteRowGroupCopyBloomFilter verifies that a writer configured with a
+// bloom filter still takes the verbatim copy path when the source chunk carries
+// an equivalent filter, that the copied filter works in the output file, and
+// that mismatched or absent source filters demote to a rebuild.
+func TestWriteRowGroupCopyBloomFilter(t *testing.T) {
+	rows := makeCopyTestRows(1000)
+	filter10 := SplitBlockFilter(10, "id")
+
+	rewrite := func(src *File, opts ...WriterOption) (*File, int64, int64) {
+		beforeCopy, beforeL3 := copyPathCounter.Load(), reencodePathCounter.Load()
+		var dst bytes.Buffer
+		w := NewGenericWriter[copyTestRow](&dst, opts...)
+		for _, rg := range src.RowGroups() {
+			if _, err := w.WriteRowGroup(rg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		out, err := OpenFile(bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out, copyPathCounter.Load() - beforeCopy, reencodePathCounter.Load() - beforeL3
+	}
+
+	checkFilter := func(t *testing.T, out *File) {
+		t.Helper()
+		bf := out.RowGroups()[0].ColumnChunks()[0].BloomFilter()
+		if bf == nil {
+			t.Fatal("output column has no bloom filter")
+		}
+		for _, id := range []int64{0, 1, 500, 999} {
+			ok, err := bf.Check(ValueOf(id))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatalf("bloom filter misses present value %d", id)
+			}
+		}
+		misses := 0
+		for id := int64(10_000); id < 10_100; id++ {
+			ok, err := bf.Check(ValueOf(id))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				misses++
+			}
+		}
+		if misses == 0 {
+			t.Fatal("bloom filter matches every absent value; likely bogus")
+		}
+	}
+
+	t.Run("matching_filter_copies", func(t *testing.T) {
+		src := writeCopyTestFile(t, rows, BloomFilters(filter10))
+		out, copied, _ := rewrite(src, BloomFilters(filter10))
+		if copied == 0 {
+			t.Fatal("expected verbatim copy with matching source bloom filter")
+		}
+		checkFilter(t, out)
+	})
+
+	t.Run("missing_source_filter_demotes", func(t *testing.T) {
+		src := writeCopyTestFile(t, rows) // no filter in source
+		out, copied, l3 := rewrite(src, BloomFilters(filter10))
+		if copied != 0 {
+			t.Fatalf("expected demotion when source lacks a bloom filter, %d chunks copied", copied)
+		}
+		if l3 == 0 {
+			t.Fatal("expected L3 rebuild when source lacks a bloom filter")
+		}
+		checkFilter(t, out)
+	})
+
+	t.Run("different_bits_per_value_demotes", func(t *testing.T) {
+		src := writeCopyTestFile(t, rows, BloomFilters(SplitBlockFilter(2, "id")))
+		out, copied, l3 := rewrite(src, BloomFilters(filter10))
+		if copied != 0 {
+			t.Fatalf("expected demotion on bits-per-value mismatch, %d chunks copied", copied)
+		}
+		if l3 == 0 {
+			t.Fatal("expected L3 rebuild on bits-per-value mismatch")
+		}
+		checkFilter(t, out)
+	})
+}

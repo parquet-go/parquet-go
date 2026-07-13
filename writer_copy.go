@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync/atomic"
 
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -44,6 +45,8 @@ type copiedChunk struct {
 	dictLength    int64       // length of the dictionary page, 0 if none
 	dataOffset    int64       // byte offset of the first data page in the source
 	dataLength    int64       // length of all data pages
+	bloomOffset   int64       // byte offset of the bloom filter in the source
+	bloomLength   int64       // length of the bloom filter (header + bitset), 0 if not copied
 	columnIndex   format.ColumnIndex
 	sizeStats     format.SizeStatistics
 	statistics    format.Statistics
@@ -208,9 +211,10 @@ func columnChunkIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	if meta.Codec != dst.compression.CompressionCodec() {
 		return false
 	}
-	// A writer-requested bloom filter would have to be recomputed from decoded
-	// values, which a verbatim copy cannot do. Demote.
-	if dst.columnFilter != nil {
+	// A writer-requested bloom filter can only be satisfied by a verbatim copy
+	// when the source chunk carries a filter equivalent to the one the writer
+	// would build; otherwise the filter must be recomputed from decoded values.
+	if dst.columnFilter != nil && !bloomFilterIsCopyable(dst, src) {
 		return false
 	}
 	// We copy statistics and the page index from the source; require both to be
@@ -262,6 +266,46 @@ func encodingStatsMatch(stats []format.PageEncodingStats, dst *ColumnWriter) boo
 		return false
 	}
 	return true
+}
+
+// bloomFilterIsCopyable reports whether the source chunk carries a bloom filter
+// equivalent to the one the destination column writer is configured to build,
+// so that copying its bytes verbatim is indistinguishable from recomputing it:
+//
+//   - the source records the filter location and length (older files omit the
+//     length, in which case the byte range is unknown);
+//   - both source and destination use the uncompressed filter representation
+//     (this library's default; compressed filters would require comparing
+//     post-compression content);
+//   - the source header describes the same algorithm and hash the writer would
+//     use (split-block, xxhash — the only ones supported); and
+//   - the source bitset has exactly the size the destination filter would
+//     allocate for this chunk's value count, i.e. the same bits-per-value.
+func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
+	meta := &src.chunk.MetaData
+	if meta.BloomFilterOffset == 0 || meta.BloomFilterLength <= 0 {
+		return false
+	}
+	if dst.bloomFilterCompression != nil && dst.bloomFilterCompression.CompressionCodec() != format.Uncompressed {
+		return false
+	}
+
+	section := io.NewSectionReader(src.file.reader, meta.BloomFilterOffset, int64(meta.BloomFilterLength))
+	rbuf, rbufpool := getBufioReader(section, 1024)
+	defer putBufioReader(rbuf, rbufpool)
+
+	var header format.BloomFilterHeader
+	compact := thrift.CompactProtocol{}
+	if err := thrift.NewDecoder(compact.NewReader(rbuf)).Decode(&header); err != nil {
+		return false
+	}
+	if !isSplitBlockAlgorithm(&header) || !isXxHash(&header) {
+		return false
+	}
+	if _, ok := header.Compression.Value.(*format.BloomFilterUncompressed); !ok {
+		return false
+	}
+	return int(header.NumBytes) == dst.columnFilter.Size(meta.NumValues)
 }
 
 // loadCopiedChunk prepares the destination ColumnWriter to emit a source column
@@ -321,6 +365,14 @@ func (c *ColumnWriter) loadCopiedChunk(src *FileColumnChunk) error {
 		numRows:               src.rowGroup.NumRows,
 		totalUncompressedSize: meta.TotalUncompressedSize,
 		totalCompressedSize:   meta.TotalCompressedSize,
+	}
+
+	// When the destination column is configured with a bloom filter, the copy
+	// predicate has already verified that the source carries an equivalent one;
+	// record its byte range so it is copied verbatim during assembly.
+	if c.columnFilter != nil {
+		cc.bloomOffset = meta.BloomFilterOffset
+		cc.bloomLength = int64(meta.BloomFilterLength)
 	}
 
 	c.copied = cc

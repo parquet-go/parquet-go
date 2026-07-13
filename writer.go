@@ -1484,6 +1484,12 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		if err := c.Flush(); err != nil {
 			return 0, err
 		}
+		// Columns copied verbatim carry the source's bloom filter bytes (when
+		// configured); building a filter from the writer's (empty) buffers would
+		// produce a bogus one.
+		if c.copied != nil {
+			continue
+		}
 		if err := c.flushFilterPages(); err != nil {
 			return 0, err
 		}
@@ -1562,6 +1568,41 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 	}
 
 	for i, c := range rg.columns {
+		// Columns copied verbatim carry the source's bloom filter as a raw byte
+		// range (header + bitset); stream it through unchanged.
+		if c.copied != nil && c.copied.bloomLength > 0 {
+			cc := c.copied
+			bloom := io.NewSectionReader(cc.reader, cc.bloomOffset, cc.bloomLength)
+
+			if rg.config.DeferredBloomFiltersBuffers != nil {
+				buf := rg.config.DeferredBloomFiltersBuffers.GetBuffer()
+				reset := func() { rg.config.DeferredBloomFiltersBuffers.PutBuffer(buf) }
+				if _, err := io.Copy(buf, bloom); err != nil {
+					reset()
+					return 0, fmt.Errorf("copying bloom filter of row group column %d: %w", i, err)
+				}
+				if _, err := buf.Seek(0, io.SeekStart); err != nil {
+					reset()
+					return 0, err
+				}
+				w.deferredBloomFilterSize += cc.bloomLength
+				w.deferredBloomFilters = append(w.deferredBloomFilters, deferredBloomFilter{
+					rowGroup: rowGroupIndex,
+					column:   i,
+					buf:      buf,
+					reset:    reset,
+				})
+				continue
+			}
+
+			c.columnChunk.MetaData.BloomFilterOffset = w.writer.offset
+			if _, err := w.writer.ReadFrom(bloom); err != nil {
+				return 0, fmt.Errorf("copying bloom filter of row group column %d: %w", i, err)
+			}
+			c.columnChunk.MetaData.BloomFilterLength = int32(cc.bloomLength)
+			continue
+		}
+
 		if len(c.filter) == 0 {
 			continue
 		}
