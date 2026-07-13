@@ -507,14 +507,12 @@ func mergeRowReaders[T RowReader](rows []T, compare func(Row, Row) int) RowReade
 		}
 	default:
 		buffers := make([]bufferedRowReader, len(rows))
-		readers := make([]*bufferedRowReader, len(rows))
 		for i, r := range rows {
 			buffers[i].rows = r
-			readers[i] = &buffers[i]
 		}
 		return &mergedRowReader{
 			compare: compare,
-			readers: readers,
+			buffers: buffers,
 		}
 	}
 }
@@ -630,39 +628,54 @@ func (m *mergedRowReader2) ReadRows(rows []Row) (n int, err error) {
 	return n, nil
 }
 
+// mergedRowReader merges k buffered row readers using a tournament tree of
+// losers, which performs ~log2(k) comparisons per row instead of the ~2*log2(k)
+// required to sift down a binary min-heap.
+//
+// The tree is laid out as the first k positions of a 2k binary heap: internal
+// node i stores the loser of the game played at that position, identified by
+// the index of its buffer, and the leaf for buffer i sits at implicit position
+// k+i. The overall winner is kept out of the tree in the winner field, and its
+// leaf position in winnerLeaf. Advancing the merge replays the games on the
+// path from the winner's leaf to the root, comparing the new head of the
+// winner against the losers stored along the way. Exhausted readers are
+// represented by a negative value which loses every game it plays.
 type mergedRowReader struct {
 	compare     func(Row, Row) int
-	readers     []*bufferedRowReader
+	buffers     []bufferedRowReader
+	losers      []int32
+	count       int
+	winner      int32
+	winnerLeaf  int32
 	initialized bool
 }
 
 func (m *mergedRowReader) initialize() error {
-	for i, r := range m.readers {
-		switch err := r.read(); err {
+	k := len(m.buffers)
+	m.losers = make([]int32, k)
+	m.count = k
+
+	leaves := make([]int32, k)
+	for i := range leaves {
+		leaves[i] = int32(i)
+	}
+
+	for i := range m.buffers {
+		switch err := m.buffers[i].read(); err {
 		case nil:
 		case io.EOF:
-			m.readers[i] = nil
+			leaves[i] = -1
+			m.count--
 		default:
-			m.readers = nil
+			m.count = 0
 			return err
 		}
 	}
 
-	n := 0
-	for _, r := range m.readers {
-		if r != nil {
-			m.readers[n] = r
-			n++
-		}
+	if m.count > 0 {
+		m.winner = m.playInitialGames(0, leaves)
+		m.winnerLeaf = int32(k) + m.winner
 	}
-
-	clear := m.readers[n:]
-	for i := range clear {
-		clear[i] = nil
-	}
-
-	m.readers = m.readers[:n]
-	m.heapInit()
 	return nil
 }
 
@@ -675,88 +688,96 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 		}
 	}
 
-	for n < len(rows) && len(m.readers) != 0 {
-		r := m.readers[0]
-		if r.empty() { // This readers buffer has been exhausted, repopulate it.
-			if err := r.read(); err != nil {
-				if err == io.EOF {
-					m.heapPop()
-					continue
+	for n < len(rows) && m.count != 0 {
+		c := &m.buffers[m.winner]
+
+		if c.empty() { // This reader's buffer has been exhausted, repopulate it.
+			switch err := c.read(); err {
+			case nil:
+			case io.EOF:
+				m.winner = -1
+				m.count--
+				if m.count == 0 {
+					break
 				}
+			default:
 				return n, err
-			} else {
-				if !m.heapDown(0, len(m.readers)) { // heap.Fix
-					m.heapUp(0)
-				}
-				continue
 			}
+			// The winner's head changed (or the winner was exhausted), replay
+			// the games on the path from its leaf to the root to determine the
+			// new winner.
+			m.replayGames()
+			continue
 		}
 
-		rows[n] = append(rows[n][:0], r.head()...)
+		rows[n] = append(rows[n][:0], c.head()...)
 		n++
 
-		if !r.next() {
+		if !c.next() {
 			return n, nil
 		}
-		if !m.heapDown(0, len(m.readers)) { // heap.Fix
-			m.heapUp(0)
-		}
+		m.replayGames()
 	}
 
-	if len(m.readers) == 0 {
+	if m.count == 0 {
 		err = io.EOF
 	}
 
 	return n, err
 }
 
-func (m *mergedRowReader) heapInit() {
-	n := len(m.readers)
-	for i := n/2 - 1; i >= 0; i-- {
-		m.heapDown(i, n)
+// playInitialGames recursively plays the tournament rooted at position i,
+// storing the loser of each game at the internal node where it was played,
+// and returns the winner of the subtree.
+func (m *mergedRowReader) playInitialGames(i int32, leaves []int32) int32 {
+	k := int32(len(m.buffers))
+	if i >= k { // leaf or out of bounds
+		if i -= k; int(i) < len(leaves) {
+			return leaves[i]
+		}
+		return -1
 	}
+	n1 := m.playInitialGames(2*i+1, leaves)
+	n2 := m.playInitialGames(2*i+2, leaves)
+	loser, winner := m.playGame(n1, n2)
+	m.losers[i] = loser
+	return winner
 }
 
-func (m *mergedRowReader) heapPop() {
-	n := len(m.readers) - 1
-	m.heapSwap(0, n)
-	m.heapDown(0, n)
-	m.readers = m.readers[:n]
+func (m *mergedRowReader) playGame(n1, n2 int32) (loser, winner int32) {
+	if n1 < 0 {
+		return n1, n2
+	}
+	if n2 < 0 {
+		return n2, n1
+	}
+	if m.compare(m.buffers[n1].head(), m.buffers[n2].head()) < 0 {
+		return n2, n1
+	}
+	return n1, n2
 }
 
-func (m *mergedRowReader) heapUp(j int) {
-	for {
-		i := (j - 1) / 2 // parent
-		if i == j || !(m.compare(m.readers[j].head(), m.readers[i].head()) < 0) {
+// replayGames walks the path from the current winner's leaf to the root,
+// playing the winner against the losers stored along the way and exchanging
+// them when they win, then records the new overall winner.
+func (m *mergedRowReader) replayGames() {
+	winner := m.winner
+	for offset := (m.winnerLeaf - 1) / 2; ; offset = (offset - 1) / 2 {
+		player := m.losers[offset]
+
+		if player >= 0 {
+			if winner < 0 || m.compare(m.buffers[player].head(), m.buffers[winner].head()) < 0 {
+				m.losers[offset] = winner
+				winner = player
+			}
+		}
+
+		if offset == 0 {
 			break
 		}
-		m.heapSwap(i, j)
-		j = i
 	}
-}
-
-func (m *mergedRowReader) heapDown(i0, n int) bool {
-	i := i0
-	for {
-		j1 := 2*i + 1
-		if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
-			break
-		}
-		j := j1 // left child
-		if j2 := j1 + 1; j2 < n && m.compare(m.readers[j2].head(), m.readers[j1].head()) < 0 {
-			j = j2 // = 2*i + 2  // right child
-		}
-		if !(m.compare(m.readers[j].head(), m.readers[i].head()) < 0) {
-			break
-		}
-		m.heapSwap(i, j)
-		i = j
-	}
-	return i > i0
-}
-
-func (m *mergedRowReader) heapSwap(i, j int) {
-	m.readers[i], m.readers[j] = m.readers[j], m.readers[i]
+	m.winner = winner
+	m.winnerLeaf = int32(len(m.buffers)) + winner
 }
 
 type bufferedRowReader struct {

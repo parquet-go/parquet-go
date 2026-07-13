@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
@@ -3344,5 +3345,129 @@ func TestMergeRowGroupsMultipleSequentialOverlappingSegments(t *testing.T) {
 	expected := []int64{1, 3, 4, 5, 6, 10, 12, 15, 20}
 	if !slices.Equal(got, expected) {
 		t.Errorf("got %v, want %v", got, expected)
+	}
+}
+
+// sliceRowReader is a minimal in-memory RowReader used to benchmark the k-way
+// merge algorithm in isolation from parquet page decoding.
+type sliceRowReader struct {
+	rows []parquet.Row
+	off  int
+}
+
+func (r *sliceRowReader) ReadRows(rows []parquet.Row) (n int, err error) {
+	for n < len(rows) && r.off < len(r.rows) {
+		rows[n] = append(rows[n][:0], r.rows[r.off]...)
+		n++
+		r.off++
+	}
+	if n == 0 {
+		return 0, io.EOF
+	}
+	return n, nil
+}
+
+func TestMergeRowReaders(t *testing.T) {
+	compare := func(a, b parquet.Row) int {
+		return parquet.Int64Type.Compare(a[0], b[0])
+	}
+
+	prng := rand.New(rand.NewSource(1))
+
+	for _, numReaders := range []int{2, 3, 4, 5, 7, 8, 16, 31, 64} {
+		t.Run(fmt.Sprintf("readers=%d", numReaders), func(t *testing.T) {
+			for trial := range 10 {
+				expect := make([]int64, 0, numReaders*100)
+				readers := make([]parquet.RowReader, numReaders)
+
+				for i := range readers {
+					n := prng.Intn(100)
+					if trial%3 == 0 && i%2 == 0 {
+						n = 0 // exercise readers that are empty from the start
+					}
+					values := make([]int64, n)
+					for j := range values {
+						values[j] = int64(prng.Intn(50)) // small domain to produce duplicates
+					}
+					slices.Sort(values)
+					rows := make([]parquet.Row, n)
+					for j, v := range values {
+						rows[j] = parquet.Row{parquet.Int64Value(v).Level(0, 0, 0)}
+					}
+					readers[i] = &sliceRowReader{rows: rows}
+					expect = append(expect, values...)
+				}
+				slices.Sort(expect)
+
+				merge := parquet.MergeRowReaders(readers, compare)
+				got := make([]int64, 0, len(expect))
+				rbuf := make([]parquet.Row, 7) // small buffer to exercise buffer boundaries
+				for {
+					n, err := merge.ReadRows(rbuf)
+					for _, row := range rbuf[:n] {
+						got = append(got, row[0].Int64())
+					}
+					if err != nil {
+						if !errors.Is(err, io.EOF) {
+							t.Fatal(err)
+						}
+						break
+					}
+				}
+
+				if !slices.Equal(got, expect) {
+					t.Fatalf("trial %d: merged output mismatch: got %d rows, want %d rows\ngot:  %v\nwant: %v",
+						trial, len(got), len(expect), got, expect)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkMergeRowReaders(b *testing.B) {
+	const rowsPerReader = 10_000
+
+	compare := func(a, b parquet.Row) int {
+		return parquet.Int64Type.Compare(a[0], b[0])
+	}
+
+	for _, numReaders := range []int{2, 3, 4, 8, 16, 32, 64, 128} {
+		b.Run(fmt.Sprintf("readers=%d", numReaders), func(b *testing.B) {
+			// Interleave values across readers so the merge alternates between
+			// inputs on every row, maximizing the number of comparisons.
+			readers := make([]sliceRowReader, numReaders)
+			for i := range readers {
+				rows := make([]parquet.Row, rowsPerReader)
+				for j := range rows {
+					rows[j] = parquet.Row{parquet.Int64Value(int64(j*numReaders+i)).Level(0, 0, 0)}
+				}
+				readers[i].rows = rows
+			}
+
+			rbuf := make([]parquet.Row, benchmarkRowsPerStep)
+			totalRows := int64(0)
+
+			start := time.Now()
+			for b.Loop() {
+				rowReaders := make([]parquet.RowReader, numReaders)
+				for i := range readers {
+					readers[i].off = 0
+					rowReaders[i] = &readers[i]
+				}
+				merge := parquet.MergeRowReaders(rowReaders, compare)
+				for {
+					n, err := merge.ReadRows(rbuf)
+					totalRows += int64(n)
+					if err != nil {
+						if !errors.Is(err, io.EOF) {
+							b.Fatal(err)
+						}
+						break
+					}
+				}
+			}
+			seconds := time.Since(start).Seconds()
+			b.ReportMetric(float64(totalRows)/seconds, "row/s")
+		})
 	}
 }
