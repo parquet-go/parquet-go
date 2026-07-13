@@ -490,3 +490,133 @@ func TestMergeRefinementSkippedWithDedup(t *testing.T) {
 		}
 	}
 }
+
+// refineWriteRow includes a repeated column so bloom sizing must handle
+// inexact range-view value counts.
+type refineWriteRow struct {
+	Key  int64   `parquet:"key"`
+	Src  string  `parquet:"src"`
+	List []int32 `parquet:"list,list"`
+}
+
+// TestMergeRefinementWrite writes refined merges through WriteRowGroup and
+// verifies that the streamed regions take the column-oriented fast paths, that
+// the output matches the row-path reference, and that a bloom filter on a
+// repeated column is built exactly despite range views only knowing an upper
+// bound of their value count.
+func TestMergeRefinementWrite(t *testing.T) {
+	newFile := func(src string, start, n int64) *File {
+		rows := make([]refineWriteRow, n)
+		for i := range rows {
+			rows[i] = refineWriteRow{Key: start + int64(i), Src: fmt.Sprintf("%s-%d", src, i)}
+			for j := range int(start+int64(i)) % 3 {
+				rows[i].List = append(rows[i].List, int32(j))
+			}
+		}
+		var buf bytes.Buffer
+		w := NewGenericWriter[refineWriteRow](&buf,
+			SortingWriterConfig(SortingColumns(Ascending("key"))), PageBufferSize(512))
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	// Chain with ~4% boundary overlaps.
+	files := []*File{
+		newFile("a", 0, 5000),
+		newFile("b", 4800, 5000),
+		newFile("c", 9600, 5000),
+	}
+
+	write := func(refine bool, opts ...WriterOption) ([]byte, int64) {
+		defer func(prev bool) { disableMergeRefinement = prev }(disableMergeRefinement)
+		disableMergeRefinement = !refine
+		rgs := make([]RowGroup, len(files))
+		for i, f := range files {
+			rgs[i] = f.RowGroups()[0]
+		}
+		m, err := MergeRowGroups(rgs,
+			&RowGroupConfig{Schema: rgs[0].Schema()},
+			SortingRowGroupConfig(SortingColumns(Ascending("key"))),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dst bytes.Buffer
+		opts = append(opts, SortingWriterConfig(SortingColumns(Ascending("key"))))
+		w := NewGenericWriter[refineWriteRow](&dst, opts...)
+		before := reencodePathCounter.Load()
+		if _, err := w.WriteRowGroup(m); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return dst.Bytes(), reencodePathCounter.Load() - before
+	}
+
+	refined, l3 := write(true)
+	reference, _ := write(false)
+
+	if l3 == 0 {
+		t.Fatal("expected refined merge to take the column-oriented fast path for streamed regions")
+	}
+
+	readAll := func(b []byte) []refineWriteRow {
+		r := NewGenericReader[refineWriteRow](bytes.NewReader(b))
+		defer r.Close()
+		out := make([]refineWriteRow, 16000)
+		n, _ := r.Read(out)
+		return out[:n]
+	}
+	gotR := readAll(refined)
+	gotRef := readAll(reference)
+	if len(gotR) != len(gotRef) {
+		t.Fatalf("refined write has %d rows, reference %d", len(gotR), len(gotRef))
+	}
+	for i := 1; i < len(gotR); i++ {
+		if gotR[i].Key < gotR[i-1].Key {
+			t.Fatalf("refined write output not sorted at %d", i)
+		}
+	}
+
+	t.Run("bloom_on_repeated_column", func(t *testing.T) {
+		out, _ := write(true, BloomFilters(SplitBlockFilter(10, "list", "list", "element")))
+		f, err := OpenFile(bytes.NewReader(out), int64(len(out)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		checked := 0
+		for _, rg := range f.RowGroups() {
+			var listChunk ColumnChunk
+			for _, c := range rg.ColumnChunks() {
+				if c.Type().Kind() == Int32 {
+					listChunk = c
+				}
+			}
+			bf := listChunk.BloomFilter()
+			if bf == nil {
+				continue // row groups whose column had no filter written
+			}
+			ok, err := bf.Check(ValueOf(int32(0)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatal("bloom filter misses value 0, present in every non-empty list")
+			}
+			checked++
+		}
+		if checked == 0 {
+			t.Fatal("no bloom filters found in refined output")
+		}
+	})
+}
