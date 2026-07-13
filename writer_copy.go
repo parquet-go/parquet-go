@@ -67,12 +67,14 @@ type orderedRowGroupSegments interface {
 }
 
 // splittableCopyableSegments returns the writable segments of rowGroup when it
-// is a segmented row group and at least one segment can be copied verbatim. The
-// writer then emits one output row group per segment so the copyable ones take
-// the fast path. Splitting is gated on copy-eligibility so that pure re-encode
-// merges keep their existing output structure.
+// is a segmented row group and at least one segment can be written through an
+// optimized segment path. The writer then emits packed output row groups so
+// copyable single segments can take the L0 fast path and multi-segment batches
+// can take the L3 column-oriented packing path. Splitting is gated on
+// optimization eligibility so that pure re-encode merges keep their existing
+// output structure.
 func (w *Writer) splittableCopyableSegments(rowGroup RowGroup) ([]RowGroup, bool) {
-	if disableWriteCopy {
+	if disableWriteCopy && disableWriteReencode {
 		return nil, false
 	}
 	v, ok := rowGroup.(orderedRowGroupSegments)
@@ -85,6 +87,9 @@ func (w *Writer) splittableCopyableSegments(rowGroup RowGroup) ([]RowGroup, bool
 	}
 	for _, seg := range segments {
 		if _, ok := w.copyableColumnChunks(seg); ok {
+			return segments, true
+		}
+		if _, ok := w.reencodableRowGroup(seg); ok {
 			return segments, true
 		}
 	}

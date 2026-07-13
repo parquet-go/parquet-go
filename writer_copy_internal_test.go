@@ -27,7 +27,7 @@ func makeCopyTestRows(n int) []copyTestRow {
 	return rows
 }
 
-func writeCopyTestFile(t *testing.T, rows []copyTestRow, opts ...WriterOption) *File {
+func writeCopyTestFile(t testing.TB, rows []copyTestRow, opts ...WriterOption) *File {
 	t.Helper()
 	var buf bytes.Buffer
 	w := NewGenericWriter[copyTestRow](&buf, opts...)
@@ -572,7 +572,7 @@ func BenchmarkWriteRowGroupReencodeWide(b *testing.B) {
 // buildIDFile writes a single-row-group file whose rows are sorted by id. The
 // caller must pass ids in ascending order. Other fields are derived from id so
 // that the fully-sorted sequence of rows is uniquely determined by the id set.
-func buildIDFile(t *testing.T, ids []int64) *File {
+func buildIDFile(t testing.TB, ids []int64) *File {
 	t.Helper()
 	rows := make([]copyTestRow, len(ids))
 	for i, id := range ids {
@@ -850,4 +850,172 @@ func TestWriteRowGroupMergePacksToMaxRows(t *testing.T) {
 			t.Fatalf("row group %d has %d rows, exceeds MaxRowsPerRowGroup=500", i, rg.NumRows())
 		}
 	}
+}
+
+// TestWriteRowGroupMergePacksWithBloomFilters verifies that a merge of many
+// small, sorted, non-overlapping row groups can still enter the segment-packing
+// path when L0 copy is disabled by destination bloom filters. The packed output
+// should consolidate several input row groups into fewer larger output row
+// groups, rebuild bloom filters, and use the L3 column-oriented re-encode path
+// instead of falling back to the row-oriented merged reader path.
+func TestWriteRowGroupMergePacksWithBloomFilters(t *testing.T) {
+	const numFiles, perFile = 20, 100
+
+	files := make([]*File, numFiles)
+	for i := range files {
+		files[i] = buildIDFile(t, idSeq(int64(i*perFile), int64(i*perFile+perFile-1)))
+	}
+
+	rgs := make([]RowGroup, numFiles)
+	for i, f := range files {
+		rgs[i] = f.RowGroups()[0]
+	}
+
+	merged, err := MergeRowGroups(
+		rgs,
+		SortingRowGroupConfig(SortingColumns(Ascending("id"))),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	beforeCopy := copyPathCounter.Load()
+	beforeReencode := reencodePathCounter.Load()
+
+	var dst bytes.Buffer
+	w := NewGenericWriter[copyTestRow](
+		&dst,
+		SortingWriterConfig(SortingColumns(Ascending("id"))),
+		MaxRowsPerRowGroup(500),
+		BloomFilters(SplitBlockFilter(10, "id")),
+	)
+	if _, err := w.WriteRowGroup(merged); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if copied := copyPathCounter.Load() - beforeCopy; copied != 0 {
+		t.Fatalf("expected bloom filters to disable L0 copy, but copied %d column chunks", copied)
+	}
+	if reencoded := reencodePathCounter.Load() - beforeReencode; reencoded == 0 {
+		t.Fatal("expected packed merge with bloom filters to use the L3 re-encode path")
+	}
+
+	out, err := OpenFile(bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(out.RowGroups()); got != 4 {
+		t.Fatalf("output row groups = %d, want 4 packed groups of 500 rows", got)
+	}
+	if got := out.NumRows(); got != numFiles*perFile {
+		t.Fatalf("output row count = %d, want %d", got, numFiles*perFile)
+	}
+
+	for i, rg := range out.RowGroups() {
+		if rg.NumRows() > 500 {
+			t.Fatalf("row group %d has %d rows, exceeds MaxRowsPerRowGroup=500", i, rg.NumRows())
+		}
+		filter := rg.ColumnChunks()[0].BloomFilter()
+		if filter == nil {
+			t.Fatalf("row group %d id column has no bloom filter", i)
+		}
+
+		rowBase := int64(i * 500)
+		for _, id := range []int64{rowBase, rowBase + rg.NumRows()/2, rowBase + rg.NumRows() - 1} {
+			ok, err := filter.Check(ValueOf(id))
+			if err != nil {
+				t.Fatalf("checking bloom filter for id=%d: %v", id, err)
+			}
+			if !ok {
+				t.Fatalf("bloom filter for row group %d returned false for present id=%d", i, id)
+			}
+		}
+	}
+
+	got := readCopyTestRows(t, dst.Bytes(), numFiles*perFile)
+	if len(got) != numFiles*perFile {
+		t.Fatalf("read %d rows, want %d", len(got), numFiles*perFile)
+	}
+	for i, r := range got {
+		if r.ID != int64(i) {
+			t.Fatalf("row %d has id %d, want %d", i, r.ID, i)
+		}
+	}
+}
+
+// BenchmarkWriteRowGroupMergePackPaths compares the row-oriented packed merge
+// path against the optimized column-oriented packed merge path for the same
+// scenario as TestWriteRowGroupMergePacksWithBloomFilters:
+//
+//   - many small sorted, non-overlapping file-backed row groups
+//   - destination packs them into larger row groups
+//   - destination rebuilds a bloom filter for "id"
+//
+// "rowpath" disables both write fast paths, so WriteRowGroup(merged) falls back
+// to reading merged.Rows() and writing rows. "columnpack" leaves the fast paths
+// enabled, so ordered segments are packed column-by-column.
+func BenchmarkWriteRowGroupMergePackPaths(b *testing.B) {
+	const (
+		numFiles = 20
+		perFile  = 1_000
+		maxRows  = 5_000
+	)
+
+	files := make([]*File, numFiles)
+	for i := range files {
+		files[i] = buildIDFile(b, idSeq(int64(i*perFile), int64(i*perFile+perFile-1)))
+	}
+
+	rowGroups := make([]RowGroup, numFiles)
+	for i, f := range files {
+		rowGroups[i] = f.RowGroups()[0]
+	}
+
+	merged, err := MergeRowGroups(
+		rowGroups,
+		SortingRowGroupConfig(SortingColumns(Ascending("id"))),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	writerOptions := []WriterOption{
+		SortingWriterConfig(SortingColumns(Ascending("id"))),
+		MaxRowsPerRowGroup(maxRows),
+		BloomFilters(SplitBlockFilter(10, "id")),
+	}
+
+	run := func(b *testing.B, fastPaths bool) {
+		defer func(copyDisabled, reencodeDisabled bool) {
+			disableWriteCopy = copyDisabled
+			disableWriteReencode = reencodeDisabled
+		}(disableWriteCopy, disableWriteReencode)
+
+		disableWriteCopy = !fastPaths
+		disableWriteReencode = !fastPaths
+
+		b.ReportAllocs()
+		b.SetBytes(int64(numFiles * perFile))
+		b.ResetTimer()
+
+		for b.Loop() {
+			w := NewGenericWriter[copyTestRow](io.Discard, writerOptions...)
+			if _, err := w.WriteRowGroup(merged); err != nil {
+				b.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	b.Run("rowpath", func(b *testing.B) {
+		run(b, false)
+	})
+	b.Run("columnpack", func(b *testing.B) {
+		run(b, true)
+	})
 }
