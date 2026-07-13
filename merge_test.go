@@ -3424,6 +3424,93 @@ func TestMergeRowReaders(t *testing.T) {
 	}
 }
 
+// pageReuseRowReader serves BYTE_ARRAY values whose bytes live in an internal
+// page buffer that is overwritten at the start of every ReadRows call, like a
+// parquet reader reusing page buffers. It verifies that consumers such as the
+// k-way merge never hold on to values across a refill of the reader they came
+// from.
+type pageReuseRowReader struct {
+	values []string
+	batch  int
+	page   [4096]byte
+	used   int
+}
+
+func (r *pageReuseRowReader) ReadRows(rows []parquet.Row) (n int, err error) {
+	// Poison the bytes served by the previous call. Any Value still pointing
+	// into this page is now visibly corrupted.
+	for i := range r.page[:r.used] {
+		r.page[i] = '#'
+	}
+	r.used = 0
+	if len(r.values) == 0 {
+		return 0, io.EOF
+	}
+	for n < min(len(rows), r.batch, len(r.values)) {
+		v := r.values[n]
+		off := r.used
+		r.used += copy(r.page[off:], v)
+		rows[n] = append(rows[n][:0], parquet.ByteArrayValue(r.page[off:r.used]).Level(0, 0, 0))
+		n++
+	}
+	r.values = r.values[n:]
+	return n, nil
+}
+
+func TestMergeRowReadersPageReuse(t *testing.T) {
+	compare := func(a, b parquet.Row) int {
+		return parquet.ByteArrayType.Compare(a[0], b[0])
+	}
+
+	for _, numReaders := range []int{3, 4, 7, 16} {
+		t.Run(fmt.Sprintf("readers=%d", numReaders), func(t *testing.T) {
+			const rowsPerReader = 500
+			expect := make([]string, 0, numReaders*rowsPerReader)
+			readers := make([]parquet.RowReader, numReaders)
+
+			for i := range readers {
+				values := make([]string, rowsPerReader)
+				for j := range values {
+					// Zero-padded so byte order matches numeric order,
+					// interleaved across readers.
+					values[j] = fmt.Sprintf("%08d", j*numReaders+i)
+				}
+				// Small batches force refills to interleave with the merge.
+				readers[i] = &pageReuseRowReader{values: values, batch: 5}
+				expect = append(expect, values...)
+			}
+			slices.Sort(expect)
+
+			merge := parquet.MergeRowReaders(readers, compare)
+			got := make([]string, 0, len(expect))
+			rbuf := make([]parquet.Row, 11)
+			for {
+				n, err := merge.ReadRows(rbuf)
+				for _, row := range rbuf[:n] {
+					// Copy the bytes out immediately, as required by the
+					// ReadRows contract: rows are valid until the next call.
+					got = append(got, string(row[0].ByteArray()))
+				}
+				if err != nil {
+					if !errors.Is(err, io.EOF) {
+						t.Fatal(err)
+					}
+					break
+				}
+			}
+
+			if !slices.Equal(got, expect) {
+				for i := range min(len(got), len(expect)) {
+					if got[i] != expect[i] {
+						t.Fatalf("row %d: got %q, want %q", i, got[i], expect[i])
+					}
+				}
+				t.Fatalf("got %d rows, want %d rows", len(got), len(expect))
+			}
+		})
+	}
+}
+
 func BenchmarkMergeRowReaders(b *testing.B) {
 	const rowsPerReader = 10_000
 
