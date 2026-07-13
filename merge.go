@@ -659,8 +659,18 @@ type mergedRowReader struct {
 	count       int
 	winner      int32
 	winnerLeaf  int32
+	streak      int32 // consecutive games won by the current winner
 	initialized bool
 }
+
+// runDetectionStreak is the number of consecutive games the same reader must
+// win before the merge switches to run mode. When the merged inputs are mostly
+// disjoint (e.g. sorted row groups overlapping only at their boundaries), the
+// same reader wins long streaks and replaying ~log2(k) games per row is wasted
+// work; run mode computes the second-smallest head once and then emits rows
+// with a single comparison each. Interleaved inputs never reach the threshold
+// and pay only the cost of maintaining the streak counter.
+const runDetectionStreak = 3
 
 func (m *mergedRowReader) initialize() error {
 	k := len(m.buffers)
@@ -718,7 +728,11 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 			// The winner's head changed (or the winner was exhausted), replay
 			// the games on the path from its leaf to the root to determine the
 			// new winner.
+			prev := m.winner
 			m.replayGames()
+			if m.winner != prev {
+				m.streak = 0
+			}
 			continue
 		}
 
@@ -728,7 +742,34 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 		if !c.next() {
 			return n, nil
 		}
+
+		if m.streak >= runDetectionStreak {
+			// The same reader has been winning; emit its run in bulk. The run
+			// bound is the second-smallest head across all readers, so the
+			// winner keeps winning as long as its head does not exceed it
+			// (ties favor the incumbent, matching the strict comparison in
+			// replayGames). Other readers are not consumed during the run, so
+			// the bound remains valid until it is crossed.
+			bound := m.runBound()
+			for n < len(rows) && (bound == nil || m.compare(c.head(), bound) <= 0) {
+				rows[n] = append(rows[n][:0], c.head()...)
+				n++
+				if !c.next() {
+					return n, nil
+				}
+			}
+			m.streak = 0
+			m.replayGames()
+			continue
+		}
+
+		prev := m.winner
 		m.replayGames()
+		if m.winner == prev {
+			m.streak++
+		} else {
+			m.streak = 0
+		}
 	}
 
 	if m.count == 0 {
@@ -736,6 +777,25 @@ func (m *mergedRowReader) ReadRows(rows []Row) (n int, err error) {
 	}
 
 	return n, err
+}
+
+// runBound returns the second-smallest head among the merged readers, i.e. the
+// row that the current winner's head must not exceed for the winner to keep
+// winning. In a tournament tree of losers the runner-up necessarily lost its
+// game directly against the overall winner, so it is stored at one of the
+// nodes on the winner's path from leaf to root; the minimum over those players
+// is the runner-up. Returns nil when the winner is the only reader left.
+func (m *mergedRowReader) runBound() (bound Row) {
+	for offset := (m.winnerLeaf - 1) / 2; ; offset = (offset - 1) / 2 {
+		if player := m.losers[offset]; player >= 0 {
+			if head := m.buffers[player].head(); bound == nil || m.compare(head, bound) < 0 {
+				bound = head
+			}
+		}
+		if offset == 0 {
+			return bound
+		}
+	}
 }
 
 // playInitialGames recursively plays the tournament rooted at position i,
