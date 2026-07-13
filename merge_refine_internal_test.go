@@ -620,3 +620,88 @@ func TestMergeRefinementWrite(t *testing.T) {
 		}
 	})
 }
+
+func benchmarkMergeRefinement(b *testing.B, mode string, refine bool, write bool) {
+	const numFiles, rowsPerFile = 8, 20_000
+	files := make([]*File, numFiles)
+	for i := range files {
+		var start int64
+		switch mode {
+		case "chain": // ~2% boundary overlap with the next file
+			start = int64(i) * (rowsPerFile - rowsPerFile/50)
+		case "full_overlap":
+			start = int64(i) // all files cover ~the same range
+		case "slivers": // ~50% overlap: lone stretches straddle the floor
+			start = int64(i) * rowsPerFile / 2
+		}
+		rows := make([]benchRow, rowsPerFile)
+		for j := range rows {
+			id := start + int64(j)
+			rows[j] = benchRow{ID: id, Name: fmt.Sprintf("c%d", id%32), Email: fmt.Sprintf("u%d@x.com", id), Score: float64(id), Flag: id%2 == 0, Count: int32(id % 1000)}
+		}
+		var buf bytes.Buffer
+		w := NewGenericWriter[benchRow](&buf, SortingWriterConfig(SortingColumns(Ascending("id"))), PageBufferSize(4096))
+		if _, err := w.Write(rows); err != nil {
+			b.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			b.Fatal(err)
+		}
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			b.Fatal(err)
+		}
+		files[i] = f
+	}
+
+	defer func(prev bool) { disableMergeRefinement = prev }(disableMergeRefinement)
+	disableMergeRefinement = !refine
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		rgs := make([]RowGroup, numFiles)
+		for i, f := range files {
+			rgs[i] = f.RowGroups()[0]
+		}
+		m, err := MergeRowGroups(rgs,
+			&RowGroupConfig{Schema: rgs[0].Schema()},
+			SortingRowGroupConfig(SortingColumns(Ascending("id"))),
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if write {
+			w := NewGenericWriter[benchRow](io.Discard, SortingWriterConfig(SortingColumns(Ascending("id"))))
+			if _, err := w.WriteRowGroup(m); err != nil {
+				b.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				b.Fatal(err)
+			}
+		} else {
+			rows := m.Rows()
+			buf := make([]Row, 256)
+			for {
+				_, err := rows.ReadRows(buf)
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			rows.Close()
+		}
+	}
+}
+
+func BenchmarkMergeRefinement(b *testing.B) {
+	for _, mode := range []string{"chain", "full_overlap", "slivers"} {
+		for _, op := range []string{"read", "write"} {
+			write := op == "write"
+			b.Run(fmt.Sprintf("%s/%s/refined", mode, op), func(b *testing.B) { benchmarkMergeRefinement(b, mode, true, write) })
+			b.Run(fmt.Sprintf("%s/%s/baseline", mode, op), func(b *testing.B) { benchmarkMergeRefinement(b, mode, false, write) })
+		}
+	}
+}
