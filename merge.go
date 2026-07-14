@@ -325,13 +325,31 @@ func (m *mergedRowGroup) Rows() Rows {
 // a converted view whose conversion re-shreds variant columns.
 func rowGroupsHaveVariantConversions(rowGroups []RowGroup) bool {
 	for _, rg := range rowGroups {
-		if crg, ok := rg.(*convertedRowGroup); ok {
-			if c, ok := crg.conv.(*conversion); ok && len(c.variants) > 0 {
-				return true
-			}
+		if rowGroupHasVariantConversions(rg) {
+			return true
 		}
 	}
 	return false
+}
+
+// rowGroupHasVariantConversions reports whether rowGroup is (or wraps) a
+// converted view whose conversion re-shreds variant columns. Re-shredding is
+// a row-level conversion: the chunk-level view of such a row group still
+// carries the source's shredding, so the chunk-oriented write fast paths
+// (verbatim copy, column-wise re-encode) must reject it and leave the row
+// group to a path that reads through its converted Rows().
+func rowGroupHasVariantConversions(rowGroup RowGroup) bool {
+	for {
+		switch rg := rowGroup.(type) {
+		case *convertedRowGroup:
+			c, ok := rg.conv.(*conversion)
+			return ok && len(c.variants) > 0
+		case *dedupRowGroup:
+			rowGroup = rg.RowGroup
+		default:
+			return false
+		}
+	}
 }
 
 // concatenatedRowGroup wraps a multiRowGroup but overrides Rows() to read
