@@ -41,7 +41,15 @@ func (m *FileMetaData) Reset() {
 	m.CreatedBy = ""
 	m.ColumnOrders = m.ColumnOrders[:0]
 	// EncryptionAlgorithm is a union; its member allocation is retained
-	// for reuse by the next decode (see SchemaElement.Reset).
+	// for reuse by the next decode (see SchemaElement.Reset). The members'
+	// byte slices alias the decode input buffer, so their contents are
+	// cleared like the CRS strings of SchemaElement.
+	switch v := m.EncryptionAlgorithm.Value.(type) {
+	case *AesGcmV1:
+		*v = AesGcmV1{}
+	case *AesGcmCtrV1:
+		*v = AesGcmCtrV1{}
+	}
 	m.FooterSigningKeyMetadata = nil
 }
 
@@ -86,7 +94,13 @@ func (c *ColumnChunk) Reset() {
 	c.ColumnIndexOffset = 0
 	c.ColumnIndexLength = 0
 	// CryptoMetadata is a union; its member allocation is retained for
-	// reuse by the next decode (see SchemaElement.Reset).
+	// reuse by the next decode (see SchemaElement.Reset). The column-key
+	// member's path strings and key metadata alias the decode input
+	// buffer, so its contents are cleared like the CRS strings of
+	// SchemaElement.
+	if v, ok := c.CryptoMetadata.Value.(*EncryptionWithColumnKey); ok {
+		*v = EncryptionWithColumnKey{}
+	}
 	c.EncryptedColumnMetadata = nil
 }
 

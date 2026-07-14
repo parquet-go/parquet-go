@@ -381,6 +381,55 @@ func TestSchemaElementResetClearsGeospatialMembers(t *testing.T) {
 	}
 }
 
+// TestResetClearsCryptoUnionMembers pins the buffer-aliasing scrub of the
+// two retained crypto unions, mirroring the CRS handling above: a retained
+// EncryptionAlgorithm or CryptoMetadata member must not keep byte slices or
+// strings that alias the previous decode's input buffer.
+func TestResetClearsCryptoUnionMembers(t *testing.T) {
+	m := format.FileMetaData{
+		EncryptionAlgorithm: format.EncryptionAlgorithm{
+			Value: &format.AesGcmV1{
+				AadPrefix:       []byte("prefix"),
+				AadFileUnique:   []byte("unique"),
+				SupplyAadPrefix: true,
+			},
+		},
+	}
+	m.Reset()
+	if v, ok := m.EncryptionAlgorithm.Value.(*format.AesGcmV1); !ok {
+		t.Errorf("AesGcmV1 member allocation not retained by Reset")
+	} else if v.AadPrefix != nil || v.AadFileUnique != nil || v.SupplyAadPrefix {
+		t.Errorf("AesGcmV1 member not cleared by Reset: %+v", *v)
+	}
+
+	m = format.FileMetaData{
+		EncryptionAlgorithm: format.EncryptionAlgorithm{
+			Value: &format.AesGcmCtrV1{AadPrefix: []byte("prefix")},
+		},
+	}
+	m.Reset()
+	if v, ok := m.EncryptionAlgorithm.Value.(*format.AesGcmCtrV1); !ok {
+		t.Errorf("AesGcmCtrV1 member allocation not retained by Reset")
+	} else if v.AadPrefix != nil || v.AadFileUnique != nil || v.SupplyAadPrefix {
+		t.Errorf("AesGcmCtrV1 member not cleared by Reset: %+v", *v)
+	}
+
+	c := format.ColumnChunk{
+		CryptoMetadata: format.ColumnCryptoMetaData{
+			Value: &format.EncryptionWithColumnKey{
+				PathInSchema: thrift.Slice[string]{"a", "b"},
+				KeyMetadata:  []byte("key"),
+			},
+		},
+	}
+	c.Reset()
+	if v, ok := c.CryptoMetadata.Value.(*format.EncryptionWithColumnKey); !ok {
+		t.Errorf("EncryptionWithColumnKey member allocation not retained by Reset")
+	} else if v.PathInSchema != nil || v.KeyMetadata != nil {
+		t.Errorf("EncryptionWithColumnKey member not cleared by Reset: %+v", *v)
+	}
+}
+
 // TestFooterDecoderTrailingBytes checks the documented tolerance for
 // trailing bytes: signed plaintext footers carry a 28-byte signature after
 // the thrift payload, which Decode must not treat as an error, reporting the

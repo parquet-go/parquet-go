@@ -128,6 +128,30 @@ func (d *debugReader) BytesRead() int {
 	return d.r.BytesRead()
 }
 
+// Discard forwards discards to the wrapped reader, mirroring the cascade of
+// skipBinary. Without it, a debug-wrapped bytes-backed reader would fall
+// through to a throwaway Reader() view and the discard would not advance
+// the wrapped reader's offset, silently desynchronizing the stream.
+func (d *debugReader) Discard(n int) (int, error) {
+	type discarder interface{ Discard(int) (int, error) }
+	var v int
+	var err error
+	switch x := d.r.(type) {
+	case discarder:
+		v, err = x.Discard(n)
+	default:
+		if x, ok := d.r.Reader().(discarder); ok {
+			v, err = x.Discard(n)
+		} else {
+			var c int64
+			c, err = io.CopyN(io.Discard, d.r.Reader(), int64(n))
+			v = int(c)
+		}
+	}
+	d.log("Discard", v, err)
+	return v, err
+}
+
 type debugWriter struct {
 	w Writer
 	l *log.Logger

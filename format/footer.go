@@ -16,7 +16,10 @@ import (
 //
 // A decoder never allocates for inputs whose shape fits the capacity
 // retained from previous decodes; larger or differently-shaped inputs grow
-// the retained state as needed.
+// the retained state as needed. The retained state never shrinks: one
+// unusually large footer sizes the decoder's buffer and metadata tree for
+// its remaining lifetime, so long-lived decoders dedicated to a single file
+// may prefer to be discarded after use instead of pooled.
 type FooterDecoder struct {
 	buf     []byte
 	meta    FileMetaData

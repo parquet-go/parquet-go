@@ -189,6 +189,54 @@ func TestUnmarshalRequiredTypeMismatch(t *testing.T) {
 	}
 }
 
+// TestUnmarshalContainerElementTypeMismatch checks the non-strict handling
+// of containers whose element wire type does not match the target: the
+// elements must still be consumed so that fields following the container
+// decode correctly. Without the skip, the binary protocol fails with
+// trailing bytes and the compact protocol silently misparses the next
+// field.
+func TestUnmarshalContainerElementTypeMismatch(t *testing.T) {
+	type source struct {
+		List  []string             `thrift:"1"`
+		Slice thrift.Slice[string] `thrift:"2"`
+		Map   map[string]string    `thrift:"3"`
+		Set   map[string]struct{}  `thrift:"4"`
+		After int64                `thrift:"5"`
+	}
+	type target struct {
+		List  []int64             `thrift:"1"`
+		Slice thrift.Slice[int64] `thrift:"2"`
+		Map   map[int64]int64     `thrift:"3"`
+		Set   map[int64]struct{}  `thrift:"4"`
+		After int64               `thrift:"5"`
+	}
+
+	for _, p := range protocols {
+		t.Run(p.name, func(t *testing.T) {
+			b, err := thrift.Marshal(p.proto, &source{
+				List:  []string{"a", "bc"},
+				Slice: thrift.Slice[string]{"def"},
+				Map:   map[string]string{"key": "value"},
+				Set:   map[string]struct{}{"member": {}},
+				After: 42,
+			})
+			if err != nil {
+				t.Fatal("marshal:", err)
+			}
+			v := new(target)
+			if err := thrift.Unmarshal(p.proto, b, v); err != nil {
+				t.Fatal("unmarshal:", err)
+			}
+			if len(v.List) != 0 || len(v.Slice) != 0 || len(v.Map) != 0 || len(v.Set) != 0 {
+				t.Errorf("mismatched containers should decode empty, got %+v", v)
+			}
+			if v.After != 42 {
+				t.Errorf("After = %d, want 42 (stream desynchronized by a mismatched container)", v.After)
+			}
+		})
+	}
+}
+
 // TestUnmarshalSkipsUnknownBinaryField checks that skipping an unknown
 // string/binary field advances the reader correctly, so that known fields
 // following it still decode. This exercises the Discard path of the

@@ -253,7 +253,7 @@ func decodeFuncSliceOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 			if flags.Have(Strict) {
 				return &TypeMismatch{item: "list item", Expect: typ, Found: l.Type}
 			}
-			return nil
+			return skipListItems(r, l)
 		}
 
 		size := int(l.Size)
@@ -308,14 +308,14 @@ func decodeFuncMapOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 			if flags.Have(Strict) {
 				return &TypeMismatch{item: "map key", Expect: keyType, Found: m.Key}
 			}
-			return nil
+			return skipMapItems(r, m)
 		}
 
 		if elemType != m.Value {
 			if flags.Have(Strict) {
 				return &TypeMismatch{item: "map value", Expect: elemType, Found: m.Value}
 			}
-			return nil
+			return skipMapItems(r, m)
 		}
 
 		tmpKey := reflect.New(key).Elem()
@@ -369,7 +369,7 @@ func decodeFuncMapAsSetOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 			if flags.Have(Strict) {
 				return &TypeMismatch{item: "list item", Expect: typ, Found: s.Type}
 			}
-			return nil
+			return skipSetItems(r, s)
 		}
 
 		tmp := reflect.New(key).Elem()
@@ -721,12 +721,7 @@ func skipList(r Reader) error {
 	if err != nil {
 		return err
 	}
-	for i := range int(l.Size) {
-		if err := skip(r, l.Type); err != nil {
-			return with(dontExpectEOF(err), &decodeErrorList{cause: l, index: i})
-		}
-	}
-	return nil
+	return skipListItems(r, l)
 }
 
 func skipSet(r Reader) error {
@@ -734,12 +729,7 @@ func skipSet(r Reader) error {
 	if err != nil {
 		return err
 	}
-	for i := range int(s.Size) {
-		if err := skip(r, s.Type); err != nil {
-			return with(dontExpectEOF(err), &decodeErrorSet{cause: s, index: i})
-		}
-	}
-	return nil
+	return skipSetItems(r, s)
 }
 
 func skipMap(r Reader) error {
@@ -747,11 +737,52 @@ func skipMap(r Reader) error {
 	if err != nil {
 		return err
 	}
+	return skipMapItems(r, m)
+}
+
+// skipItem consumes one container element of the given type. Unlike bool
+// fields, whose value compact-protocol encoders coalesce into the field
+// type, bool container elements always occupy one byte.
+func skipItem(r Reader, t Type) error {
+	switch t {
+	case TRUE, FALSE:
+		_, err := r.ReadBool()
+		return err
+	default:
+		return skip(r, t)
+	}
+}
+
+// skipListItems, skipSetItems, and skipMapItems consume the elements of a
+// container whose header has already been read. They are used both by the
+// skip functions above and by the decoders when the elements cannot be
+// decoded into the target type: the payload must still be consumed, or the
+// reader would desynchronize from the stream.
+
+func skipListItems(r Reader, l List) error {
+	for i := range int(l.Size) {
+		if err := skipItem(r, l.Type); err != nil {
+			return with(dontExpectEOF(err), &decodeErrorList{cause: l, index: i})
+		}
+	}
+	return nil
+}
+
+func skipSetItems(r Reader, s Set) error {
+	for i := range int(s.Size) {
+		if err := skipItem(r, s.Type); err != nil {
+			return with(dontExpectEOF(err), &decodeErrorSet{cause: s, index: i})
+		}
+	}
+	return nil
+}
+
+func skipMapItems(r Reader, m Map) error {
 	for i := range int(m.Size) {
-		if err := skip(r, m.Key); err != nil {
+		if err := skipItem(r, m.Key); err != nil {
 			return with(dontExpectEOF(err), &decodeErrorMap{cause: m, index: i})
 		}
-		if err := skip(r, m.Value); err != nil {
+		if err := skipItem(r, m.Value); err != nil {
 			return with(dontExpectEOF(err), &decodeErrorMap{cause: m, index: i})
 		}
 	}
