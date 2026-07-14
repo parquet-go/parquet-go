@@ -219,19 +219,36 @@ func TestReadFooterFromBareFooter(t *testing.T) {
 	}
 }
 
+// sliceReaderAt serves reads by indexing a byte slice without validating
+// the offset, like a permissive custom io.ReaderAt implementation: a
+// negative offset panics. The io.ReaderAt contract does not require
+// rejecting negative offsets, so footer reading must validate untrusted
+// sizes before any offset arithmetic reaches the reader.
+type sliceReaderAt []byte
+
+func (s sliceReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n := copy(p, s[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
 // TestReadFooterRejectsInvalidInput checks the input validation of
-// ReadFooter over invalid bare inputs.
+// ReadFooter over invalid bare inputs. The permissive reader turns a
+// missing bounds check into a panic instead of a reader error.
 func TestReadFooterRejectsInvalidInput(t *testing.T) {
 	for _, test := range []struct {
 		scenario string
 		input    string
 	}{
+		{scenario: "empty input", input: ""},
 		{scenario: "truncated input", input: "PAR1"},
 		{scenario: "invalid magic", input: "\x00\x00\x00\x00XXXX"},
 		{scenario: "footer size larger than input", input: "\xff\x00\x00\x00PAR1"},
 	} {
 		t.Run(test.scenario, func(t *testing.T) {
-			r := bytes.NewReader([]byte(test.input))
+			r := sliceReaderAt(test.input)
 			if _, err := parquet.ReadFooter(r, int64(len(test.input))); err == nil {
 				t.Error("expected error")
 			}

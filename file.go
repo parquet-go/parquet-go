@@ -419,9 +419,11 @@ func (f *File) Schema() *Schema { return f.schema }
 
 // Metadata returns the metadata of f.
 //
-// When the file was opened with the WithFooter option, the returned metadata
-// is shared with the footer (and any other files opened from it) and must be
-// treated as read-only.
+// The returned metadata is always shared with f.Footer() — and, when the
+// file was opened with the WithFooter option, with the footer passed to
+// OpenFile and any other files opened from it — so it must be treated as
+// read-only. Mutating it corrupts the shared footer and is a data race if
+// any file backed by it is in use concurrently.
 func (f *File) Metadata() *format.FileMetaData { return f.metadata }
 
 // Footer returns the footer of f, suitable for caching and for opening the

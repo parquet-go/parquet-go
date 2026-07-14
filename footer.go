@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"sync"
 
@@ -151,6 +152,13 @@ func (f *Footer) buildSchema() error {
 // header magic check is skipped (there is no header) and the returned footer
 // records no file size.
 func readFooter(r io.ReaderAt, size int64, c *FileConfig, allowBareFooter bool) (*Footer, io.ReaderAt, error) {
+	// The size and the footer length decoded below come from untrusted
+	// input; validate both before any offset arithmetic reaches the
+	// caller's io.ReaderAt, which is not required to reject negative
+	// offsets.
+	if size < 8 {
+		return nil, nil, fmt.Errorf("parquet file of size %d is too small to hold a footer", size)
+	}
 	if cast, ok := r.(interface{ SetMagicFooterSection(offset, length int64) }); ok {
 		cast.SetMagicFooterSection(size-8, 8)
 	}
@@ -181,6 +189,9 @@ func readFooter(r io.ReaderAt, size int64, c *FileConfig, allowBareFooter bool) 
 	}
 
 	footerSize := int64(binary.LittleEndian.Uint32(b[:4]))
+	if footerSize+8 > size {
+		return nil, nil, fmt.Errorf("invalid footer size %d in parquet file of size %d", footerSize, size)
+	}
 
 	// A complete file is always larger than footerSize+8: at minimum the
 	// 4-byte header magic precedes the footer section. An input of exactly
@@ -209,7 +220,9 @@ func readFooter(r io.ReaderAt, size int64, c *FileConfig, allowBareFooter bool) 
 	footerData := []byte(nil)
 
 	if footerSize <= optimisticFooterSize {
-		footerData = optimisticFooterData[optimisticFooterSize-footerSize : optimisticFooterSize]
+		// The prefetch buffer may outlive this call (it backs the returned
+		// optimistic reader), so hand newFooter a copy it can own.
+		footerData = bytes.Clone(optimisticFooterData[optimisticFooterSize-footerSize : optimisticFooterSize])
 	} else {
 		footerData = make([]byte, footerSize)
 		if cast, ok := reader.(interface{ SetFooterSection(offset, length int64) }); ok {
@@ -231,8 +244,11 @@ func readFooter(r io.ReaderAt, size int64, c *FileConfig, allowBareFooter bool) 
 }
 
 // newFooter decodes and normalizes a footer from the raw footer section
-// bytes (without the trailing size and magic). newFooter does not retain
-// data.
+// bytes (without the trailing size and magic). newFooter takes ownership of
+// data: the returned footer may retain it, so callers must not reuse or
+// mutate the slice. This spares footers larger than the prefetch buffer —
+// the exact case footer caching targets — from being allocated and copied
+// twice.
 func newFooter(data []byte, magic string, c *FileConfig) (*Footer, error) {
 	f := new(Footer)
 	protocol := new(thrift.CompactProtocol)
@@ -283,11 +299,11 @@ func newFooter(data []byte, magic string, c *FileConfig) (*Footer, error) {
 		f.fileUnique = slices.Clone(fileUnique)
 		f.aadPrefix = slices.Clone(aadPrefix)
 	} else {
-		// Decoded strings and byte slices alias the input, so make a private
-		// copy for the footer to own. Decode using a reader that tracks
+		// Decoded strings and byte slices alias the input, which the footer
+		// owns (see the function doc). Decode using a reader that tracks
 		// bytes consumed, so that we can detect a trailing 28-byte AES-GCM
 		// signature without treating it as trailing garbage.
-		f.data = bytes.Clone(data)
+		f.data = data
 		pr := protocol.NewReaderFromBytes(f.data)
 		if err := thrift.NewDecoder(pr).Decode(&f.metadata); err != nil {
 			return nil, fmt.Errorf("reading parquet file metadata: %w", err)
@@ -399,7 +415,15 @@ func (f *Footer) decryptAllColumnMetadata() error {
 					return fmt.Errorf("resolving column key for column metadata: %w", err)
 				}
 			default:
-				continue
+				// The column carries encrypted metadata but no key
+				// reference; without one the metadata cannot be decrypted
+				// and every later read of the column would fail with
+				// confusing zero-metadata decode errors. Report the corrupt
+				// footer here instead.
+				return fmt.Errorf("column metadata is encrypted but the column carries no crypto metadata: rowGroup=%d col=%d", rg.Ordinal, colIdx)
+			}
+			if colIdx > math.MaxInt16 {
+				return fmt.Errorf("cannot compute AAD for column %d: column ordinals are 16-bit in the parquet encryption spec", colIdx)
 			}
 			aad := makeAAD(f.aadPrefix, f.fileUnique, columnMetaDataModule, rg.Ordinal, int16(colIdx))
 			plain, err := decryptModule(key, aad, chunk.EncryptedColumnMetadata)
