@@ -1309,48 +1309,57 @@ func TestFilePagesLazyDictionaryWithReusedHeader(t *testing.T) {
 		rows[i] = Row{Value: fmt.Sprintf("value-%03d", i%50)}
 	}
 
-	buf := new(bytes.Buffer)
-	w := parquet.NewGenericWriter[Row](buf, parquet.PageBufferSize(256))
-	if _, err := w.Write(rows); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
+	// Both data page versions make the identical lazy readDictionary call
+	// (decodeDataPageV1 and decodeDataPageV2 respectively), so both must be
+	// exercised against the reused header.
+	for _, version := range []int{1, 2} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			w := parquet.NewGenericWriter[Row](buf,
+				parquet.PageBufferSize(256),
+				parquet.DataPageVersion(version))
+			if _, err := w.Write(rows); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
 
-	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	chunk := f.RowGroups()[0].ColumnChunks()[0]
+			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			chunk := f.RowGroups()[0].ColumnChunks()[0]
 
-	vals := make([]parquet.Value, 1)
-	// Seeking to numRows-1 and numRows/2 jumps past the dictionary page and
-	// exercises the lazy load; seeking to row 3 lands on the first data page
-	// with the stream still positioned at the dictionary page, covering the
-	// eager in-loop dictionary decode through the reused header instead.
-	for _, seekTo := range []int64{numRows - 1, numRows / 2, 3} {
-		pages := chunk.Pages()
-		if err := pages.SeekToRow(seekTo); err != nil {
-			t.Fatalf("SeekToRow(%d): %v", seekTo, err)
-		}
-		page, err := pages.ReadPage()
-		if err != nil {
-			t.Fatalf("ReadPage after SeekToRow(%d): %v", seekTo, err)
-		}
-		if page.NumValues() <= 0 {
-			t.Errorf("SeekToRow(%d): page has %d values, want > 0", seekTo, page.NumValues())
-		}
-		if _, err := page.Values().ReadValues(vals); err != nil && !errors.Is(err, io.EOF) {
-			t.Fatalf("ReadValues after SeekToRow(%d): %v", seekTo, err)
-		}
-		if got, want := vals[0].String(), rows[seekTo].Value; got != want {
-			t.Errorf("SeekToRow(%d): first value = %q, want %q", seekTo, got, want)
-		}
-		parquet.Release(page)
-		if err := pages.Close(); err != nil {
-			t.Fatal(err)
-		}
+			vals := make([]parquet.Value, 1)
+			// Seeking to numRows-1 and numRows/2 jumps past the dictionary page and
+			// exercises the lazy load; seeking to row 3 lands on the first data page
+			// with the stream still positioned at the dictionary page, covering the
+			// eager in-loop dictionary decode through the reused header instead.
+			for _, seekTo := range []int64{numRows - 1, numRows / 2, 3} {
+				pages := chunk.Pages()
+				if err := pages.SeekToRow(seekTo); err != nil {
+					t.Fatalf("SeekToRow(%d): %v", seekTo, err)
+				}
+				page, err := pages.ReadPage()
+				if err != nil {
+					t.Fatalf("ReadPage after SeekToRow(%d): %v", seekTo, err)
+				}
+				if page.NumValues() <= 0 {
+					t.Errorf("SeekToRow(%d): page has %d values, want > 0", seekTo, page.NumValues())
+				}
+				if _, err := page.Values().ReadValues(vals); err != nil && !errors.Is(err, io.EOF) {
+					t.Fatalf("ReadValues after SeekToRow(%d): %v", seekTo, err)
+				}
+				if got, want := vals[0].String(), rows[seekTo].Value; got != want {
+					t.Errorf("SeekToRow(%d): first value = %q, want %q", seekTo, got, want)
+				}
+				parquet.Release(page)
+				if err := pages.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

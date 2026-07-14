@@ -28,7 +28,10 @@ import (
 // copied into the capacity retained by the field, overwriting its previous
 // contents in place. Applications that hand decoded byte slices to other
 // consumers must not reuse the decode target while those slices are still
-// referenced.
+// referenced. After a failed decode the contents of reused fields are
+// undefined: a partial read may have overwritten a field's previously
+// visible bytes through the shared backing array even though the field
+// header still describes the old value.
 func Unmarshal(p Protocol, b []byte, v any) error {
 	pr := p.NewReaderFromBytes(slices.Clone(b))
 
