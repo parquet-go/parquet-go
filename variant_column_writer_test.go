@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -498,7 +499,7 @@ func TestVariantColumnWriterFieldRef(t *testing.T) {
 			field = func(name string) {
 				ref := refs[name]
 				if ref == nil {
-					ref = vw.FieldRef(name)
+					ref = parquet.NewVariantFieldRef(name)
 					refs[name] = ref
 				}
 				vw.FieldByRef(ref)
@@ -540,7 +541,7 @@ func TestVariantColumnWriterFieldRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := vw.FieldRef("a")
+	ref := parquet.NewVariantFieldRef("a")
 	if err := vw.BeginRow(); err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +578,7 @@ func TestVariantColumnWriterFieldRefAcrossWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ref := vw1.FieldRef("a")
+	ref := parquet.NewVariantFieldRef("a")
 	write := func(vw *parquet.VariantColumnWriter) {
 		if err := vw.BeginRow(); err != nil {
 			t.Fatal(err)
@@ -673,7 +674,7 @@ func TestVariantColumnWriterMetadataPersistent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nameRef := vw.FieldRef("name")
+	nameRef := parquet.NewVariantFieldRef("name")
 	const rows = 50
 	churn := make([]*variant.Value, rows)
 	for i := range rows {
@@ -1062,6 +1063,75 @@ func TestVariantColumnWriterMisuse(t *testing.T) {
 			t.Fatal("expected an error")
 		}
 	})
+	t.Run("EndObject with pending residual field fails at the event", func(t *testing.T) {
+		vw := newWriter(t, true)
+		if err := vw.BeginRow(); err != nil {
+			t.Fatal(err)
+		}
+		vw.BeginObject()
+		vw.Field("resid") // not shredded: opens the partial-object residual
+		vw.EndObject()    // closes the object while the field has no value
+		if err := vw.Err(); err == nil {
+			t.Fatal("expected an error at the EndObject event")
+		}
+	})
+	t.Run("EndArray with pending residual field", func(t *testing.T) {
+		vw := newWriter(t, true)
+		if err := vw.BeginRow(); err != nil {
+			t.Fatal(err)
+		}
+		vw.BeginObject()
+		vw.Field("resid")
+		vw.EndArray() // no array is open anywhere
+		if err := vw.Err(); err == nil {
+			t.Fatal("expected an error at the EndArray event")
+		}
+	})
+	t.Run("mismatched end inside a residual", func(t *testing.T) {
+		vw := newWriter(t, true)
+		if err := vw.BeginRow(); err != nil {
+			t.Fatal(err)
+		}
+		vw.BeginArray() // root is shredded as an object: full residual
+		vw.BeginArray()
+		vw.EndObject() // closes an array frame: builder misuse
+		if err := vw.Err(); err == nil {
+			t.Fatal("expected the builder error to surface at the EndObject event")
+		}
+	})
+	t.Run("unshredded field without a value column", func(t *testing.T) {
+		// A shredded object group may legally omit the value column; then
+		// any field outside the shredded set is unrepresentable and must
+		// fail with a message saying so (not a type-mismatch error).
+		schema := parquet.NewSchema("table", parquet.Group{
+			"var": parquet.Group{
+				"metadata": parquet.Leaf(parquet.ByteArrayType),
+				"typed_value": parquet.Optional(parquet.Group{
+					"a": parquet.Group{
+						"value":       parquet.Optional(parquet.Leaf(parquet.ByteArrayType)),
+						"typed_value": parquet.Optional(parquet.Int(64)),
+					},
+				}),
+			},
+		})
+		w := parquet.NewWriter(io.Discard, schema)
+		vw, err := parquet.NewVariantColumnWriter(w, "var")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := vw.BeginRow(); err != nil {
+			t.Fatal(err)
+		}
+		vw.BeginObject()
+		vw.Field("extra")
+		err = vw.Err()
+		if err == nil {
+			t.Fatal("expected an error at the Field event")
+		}
+		if !strings.Contains(err.Error(), "no value column") {
+			t.Errorf("error should name the missing value column, got: %v", err)
+		}
+	})
 	t.Run("WriteNullRow inside a row", func(t *testing.T) {
 		vw := newWriter(t, true)
 		if err := vw.BeginRow(); err != nil {
@@ -1260,7 +1330,7 @@ func BenchmarkVariantColumnWriter(b *testing.B) {
 		}
 		refs := make([]*parquet.VariantFieldRef, numFields)
 		for j := range refs {
-			refs[j] = vw.FieldRef(names[j])
+			refs[j] = parquet.NewVariantFieldRef(names[j])
 		}
 		b.ReportAllocs()
 		for b.Loop() {

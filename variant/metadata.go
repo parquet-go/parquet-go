@@ -180,6 +180,11 @@ func (b *MetadataBuilder) Build() (Metadata, []byte) {
 // dst and returns the extended slice. The dictionary indices in the output
 // match those returned by Add, so encoded values referencing those indices
 // remain valid.
+//
+// The variant format encodes dictionary offsets in at most 4 bytes, so the
+// interned names must total at most math.MaxUint32 bytes; callers growing
+// the dictionary without bound must check Size before encoding (as
+// Builder.Finish and parquet.VariantColumnWriter do).
 func (b *MetadataBuilder) AppendTo(dst []byte) []byte {
 	n := len(b.offs)
 	totalLen := len(b.buf)

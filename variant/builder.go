@@ -238,7 +238,13 @@ func (b *Builder) Finish() (metadata, value []byte, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	metadata = b.metadata().AppendTo(nil)
+	meta := b.metadata()
+	// Dictionary offsets are at most 4 bytes wide; MetadataBuilder.AppendTo
+	// would silently truncate a larger dictionary.
+	if uint64(meta.Size()) > math.MaxUint32 {
+		return nil, nil, fmt.Errorf("variant builder: metadata dictionary of %d bytes exceeds the variant format's 4 GiB limit", meta.Size())
+	}
+	metadata = meta.AppendTo(nil)
 	return metadata, value, nil
 }
 
@@ -321,6 +327,10 @@ func (b *Builder) String(v string) {
 	if !b.beginValue() {
 		return
 	}
+	if uint64(len(v)) > math.MaxUint32 {
+		b.fail("string of %d bytes exceeds the variant format's 4 GiB limit", len(v))
+		return
+	}
 	if len(v) <= 63 {
 		b.buf = append(b.buf, makeHeader(BasicShortString, byte(len(v))))
 	} else {
@@ -333,6 +343,10 @@ func (b *Builder) String(v string) {
 
 func (b *Builder) Binary(v []byte) {
 	if !b.beginValue() {
+		return
+	}
+	if uint64(len(v)) > math.MaxUint32 {
+		b.fail("binary value of %d bytes exceeds the variant format's 4 GiB limit", len(v))
 		return
 	}
 	b.buf = append(b.buf, makeHeader(BasicPrimitive, byte(PrimitiveBinary)), 0, 0, 0, 0)
@@ -483,6 +497,14 @@ func (b *Builder) EndObject() {
 
 	numFields := len(entries)
 	contentSize := len(b.buf) - f.start
+	// Offsets are at most 4 bytes wide, so a container whose encoded
+	// children exceed math.MaxUint32 bytes is unrepresentable; failing
+	// beats the silent truncation of writeUint. Field offsets and counts
+	// are bounded by contentSize, so this one check covers them too.
+	if uint64(contentSize) > math.MaxUint32 {
+		b.fail("object content of %d bytes exceeds the variant format's 4 GiB limit", contentSize)
+		return
+	}
 	maxID := 0
 	for i := range entries {
 		if entries[i].id > maxID {
@@ -553,6 +575,11 @@ func (b *Builder) EndArray() {
 
 	numElems := len(starts)
 	contentSize := len(b.buf) - f.start
+	// See the matching check in EndObject.
+	if uint64(contentSize) > math.MaxUint32 {
+		b.fail("array content of %d bytes exceeds the variant format's 4 GiB limit", contentSize)
+		return
+	}
 
 	offsetSzCode := offsetSizeCode(contentSize)
 	offsetSz := offsetSize(offsetSzCode)

@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/google/uuid"
@@ -46,7 +47,10 @@ import (
 //
 // The writer appends to the column buffers of the ColumnWriters backing the
 // variant column's leaf columns and flushes full pages at row boundaries,
-// like ColumnWriter.WriteRowValues. Other columns of the file must be
+// like ColumnWriter.WriteRowValues. To keep row boundaries cheap the
+// page-size check is polled every few rows while the buffers are under half
+// the configured page size (and every row past that), so pages may
+// moderately overshoot the configured size. Other columns of the file must be
 // written separately (e.g. through Writer.ColumnWriters) with the same
 // number of rows, and the parent writer must be closed (or its row group
 // committed) as usual to flush buffered sub-page data to the file.
@@ -233,8 +237,8 @@ func (w *VariantColumnWriter) fail(format string, args ...any) {
 const variantMetadataResetSize = 4096
 
 // variantFlushCheckRows is how many rows may pass between page-size checks
-// of the variant group's columns. Pages can overshoot the configured buffer
-// size by up to this many rows of values.
+// of the variant group's columns while every column is under half its
+// buffer size; past half, flush checks every row.
 const variantFlushCheckRows = 16
 
 // BeginRow starts a new row. Exactly one value — a single scalar event, or
@@ -273,6 +277,14 @@ func (w *VariantColumnWriter) EndRow() error {
 		w.fail("EndRow without a value; use WriteNullRow for SQL null rows")
 	}
 	if w.err != nil {
+		return w.err
+	}
+	// Dictionary offsets are at most 4 bytes wide; AppendTo would silently
+	// truncate a larger dictionary. Only reachable when a single row
+	// interns over 4 GiB of unique field names, since BeginRow resets the
+	// dictionary at variantMetadataResetSize.
+	if uint64(w.meta.Size()) > math.MaxUint32 {
+		w.fail("metadata dictionary of %d bytes exceeds the variant format's 4 GiB limit", w.meta.Size())
 		return w.err
 	}
 	w.metaBuf = w.meta.AppendTo(w.metaBuf[:0])
@@ -333,8 +345,10 @@ func (w *VariantColumnWriter) levels(def, rep byte) columnLevels {
 }
 
 // flush flushes any column whose buffer reached the configured page size.
-// It only runs at row boundaries, since a row cannot span two pages, and
-// polls the column sizes every variantFlushCheckRows rows.
+// It only runs at row boundaries, since a row cannot span two pages. While
+// every column is under half its buffer size the poll is spaced out to
+// every variantFlushCheckRows rows; once any column crosses half, it runs
+// every row so a page cannot silently overshoot by many large rows.
 func (w *VariantColumnWriter) flush() error {
 	if w.flushCountdown > 0 {
 		w.flushCountdown--
@@ -342,11 +356,16 @@ func (w *VariantColumnWriter) flush() error {
 	}
 	w.flushCountdown = variantFlushCheckRows - 1
 	for _, c := range w.columns {
-		if c.columnBuffer != nil && c.columnBuffer.Size() >= int64(c.bufferSize) {
+		if c.columnBuffer == nil {
+			continue
+		}
+		if size := c.columnBuffer.Size(); size >= int64(c.bufferSize) {
 			if err := c.Flush(); err != nil {
 				w.err = err
 				return err
 			}
+		} else if size >= int64(c.bufferSize)/2 {
+			w.flushCountdown = 0
 		}
 	}
 	return nil
@@ -440,6 +459,20 @@ func (w *VariantColumnWriter) forward() bool {
 	return w.err == nil && w.residual.b != nil
 }
 
+// checkResidual surfaces an error the residual builder recorded from a
+// forwarded event (misuse of the event sequence, an oversized value) as the
+// writer's error, so it is reported at the offending event rather than when
+// the residual is committed. It reports whether the residual is healthy.
+func (w *VariantColumnWriter) checkResidual() bool {
+	if err := w.residual.b.Err(); err != nil {
+		if w.err == nil {
+			w.err = err
+		}
+		return false
+	}
+	return true
+}
+
 // residualDone finalizes a completed residual stream.
 func (w *VariantColumnWriter) residualDone() {
 	r := w.residual
@@ -455,10 +488,16 @@ func (w *VariantColumnWriter) residualDone() {
 		return
 	}
 	w.writeResidualBytes(r.node, r.levels, data)
+	if w.err != nil {
+		return
+	}
 	w.valueDone()
 }
 
 func (w *VariantColumnWriter) afterResidualScalar() {
+	if !w.checkResidual() {
+		return
+	}
 	if w.residual.depth == w.residual.base {
 		w.residualDone()
 	}
@@ -494,6 +533,9 @@ func (w *VariantColumnWriter) scalar(v variant.Value) {
 		return
 	}
 	w.writeResidualBytes(node, l, data)
+	if w.err != nil {
+		return
+	}
 	if node.typed != nil {
 		w.writeNulls(node.typed.startCol, node.typed.startCol+node.typed.numCols, l.def(node.defLevel), l.rep)
 	}
@@ -519,6 +561,7 @@ func (w *VariantColumnWriter) BeginObject() {
 	if w.forward() {
 		w.residual.b.BeginObject()
 		w.residual.depth++
+		w.checkResidual()
 		return
 	}
 	if w.err != nil {
@@ -547,6 +590,7 @@ func (w *VariantColumnWriter) BeginObject() {
 func (w *VariantColumnWriter) Field(name string) {
 	if w.forward() {
 		w.residual.b.Field(name)
+		w.checkResidual()
 		return
 	}
 	f := w.fieldFrame(name)
@@ -568,10 +612,14 @@ func (w *VariantColumnWriter) Field(name string) {
 // schema and its metadata dictionary intern, so hot ingest loops writing
 // the same fields on every row skip the per-event name hashing of Field.
 //
-// A ref caches its resolution against one writer and one object position at
-// a time, so any use is correct, but for peak performance use one ref per
-// writer per field name, with distinct refs for identically named fields of
-// different objects.
+// FieldByRef rewrites the ref's cache (which also retains the last writer
+// it resolved against), so a ref must not be used by multiple goroutines
+// concurrently: writers running in parallel, e.g. one per
+// ConcurrentRowGroupWriter goroutine, each need their own refs. Within one
+// goroutine any use is correct — the cache re-resolves whenever the writer
+// or object position changes — but for peak performance use one ref per
+// writer per field name, with distinct refs for identically named fields
+// of different objects.
 type VariantFieldRef struct {
 	name    string
 	node    *shreddedVariantGroup // object node the ref last resolved against
@@ -580,16 +628,19 @@ type VariantFieldRef struct {
 	metaGen uint64                // dictionary generation of the cached intern
 }
 
-// FieldRef pre-resolves an object field name for use with FieldByRef. The
-// name is copied; the caller may reuse its backing memory.
-func (w *VariantColumnWriter) FieldRef(name string) *VariantFieldRef {
+// NewVariantFieldRef pre-resolves an object field name for use with
+// VariantColumnWriter.FieldByRef. The name is copied; the caller may reuse
+// its backing memory. The ref is not bound to any writer: resolution is
+// cached lazily by FieldByRef.
+func NewVariantFieldRef(name string) *VariantFieldRef {
 	return &VariantFieldRef{name: strings.Clone(name)}
 }
 
-// FieldByRef is Field with a pre-resolved name; see FieldRef.
+// FieldByRef is Field with a pre-resolved name; see NewVariantFieldRef.
 func (w *VariantColumnWriter) FieldByRef(ref *VariantFieldRef) {
 	if w.forward() {
 		w.residual.b.Field(ref.name)
+		w.checkResidual()
 		return
 	}
 	f := w.fieldFrame(ref.name)
@@ -644,6 +695,10 @@ func (w *VariantColumnWriter) beginField(f *variantWriterFrame, name string, idx
 		return
 	}
 	// Not a shredded field: it goes into the partial-object residual.
+	if f.node.valueCol < 0 {
+		w.fail("object field %q is not in the shredded schema and the object has no value column to hold it", name)
+		return
+	}
 	if f.partial == nil {
 		f.partial = w.builder(f.node)
 		f.partial.BeginObject()
@@ -657,9 +712,17 @@ func (w *VariantColumnWriter) beginField(f *variantWriterFrame, name string, idx
 // any, to the object's value column.
 func (w *VariantColumnWriter) EndObject() {
 	if w.forward() {
+		if w.residual.depth == w.residual.base {
+			// Only reachable in a partial-object residual, right after a
+			// Field: the event tries to close the enclosing shredded
+			// object while the field's value is still pending. Fail here
+			// rather than corrupting the residual's depth tracking.
+			w.fail("EndObject: last field has no value")
+			return
+		}
 		w.residual.b.EndObject()
 		w.residual.depth--
-		if w.residual.depth == w.residual.base {
+		if w.checkResidual() && w.residual.depth == w.residual.base {
 			w.residualDone()
 		}
 		return
@@ -706,6 +769,7 @@ func (w *VariantColumnWriter) BeginArray() {
 	if w.forward() {
 		w.residual.b.BeginArray()
 		w.residual.depth++
+		w.checkResidual()
 		return
 	}
 	if w.err != nil {
@@ -735,9 +799,16 @@ func (w *VariantColumnWriter) BeginArray() {
 // EndArray closes the innermost open array.
 func (w *VariantColumnWriter) EndArray() {
 	if w.forward() {
+		if w.residual.depth == w.residual.base {
+			// See the matching guard in EndObject; here the enclosing
+			// container is an object, so the array being closed was never
+			// opened.
+			w.fail("EndArray without matching BeginArray")
+			return
+		}
 		w.residual.b.EndArray()
 		w.residual.depth--
-		if w.residual.depth == w.residual.base {
+		if w.checkResidual() && w.residual.depth == w.residual.base {
 			w.residualDone()
 		}
 		return
