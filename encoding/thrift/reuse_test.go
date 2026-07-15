@@ -12,6 +12,22 @@ import (
 // previous decode, pointer fields absent from the input are set to nil, and
 // reused pointees are zeroed before decoding so no stale fields leak through.
 
+func mustMarshal(t *testing.T, p thrift.Protocol, v any) []byte {
+	t.Helper()
+	b, err := thrift.Marshal(p, v)
+	if err != nil {
+		t.Fatal("marshal:", err)
+	}
+	return b
+}
+
+func mustUnmarshal(t *testing.T, p thrift.Protocol, b []byte, v any) {
+	t.Helper()
+	if err := thrift.Unmarshal(p, b, v); err != nil {
+		t.Fatal("unmarshal:", err)
+	}
+}
+
 type reuseInner struct {
 	A int64  `thrift:"1,optional"`
 	B string `thrift:"2,optional"`
@@ -27,30 +43,20 @@ func TestUnmarshalReuseNilsUnseenPointers(t *testing.T) {
 	for _, p := range protocols {
 		t.Run(p.name, func(t *testing.T) {
 			count := int64(42)
-			first, err := thrift.Marshal(p.proto, &reuseOuter{
+			first := mustMarshal(t, p.proto, &reuseOuter{
 				Name:  "first",
 				Inner: &reuseInner{A: 1, B: "one"},
 				Count: &count,
 			})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
-			second, err := thrift.Marshal(p.proto, &reuseOuter{Name: "second"})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
+			second := mustMarshal(t, p.proto, &reuseOuter{Name: "second"})
 
 			v := new(reuseOuter)
-			if err := thrift.Unmarshal(p.proto, first, v); err != nil {
-				t.Fatal("unmarshal first:", err)
-			}
+			mustUnmarshal(t, p.proto, first, v)
 			if v.Inner == nil || v.Count == nil {
 				t.Fatalf("first decode did not populate pointer fields: %+v", v)
 			}
 
-			if err := thrift.Unmarshal(p.proto, second, v); err != nil {
-				t.Fatal("unmarshal second:", err)
-			}
+			mustUnmarshal(t, p.proto, second, v)
 			if v.Name != "second" {
 				t.Errorf("Name = %q, want %q", v.Name, "second")
 			}
@@ -67,31 +73,21 @@ func TestUnmarshalReuseNilsUnseenPointers(t *testing.T) {
 func TestUnmarshalReuseZeroesPointee(t *testing.T) {
 	for _, p := range protocols {
 		t.Run(p.name, func(t *testing.T) {
-			first, err := thrift.Marshal(p.proto, &reuseOuter{
+			first := mustMarshal(t, p.proto, &reuseOuter{
 				Name:  "first",
 				Inner: &reuseInner{A: 1, B: "one"},
 			})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
 			// Second input sets Inner.A but not Inner.B.
-			second, err := thrift.Marshal(p.proto, &reuseOuter{
+			second := mustMarshal(t, p.proto, &reuseOuter{
 				Name:  "second",
 				Inner: &reuseInner{A: 2},
 			})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
 
 			v := new(reuseOuter)
-			if err := thrift.Unmarshal(p.proto, first, v); err != nil {
-				t.Fatal("unmarshal first:", err)
-			}
+			mustUnmarshal(t, p.proto, first, v)
 			firstInner := v.Inner
 
-			if err := thrift.Unmarshal(p.proto, second, v); err != nil {
-				t.Fatal("unmarshal second:", err)
-			}
+			mustUnmarshal(t, p.proto, second, v)
 			if v.Inner != firstInner {
 				t.Error("Inner pointer was reallocated instead of reused")
 			}
@@ -121,30 +117,20 @@ func TestUnmarshalReuseTypeMismatchedField(t *testing.T) {
 	for _, p := range protocols {
 		t.Run(p.name, func(t *testing.T) {
 			count := int64(42)
-			first, err := thrift.Marshal(p.proto, &reuseOuter{
+			first := mustMarshal(t, p.proto, &reuseOuter{
 				Name:  "first",
 				Inner: &reuseInner{A: 1, B: "one"},
 				Count: &count,
 			})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
-			second, err := thrift.Marshal(p.proto, &mismatchedOuter{
+			second := mustMarshal(t, p.proto, &mismatchedOuter{
 				Name:  "second",
 				Inner: 7,
 				Count: "not an integer",
 			})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
 
 			v := new(reuseOuter)
-			if err := thrift.Unmarshal(p.proto, first, v); err != nil {
-				t.Fatal("unmarshal first:", err)
-			}
-			if err := thrift.Unmarshal(p.proto, second, v); err != nil {
-				t.Fatal("unmarshal second:", err)
-			}
+			mustUnmarshal(t, p.proto, first, v)
+			mustUnmarshal(t, p.proto, second, v)
 			if v.Name != "second" {
 				t.Errorf("Name = %q, want %q (stream desynchronized?)", v.Name, "second")
 			}
@@ -173,11 +159,8 @@ func TestUnmarshalRequiredTypeMismatch(t *testing.T) {
 
 	for _, p := range protocols {
 		t.Run(p.name, func(t *testing.T) {
-			b, err := thrift.Marshal(p.proto, &mismatchedPoint{X: "oops", Y: 2})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
-			err = thrift.Unmarshal(p.proto, b, new(point))
+			b := mustMarshal(t, p.proto, &mismatchedPoint{X: "oops", Y: 2})
+			err := thrift.Unmarshal(p.proto, b, new(point))
 			missing := new(thrift.MissingField)
 			if !errors.As(err, &missing) {
 				t.Fatalf("expected MissingField error, got %v", err)
@@ -213,20 +196,15 @@ func TestUnmarshalContainerElementTypeMismatch(t *testing.T) {
 
 	for _, p := range protocols {
 		t.Run(p.name, func(t *testing.T) {
-			b, err := thrift.Marshal(p.proto, &source{
+			b := mustMarshal(t, p.proto, &source{
 				List:  []string{"a", "bc"},
 				Slice: thrift.Slice[string]{"def"},
 				Map:   map[string]string{"key": "value"},
 				Set:   map[string]struct{}{"member": {}},
 				After: 42,
 			})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
 			v := new(target)
-			if err := thrift.Unmarshal(p.proto, b, v); err != nil {
-				t.Fatal("unmarshal:", err)
-			}
+			mustUnmarshal(t, p.proto, b, v)
 			if len(v.List) != 0 || len(v.Slice) != 0 || len(v.Map) != 0 || len(v.Set) != 0 {
 				t.Errorf("mismatched containers should decode empty, got %+v", v)
 			}
@@ -252,14 +230,9 @@ func TestUnmarshalSkipsUnknownBinaryField(t *testing.T) {
 
 	for _, p := range protocols {
 		t.Run(p.name, func(t *testing.T) {
-			b, err := thrift.Marshal(p.proto, &withString{S: "skip me entirely", B: 42})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
+			b := mustMarshal(t, p.proto, &withString{S: "skip me entirely", B: 42})
 			v := new(withoutString)
-			if err := thrift.Unmarshal(p.proto, b, v); err != nil {
-				t.Fatal("unmarshal:", err)
-			}
+			mustUnmarshal(t, p.proto, b, v)
 			if v.B != 42 {
 				t.Errorf("B = %d, want 42 (unknown binary field was not skipped correctly)", v.B)
 			}
@@ -282,25 +255,17 @@ type sparseIDsPartial struct {
 func TestUnmarshalSparseFieldIDs(t *testing.T) {
 	for _, p := range protocols {
 		t.Run(p.name, func(t *testing.T) {
-			b, err := thrift.Marshal(p.proto, &sparseIDs{First: 1, Last: 100})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
+			b := mustMarshal(t, p.proto, &sparseIDs{First: 1, Last: 100})
 			v := new(sparseIDs)
-			if err := thrift.Unmarshal(p.proto, b, v); err != nil {
-				t.Fatal("unmarshal:", err)
-			}
+			mustUnmarshal(t, p.proto, b, v)
 			if v.First != 1 || v.Last != 100 {
 				t.Errorf("got %+v, want {First:1 Last:100}", v)
 			}
 
 			// Input missing required field 100 must be rejected, which
 			// requires the required bitmap to cover the full ID span.
-			partial, err := thrift.Marshal(p.proto, &sparseIDsPartial{First: 1})
-			if err != nil {
-				t.Fatal("marshal:", err)
-			}
-			err = thrift.Unmarshal(p.proto, partial, new(sparseIDs))
+			partial := mustMarshal(t, p.proto, &sparseIDsPartial{First: 1})
+			err := thrift.Unmarshal(p.proto, partial, new(sparseIDs))
 			missing := new(thrift.MissingField)
 			if !errors.As(err, &missing) {
 				t.Fatalf("expected MissingField error, got %v", err)

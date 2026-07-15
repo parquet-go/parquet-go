@@ -232,11 +232,8 @@ func (dec *unionDecoder) decode(r Reader, v reflect.Value, flags Flags) error {
 	// member of the same type, its allocation is reused instead of
 	// allocating a fresh value.
 	x := v.Field(dec.field)
-	prev := reflect.Value{}
-	if !x.IsNil() {
-		prev = x.Elem()
-		x.SetZero()
-	}
+	prev := x.Elem() // invalid when the union was unset
+	x.SetZero()
 
 	lastFieldID := int16(0)
 	numFields := 0

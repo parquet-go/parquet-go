@@ -15,7 +15,10 @@ package format
 // Byte slice and string fields decoded from footers alias the input buffer
 // (they are replaced, never reused, by the decoder), so Reset sets them to
 // nil or empty instead of truncating, releasing references to the previous
-// input buffer.
+// input buffer. This includes the contents of retained union members whose
+// fields alias the buffer: the member allocation is kept for the next
+// decode to reuse, but its contents are zeroed so no retained member holds
+// a reference into a buffer with unrelated data.
 
 // Reset clears m in place, retaining allocated capacity for reuse in
 // subsequent thrift decodes.
@@ -40,10 +43,7 @@ func (m *FileMetaData) Reset() {
 	m.KeyValueMetadata = m.KeyValueMetadata[:0]
 	m.CreatedBy = ""
 	m.ColumnOrders = m.ColumnOrders[:0]
-	// EncryptionAlgorithm is a union; its member allocation is retained
-	// for reuse by the next decode (see SchemaElement.Reset). The members'
-	// byte slices alias the decode input buffer, so their contents are
-	// cleared like the CRS strings of SchemaElement.
+	// Retained union member; scrub buffer-aliasing contents (see file header).
 	switch v := m.EncryptionAlgorithm.Value.(type) {
 	case *AesGcmV1:
 		*v = AesGcmV1{}
@@ -65,16 +65,8 @@ func (s *SchemaElement) Reset() {
 	s.Scale.Reset()
 	s.Precision.Reset()
 	s.FieldID = 0
-	// The LogicalType union member is deliberately retained: when the
-	// element is decoded again, the thrift decoder reuses the member
-	// allocation if the input holds the same member type (zeroing its
-	// contents first), and clears the union if the field is absent from
-	// the input. Either way no stale state survives a decode.
-	//
-	// The Geometry and Geography members are the exception: their CRS
-	// strings alias the decode input buffer, which the owner of this value
-	// may overwrite before the next decode. Clear their contents so no
-	// retained member holds a reference into a buffer with unrelated data.
+	// Retained union member; scrub the buffer-aliasing CRS strings of the
+	// Geometry and Geography members (see file header).
 	switch m := s.LogicalType.Value.(type) {
 	case *GeometryType:
 		*m = GeometryType{}
@@ -93,11 +85,7 @@ func (c *ColumnChunk) Reset() {
 	c.OffsetIndexLength = 0
 	c.ColumnIndexOffset = 0
 	c.ColumnIndexLength = 0
-	// CryptoMetadata is a union; its member allocation is retained for
-	// reuse by the next decode (see SchemaElement.Reset). The column-key
-	// member's path strings and key metadata alias the decode input
-	// buffer, so its contents are cleared like the CRS strings of
-	// SchemaElement.
+	// Retained union member; scrub buffer-aliasing contents (see file header).
 	if v, ok := c.CryptoMetadata.Value.(*EncryptionWithColumnKey); ok {
 		*v = EncryptionWithColumnKey{}
 	}
@@ -120,38 +108,17 @@ func (c *ColumnMetaData) Reset() {
 	c.DataPageOffset = 0
 	c.IndexPageOffset = 0
 	c.DictionaryPageOffset = 0
-	c.Statistics.Reset()
+	// Statistics byte slices alias the input buffer (replaced, never
+	// appended to), so zero the whole struct instead of truncating.
+	c.Statistics = Statistics{}
 	clear(c.EncodingStats)
 	c.EncodingStats = c.EncodingStats[:0]
 	c.BloomFilterOffset = 0
 	c.BloomFilterLength = 0
-	c.SizeStatistics.Reset()
-	c.GeospatialStatistics.Reset()
-}
-
-// Reset clears s in place. The byte slice fields are set to nil rather than
-// truncated because decoded values alias the input buffer and are always
-// replaced, never appended to.
-func (s *Statistics) Reset() {
-	s.Max = nil
-	s.Min = nil
-	s.NullCount = 0
-	s.DistinctCount = 0
-	s.MaxValue = nil
-	s.MinValue = nil
-}
-
-// Reset clears s in place, retaining allocated capacity for reuse in
-// subsequent thrift decodes.
-func (s *SizeStatistics) Reset() {
-	s.UnencodedByteArrayDataBytes = 0
-	s.RepetitionLevelHistogram = s.RepetitionLevelHistogram[:0]
-	s.DefinitionLevelHistogram = s.DefinitionLevelHistogram[:0]
-}
-
-// Reset clears g in place, retaining allocated capacity for reuse in
-// subsequent thrift decodes.
-func (g *GeospatialStatistics) Reset() {
-	g.BBox = BoundingBox{}
-	g.GeoSpatialTypes = g.GeoSpatialTypes[:0]
+	// The histograms and geospatial types retain capacity.
+	c.SizeStatistics.UnencodedByteArrayDataBytes = 0
+	c.SizeStatistics.RepetitionLevelHistogram = c.SizeStatistics.RepetitionLevelHistogram[:0]
+	c.SizeStatistics.DefinitionLevelHistogram = c.SizeStatistics.DefinitionLevelHistogram[:0]
+	c.GeospatialStatistics.BBox = BoundingBox{}
+	c.GeospatialStatistics.GeoSpatialTypes = c.GeospatialStatistics.GeoSpatialTypes[:0]
 }

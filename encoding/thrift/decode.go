@@ -400,23 +400,18 @@ type structDecoder struct {
 	// optional fields but corrupts values where "which member is non-nil"
 	// carries meaning.
 	clears []int
-	// seenWords is the size of the bitmap needed to track which of the
-	// (sparse, id-indexed) fields were observed in the input.
-	seenWords int
 }
 
 func (dec *structDecoder) decode(r Reader, v reflect.Value, flags Flags) error {
 	flags = flags.Only(decodeFlags)
 	coalesceBool := flags.Have(coalesceBoolFields)
 
+	// seen tracks which of the (sparse, id-indexed) fields were observed
+	// in the input; required is sized to the same word count.
 	var seenBuf [4]uint64
-	seen := seenBuf[:1]
-	if dec.seenWords > 1 {
-		if dec.seenWords <= len(seenBuf) {
-			seen = seenBuf[:dec.seenWords]
-		} else {
-			seen = make([]uint64, dec.seenWords)
-		}
+	seen := seenBuf[:]
+	if n := len(dec.required); n > len(seenBuf) {
+		seen = make([]uint64, n)
 	}
 
 	// Inlined readStruct loop to avoid closure overhead
@@ -443,25 +438,19 @@ decodeFields:
 		}
 
 		i := int(f.ID) - int(dec.minID)
-		if i < 0 || i >= len(dec.fields) || dec.fields[i].decode == nil {
-			if err := skip(r, f.Type); err != nil {
-				return with(dontExpectEOF(err), &decodeErrorField{cause: f})
-			}
-			lastFieldID = f.ID
-			numFields++
-			continue decodeFields
+		var field *structDecoderField
+		if i >= 0 && i < len(dec.fields) && dec.fields[i].decode != nil {
+			field = &dec.fields[i]
 		}
-		field := &dec.fields[i]
-
+		// Unknown fields and (in non-strict mode) type-mismatched fields
+		// are consumed so the stream stays aligned, and left unseen: they
+		// were not decoded, so they must not satisfy the required check nor
+		// protect a stale pointer from the clearUnseen pass below.
 		// TODO: implement type conversions?
-		if f.Type != field.typ && !(f.Type == TRUE && field.typ == BOOL) {
-			if flags.Have(Strict) {
+		if field == nil || (f.Type != field.typ && !(f.Type == TRUE && field.typ == BOOL)) {
+			if field != nil && flags.Have(Strict) {
 				return &TypeMismatch{item: "field value", Expect: field.typ, Found: f.Type}
 			}
-			// Consume the mismatched value so the stream stays aligned, and
-			// leave the field unseen: it was not decoded, so it must not
-			// satisfy the required check nor protect a stale pointer from
-			// clearUnseenPtrs below.
 			if err := skip(r, f.Type); err != nil {
 				return with(dontExpectEOF(err), &decodeErrorField{cause: f})
 			}
@@ -588,8 +577,7 @@ func decodeFuncStructOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 
 	dec.fields = make([]structDecoderField, (maxID-minID)+1)
 	dec.minID = minID
-	dec.seenWords = (len(dec.fields) + 63) / 64
-	dec.required = make([]uint64, dec.seenWords)
+	dec.required = make([]uint64, (len(dec.fields)+63)/64)
 
 	for _, f := range fields {
 		i := f.id - minID
@@ -601,11 +589,8 @@ func decodeFuncStructOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		if f.flags.Have(Required) {
 			dec.required[i/64] |= 1 << (i % 64)
 		}
-	}
-
-	for i := range dec.fields {
-		if dec.fields[i].decode != nil && (dec.fields[i].isPtr || dec.fields[i].flags.Have(UnionType)) {
-			dec.clears = append(dec.clears, i)
+		if f.isPtr || f.flags.Have(UnionType) {
+			dec.clears = append(dec.clears, int(i))
 		}
 	}
 
@@ -700,20 +685,26 @@ func skipBinary(r Reader) error {
 	if n == 0 {
 		return nil
 	}
-	// The bytes-backed readers implement Discard themselves; their Reader()
-	// method returns a throwaway view that does not advance the read offset,
-	// so discarding through it would silently desynchronize the stream.
-	// Streaming readers discard through the underlying io.Reader when it
-	// supports it (*bufio.Reader does).
-	type discarder interface{ Discard(int) (int, error) }
-	if d, ok := r.(discarder); ok {
-		_, err = d.Discard(int(n))
-	} else if d, ok := r.Reader().(discarder); ok {
-		_, err = d.Discard(int(n))
-	} else {
-		_, err = io.CopyN(io.Discard, r.Reader(), int64(n))
-	}
+	_, err = discard(r, int(n))
 	return dontExpectEOF(err)
+}
+
+type discarder interface{ Discard(int) (int, error) }
+
+// discard advances r past n bytes. The bytes-backed readers implement
+// Discard themselves; their Reader() method returns a throwaway view that
+// does not advance the read offset, so discarding through it would silently
+// desynchronize the stream. Streaming readers discard through the
+// underlying io.Reader when it supports it (*bufio.Reader does).
+func discard(r Reader, n int) (int, error) {
+	if d, ok := r.(discarder); ok {
+		return d.Discard(n)
+	}
+	if d, ok := r.Reader().(discarder); ok {
+		return d.Discard(n)
+	}
+	c, err := io.CopyN(io.Discard, r.Reader(), int64(n))
+	return int(c), err
 }
 
 func skipList(r Reader) error {

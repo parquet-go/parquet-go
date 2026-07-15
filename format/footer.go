@@ -23,7 +23,6 @@ import (
 type FooterDecoder struct {
 	buf     []byte
 	meta    FileMetaData
-	primed  bool
 	reader  thrift.BytesReader
 	decoder *thrift.Decoder
 }
@@ -48,24 +47,17 @@ func (d *FooterDecoder) Decode(data []byte) (*FileMetaData, int, error) {
 	// would corrupt previously returned values in place. Resetting first
 	// keeps the "valid until next Decode" contract honest instead of
 	// leaving values that are subtly wrong.
-	if d.primed {
-		d.meta.Reset()
-	}
+	d.meta.Reset()
 	d.buf = append(d.buf[:0], data...)
 
 	if d.reader == nil {
-		d.reader = footerProtocol.NewReaderFromBytes(d.buf)
+		d.reader = footerProtocol.NewReaderFromBytes(nil)
 		d.decoder = thrift.NewDecoder(d.reader)
-	} else {
-		d.reader.ResetBytes(d.buf)
 	}
+	d.reader.ResetBytes(d.buf)
 
 	if err := d.decoder.Decode(&d.meta); err != nil {
-		// Leave the decoder marked primed: a partial decode may have
-		// written into d.meta, which must be cleared before the next use.
-		d.primed = true
 		return nil, 0, fmt.Errorf("decoding parquet footer: %w", err)
 	}
-	d.primed = true
 	return &d.meta, d.reader.BytesRead(), nil
 }

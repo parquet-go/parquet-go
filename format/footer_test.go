@@ -1,10 +1,10 @@
 package format_test
 
 import (
+	"maps"
 	"path/filepath"
 	"reflect"
 	"slices"
-	"sort"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/encoding/thrift"
@@ -31,15 +31,6 @@ func loadAllFooters(t testing.TB) map[string][]byte {
 	return footers
 }
 
-func sortedNames(footers map[string][]byte) []string {
-	names := make([]string, 0, len(footers))
-	for name := range footers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 func decodeFresh(t testing.TB, footer []byte) *format.FileMetaData {
 	protocol := &thrift.CompactProtocol{}
 	metadata := new(format.FileMetaData)
@@ -56,7 +47,7 @@ func TestFooterDecoderMatchesUnmarshal(t *testing.T) {
 	footers := loadAllFooters(t)
 	decoder := new(format.FooterDecoder)
 
-	for _, name := range sortedNames(footers) {
+	for _, name := range slices.Sorted(maps.Keys(footers)) {
 		footer := footers[name]
 		decoded, n, err := decoder.Decode(footer)
 		if err != nil {
@@ -72,28 +63,35 @@ func TestFooterDecoderMatchesUnmarshal(t *testing.T) {
 	}
 }
 
-// TestFooterDecoderReuse decodes every ordered pair of testdata footers
-// through a single FooterDecoder and checks the second result against a
-// fresh decode. This catches any state from the first decode leaking into
-// the second (i.e. fields missed by the Reset methods).
+// checkReusePair decodes first then second through a single FooterDecoder
+// and checks the second result against a fresh decode. This catches any
+// state from the first decode leaking into the second (i.e. fields missed
+// by the Reset methods).
+func checkReusePair(t *testing.T, firstName string, first []byte, secondName string, second []byte) {
+	t.Helper()
+	decoder := new(format.FooterDecoder)
+	if _, _, err := decoder.Decode(first); err != nil {
+		t.Fatalf("decoding %s: %v", firstName, err)
+	}
+	decoded, _, err := decoder.Decode(second)
+	if err != nil {
+		t.Fatalf("decoding %s after %s: %v", secondName, firstName, err)
+	}
+	if fresh := decodeFresh(t, second); !equalMetadata(decoded, fresh) {
+		t.Errorf("decoding %s after %s: metadata differs from fresh decode", secondName, firstName)
+	}
+}
+
+// TestFooterDecoderReuse checks every ordered pair of testdata footers
+// through checkReusePair.
 func TestFooterDecoderReuse(t *testing.T) {
 	footers := loadAllFooters(t)
-	names := sortedNames(footers)
+	names := slices.Sorted(maps.Keys(footers))
 
 	for _, first := range names {
 		t.Run(first, func(t *testing.T) {
 			for _, second := range names {
-				decoder := new(format.FooterDecoder)
-				if _, _, err := decoder.Decode(footers[first]); err != nil {
-					t.Fatalf("decoding %s: %v", first, err)
-				}
-				decoded, _, err := decoder.Decode(footers[second])
-				if err != nil {
-					t.Fatalf("decoding %s after %s: %v", second, first, err)
-				}
-				if fresh := decodeFresh(t, footers[second]); !equalMetadata(decoded, fresh) {
-					t.Errorf("decoding %s after %s: metadata differs from fresh decode", second, first)
-				}
+				checkReusePair(t, first, footers[first], second, footers[second])
 			}
 		})
 	}
@@ -105,7 +103,7 @@ func TestFooterDecoderInputOwnership(t *testing.T) {
 	footers := loadAllFooters(t)
 	decoder := new(format.FooterDecoder)
 
-	for _, name := range sortedNames(footers) {
+	for _, name := range slices.Sorted(maps.Keys(footers)) {
 		footer := slices.Clone(footers[name])
 		decoded, _, err := decoder.Decode(footer)
 		if err != nil {
@@ -125,7 +123,7 @@ func TestFooterDecoderInputOwnership(t *testing.T) {
 func TestFooterDecoderZeroAllocs(t *testing.T) {
 	footers := loadAllFooters(t)
 
-	for _, name := range sortedNames(footers) {
+	for _, name := range slices.Sorted(maps.Keys(footers)) {
 		footer := footers[name]
 		decoder := new(format.FooterDecoder)
 		if _, _, err := decoder.Decode(footer); err != nil {
@@ -342,17 +340,7 @@ func TestFooterDecoderReuseSynthetic(t *testing.T) {
 	footers := map[string][]byte{"maximal": maximal, "minimal": minimal}
 	for first, firstFooter := range footers {
 		for second, secondFooter := range footers {
-			decoder := new(format.FooterDecoder)
-			if _, _, err := decoder.Decode(firstFooter); err != nil {
-				t.Fatalf("decoding %s: %v", first, err)
-			}
-			decoded, _, err := decoder.Decode(secondFooter)
-			if err != nil {
-				t.Fatalf("decoding %s after %s: %v", second, first, err)
-			}
-			if fresh := decodeFresh(t, secondFooter); !equalMetadata(decoded, fresh) {
-				t.Errorf("decoding %s after %s: metadata differs from fresh decode", second, first)
-			}
+			checkReusePair(t, first, firstFooter, second, secondFooter)
 		}
 	}
 }
@@ -438,7 +426,7 @@ func TestFooterDecoderTrailingBytes(t *testing.T) {
 	footers := loadAllFooters(t)
 	decoder := new(format.FooterDecoder)
 
-	for _, name := range sortedNames(footers) {
+	for _, name := range slices.Sorted(maps.Keys(footers)) {
 		footer := footers[name]
 		signed := make([]byte, 0, len(footer)+28)
 		signed = append(signed, footer...)
@@ -467,7 +455,7 @@ func TestFooterDecoderErrorRecovery(t *testing.T) {
 
 	// Truncated inputs fail partway through decoding, leaving partially
 	// populated metadata that the next Decode must fully reset.
-	for _, name := range sortedNames(footers) {
+	for _, name := range slices.Sorted(maps.Keys(footers)) {
 		footer := footers[name]
 		if _, _, err := decoder.Decode(footer[:len(footer)/2]); err == nil {
 			t.Fatalf("%s: expected error decoding truncated footer", name)
@@ -511,11 +499,6 @@ func equalMetadata(a, b *format.FileMetaData) bool {
 	return equalValue(reflect.ValueOf(a).Elem(), reflect.ValueOf(b).Elem())
 }
 
-// isNullType reports whether t has the shape of thrift.Null[T].
-func isNullType(t reflect.Type) bool {
-	return t.NumField() == 2 && t.Field(0).Name == "V" && t.Field(1).Name == "Valid"
-}
-
 func equalValue(a, b reflect.Value) bool {
 	if a.Type() != b.Type() {
 		return false
@@ -537,18 +520,6 @@ func equalValue(a, b reflect.Value) bool {
 		}
 		return true
 	case reflect.Struct:
-		// thrift.Null[T] values compare by validity first: when both are
-		// invalid, the inner value is unobservable and may contain stale
-		// data retained for reuse by Reset.
-		if isNullType(a.Type()) {
-			av, bv := a.FieldByName("Valid"), b.FieldByName("Valid")
-			if av.Bool() != bv.Bool() {
-				return false
-			}
-			if !av.Bool() {
-				return true
-			}
-		}
 		for i := range a.NumField() {
 			if !equalValue(a.Field(i), b.Field(i)) {
 				return false
