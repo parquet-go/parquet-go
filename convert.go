@@ -377,7 +377,7 @@ func Convert(to, from Node) (conv Conversion, err error) {
 	variantColumns := make(map[int]conversionColumn, 2*len(variants))
 	for k := range variants {
 		vc := &variants[k]
-		for rel := range vc.targetNumCols {
+		for rel := range vc.target.numCols {
 			variantColumns[vc.targetStart+rel] = conversionColumn{
 				sourceIndex:   vc.sourceColumnFor(rel),
 				variantIndex:  k,
@@ -716,7 +716,10 @@ func maskMissingRowGroupColumns(r RowGroup, numColumns int, conv Conversion) Row
 	if c, ok := conv.(*conversion); ok {
 		for k := range c.variants {
 			vc := &c.variants[k]
-			for j := vc.sourceStart; j < vc.sourceStart+vc.numCols && j < len(columns); j++ {
+			if vc.source == nil {
+				continue // unrecognized source group; vc.err surfaces when rows are read
+			}
+			for j := vc.sourceStart; j < vc.sourceStart+vc.source.numCols && j < len(columns); j++ {
 				columns[j] = rowGroupColumns[j]
 			}
 		}

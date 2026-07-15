@@ -78,7 +78,7 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 		// (which bypasses row-level conversion), we create a simple concatenating
 		// row reader that preserves the conversion logic.
 		m := newMultiRowGroup(schema, nil, mergedRowGroups)
-		if rowGroupsHaveVariantConversions(mergedRowGroups) {
+		if slices.ContainsFunc(mergedRowGroups, rowGroupHasVariantConversions) {
 			// Variant re-shredding is a row-level conversion that the
 			// chunk-level view of multiRowGroup cannot express; read rows
 			// through each source's converted Rows() instead.
@@ -321,17 +321,6 @@ func (m *mergedRowGroup) Rows() Rows {
 	}
 }
 
-// rowGroupsHaveVariantConversions reports whether any of the row groups is
-// a converted view whose conversion re-shreds variant columns.
-func rowGroupsHaveVariantConversions(rowGroups []RowGroup) bool {
-	for _, rg := range rowGroups {
-		if rowGroupHasVariantConversions(rg) {
-			return true
-		}
-	}
-	return false
-}
-
 // rowGroupHasVariantConversions reports whether rowGroup is (or wraps) a
 // converted view whose conversion re-shreds variant columns. Re-shredding is
 // a row-level conversion: the chunk-level view of such a row group still
@@ -362,9 +351,7 @@ type concatenatedRowGroup struct {
 
 // rowGroupSegments returns nil, opting out of the writer's segment-splitting
 // fast path: the chunk-level view of the segments cannot express the
-// row-level variant conversions this row group exists to preserve. Without
-// this override the embedded multiRowGroup would expose the raw segments and
-// the writer would copy column chunks that still have the source shredding.
+// row-level variant conversions this row group exists to preserve.
 func (c *concatenatedRowGroup) rowGroupSegments() []RowGroup { return nil }
 
 func (c *concatenatedRowGroup) Rows() Rows {

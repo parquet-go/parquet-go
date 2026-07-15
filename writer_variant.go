@@ -57,13 +57,17 @@ func (w *Writer) writeRowGroupVariantColumnar(rowGroup RowGroup) (int64, bool, e
 	}
 	w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks())
 
-	writers := make(map[string]*VariantColumnWriter, len(plans[0].variantPaths))
-	for _, path := range plans[0].variantPaths {
+	// Every plan's variantPaths are identical: they are collected while
+	// walking the target schema's fields in order, and the target is the
+	// same for all sources.
+	paths := plans[0].variantPaths
+	writers := make([]*VariantColumnWriter, len(paths))
+	for i, path := range paths {
 		vw, err := NewVariantColumnWriter(w, path...)
 		if err != nil {
 			return 0, true, err
 		}
-		writers[joinPath(path)] = vw
+		writers[i] = vw
 	}
 
 	columns := w.writer.currentRowGroup.columns
@@ -78,12 +82,12 @@ func (w *Writer) writeRowGroupVariantColumnar(rowGroup RowGroup) (int64, bool, e
 				return 0, true, err
 			}
 		}
-		for _, path := range plan.variantPaths {
+		for j, path := range plan.variantPaths {
 			vr, err := NewVariantReader(src, path...)
 			if err != nil {
 				return 0, true, err
 			}
-			_, err = CopyVariantRows(writers[joinPath(path)], vr)
+			_, err = CopyVariantRows(writers[j], vr)
 			if cerr := vr.Close(); err == nil {
 				err = cerr
 			}
@@ -164,7 +168,7 @@ type variantCopyPlan struct {
 // silently rewrite "ancestor is null" as "variant is null".
 func makeVariantCopyPlan(target, source *Schema) (*variantCopyPlan, bool) {
 	plan := &variantCopyPlan{}
-	if !planVariantCopy(target, source, 0, 0, nil, plan) {
+	if !planVariantCopy(target, source, 0, 0, nil, false, plan) {
 		return nil, false
 	}
 	if len(plan.variantPaths) == 0 {
@@ -173,9 +177,14 @@ func makeVariantCopyPlan(target, source *Schema) (*variantCopyPlan, bool) {
 	return plan, true
 }
 
-func planVariantCopy(t, s Node, tCol, sCol int, path []string, plan *variantCopyPlan) bool {
+// optAncestor is set when some strict ancestor of the current node is an
+// optional or repeated non-variant field; a variant group there cannot be
+// copied columnar (see makeVariantCopyPlan). The variant group itself may
+// be optional: its own presence is part of what the variant readers and
+// writers track.
+func planVariantCopy(t, s Node, tCol, sCol int, path []string, optAncestor bool, plan *variantCopyPlan) bool {
 	if isVariant(t) || isVariant(s) {
-		if !isVariant(t) || !isVariant(s) || !repetitionsAreEqual(t, s) || t.Repeated() {
+		if !isVariant(t) || !isVariant(s) || !repetitionsAreEqual(t, s) || t.Repeated() || optAncestor {
 			return false
 		}
 		if _, _, err := variantGroupOf(t); err != nil {
@@ -218,32 +227,13 @@ func planVariantCopy(t, s Node, tCol, sCol int, path []string, plan *variantCopy
 		if !ok {
 			return false
 		}
-		if !tf.Required() && !tf.Leaf() && !isVariant(tf) && schemaHasVariant(tf) {
-			// A variant group below an optional or repeated field cannot be
-			// copied columnar (see makeVariantCopyPlan). The variant group
-			// itself may be optional: its own presence is part of what the
-			// variant readers and writers track.
-			return false
-		}
-		if !planVariantCopy(tf, sf, tCol, sColOf[tf.Name()], append(path, tf.Name()), plan) {
+		childOpt := optAncestor || (!tf.Required() && !isVariant(tf))
+		if !planVariantCopy(tf, sf, tCol, sColOf[tf.Name()], append(path, tf.Name()), childOpt, plan) {
 			return false
 		}
 		tCol += int(numLeafColumnsOf(tf))
 	}
 	return true
-}
-
-// schemaHasVariant reports whether any variant group appears in the subtree.
-func schemaHasVariant(node Node) bool {
-	if isVariant(node) {
-		return true
-	}
-	if node.Leaf() {
-		return false
-	}
-	return slices.ContainsFunc(node.Fields(), func(f Field) bool {
-		return schemaHasVariant(f)
-	})
 }
 
 // copyColumnChunkRows copies every value of a column chunk, with its levels,

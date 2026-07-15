@@ -31,14 +31,12 @@ type variantConversion struct {
 	// sourceValueRequired marks plain unshredded sources (required binary
 	// value), whose value column does not contribute a definition level.
 	sourceValueRequired bool
-	numCols             int // leaf columns of the source variant group
 	sourceStart         int // first source leaf column of the variant group
 
 	target *shreddedVariantGroup
 	// targetValueRequired marks plain unshredded targets.
 	targetValueRequired bool
 	targetStart         int  // first target leaf column of the variant group
-	targetNumCols       int  // leaf columns of the target variant group
 	targetDef           byte // definition level of the target group when present
 	targetRep           byte // repetition depth of the target group
 
@@ -120,10 +118,8 @@ func makeVariantConversion(t, s Node, tCol, sCol int, tDef, tRep, sDef, sRep byt
 		target:              target,
 		targetValueRequired: targetValueRequired,
 		targetStart:         tCol,
-		targetNumCols:       target.numCols,
 		targetDef:           tDef,
 		targetRep:           tRep,
-		numCols:             int(numLeafColumnsOf(s)),
 		sourceStart:         sCol,
 		sourceGroupDef:      int(sDef),
 		sourceGroupRep:      int(sRep),
@@ -142,13 +138,11 @@ func (vc *variantConversion) sourceColumnFor(rel int) int {
 	if vc.source == nil {
 		return vc.sourceStart
 	}
-	if rel == vc.target.metadataCol {
-		return vc.sourceStart + vc.source.metadataCol
+	col := vc.source.valueCol
+	if rel == vc.target.metadataCol || col < 0 {
+		col = vc.source.metadataCol
 	}
-	if vc.source.valueCol >= 0 {
-		return vc.sourceStart + vc.source.valueCol
-	}
-	return vc.sourceStart + vc.source.metadataCol
+	return vc.sourceStart + col
 }
 
 // setLevelMapping returns a copy of the source-to-target level mapping with
@@ -177,16 +171,16 @@ func (vc *variantConversion) convert(source [][]Value, scratch *variantScratch) 
 	if vc.err != nil {
 		return vc.err
 	}
-	columns := source[vc.sourceStart : vc.sourceStart+vc.numCols]
+	columns := source[vc.sourceStart : vc.sourceStart+vc.source.numCols]
 	if cap(scratch.pos) < len(columns) {
 		scratch.pos = make([]int, len(columns))
 	}
 	scratch.pos = scratch.pos[:len(columns)]
 	clear(scratch.pos)
-	if cap(scratch.cols) < vc.targetNumCols {
-		scratch.cols = make([][]Value, vc.targetNumCols)
+	if cap(scratch.cols) < vc.target.numCols {
+		scratch.cols = make([][]Value, vc.target.numCols)
 	}
-	scratch.cols = scratch.cols[:vc.targetNumCols]
+	scratch.cols = scratch.cols[:vc.target.numCols]
 	for i := range scratch.cols {
 		scratch.cols[i] = scratch.cols[i][:0]
 	}

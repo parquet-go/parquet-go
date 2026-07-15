@@ -17,28 +17,13 @@ import (
 // source file's shredding schema to the destination's. It is the core of a
 // compaction pipeline: merging many small files into one, changing the
 // shredding schema of existing data, or shredding previously unshredded
-// files, all without materializing rows.
-//
-// Values are moved at the finest granularity the two schemas allow:
-//
-//   - Rows and subtrees stored in typed_value columns are walked through the
-//     reader's cursors and replayed as scalar events, so they flow from the
-//     source column buffers to the destination column buffers without ever
-//     being decoded to variant binary or boxed into a variant.Value.
-//   - Residual variant binary is walked in place and replayed as events
-//     (variant.Replay), without materializing a variant.Value. The walk is
-//     unavoidable in general: residual bytes reference the source row's
-//     metadata dictionary by field ID, and the destination row's dictionary
-//     is rebuilt from the events of the whole row.
-//
-// When the source and destination shredding schemas agree at a position, a
-// replayed typed value matches the destination's typed_value column and is
-// stored typed again; where they disagree, the destination writer re-shreds
-// per its own case tables. Whole-row-group copies between identical file
-// schemas do not need this machinery at all: Writer.WriteRowGroup already
-// copies row groups without decoding. Writer.WriteRowGroup routes whole row
-// groups through CopyVariantRows automatically when shredding differs; that
-// integration lives in writer_variant.go.
+// files, all without materializing rows. Where the two schemas agree at a
+// position, typed values flow between the column buffers without ever being
+// decoded to variant binary or boxed into a variant.Value; where they
+// disagree, the destination writer re-shreds per its own case tables.
+// Writer.WriteRowGroup routes whole row groups through CopyVariantRows
+// automatically when shredding differs; that integration lives in
+// writer_variant.go.
 
 // variantCopyWindow is the number of rows CopyVariantRows reads from the
 // source per window. It bounds the memory buffered by the reader while
@@ -223,30 +208,27 @@ func (cp *variantCopier) copyEntry(w *VariantColumnWriter, e int) error {
 
 	case variant.LocResidual:
 		r := cp.cur.residualAt(e)
-		if r == nil {
+		switch {
+		case r == nil || (!r.decoded && r.bytes == nil):
+			// Corruption backstop: entries the reader tagged itself
+			// always carry residual state.
 			w.Null()
-			break
-		}
-		if r.decoded {
+		case r.decoded:
 			// Already decoded by the reader for cursor navigation
 			// (navigated entries and residuals below cursors with
 			// children).
 			r.val.Write(w)
-			break
-		}
-		if r.bytes == nil {
-			w.Null()
-			break
-		}
-		// Replay the residual bytes as events without materializing a
-		// variant.Value; this is the only per-row work of the copy that
-		// would otherwise allocate.
-		m, err := cp.cur.reader.metadataFor(cp.cur.rowOf(e))
-		if err != nil {
-			return err
-		}
-		if err := variant.Replay(w, m, r.bytes); err != nil {
-			return err
+		default:
+			// Replay the residual bytes as events without materializing a
+			// variant.Value; this is the only per-row work of the copy
+			// that would otherwise allocate.
+			m, err := cp.cur.reader.metadataFor(cp.cur.rowOf(e))
+			if err != nil {
+				return err
+			}
+			if err := variant.Replay(w, m, r.bytes); err != nil {
+				return err
+			}
 		}
 
 	default: // variant.LocNull, variant.LocMissing

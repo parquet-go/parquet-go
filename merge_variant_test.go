@@ -3,6 +3,7 @@ package parquet_test
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"slices"
 	"testing"
@@ -18,13 +19,13 @@ import (
 // through the re-shredding schema conversion (convert_variant.go).
 
 // openRowGroups opens the row groups of the given parquet files.
-func openRowGroups(t *testing.T, files ...[]byte) []parquet.RowGroup {
-	t.Helper()
+func openRowGroups(tb testing.TB, files ...[]byte) []parquet.RowGroup {
+	tb.Helper()
 	var rowGroups []parquet.RowGroup
 	for i, data := range files {
 		f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 		if err != nil {
-			t.Fatalf("opening file %d: %v", i, err)
+			tb.Fatalf("opening file %d: %v", i, err)
 		}
 		rowGroups = append(rowGroups, f.RowGroups()...)
 	}
@@ -208,43 +209,20 @@ func TestMergeRowGroupsVariantSameShredding(t *testing.T) {
 // stays on the row-based path: variant values are re-shredded by the schema
 // conversion while rows are interleaved by the sort key.
 func TestMergeRowGroupsVariantSorted(t *testing.T) {
-	type row struct {
-		ID  int32      `parquet:"id"`
-		Var rawVariant `parquet:"var,optional,variant"`
-	}
 	build := func(shred parquet.Node, ids []int32) ([]byte, map[int32]variant.Value) {
-		variantNode := parquet.Variant()
-		if shred != nil {
-			shredded, err := parquet.ShreddedVariant(shred)
-			if err != nil {
-				t.Fatal(err)
-			}
-			variantNode = shredded
-		}
-		schema := parquet.NewSchema("table", parquet.Group{
-			"id":  parquet.Int(32),
-			"var": parquet.Optional(variantNode),
-		})
 		byID := make(map[int32]variant.Value, len(ids))
-		rows := make([]row, len(ids))
+		values := make([]*variant.Value, len(ids))
 		for i, id := range ids {
 			v := variant.MakeObject([]variant.Field{
 				{Name: "a", Value: variant.Int64(int64(id))},
 				{Name: "extra", Value: variant.String(fmt.Sprintf("id-%d", id))},
 			})
 			byID[id] = v
-			rows[i] = row{ID: id, Var: encodeRawVariant(v)}
+			values[i] = vptr(v)
 		}
-		buf := new(bytes.Buffer)
-		w := parquet.NewGenericWriter[row](buf, schema,
+		data := buildVariantIDFile(t, shred, ids, values,
 			parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("id"))))
-		if _, err := w.Write(rows); err != nil {
-			t.Fatal(err)
-		}
-		if err := w.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return buf.Bytes(), byID
+		return data, byID
 	}
 
 	evens := []int32{0, 2, 4, 6, 8}
@@ -285,33 +263,15 @@ func TestMergeRowGroupsVariantSorted(t *testing.T) {
 // instead of re-shredding to the merged schema; the copy paths must demote
 // so every value survives.
 func TestMergeRowGroupsVariantSortedNonOverlapping(t *testing.T) {
-	type row struct {
-		ID  int32      `parquet:"id"`
-		Var rawVariant `parquet:"var,optional,variant"`
-	}
 	build := func(shred parquet.Group, baseID int32, values []variant.Value) []byte {
-		shredded, err := parquet.ShreddedVariant(shred)
-		if err != nil {
-			t.Fatal(err)
+		ids := make([]int32, len(values))
+		ptrs := make([]*variant.Value, len(values))
+		for i := range values {
+			ids[i] = baseID + int32(i)
+			ptrs[i] = &values[i]
 		}
-		schema := parquet.NewSchema("table", parquet.Group{
-			"id":  parquet.Int(32),
-			"var": parquet.Optional(shredded),
-		})
-		rows := make([]row, len(values))
-		for i, v := range values {
-			rows[i] = row{ID: baseID + int32(i), Var: encodeRawVariant(v)}
-		}
-		buf := new(bytes.Buffer)
-		w := parquet.NewGenericWriter[row](buf, schema,
+		return buildVariantIDFile(t, shred, ids, ptrs,
 			parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("id"))))
-		if _, err := w.Write(rows); err != nil {
-			t.Fatal(err)
-		}
-		if err := w.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return buf.Bytes()
 	}
 
 	want := make([]*variant.Value, 10)
@@ -432,33 +392,15 @@ func TestWriteRowGroupVariantConverted(t *testing.T) {
 // columns differ (one file has an extra column), which the columnar fast
 // path rejects; the row-based fallback must still re-shred correctly.
 func TestMergeRowGroupsVariantExtraColumn(t *testing.T) {
-	type rowA struct {
-		ID  int32      `parquet:"id"`
-		Var rawVariant `parquet:"var,optional,variant"`
-	}
 	type rowB struct {
 		ID    int32      `parquet:"id"`
 		Extra int64      `parquet:"extra"`
 		Var   rawVariant `parquet:"var,optional,variant"`
 	}
-	shredded, err := parquet.ShreddedVariant(parquet.Group{"a": parquet.Int(64)})
-	if err != nil {
-		t.Fatal(err)
-	}
 	v1 := variant.MakeObject([]variant.Field{{Name: "a", Value: variant.Int64(1)}})
 	v2 := variant.MakeObject([]variant.Field{{Name: "a", Value: variant.String("x")}})
 
-	bufA := new(bytes.Buffer)
-	wA := parquet.NewGenericWriter[rowA](bufA, parquet.NewSchema("table", parquet.Group{
-		"id":  parquet.Int(32),
-		"var": parquet.Optional(shredded),
-	}))
-	if _, err := wA.Write([]rowA{{ID: 0, Var: encodeRawVariant(v1)}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := wA.Close(); err != nil {
-		t.Fatal(err)
-	}
+	fileA := buildVariantIDFile(t, parquet.Group{"a": parquet.Int(64)}, []int32{0}, []*variant.Value{vptr(v1)})
 
 	bufB := new(bytes.Buffer)
 	wB := parquet.NewGenericWriter[rowB](bufB, parquet.NewSchema("table", parquet.Group{
@@ -473,7 +415,7 @@ func TestMergeRowGroupsVariantExtraColumn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	data := mergeVariantFiles(t, [][]byte{bufA.Bytes(), bufB.Bytes()})
+	data := mergeVariantFiles(t, [][]byte{fileA, bufB.Bytes()})
 	assertVariantFile(t, data, []*variant.Value{vptr(v1), vptr(v2)}, "extra column")
 }
 
@@ -630,70 +572,35 @@ func TestMergeRowGroupsVariantRandomized(t *testing.T) {
 // re-shreds: the two source files shred the variant column differently and
 // are merged into an explicit target shredding.
 func BenchmarkMergeVariantRowGroups(b *testing.B) {
-	shred := func(g parquet.Group) parquet.Node {
-		n, err := parquet.ShreddedVariant(g)
-		if err != nil {
-			b.Fatal(err)
-		}
-		return n
-	}
-	type row struct {
-		ID  int32      `parquet:"id"`
-		Var rawVariant `parquet:"var,optional,variant"`
-	}
-	mkFile := func(variantNode parquet.Node, numRows int) []byte {
-		schema := parquet.NewSchema("table", parquet.Group{
-			"id":  parquet.Int(32),
-			"var": parquet.Optional(variantNode),
-		})
-		rows := make([]row, numRows)
-		for i := range rows {
-			rows[i] = row{ID: int32(i), Var: encodeRawVariant(variant.MakeObject([]variant.Field{
+	mkFile := func(shred parquet.Group, numRows int) []byte {
+		ids := make([]int32, numRows)
+		values := make([]*variant.Value, numRows)
+		for i := range values {
+			ids[i] = int32(i)
+			values[i] = vptr(variant.MakeObject([]variant.Field{
 				{Name: "name", Value: variant.String("alice")},
 				{Name: "age", Value: variant.Int64(int64(i))},
 				{Name: "extra", Value: variant.Double(1.5)},
-			}))}
+			}))
 		}
-		buf := new(bytes.Buffer)
-		w := parquet.NewGenericWriter[row](buf, schema)
-		if _, err := w.Write(rows); err != nil {
-			b.Fatal(err)
-		}
-		if err := w.Close(); err != nil {
-			b.Fatal(err)
-		}
-		return buf.Bytes()
+		return buildVariantIDFile(b, shred, ids, values)
 	}
-	target := parquet.NewSchema("table", parquet.Group{
-		"id":  parquet.Int(32),
-		"var": parquet.Optional(shred(parquet.Group{"name": parquet.String(), "age": parquet.Int(64)})),
-	})
+	target := variantTestSchema(b, parquet.Group{"name": parquet.String(), "age": parquet.Int(64)})
 
 	for _, numRows := range []int{2000, 50000} {
 		files := [][]byte{
-			mkFile(shred(parquet.Group{"name": parquet.String(), "age": parquet.Int(64)}), numRows),
-			mkFile(shred(parquet.Group{"name": parquet.String()}), numRows),
-		}
-		open := func() []parquet.RowGroup {
-			var rowGroups []parquet.RowGroup
-			for _, data := range files {
-				f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-				if err != nil {
-					b.Fatal(err)
-				}
-				rowGroups = append(rowGroups, f.RowGroups()...)
-			}
-			return rowGroups
+			mkFile(parquet.Group{"name": parquet.String(), "age": parquet.Int(64)}, numRows),
+			mkFile(parquet.Group{"name": parquet.String()}, numRows),
 		}
 
 		b.Run(fmt.Sprintf("columnar/rows=%d", 2*numRows), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				merged, err := parquet.MergeRowGroups(open(), target)
+				merged, err := parquet.MergeRowGroups(openRowGroups(b, files...), target)
 				if err != nil {
 					b.Fatal(err)
 				}
-				w := parquet.NewWriter(discard{}, target)
+				w := parquet.NewWriter(io.Discard, target)
 				if _, err := w.WriteRowGroup(merged); err != nil {
 					b.Fatal(err)
 				}
@@ -706,11 +613,11 @@ func BenchmarkMergeVariantRowGroups(b *testing.B) {
 		b.Run(fmt.Sprintf("rows/rows=%d", 2*numRows), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				merged, err := parquet.MergeRowGroups(open(), target)
+				merged, err := parquet.MergeRowGroups(openRowGroups(b, files...), target)
 				if err != nil {
 					b.Fatal(err)
 				}
-				w := parquet.NewWriter(discard{}, target)
+				w := parquet.NewWriter(io.Discard, target)
 				rows := merged.Rows()
 				if _, err := w.ReadRowsFrom(rows); err != nil {
 					b.Fatal(err)
@@ -725,7 +632,3 @@ func BenchmarkMergeVariantRowGroups(b *testing.B) {
 		})
 	}
 }
-
-type discard struct{}
-
-func (discard) Write(p []byte) (int, error) { return len(p), nil }

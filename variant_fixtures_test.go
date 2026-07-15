@@ -267,13 +267,13 @@ func decodeRawVariant(raw rawVariant) (variant.Value, error) {
 // variantTestSchema builds the schema shared by the variant test file
 // builders: an id column plus an optional "var" variant column shredded per
 // shred (nil means unshredded).
-func variantTestSchema(t *testing.T, shred parquet.Node) *parquet.Schema {
-	t.Helper()
+func variantTestSchema(tb testing.TB, shred parquet.Node) *parquet.Schema {
+	tb.Helper()
 	variantNode := parquet.Variant()
 	if shred != nil {
 		shredded, err := parquet.ShreddedVariant(shred)
 		if err != nil {
-			t.Fatalf("building shredded variant node: %v", err)
+			tb.Fatalf("building shredded variant node: %v", err)
 		}
 		variantNode = shredded
 	}
@@ -283,15 +283,15 @@ func variantTestSchema(t *testing.T, shred parquet.Node) *parquet.Schema {
 	})
 }
 
-// buildVariantFile writes the given variant values (nil means a null
-// variant row) into a file with the given typed_value shredding schema
-// (nil means unshredded), returning the file bytes.
-func buildVariantFile(t *testing.T, shred parquet.Node, values []*variant.Value, options ...parquet.WriterOption) []byte {
-	t.Helper()
-	schema := variantTestSchema(t, shred)
+// buildVariantIDFile writes rows (ids[i], values[i]) into a file with the
+// given typed_value shredding schema (nil means unshredded), returning the
+// file bytes. A nil value writes a null variant row.
+func buildVariantIDFile(tb testing.TB, shred parquet.Node, ids []int32, values []*variant.Value, options ...parquet.WriterOption) []byte {
+	tb.Helper()
+	schema := variantTestSchema(tb, shred)
 	rows := make([]shreddedVariantRow, len(values))
 	for i, v := range values {
-		rows[i] = shreddedVariantRow{ID: int32(i)}
+		rows[i] = shreddedVariantRow{ID: ids[i]}
 		if v != nil {
 			rows[i].Var = encodeRawVariant(*v)
 		}
@@ -300,12 +300,22 @@ func buildVariantFile(t *testing.T, shred parquet.Node, values []*variant.Value,
 	opts := append([]parquet.WriterOption{schema}, options...)
 	w := parquet.NewGenericWriter[shreddedVariantRow](buf, opts...)
 	if _, err := w.Write(rows); err != nil {
-		t.Fatalf("writing rows: %v", err)
+		tb.Fatalf("writing rows: %v", err)
 	}
 	if err := w.Close(); err != nil {
-		t.Fatalf("closing writer: %v", err)
+		tb.Fatalf("closing writer: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// buildVariantFile is buildVariantIDFile with sequential ids.
+func buildVariantFile(tb testing.TB, shred parquet.Node, values []*variant.Value, options ...parquet.WriterOption) []byte {
+	tb.Helper()
+	ids := make([]int32, len(values))
+	for i := range ids {
+		ids[i] = int32(i)
+	}
+	return buildVariantIDFile(tb, shred, ids, values, options...)
 }
 
 func vptr(v variant.Value) *variant.Value { return &v }
