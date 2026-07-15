@@ -23,19 +23,10 @@ import (
 // e.g. JSON into a shredded variant column runs allocation-free per row once
 // the writer's buffers are warm.
 //
-// The shredding semantics are identical to the row path (both follow the
-// case tables of the Variant Shredding specification and share
-// variantToParquetValue and the shreddedVariantGroup tree):
-//
-//   - Scalars that exactly match the shredded type go into typed_value with
-//     a null value column; mismatches are encoded into the value column.
-//   - Objects shred field-wise when the position is shredded as an object:
-//     shredded fields descend, missing shredded fields write nulls,
-//     non-shredded fields stream into a partial-object residual.
-//   - Arrays shred element-wise through the 3-level LIST structure when the
-//     position is shredded as a list.
-//   - All object field names of the row, shredded or not, are interned into
-//     the row's metadata dictionary (as VariantShredding.md requires).
+// The shredding semantics are identical to the row path: both follow the
+// case tables of the Variant Shredding specification (summarized at the top
+// of variant_shredded_write.go) and share variantToParquetValue and the
+// shreddedVariantGroup tree.
 
 // VariantColumnWriter writes one VARIANT column of a parquet file in
 // streaming, columnar form. It implements variant.ValueWriter: each row is
@@ -71,7 +62,6 @@ type VariantColumnWriter struct {
 	groupDef int  // definition level at which the variant group is present
 	optional bool // whether the variant group node itself is optional
 	columns  []*ColumnWriter
-	types    []Type // leaf types, indexed by relative column
 
 	// rootValueRequired is set for plain unshredded variant groups, whose
 	// value field is required rather than optional.
@@ -88,15 +78,14 @@ type VariantColumnWriter struct {
 
 	// Row state. cur is the shredded node awaiting a value event, nil when
 	// no value is expected (inside an object before a Field call, or after
-	// the row's value completed). frames tracks open shredded containers,
-	// residual an active residual stream.
-	inRow       bool
-	rowHasValue bool
-	cur         *shreddedVariantGroup
-	curLevels   shredLevels
-	frames      []variantWriterFrame
-	residual    variantResidualState
-	err         error
+	// the row's value completed). frames tracks open shredded containers;
+	// residual tracks an active residual stream.
+	inRow     bool
+	cur       *shreddedVariantGroup
+	curLevels shredLevels
+	frames    []variantWriterFrame
+	residual  variantResidualState
+	err       error
 }
 
 // variantWriterFrame is one open shredded container (an object or list
@@ -140,83 +129,29 @@ var (
 // unshredded (metadata, value) or shredded (metadata, value, typed_value)
 // in any shape permitted by the Variant Shredding specification.
 func NewVariantColumnWriter(w VariantWriterTarget, path ...string) (*VariantColumnWriter, error) {
-	if len(path) == 0 {
-		return nil, fmt.Errorf("variant: NewVariantColumnWriter requires a column path")
-	}
 	schema := w.Schema()
 	if schema == nil {
 		return nil, fmt.Errorf("variant: the writer has no schema configured")
 	}
-	node := Node(schema)
-	def := 0
-	col := 0
-	optional := false
-	for _, name := range path {
-		if node.Leaf() {
-			return nil, fmt.Errorf("variant: column %q not found: %q is a leaf", joinPath(path), name)
-		}
-		var next Node
-		for _, f := range node.Fields() {
-			if f.Name() == name {
-				next = f
-				break
-			}
-			col += int(numLeafColumnsOf(f))
-		}
-		if next == nil {
-			return nil, fmt.Errorf("variant: column %q not found: no field %q", joinPath(path), name)
-		}
-		if next.Repeated() {
-			return nil, fmt.Errorf("variant: column %q is beneath a repeated field, which VariantColumnWriter does not support", joinPath(path))
-		}
-		optional = next.Optional()
-		if optional {
-			def++
-		}
-		node = next
-	}
-	if node.Leaf() {
-		return nil, fmt.Errorf("variant: column %q is not a variant group", joinPath(path))
-	}
-
-	group, err := buildShreddedVariantGroup(node, 0, 0, 0)
-	valueRequired := false
+	info, err := resolveVariantColumn(schema, path)
 	if err != nil {
-		// Plain unshredded variant groups declare "required binary value"
-		// (VariantEncoding.md), which the shredded-schema validation
-		// rejects; accept that shape here.
-		if g, ok := unshreddedVariantGroupOf(node); ok {
-			group, valueRequired = g, true
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
-	if group.metadataCol < 0 {
-		return nil, fmt.Errorf("variant: column %q has no metadata field", joinPath(path))
-	}
+	group := info.group
 
 	columnWriters := w.ColumnWriters()
-	if col+group.numCols > len(columnWriters) {
-		return nil, fmt.Errorf("variant: column %q spans columns [%d, %d) but the writer has %d", joinPath(path), col, col+group.numCols, len(columnWriters))
+	if info.col+group.numCols > len(columnWriters) {
+		return nil, fmt.Errorf("variant: column %q spans columns [%d, %d) but the writer has %d", joinPath(path), info.col, info.col+group.numCols, len(columnWriters))
 	}
 
-	vw := &VariantColumnWriter{
+	return &VariantColumnWriter{
 		group:             group,
-		groupDef:          def,
-		optional:          optional,
-		columns:           columnWriters[col : col+group.numCols],
-		types:             make([]Type, group.numCols),
-		rootValueRequired: valueRequired,
+		groupDef:          info.def,
+		optional:          info.optional,
+		columns:           columnWriters[info.col : info.col+group.numCols],
+		rootValueRequired: info.valueRequired,
 		builders:          make(map[*shreddedVariantGroup]*variant.Builder),
-	}
-	i := 0
-	forEachLeafColumnOf(node, func(leaf leafColumn) {
-		if i < len(vw.types) {
-			vw.types[i] = leaf.node.Type()
-		}
-		i++
-	})
-	return vw, nil
+	}, nil
 }
 
 // Err returns the first error encountered, or nil.
@@ -253,7 +188,6 @@ func (w *VariantColumnWriter) BeginRow() error {
 		return w.err
 	}
 	w.inRow = true
-	w.rowHasValue = false
 	w.cur = w.group
 	w.curLevels = shredLevels{baseDef: w.groupDef}
 	if w.meta.Size() > variantMetadataResetSize {
@@ -273,7 +207,9 @@ func (w *VariantColumnWriter) EndRow() error {
 	if w.err == nil && (w.residual.b != nil || len(w.frames) > 0) {
 		w.fail("EndRow with an unclosed object or array")
 	}
-	if w.err == nil && !w.rowHasValue {
+	// With no open frames or residual, cur still set means the row's value
+	// never arrived (valueDone clears it when the value completes).
+	if w.err == nil && w.cur != nil {
 		w.fail("EndRow without a value; use WriteNullRow for SQL null rows")
 	}
 	if w.err != nil {
@@ -449,8 +385,6 @@ func (w *VariantColumnWriter) valueDone() {
 			w.curLevels = f.levels
 			w.curLevels.rep = byte(f.levels.baseRep + f.node.typed.element.repDepth)
 		}
-	} else {
-		w.rowHasValue = true
 	}
 }
 
@@ -516,7 +450,7 @@ func (w *VariantColumnWriter) scalar(v variant.Value) {
 	}
 	l := w.curLevels
 	if t := node.typed; t != nil && t.kind == shreddedTypedPrimitive {
-		if pv, ok := variantToParquetValue(v, w.types[t.startCol]); ok {
+		if pv, ok := variantToParquetValue(v, t.typ); ok {
 			w.writeTyped(t.startCol, pv, l.def(t.defLevel), l.rep)
 			if node.valueCol >= 0 {
 				w.leaf(node.valueCol).writeNull(w.levels(l.def(node.defLevel), l.rep))
@@ -607,19 +541,14 @@ func (w *VariantColumnWriter) Field(name string) {
 	w.beginField(f, name, idx)
 }
 
-// VariantFieldRef is a pre-resolved object field name for FieldByRef. In
-// steady state a ref caches both the field's position in the shredded
-// schema and its metadata dictionary intern, so hot ingest loops writing
-// the same fields on every row skip the per-event name hashing of Field.
-//
-// FieldByRef rewrites the ref's cache (which also retains the last writer
-// it resolved against), so a ref must not be used by multiple goroutines
-// concurrently: writers running in parallel, e.g. one per
-// ConcurrentRowGroupWriter goroutine, each need their own refs. Within one
-// goroutine any use is correct — the cache re-resolves whenever the writer
-// or object position changes — but for peak performance use one ref per
-// writer per field name, with distinct refs for identically named fields
-// of different objects.
+// VariantFieldRef is a pre-resolved object field name for FieldByRef: a ref
+// caches its resolution (shredded position and metadata intern) against the
+// last writer and object it was used with, so hot ingest loops writing the
+// same fields on every row skip the per-event name hashing of Field. The
+// cache re-resolves whenever the writer or object position changes, but
+// FieldByRef mutates it, so a ref must not be used by multiple goroutines
+// concurrently — for concurrency and peak performance use one ref per
+// writer per field.
 type VariantFieldRef struct {
 	name    string
 	node    *shreddedVariantGroup // object node the ref last resolved against
@@ -859,6 +788,17 @@ func (w *VariantColumnWriter) pushFrame(node *shreddedVariantGroup, isList bool,
 	}
 }
 
+// scalarEvent handles one scalar event: forwarded into an active residual
+// stream, or shredded at the current position.
+func (w *VariantColumnWriter) scalarEvent(v variant.Value) {
+	if w.forward() {
+		v.Write(w.residual.b)
+		w.afterResidualScalar()
+		return
+	}
+	w.scalar(v)
+}
+
 // The scalar event methods below write one scalar value at the current
 // position: the row's value, the current object field, or the next array
 // element. A scalar matching the position's shredded type goes to its
@@ -868,184 +808,37 @@ func (w *VariantColumnWriter) pushFrame(node *shreddedVariantGroup, isList bool,
 // from a SQL null row; see WriteNullRow). Variant null never matches a
 // shredded type: it encodes into the position's value column, or fails the
 // row when the position is shredded without one.
-func (w *VariantColumnWriter) Null() {
-	if w.forward() {
-		w.residual.b.Null()
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Null())
+func (w *VariantColumnWriter) Null()              { w.scalarEvent(variant.Null()) }
+func (w *VariantColumnWriter) Bool(v bool)        { w.scalarEvent(variant.Bool(v)) }
+func (w *VariantColumnWriter) Int8(v int8)        { w.scalarEvent(variant.Int8(v)) }
+func (w *VariantColumnWriter) Int16(v int16)      { w.scalarEvent(variant.Int16(v)) }
+func (w *VariantColumnWriter) Int32(v int32)      { w.scalarEvent(variant.Int32(v)) }
+func (w *VariantColumnWriter) Int64(v int64)      { w.scalarEvent(variant.Int64(v)) }
+func (w *VariantColumnWriter) Float(v float32)    { w.scalarEvent(variant.Float(v)) }
+func (w *VariantColumnWriter) Double(v float64)   { w.scalarEvent(variant.Double(v)) }
+func (w *VariantColumnWriter) String(v string)    { w.scalarEvent(variant.String(v)) }
+func (w *VariantColumnWriter) Binary(v []byte)    { w.scalarEvent(variant.Binary(v)) }
+func (w *VariantColumnWriter) Date(days int32)    { w.scalarEvent(variant.Date(days)) }
+func (w *VariantColumnWriter) Time(micros int64)  { w.scalarEvent(variant.Time(micros)) }
+func (w *VariantColumnWriter) UUID(v uuid.UUID)   { w.scalarEvent(variant.UUID(v)) }
+func (w *VariantColumnWriter) Timestamp(us int64) { w.scalarEvent(variant.Timestamp(us)) }
+func (w *VariantColumnWriter) TimestampNTZ(us int64) {
+	w.scalarEvent(variant.TimestampNTZ(us))
 }
-
-func (w *VariantColumnWriter) Bool(v bool) {
-	if w.forward() {
-		w.residual.b.Bool(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Bool(v))
+func (w *VariantColumnWriter) TimestampNanos(ns int64) {
+	w.scalarEvent(variant.TimestampNanos(ns))
 }
-
-func (w *VariantColumnWriter) Int8(v int8) {
-	if w.forward() {
-		w.residual.b.Int8(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Int8(v))
+func (w *VariantColumnWriter) TimestampNTZNanos(ns int64) {
+	w.scalarEvent(variant.TimestampNTZNanos(ns))
 }
-
-func (w *VariantColumnWriter) Int16(v int16) {
-	if w.forward() {
-		w.residual.b.Int16(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Int16(v))
-}
-
-func (w *VariantColumnWriter) Int32(v int32) {
-	if w.forward() {
-		w.residual.b.Int32(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Int32(v))
-}
-
-func (w *VariantColumnWriter) Int64(v int64) {
-	if w.forward() {
-		w.residual.b.Int64(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Int64(v))
-}
-
-func (w *VariantColumnWriter) Float(v float32) {
-	if w.forward() {
-		w.residual.b.Float(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Float(v))
-}
-
-func (w *VariantColumnWriter) Double(v float64) {
-	if w.forward() {
-		w.residual.b.Double(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Double(v))
-}
-
-func (w *VariantColumnWriter) String(v string) {
-	if w.forward() {
-		w.residual.b.String(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.String(v))
-}
-
-func (w *VariantColumnWriter) Binary(v []byte) {
-	if w.forward() {
-		w.residual.b.Binary(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Binary(v))
-}
-
-func (w *VariantColumnWriter) Date(days int32) {
-	if w.forward() {
-		w.residual.b.Date(days)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Date(days))
-}
-
-func (w *VariantColumnWriter) Time(micros int64) {
-	if w.forward() {
-		w.residual.b.Time(micros)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Time(micros))
-}
-
-func (w *VariantColumnWriter) Timestamp(micros int64) {
-	if w.forward() {
-		w.residual.b.Timestamp(micros)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Timestamp(micros))
-}
-
-func (w *VariantColumnWriter) TimestampNTZ(micros int64) {
-	if w.forward() {
-		w.residual.b.TimestampNTZ(micros)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.TimestampNTZ(micros))
-}
-
-func (w *VariantColumnWriter) TimestampNanos(nanos int64) {
-	if w.forward() {
-		w.residual.b.TimestampNanos(nanos)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.TimestampNanos(nanos))
-}
-
-func (w *VariantColumnWriter) TimestampNTZNanos(nanos int64) {
-	if w.forward() {
-		w.residual.b.TimestampNTZNanos(nanos)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.TimestampNTZNanos(nanos))
-}
-
-func (w *VariantColumnWriter) UUID(v uuid.UUID) {
-	if w.forward() {
-		w.residual.b.UUID(v)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.UUID(v))
-}
-
 func (w *VariantColumnWriter) Decimal4(unscaled int32, scale byte) {
-	if w.forward() {
-		w.residual.b.Decimal4(unscaled, scale)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Decimal4(unscaled, scale))
+	w.scalarEvent(variant.Decimal4(unscaled, scale))
 }
-
 func (w *VariantColumnWriter) Decimal8(unscaled int64, scale byte) {
-	if w.forward() {
-		w.residual.b.Decimal8(unscaled, scale)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Decimal8(unscaled, scale))
+	w.scalarEvent(variant.Decimal8(unscaled, scale))
 }
-
 func (w *VariantColumnWriter) Decimal16(unscaled [16]byte, scale byte) {
-	if w.forward() {
-		w.residual.b.Decimal16(unscaled, scale)
-		w.afterResidualScalar()
-		return
-	}
-	w.scalar(variant.Decimal16(unscaled, scale))
+	w.scalarEvent(variant.Decimal16(unscaled, scale))
 }
 
 var _ variant.ValueWriter = (*VariantColumnWriter)(nil)

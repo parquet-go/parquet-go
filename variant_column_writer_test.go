@@ -97,6 +97,72 @@ func assertVariantFile(t *testing.T, data []byte, values []*variant.Value, conte
 	}
 }
 
+// assertRowBasedRead checks a written file through the row-based conversion
+// read path (schema conversion to an unshredded variant), an independent
+// check on files produced by the streaming writer. Nil values are expected
+// to read back as empty metadata/value bytes.
+func assertRowBasedRead(t *testing.T, data []byte, values []*variant.Value) {
+	t.Helper()
+	rows, err := parquet.Read[rawVariantRow](bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("row-based read: %v", err)
+	}
+	if len(rows) != len(values) {
+		t.Fatalf("row-based read: %d rows, want %d", len(rows), len(values))
+	}
+	for i, want := range values {
+		if want == nil {
+			if len(rows[i].Var.Metadata) != 0 || len(rows[i].Var.Value) != 0 {
+				t.Errorf("row-based read: row %d: got %d metadata and %d value bytes, want empty null row",
+					i, len(rows[i].Var.Metadata), len(rows[i].Var.Value))
+			}
+			continue
+		}
+		decoded, err := decodeRawVariant(rows[i].Var)
+		if err != nil {
+			t.Errorf("row-based read: row %d: %v", i, err)
+			continue
+		}
+		if !decoded.Equal(*want) {
+			t.Errorf("row-based read: row %d mismatch:\n got: %#v\nwant: %#v",
+				i, decoded.GoValue(), want.GoValue())
+		}
+	}
+}
+
+// readMetadataColumn opens a written file and returns the raw metadata
+// bytes of every row of leaf column col (the variant group's metadata
+// column), across all its pages.
+func readMetadataColumn(t *testing.T, data []byte, col int) [][]byte {
+	t.Helper()
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages := f.RowGroups()[0].ColumnChunks()[col].Pages()
+	defer pages.Close()
+	var metas [][]byte
+	for {
+		p, err := pages.ReadPage()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		vals := make([]parquet.Value, p.NumRows())
+		n, err := p.Values().ReadValues(vals)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		for _, v := range vals[:n] {
+			metas = append(metas, bytes.Clone(v.ByteArray()))
+		}
+		parquet.Release(p)
+	}
+	return metas
+}
+
 // TestVariantColumnWriterRandomizedDifferential runs the randomized
 // shredding schema × value matrix through both the streaming writer and the
 // row-based writer, reading each file back through the columnar reader and
@@ -127,34 +193,9 @@ func TestVariantColumnWriterRandomizedDifferential(t *testing.T) {
 			rowData := buildVariantFile(t, shred, values)
 			assertVariantFile(t, rowData, values, "row-based write")
 
-			// The row-based read path (schema conversion to an unshredded
-			// variant) is an independent check on the streaming file. Null
-			// rows read back as empty metadata/value bytes.
-			rows, err := parquet.Read[rawVariantRow](bytes.NewReader(data), int64(len(data)))
-			if err != nil {
-				t.Fatalf("row-based read: %v", err)
-			}
-			if len(rows) != len(values) {
-				t.Fatalf("row-based read: %d rows, want %d", len(rows), len(values))
-			}
-			for j, want := range values {
-				if want == nil {
-					if len(rows[j].Var.Metadata) != 0 || len(rows[j].Var.Value) != 0 {
-						t.Errorf("row-based read: row %d: got %d metadata and %d value bytes, want empty null row",
-							j, len(rows[j].Var.Metadata), len(rows[j].Var.Value))
-					}
-					continue
-				}
-				decoded, err := decodeRawVariant(rows[j].Var)
-				if err != nil {
-					t.Errorf("row-based read: row %d: %v", j, err)
-					continue
-				}
-				if !decoded.Equal(*want) {
-					t.Errorf("row-based read: row %d mismatch:\n got: %#v\nwant: %#v",
-						j, decoded.GoValue(), want.GoValue())
-				}
-			}
+			// Independent check on the streaming file through the row-based
+			// conversion read path.
+			assertRowBasedRead(t, data, values)
 		})
 	}
 }
@@ -173,28 +214,7 @@ func TestVariantColumnWriterUnshredded(t *testing.T) {
 	}
 	data := buildVariantFileStreaming(t, nil, values)
 	assertVariantFile(t, data, values, "unshredded")
-
-	rows, err := parquet.Read[rawVariantRow](bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatalf("row-based read: %v", err)
-	}
-	for i, want := range values {
-		if want == nil {
-			if len(rows[i].Var.Metadata) != 0 || len(rows[i].Var.Value) != 0 {
-				t.Errorf("row-based read: row %d: want empty null row", i)
-			}
-			continue
-		}
-		decoded, err := decodeRawVariant(rows[i].Var)
-		if err != nil {
-			t.Errorf("row-based read: row %d: %v", i, err)
-			continue
-		}
-		if !decoded.Equal(*want) {
-			t.Errorf("row-based read: row %d mismatch:\n got: %#v\nwant: %#v",
-				i, decoded.GoValue(), want.GoValue())
-		}
-	}
+	assertRowBasedRead(t, data, values)
 }
 
 // TestVariantColumnWriterErrors exercises the constructor error paths.
@@ -407,22 +427,7 @@ func TestVariantColumnWriterDeepNesting(t *testing.T) {
 	}
 	data := buildVariantFileStreaming(t, shred, values)
 	assertVariantFile(t, data, values, "deep nesting")
-
-	// Independent check through the row-based conversion read path.
-	rows, err := parquet.Read[rawVariantRow](bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatalf("row-based read: %v", err)
-	}
-	for i, want := range values {
-		decoded, err := decodeRawVariant(rows[i].Var)
-		if err != nil {
-			t.Fatalf("row-based read: row %d: %v", i, err)
-		}
-		if !decoded.Equal(*want) {
-			t.Errorf("row-based read: row %d mismatch:\n got: %#v\nwant: %#v",
-				i, decoded.GoValue(), want.GoValue())
-		}
-	}
+	assertRowBasedRead(t, data, values)
 }
 
 // TestVariantColumnWriterMetadataInterned reads back the raw metadata
@@ -442,24 +447,10 @@ func TestVariantColumnWriterMetadataInterned(t *testing.T) {
 	}
 	data := buildVariantFileStreaming(t, shred, values)
 
-	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	// The metadata column is the first leaf of the variant group; the id
 	// column sorts before var, so it is leaf column 1 of the file.
-	pages := f.RowGroups()[0].ColumnChunks()[1].Pages()
-	defer pages.Close()
-	p, err := pages.ReadPage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer parquet.Release(p)
-	vals := make([]parquet.Value, 1)
-	if _, err := p.Values().ReadValues(vals); err != nil && err != io.EOF {
-		t.Fatal(err)
-	}
-	m, err := variant.DecodeMetadata(vals[0].ByteArray())
+	metas := readMetadataColumn(t, data, 1)
+	m, err := variant.DecodeMetadata(metas[0])
 	if err != nil {
 		t.Fatalf("decoding written metadata: %v", err)
 	}
@@ -602,22 +593,8 @@ func TestVariantColumnWriterFieldRefAcrossWriters(t *testing.T) {
 	}
 
 	for label, data := range map[string][]byte{"writer 1": buf1.Bytes(), "writer 2": buf2.Bytes()} {
-		f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
-		p, err := pages.ReadPage()
-		if err != nil {
-			t.Fatal(err)
-		}
-		vals := make([]parquet.Value, 1)
-		if _, err := p.Values().ReadValues(vals); err != nil && err != io.EOF {
-			t.Fatal(err)
-		}
-		m, err := variant.DecodeMetadata(vals[0].ByteArray())
-		parquet.Release(p)
-		pages.Close()
+		metas := readMetadataColumn(t, data, 0)
+		m, err := variant.DecodeMetadata(metas[0])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -641,26 +618,12 @@ func TestVariantColumnWriterMetadataPersistent(t *testing.T) {
 	}
 	data := buildVariantFileStreaming(t, shred, values)
 
-	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Leaf column 1 of the file is the variant group's metadata column
 	// (the id column sorts first).
-	pages := f.RowGroups()[0].ColumnChunks()[1].Pages()
-	defer pages.Close()
-	p, err := pages.ReadPage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer parquet.Release(p)
-	vals := make([]parquet.Value, 2)
-	if _, err := p.Values().ReadValues(vals); err != nil && err != io.EOF {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(vals[0].ByteArray(), vals[1].ByteArray()) {
+	metas := readMetadataColumn(t, data, 1)
+	if !bytes.Equal(metas[0], metas[1]) {
 		t.Errorf("rows with the same field set wrote different metadata:\n row 0: %x\n row 1: %x",
-			vals[0].ByteArray(), vals[1].ByteArray())
+			metas[0], metas[1])
 	}
 
 	// Churn: every row carries unique long residual field names, forcing
@@ -705,40 +668,18 @@ func TestVariantColumnWriterMetadataPersistent(t *testing.T) {
 	// every row's metadata must still contain the shredded field name.
 	// This cannot be caught by reconstruction, which recovers shredded
 	// field names from the schema instead of the dictionary.
-	f, err = parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	if err != nil {
-		t.Fatal(err)
+	churnMetas := readMetadataColumn(t, buf.Bytes(), 0)
+	if len(churnMetas) != rows {
+		t.Fatalf("read %d metadata values, want %d", len(churnMetas), rows)
 	}
-	metaPages := f.RowGroups()[0].ColumnChunks()[0].Pages()
-	defer metaPages.Close()
-	row := 0
-	for {
-		p, err := metaPages.ReadPage()
-		if err == io.EOF {
-			break
-		}
+	for row, raw := range churnMetas {
+		m, err := variant.DecodeMetadata(raw)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("row %d: decoding metadata: %v", row, err)
 		}
-		metaVals := make([]parquet.Value, p.NumRows())
-		n, err := p.Values().ReadValues(metaVals)
-		if err != nil && err != io.EOF {
-			t.Fatal(err)
+		if !slices.Contains(m.Strings, "name") {
+			t.Errorf("row %d: metadata is missing shredded field name %q after dictionary reset", row, "name")
 		}
-		for _, v := range metaVals[:n] {
-			m, err := variant.DecodeMetadata(v.ByteArray())
-			if err != nil {
-				t.Fatalf("row %d: decoding metadata: %v", row, err)
-			}
-			if !slices.Contains(m.Strings, "name") {
-				t.Errorf("row %d: metadata is missing shredded field name %q after dictionary reset", row, "name")
-			}
-			row++
-		}
-		parquet.Release(p)
-	}
-	if row != rows {
-		t.Fatalf("read %d metadata values, want %d", row, rows)
 	}
 }
 
@@ -872,179 +813,126 @@ func TestVariantColumnWriterMisuse(t *testing.T) {
 		return vw
 	}
 
-	t.Run("EndRow without BeginRow", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.EndRow(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("BeginRow inside a row", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		if err := vw.BeginRow(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("EndRow without a value", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		if err := vw.EndRow(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("EndRow with unclosed container", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginObject()
-		if err := vw.EndRow(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("two values per row", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.Int32(1)
-		vw.Int32(2)
-		if err := vw.EndRow(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("value without Field", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginObject()
-		vw.Int32(1)
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("residual field without value", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginObject()
-		vw.Field("resid") // not shredded: opens the partial-object residual
-		vw.EndObject()
-		if err := vw.EndRow(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("duplicate residual field", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginObject()
-		vw.Field("x")
-		vw.Int64(1)
-		vw.Field("x")
-		vw.Int64(2)
-		vw.EndObject()
-		if err := vw.EndRow(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("duplicate shredded field", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginObject()
-		vw.Field("a")
-		vw.Int64(1)
-		vw.Field("a")
-		vw.Int64(2)
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("Field outside an object", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.Field("a")
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("shredded field without value", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginObject()
-		vw.Field("a") // shredded field
-		vw.Field("b") // previous field has no value
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("EndObject without BeginObject", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.EndObject()
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("EndObject with unvalued shredded field", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginObject()
-		vw.Field("a")
-		vw.EndObject()
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("EndArray without BeginArray", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.EndArray()
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("second top-level container", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.Int32(1)
-		vw.BeginObject()
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
-	t.Run("unexpected BeginArray", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.Int32(1)
-		vw.BeginArray()
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error")
-		}
-	})
+	// Each case drives a misuse sequence on a fresh writer and expects an
+	// error: at the offending event itself when atEvent is set, or at the
+	// latest by EndRow.
+	tests := []struct {
+		name    string
+		atEvent bool
+		drive   func(vw *parquet.VariantColumnWriter)
+	}{
+		{"EndRow without BeginRow", false, func(vw *parquet.VariantColumnWriter) {}},
+		{"BeginRow inside a row", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginRow()
+		}},
+		{"EndRow without a value", false, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+		}},
+		{"EndRow with unclosed container", false, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginObject()
+		}},
+		{"two values per row", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.Int32(1)
+			vw.Int32(2)
+		}},
+		{"value without Field", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginObject()
+			vw.Int32(1)
+		}},
+		{"EndObject with pending residual field", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginObject()
+			vw.Field("resid") // not shredded: opens the partial-object residual
+			vw.EndObject()    // closes the object while the field has no value
+		}},
+		{"duplicate residual field", false, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginObject()
+			vw.Field("x")
+			vw.Int64(1)
+			vw.Field("x")
+			vw.Int64(2)
+			vw.EndObject()
+		}},
+		{"duplicate shredded field", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginObject()
+			vw.Field("a")
+			vw.Int64(1)
+			vw.Field("a")
+			vw.Int64(2)
+		}},
+		{"Field outside an object", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.Field("a")
+		}},
+		{"shredded field without value", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginObject()
+			vw.Field("a") // shredded field
+			vw.Field("b") // previous field has no value
+		}},
+		{"EndObject without BeginObject", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.EndObject()
+		}},
+		{"EndObject with unvalued shredded field", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginObject()
+			vw.Field("a")
+			vw.EndObject()
+		}},
+		{"EndArray without BeginArray", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.EndArray()
+		}},
+		{"second top-level container", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.Int32(1)
+			vw.BeginObject()
+		}},
+		{"unexpected BeginArray", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.Int32(1)
+			vw.BeginArray()
+		}},
+		{"EndArray with pending residual field", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginObject()
+			vw.Field("resid")
+			vw.EndArray() // no array is open anywhere
+		}},
+		{"mismatched end inside a residual", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.BeginArray() // root is shredded as an object: full residual
+			vw.BeginArray()
+			vw.EndObject() // closes an array frame: builder misuse
+		}},
+		{"WriteNullRow inside a row", true, func(vw *parquet.VariantColumnWriter) {
+			vw.BeginRow()
+			vw.WriteNullRow()
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			vw := newWriter(t, true)
+			tc.drive(vw)
+			if vw.Err() == nil {
+				if tc.atEvent {
+					t.Fatal("expected an error at the offending event")
+				}
+				if err := vw.EndRow(); err == nil {
+					t.Fatal("expected an error")
+				}
+			}
+		})
+	}
+
+	// The remaining cases need a different schema or writer configuration.
 	t.Run("Field inside a list", func(t *testing.T) {
 		schema := parquet.NewSchema("table", parquet.Group{
 			"var": parquet.Optional(mustShreddedVariant(t, parquet.List(parquet.Int(64)))),
@@ -1061,42 +949,6 @@ func TestVariantColumnWriterMisuse(t *testing.T) {
 		vw.Field("x")
 		if err := vw.Err(); err == nil {
 			t.Fatal("expected an error")
-		}
-	})
-	t.Run("EndObject with pending residual field fails at the event", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginObject()
-		vw.Field("resid") // not shredded: opens the partial-object residual
-		vw.EndObject()    // closes the object while the field has no value
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error at the EndObject event")
-		}
-	})
-	t.Run("EndArray with pending residual field", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginObject()
-		vw.Field("resid")
-		vw.EndArray() // no array is open anywhere
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected an error at the EndArray event")
-		}
-	})
-	t.Run("mismatched end inside a residual", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		vw.BeginArray() // root is shredded as an object: full residual
-		vw.BeginArray()
-		vw.EndObject() // closes an array frame: builder misuse
-		if err := vw.Err(); err == nil {
-			t.Fatal("expected the builder error to surface at the EndObject event")
 		}
 	})
 	t.Run("unshredded field without a value column", func(t *testing.T) {
@@ -1130,15 +982,6 @@ func TestVariantColumnWriterMisuse(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "no value column") {
 			t.Errorf("error should name the missing value column, got: %v", err)
-		}
-	})
-	t.Run("WriteNullRow inside a row", func(t *testing.T) {
-		vw := newWriter(t, true)
-		if err := vw.BeginRow(); err != nil {
-			t.Fatal(err)
-		}
-		if err := vw.WriteNullRow(); err == nil {
-			t.Fatal("expected an error")
 		}
 	})
 	t.Run("WriteNullRow on required column", func(t *testing.T) {

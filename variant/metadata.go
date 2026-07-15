@@ -105,10 +105,13 @@ func (m Metadata) Lookup(id int) (string, error) {
 // interned into a single contiguous byte buffer so a high-cardinality key
 // set pays for buffer growth rather than a heap string per key.
 type MetadataBuilder struct {
-	buf      []byte // concatenated dictionary strings
-	offs     []int  // start offset of each string in buf; end is offs[i+1] or len(buf)
-	index    map[string]int
-	unsorted bool // some entry compares below its predecessor
+	buf   []byte // concatenated dictionary strings
+	offs  []int  // start offset of each string in buf; end is offs[i+1] or len(buf)
+	index map[string]int
+	// unsorted is set when some entry compares below its predecessor; it is
+	// tracked incrementally by Add so encoding a large dictionary need not
+	// re-compare every entry.
+	unsorted bool
 }
 
 // Add interns s into the dictionary and returns its stable index. The
@@ -156,9 +159,6 @@ func (b *MetadataBuilder) stringAt(i int) string {
 // reindex rebuilds the lookup map after the slab has been reallocated.
 func (b *MetadataBuilder) reindex() {
 	clear(b.index)
-	if b.index == nil {
-		b.index = make(map[string]int, len(b.offs))
-	}
 	for i := range b.offs {
 		b.index[b.stringAt(i)] = i
 	}
@@ -173,7 +173,7 @@ func (b *MetadataBuilder) Build() (Metadata, []byte) {
 	for i := range b.offs {
 		strs[i] = string(b.stringAt(i)) // detach from the slab so Reset cannot invalidate
 	}
-	return Metadata{Strings: strs, Sorted: b.sorted()}, b.AppendTo(nil)
+	return Metadata{Strings: strs, Sorted: !b.unsorted}, b.AppendTo(nil)
 }
 
 // AppendTo appends the encoded binary representation of the dictionary to
@@ -189,7 +189,7 @@ func (b *MetadataBuilder) AppendTo(dst []byte) []byte {
 	n := len(b.offs)
 	totalLen := len(b.buf)
 	sortedBit := byte(0)
-	if b.sorted() {
+	if !b.unsorted {
 		sortedBit = 1
 	}
 
@@ -221,13 +221,6 @@ func (b *MetadataBuilder) AppendTo(dst []byte) []byte {
 
 	copy(out[pos:], b.buf)
 	return dst
-}
-
-// sorted reports whether the dictionary strings are in lexicographic order.
-// The order is tracked incrementally by Add, so building the binary
-// representation of a large dictionary need not re-compare every entry.
-func (b *MetadataBuilder) sorted() bool {
-	return !b.unsorted
 }
 
 // Size returns the total number of bytes of interned dictionary strings.

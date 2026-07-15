@@ -489,7 +489,8 @@ func (b *Builder) EndObject() {
 		return strings.Compare(meta.stringAt(a.id), meta.stringAt(c.id))
 	})
 	for i := 1; i < len(entries); i++ {
-		if entries[i].id == entries[i-1].id || meta.stringAt(entries[i].id) == meta.stringAt(entries[i-1].id) {
+		// Names are interned, so equal names always share one id.
+		if entries[i].id == entries[i-1].id {
 			b.fail("duplicate object field %q", meta.stringAt(entries[i].id))
 			return
 		}
