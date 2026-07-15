@@ -120,8 +120,11 @@ func readAllFileRows(t *testing.T, f *parquet.File) []parquet.Row {
 	return rows
 }
 
-// TestOpenFileWithFooter checks that opening a file from a pre-read footer
-// is equivalent to a regular open, for every testdata file.
+// TestOpenFileWithFooter checks, for every testdata file, that opening the
+// file from a pre-read footer is equivalent to a regular open, and that
+// ReadFooter over a bare footer section (the last footerSize+8 bytes of the
+// file, as cached by programs that store raw footer bytes) is equivalent to
+// ReadFooter over the file.
 func TestOpenFileWithFooter(t *testing.T) {
 	for _, path := range footerTestFiles(t) {
 		t.Run(filepath.Base(path), func(t *testing.T) {
@@ -152,6 +155,31 @@ func TestOpenFileWithFooter(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertFilesEquivalent(t, base, again)
+
+			// A bare footer section must decode to the same footer, minus
+			// the file size, which a bare section does not carry.
+			footerSize := binary.LittleEndian.Uint32(data[size-8 : size-4])
+			footerBytes := data[size-int64(footerSize)-8 : size]
+			decoded, err := parquet.ReadFooter(bytes.NewReader(footerBytes), int64(len(footerBytes)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Size() != 0 {
+				t.Errorf("decoded.Size() = %d, want 0 (unknown)", decoded.Size())
+			}
+			if b, w := marshalMetadata(t, footer.Metadata()), marshalMetadata(t, decoded.Metadata()); !bytes.Equal(b, w) {
+				t.Error("metadata mismatch between file and bare footer reads")
+			}
+			if b, w := footer.Schema().String(), decoded.Schema().String(); b != w {
+				t.Errorf("schema mismatch:\nread: %s\ndecoded: %s", b, w)
+			}
+			f, err := parquet.OpenFile(bytes.NewReader(data), size, parquet.WithFooter(decoded))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.NumRows() != decoded.Metadata().NumRows {
+				t.Errorf("num rows mismatch: %d != %d", f.NumRows(), decoded.Metadata().NumRows)
+			}
 		})
 	}
 }
@@ -173,49 +201,6 @@ func TestOpenFileWithFooterRejectsWrongSize(t *testing.T) {
 	}
 	if _, err := parquet.OpenFile(bytes.NewReader(data), size+1, parquet.WithFooter(footer)); err == nil {
 		t.Error("expected error opening a file with a footer read from a file of a different size")
-	}
-}
-
-// TestReadFooterFromBareFooter checks that ReadFooter over a bare footer
-// section (the last footerSize+8 bytes of a file, as cached by programs
-// that store raw footer bytes) is equivalent to ReadFooter over the file.
-func TestReadFooterFromBareFooter(t *testing.T) {
-	for _, path := range footerTestFiles(t) {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			size := int64(len(data))
-			footerSize := binary.LittleEndian.Uint32(data[size-8 : size-4])
-			footerBytes := data[size-int64(footerSize)-8 : size]
-
-			read, err := parquet.ReadFooter(bytes.NewReader(data), size)
-			if err != nil {
-				t.Fatal(err)
-			}
-			decoded, err := parquet.ReadFooter(bytes.NewReader(footerBytes), int64(len(footerBytes)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if decoded.Size() != 0 {
-				t.Errorf("decoded.Size() = %d, want 0 (unknown)", decoded.Size())
-			}
-			if b, w := marshalMetadata(t, read.Metadata()), marshalMetadata(t, decoded.Metadata()); !bytes.Equal(b, w) {
-				t.Error("metadata mismatch between file and bare footer reads")
-			}
-			if b, w := read.Schema().String(), decoded.Schema().String(); b != w {
-				t.Errorf("schema mismatch:\nread: %s\ndecoded: %s", b, w)
-			}
-
-			f, err := parquet.OpenFile(bytes.NewReader(data), size, parquet.WithFooter(decoded))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if f.NumRows() != decoded.NumRows() {
-				t.Errorf("num rows mismatch: %d != %d", f.NumRows(), decoded.NumRows())
-			}
-		})
 	}
 }
 

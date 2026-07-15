@@ -16,27 +16,22 @@ import (
 
 // A Footer is a decoded, validated parquet file footer.
 //
-// Footer values are immutable after construction and safe for concurrent use:
-// a single Footer may back any number of Files opened with the WithFooter
-// option, across goroutines, without synchronization. This makes Footer
-// suitable for caching: programs opening the same file repeatedly can read
-// the footer once with ReadFooter (from the file, or from cached raw footer
-// bytes) and amortize the decoding cost across opens.
+// Footer values are immutable after construction and safe for concurrent
+// use: a single Footer may back any number of Files opened with the
+// WithFooter option, across goroutines, without synchronization. This makes
+// Footer suitable for caching: programs opening the same file repeatedly
+// can read the footer once with ReadFooter and amortize the decoding cost
+// across opens.
 //
 // All footer normalization performed by OpenFile happens at construction
 // time: key/value metadata is sorted, row group ordinals are back-filled,
 // and encrypted column metadata is decrypted. Files opened with WithFooter
-// never write to the footer.
-//
-// A cached Footer retains the decoded metadata graph, one backing byte
-// buffer, and the schema (including a column tree with per-leaf slices
-// proportional to the number of row groups). The page index is not part of
-// the footer: files opened with WithFooter read it from the file unless
-// SkipPageIndex is used.
+// never write to the footer. The page index is not part of the footer:
+// files opened with WithFooter read it from the file unless SkipPageIndex
+// is used.
 type Footer struct {
 	metadata format.FileMetaData
-	data     []byte // backing buffer aliased by metadata strings and byte slices
-	size     int64  // size of the file the footer was read from, 0 if unknown
+	size     int64 // size of the file the footer was read from, 0 if unknown
 
 	// The schema is built eagerly by ReadFooter (which reports schema
 	// validation errors), and lazily through schemaOnce for
@@ -59,22 +54,18 @@ type Footer struct {
 // Options are interpreted the same way as OpenFile: WithDecryption is
 // required for files with encrypted or signed footers, SkipMagicBytes skips
 // the header magic check, and OptimisticRead and ReadBufferSize control how
-// the footer bytes are fetched. Decryption is resolved at construction time:
-// the footer (and the column metadata it contains) is decrypted here, and
-// files later opened from it inherit this decryption configuration
-// regardless of the options passed to OpenFile.
+// the footer bytes are fetched. The footer (and the column metadata it
+// contains) is decrypted here; files later opened from it inherit this
+// decryption configuration regardless of the options passed to OpenFile.
 //
 // ReadFooter also accepts a bare footer section — the last footerSize+8
 // bytes of a file, as cached by programs that store raw footer bytes
-// instead of decoded footers:
-//
-//	footer, err := parquet.ReadFooter(bytes.NewReader(blob), int64(len(blob)))
-//
-// The input is recognized as a bare footer when it is exactly footerSize+8
-// bytes (a complete file is always larger, since at least the 4-byte header
-// magic precedes the footer). In that case the header magic check does not
-// apply and the footer records no file size (see Size). ReadFooter does not
-// retain the input; it makes a private copy of the parts it needs.
+// instead of decoded footers. The input is recognized as a bare footer when
+// it is exactly footerSize+8 bytes (a complete file is always larger, since
+// at least the 4-byte header magic precedes the footer). In that case the
+// header magic check does not apply and the footer records no file size
+// (see Size). ReadFooter does not retain the input; it makes a private copy
+// of the parts it needs.
 func ReadFooter(r io.ReaderAt, size int64, options ...FileOption) (*Footer, error) {
 	c, err := NewFileConfig(options...)
 	if err != nil {
@@ -97,9 +88,6 @@ func ReadFooter(r io.ReaderAt, size int64, options ...FileOption) (*Footer, erro
 // all files backed by the footer and is a data race if any of them is in use
 // concurrently.
 func (f *Footer) Metadata() *format.FileMetaData { return &f.metadata }
-
-// NumRows returns the number of rows in the file.
-func (f *Footer) NumRows() int64 { return f.metadata.NumRows }
 
 // Size returns the size of the file the footer was read from, or 0 when the
 // size is unknown (footers read from a bare footer section, which carries no
@@ -204,15 +192,11 @@ func readFooter(r io.ReaderAt, size int64, c *FileConfig, allowBareFooter bool) 
 		if _, err := readAt(r, headerMagic[:], 0); err != nil {
 			return nil, nil, fmt.Errorf("reading magic header of parquet file: %w", err)
 		}
-		switch string(headerMagic[:]) {
-		case "PAR1":
-			// plain or plaintext-footer-with-signature
-		case "PARE":
-			// encrypted footer
-			if c.Decryption == nil {
-				return nil, nil, fmt.Errorf("parquet file has encrypted footer (magic \"PARE\") but no DecryptionConfig was provided")
-			}
-		default:
+		// "PAR1" is a plain (or plaintext-footer-with-signature) file,
+		// "PARE" an encrypted one; newFooter checks the decryption
+		// requirements from the footer magic, which also covers bare
+		// footers and SkipMagicBytes.
+		if m := string(headerMagic[:]); m != "PAR1" && m != "PARE" {
 			return nil, nil, fmt.Errorf("invalid magic header of parquet file: %q", headerMagic[:])
 		}
 	}
@@ -243,12 +227,33 @@ func readFooter(r io.ReaderAt, size int64, c *FileConfig, allowBareFooter bool) 
 	return footer, reader, nil
 }
 
+// aadParams extracts the AAD parameters from an encryption algorithm union.
+// The returned slices alias the buffer the algorithm was decoded from.
+func aadParams(algo format.EncryptionAlgorithm) (fileUnique, aadPrefix []byte) {
+	switch a := algo.Value.(type) {
+	case *format.AesGcmV1:
+		return a.AadFileUnique, a.AadPrefix
+	case *format.AesGcmCtrV1:
+		return a.AadFileUnique, a.AadPrefix
+	}
+	return nil, nil
+}
+
+// initDecryption records the decryption configuration carried over to files
+// opened from this footer. The AAD parameters may alias a transient decode
+// buffer, so they are cloned.
+func (f *Footer) initDecryption(c *DecryptionConfig, fileUnique, aadPrefix []byte) {
+	f.decryption = c
+	f.fileUnique = slices.Clone(fileUnique)
+	f.aadPrefix = slices.Clone(aadPrefix)
+}
+
 // newFooter decodes and normalizes a footer from the raw footer section
 // bytes (without the trailing size and magic). newFooter takes ownership of
-// data: the returned footer may retain it, so callers must not reuse or
-// mutate the slice. This spares footers larger than the prefetch buffer —
-// the exact case footer caching targets — from being allocated and copied
-// twice.
+// data: the decoded metadata retains it (strings and byte slices alias it),
+// so callers must not reuse or mutate the slice. This spares footers larger
+// than the prefetch buffer — the exact case footer caching targets — from
+// being allocated and copied twice.
 func newFooter(data []byte, magic string, c *FileConfig) (*Footer, error) {
 	f := new(Footer)
 	protocol := new(thrift.CompactProtocol)
@@ -266,18 +271,7 @@ func newFooter(data []byte, magic string, c *FileConfig) (*Footer, error) {
 		}
 		encFooterEnvelope := data[pr.BytesRead():]
 
-		// Extract AAD parameters from the encryption algorithm. The values
-		// alias data, which is not retained, so they are cloned below.
-		var fileUnique, aadPrefix []byte
-		switch algo := cryptoMeta.EncryptionAlgorithm.Value.(type) {
-		case *format.AesGcmV1:
-			fileUnique = algo.AadFileUnique
-			aadPrefix = algo.AadPrefix
-		case *format.AesGcmCtrV1:
-			fileUnique = algo.AadFileUnique
-			aadPrefix = algo.AadPrefix
-		}
-
+		fileUnique, aadPrefix := aadParams(cryptoMeta.EncryptionAlgorithm)
 		footerKey, err := c.Decryption.Keys.FooterKey(cryptoMeta.KeyMetadata)
 		if err != nil {
 			return nil, fmt.Errorf("retrieving footer key: %w", err)
@@ -294,21 +288,16 @@ func newFooter(data []byte, magic string, c *FileConfig) (*Footer, error) {
 		if n := len(plainFooter) - pr.BytesRead(); n != 0 {
 			return nil, fmt.Errorf("reading parquet file metadata from decrypted footer: unexpected trailing bytes at the end of thrift input: %d", n)
 		}
-		f.data = plainFooter
-		f.decryption = c.Decryption
-		f.fileUnique = slices.Clone(fileUnique)
-		f.aadPrefix = slices.Clone(aadPrefix)
+		f.initDecryption(c.Decryption, fileUnique, aadPrefix)
 	} else {
-		// Decoded strings and byte slices alias the input, which the footer
-		// owns (see the function doc). Decode using a reader that tracks
-		// bytes consumed, so that we can detect a trailing 28-byte AES-GCM
-		// signature without treating it as trailing garbage.
-		f.data = data
-		pr := protocol.NewReaderFromBytes(f.data)
+		// Decode using a reader that tracks bytes consumed, so that a
+		// trailing 28-byte AES-GCM signature is detected instead of being
+		// treated as trailing garbage.
+		pr := protocol.NewReaderFromBytes(data)
 		if err := thrift.NewDecoder(pr).Decode(&f.metadata); err != nil {
 			return nil, fmt.Errorf("reading parquet file metadata: %w", err)
 		}
-		trailing := len(f.data) - pr.BytesRead()
+		trailing := len(data) - pr.BytesRead()
 		const sigLen = encNonceSize + encTagSize
 		switch {
 		case trailing == 0:
@@ -318,29 +307,16 @@ func newFooter(data []byte, magic string, c *FileConfig) (*Footer, error) {
 			if c.Decryption == nil {
 				return nil, fmt.Errorf("parquet file has a signed footer but no DecryptionConfig was provided")
 			}
-			var fileUnique, aadPrefix []byte
-			switch algo := f.metadata.EncryptionAlgorithm.Value.(type) {
-			case *format.AesGcmV1:
-				fileUnique = algo.AadFileUnique
-				aadPrefix = algo.AadPrefix
-			case *format.AesGcmCtrV1:
-				fileUnique = algo.AadFileUnique
-				aadPrefix = algo.AadPrefix
-			}
-			plainFooterBytes := f.data[:pr.BytesRead()]
-			sig := f.data[pr.BytesRead():]
-
+			fileUnique, aadPrefix := aadParams(f.metadata.EncryptionAlgorithm)
 			footerKey, err := c.Decryption.Keys.FooterKey(f.metadata.FooterSigningKeyMetadata)
 			if err != nil {
 				return nil, fmt.Errorf("retrieving footer signing key: %w", err)
 			}
 			footerAAD := makeAAD(aadPrefix, fileUnique, footerModule)
-			if err := verifyFooterSignature(footerKey, footerAAD, plainFooterBytes, sig); err != nil {
+			if err := verifyFooterSignature(footerKey, footerAAD, data[:pr.BytesRead()], data[pr.BytesRead():]); err != nil {
 				return nil, err
 			}
-			f.decryption = c.Decryption
-			f.fileUnique = slices.Clone(fileUnique)
-			f.aadPrefix = slices.Clone(aadPrefix)
+			f.initDecryption(c.Decryption, fileUnique, aadPrefix)
 		default:
 			return nil, fmt.Errorf("reading parquet file metadata: unexpected trailing bytes at the end of thrift input: %d", trailing)
 		}

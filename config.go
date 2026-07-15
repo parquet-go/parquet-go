@@ -572,36 +572,31 @@ func FileSchema(schema *Schema) FileOption {
 }
 
 // WithFooter is used to open a parquet file from an already-decoded footer,
-// obtained from ReadFooter, skipping the footer read and
-// decode entirely. Programs which open the same parquet files repeatedly can
-// cache footers to amortize the cost of decoding them:
+// obtained from ReadFooter, skipping the footer read and decode entirely.
+// Programs which open the same parquet files repeatedly can cache footers
+// to amortize the cost of decoding them:
 //
 //	footer, err := parquet.ReadFooter(reader, size)
 //	...
 //	f, err := parquet.OpenFile(reader, size, parquet.WithFooter(footer))
 //
 // Footers are immutable and safe for concurrent use: a single footer can
-// back any number of open files at the same time. The footer must correspond
-// to the file passed to OpenFile, and the size passed to OpenFile must be
-// the size of that file. OpenFile reports an error when the footer records a
-// different size, but footers read from a bare footer section carry no size and a footer
-// applied to the wrong file of the same size is not detected at open time:
-// it results in decode errors or corrupt reads later.
+// back any number of open files at the same time. The footer must
+// correspond to the file passed to OpenFile. OpenFile reports an error when
+// the footer records a different file size, but a footer applied to the
+// wrong file of the same size (or a footer read from a bare footer section,
+// which carries no size) is not detected at open time: it results in decode
+// errors or corrupt reads later.
 //
-// Because the footer is not read or decoded by OpenFile, the options that
-// affect footer reading and decoding are ignored when WithFooter is used;
-// they took effect when the footer was constructed instead. In particular
-// decryption is inherited from the footer: WithDecryption passed to OpenFile
-// has no effect, and encrypted files require the DecryptionConfig to be
-// passed to ReadFooter. SkipMagicBytes and OptimisticRead
-// only affect the footer read and are likewise ignored; note that without
-// OptimisticRead prefetching, the page index is read directly from r on
-// every open (the footer does not cache it), so footer-cached opens should
-// usually skip or separately cache the page index. FileSchema is still
-// honored and overrides the footer's schema.
-//
-// Combined with SkipPageIndex and SkipBloomFilters, opening a file with a
-// footer performs no I/O.
+// Options that affect footer reading and decoding (WithDecryption,
+// SkipMagicBytes, OptimisticRead) are ignored when WithFooter is used; they
+// took effect when the footer was constructed. In particular, encrypted
+// files require the DecryptionConfig to be passed to ReadFooter, and files
+// opened from the footer inherit it. The page index is not cached in the
+// footer and is read from r on every open, so footer-cached opens should
+// usually skip or separately cache it; combined with SkipPageIndex and
+// SkipBloomFilters, opening a file with a footer performs no I/O.
+// FileSchema is still honored and overrides the footer's schema.
 //
 // Defaults to nil.
 func WithFooter(footer *Footer) FileOption {

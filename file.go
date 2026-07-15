@@ -120,9 +120,11 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	switch {
 	case c.Schema != nil:
 		f.schema = c.Schema
-	case c.Footer != nil && c.Footer.Schema() != nil:
+	case c.Footer != nil:
 		// Footers from the public constructors already carry a schema built
-		// from the same metadata; share it instead of rebuilding.
+		// from the same metadata; share it instead of rebuilding. Building
+		// it cannot fail here: openColumns just succeeded above on the same
+		// metadata.
 		f.schema = c.Footer.Schema()
 	default:
 		f.schema = NewSchema(f.root.Name(), f.root)
