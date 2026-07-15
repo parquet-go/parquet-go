@@ -2,6 +2,7 @@ package thrift
 
 import (
 	"io"
+	"slices"
 )
 
 // Features is a bitset describing the thrift encoding features supported by
@@ -68,6 +69,36 @@ type Reader interface {
 	ReadSet() (Set, error)
 	ReadMap() (Map, error)
 	BytesRead() int
+}
+
+// readBytesAppend appends the next n bytes of r to b, implementing the
+// streaming half of the Reader.ReadBytesAppend contract.
+func readBytesAppend(r io.Reader, b []byte, n int) ([]byte, error) {
+	if b == nil && n == 0 {
+		// slices.Grow(nil, 0) stays nil, but the contract requires a
+		// non-nil empty slice for zero-length values.
+		return []byte{}, nil
+	}
+	off := len(b)
+	b = slices.Grow(b, n)[:off+n]
+	if _, err := io.ReadFull(r, b[off:]); err != nil {
+		return b[:off], err
+	}
+	return b, nil
+}
+
+// appendBytesValue implements Reader.ReadBytesAppend for the bytes-backed
+// readers in terms of their zero-copy ReadBytes: the value v is returned
+// as-is (an alias into the input buffer) when b is empty.
+func appendBytesValue(b, v []byte, err error) ([]byte, error) {
+	switch {
+	case err != nil:
+		return b, err
+	case len(b) == 0:
+		return v, nil
+	default:
+		return append(b, v...), nil
+	}
 }
 
 // BytesReader is a Reader positioned over a fixed byte slice.

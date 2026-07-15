@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 )
@@ -81,16 +80,7 @@ func (r *compactReader) ReadFloat64() (float64, error) {
 }
 
 func (r *compactReader) ReadBytes() ([]byte, error) {
-	n, err := r.ReadLength()
-	if err != nil {
-		return nil, err
-	}
-	b := make([]byte, n)
-	_, err = io.ReadFull(r.Reader(), b)
-	if err == nil {
-		r.binary.n += n
-	}
-	return b, err
+	return r.ReadBytesAppend(nil)
 }
 
 // ReadBytesAppend reads a length-prefixed byte sequence and appends it to b,
@@ -102,18 +92,10 @@ func (r *compactReader) ReadBytesAppend(b []byte) ([]byte, error) {
 	if err != nil {
 		return b, err
 	}
-	if b == nil && n == 0 {
-		// slices.Grow(nil, 0) stays nil, but ReadBytes returns a non-nil
-		// empty slice for zero-length values and this method must match.
-		return []byte{}, nil
+	if b, err = readBytesAppend(r.Reader(), b, n); err == nil {
+		r.binary.n += n
 	}
-	off := len(b)
-	b = slices.Grow(b, n)[:off+n]
-	if _, err = io.ReadFull(r.Reader(), b[off:]); err != nil {
-		return b[:off], err
-	}
-	r.binary.n += n
-	return b, nil
+	return b, err
 }
 
 func (r *compactReader) ReadString() (string, error) {
@@ -474,13 +456,7 @@ func (r *compactBytesReader) ReadBytes() ([]byte, error) {
 // ReadBytes.
 func (r *compactBytesReader) ReadBytesAppend(b []byte) ([]byte, error) {
 	v, err := r.ReadBytes()
-	if err != nil {
-		return b, err
-	}
-	if len(b) == 0 {
-		return v, nil
-	}
-	return append(b, v...), nil
+	return appendBytesValue(b, v, err)
 }
 
 func (r *compactBytesReader) ReadString() (string, error) {

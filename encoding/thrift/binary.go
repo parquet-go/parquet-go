@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 )
@@ -94,16 +93,7 @@ func (r *binaryReader) ReadFloat64() (float64, error) {
 }
 
 func (r *binaryReader) ReadBytes() ([]byte, error) {
-	n, err := r.ReadLength()
-	if err != nil {
-		return nil, err
-	}
-	b := make([]byte, n)
-	_, err = io.ReadFull(r.r, b)
-	if err == nil {
-		r.n += n
-	}
-	return b, err
+	return r.ReadBytesAppend(nil)
 }
 
 // ReadBytesAppend reads a length-prefixed byte sequence and appends it to b,
@@ -115,18 +105,10 @@ func (r *binaryReader) ReadBytesAppend(b []byte) ([]byte, error) {
 	if err != nil {
 		return b, err
 	}
-	if b == nil && n == 0 {
-		// slices.Grow(nil, 0) stays nil, but ReadBytes returns a non-nil
-		// empty slice for zero-length values and this method must match.
-		return []byte{}, nil
+	if b, err = readBytesAppend(r.r, b, n); err == nil {
+		r.n += n
 	}
-	off := len(b)
-	b = slices.Grow(b, n)[:off+n]
-	if _, err = io.ReadFull(r.r, b[off:]); err != nil {
-		return b[:off], err
-	}
-	r.n += n
-	return b, nil
+	return b, err
 }
 
 func (r *binaryReader) ReadString() (string, error) {
@@ -515,13 +497,7 @@ func (r *binaryBytesReader) ReadBytes() ([]byte, error) {
 // ReadBytes.
 func (r *binaryBytesReader) ReadBytesAppend(b []byte) ([]byte, error) {
 	v, err := r.ReadBytes()
-	if err != nil {
-		return b, err
-	}
-	if len(b) == 0 {
-		return v, nil
-	}
-	return append(b, v...), nil
+	return appendBytesValue(b, v, err)
 }
 
 func (r *binaryBytesReader) ReadString() (string, error) {

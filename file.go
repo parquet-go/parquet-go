@@ -1214,19 +1214,14 @@ func (f *FilePages) ReadPage() (Page, error) {
 			// the struct itself is retained, and the streaming thrift decoder
 			// reuses the capacity of its statistics byte slices.
 			//
-			// A previous implementation of header reuse produced instability
-			// (https://github.com/segmentio/parquet-go/pull/484, reverted in
-			// https://github.com/parquet-go/parquet-go/pull/11, with remaining
-			// fallout in https://github.com/parquet-go/parquet-go/issues/70).
-			// Back then the sub-headers were pointer fields shared into a
-			// process-wide pool while consumers could still reference them.
-			// Neither hazard exists anymore: the sub-headers are inline
-			// thrift.Null values rather than pointers, the header is owned by
-			// a single FilePages (which is not safe for concurrent use), and
-			// it does not escape ReadPage — validatePageHeader and the
-			// decode(Dictionary|DataPageV1|DataPageV2) helpers only read
-			// scalar fields from it, and the returned Page retains nothing
-			// from the header.
+			// An earlier reuse attempt shared pooled headers with pointer
+			// sub-headers across consumers and was reverted
+			// (segmentio/parquet-go#484, parquet-go#11, parquet-go#70).
+			// Neither hazard exists here: the sub-headers are inline
+			// thrift.Null values, the header is owned by a single FilePages
+			// (which is not safe for concurrent use), and it does not escape
+			// ReadPage — the decode helpers only read scalar fields from it,
+			// and the returned Page retains nothing from the header.
 			f.header.Reset()
 			header = &f.header
 			if err = f.decoder.Decode(header); err != nil {

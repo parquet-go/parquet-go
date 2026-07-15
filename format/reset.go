@@ -1,5 +1,7 @@
 package format
 
+import "github.com/parquet-go/parquet-go/encoding/thrift"
+
 // The Reset methods in this file clear values in place while retaining
 // allocated slice capacity, so that a value can be reused as the decode
 // target of multiple thrift deserializations without allocating on each
@@ -142,22 +144,14 @@ func (c *ColumnMetaData) Reset() {
 // (zero-length), but programs distinguishing nil from empty slices, or
 // re-encoding the value, can observe the difference.
 func (h *PageHeader) Reset() {
-	h.Type = 0
-	h.UncompressedPageSize = 0
-	h.CompressedPageSize = 0
-	h.CRC = 0
-	h.DataPageHeader.V = DataPageHeader{
-		Statistics: truncatedStatistics(h.DataPageHeader.V.Statistics),
+	*h = PageHeader{
+		DataPageHeader: thrift.Null[DataPageHeader]{V: DataPageHeader{
+			Statistics: truncatedStatistics(h.DataPageHeader.V.Statistics),
+		}},
+		DataPageHeaderV2: thrift.Null[DataPageHeaderV2]{V: DataPageHeaderV2{
+			Statistics: truncatedStatistics(h.DataPageHeaderV2.V.Statistics),
+		}},
 	}
-	h.DataPageHeader.Valid = false
-	h.IndexPageHeader.V = IndexPageHeader{}
-	h.IndexPageHeader.Valid = false
-	h.DictionaryPageHeader.V = DictionaryPageHeader{}
-	h.DictionaryPageHeader.Valid = false
-	h.DataPageHeaderV2.V = DataPageHeaderV2{
-		Statistics: truncatedStatistics(h.DataPageHeaderV2.V.Statistics),
-	}
-	h.DataPageHeaderV2.Valid = false
 }
 
 // truncatedStatistics clears s, retaining the capacity of its byte slices
