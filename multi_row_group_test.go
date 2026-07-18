@@ -525,3 +525,30 @@ func TestMultiOffsetIndexErrors(t *testing.T) {
 		t.Errorf("OffsetIndex() NumPages() = %d, expected > 0", index.NumPages())
 	}
 }
+
+func TestMultiOffsetIndexMergedRowGroups(t *testing.T) {
+	// Merging already-merged row groups flattens the nested chunks, so a
+	// column chunk ends up with more chunks than the outer merge has row
+	// groups. OffsetIndex used to index rowGroups by the chunk position,
+	// which ran past the end of the slice and panicked.
+	inner := makeMultiRowGroupWithBloomFilters(t, []rowGroupConfig{
+		{numRows: 10, startID: 0, valuePrefix: "a"},
+		{numRows: 20, startID: 100, valuePrefix: "b"},
+	})
+
+	merged := parquet.MultiRowGroup(inner, inner)
+
+	index, err := merged.ColumnChunks()[0].OffsetIndex()
+	if err != nil {
+		t.Fatalf("OffsetIndex() error: %v", err)
+	}
+
+	prevRowIndex := int64(-1)
+	for i := range index.NumPages() {
+		rowIndex := index.FirstRowIndex(i)
+		if rowIndex < prevRowIndex {
+			t.Errorf("Page %d FirstRowIndex() = %d, expected >= %d", i, rowIndex, prevRowIndex)
+		}
+		prevRowIndex = rowIndex
+	}
+}
