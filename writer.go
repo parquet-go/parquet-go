@@ -580,13 +580,13 @@ func (w *Writer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 	// copied verbatim (config differs) is re-encoded column-by-column, skipping
 	// the row assembly/deconstruction round-trip of the path below.
 	if cols, ok := w.reencodableRowGroup(rowGroup); ok {
-		w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks())
+		w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks(), rowGroup.NumRows())
 		if err := w.writeRowGroupByColumn(cols); err != nil {
 			return 0, err
 		}
 		return w.writer.writeRowGroup(w.writer.currentRowGroup, rowGroup.Schema(), rowGroup.SortingColumns())
 	}
-	w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks())
+	w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks(), rowGroup.NumRows())
 	rows := rowGroup.Rows()
 	defer rows.Close()
 	n, err := CopyRows(w.writer, rows)
@@ -885,11 +885,27 @@ func (rg *ConcurrentRowGroupWriter) reset() {
 	}
 }
 
-func (rg *ConcurrentRowGroupWriter) configureBloomFilters(columnChunks []ColumnChunk) {
+func (rg *ConcurrentRowGroupWriter) configureBloomFilters(columnChunks []ColumnChunk, numRows int64) {
 	for i, c := range rg.columns {
-		if c.columnFilter != nil {
-			c.resizeBloomFilter(columnChunks[i].NumValues())
+		if c.columnFilter == nil {
+			continue
 		}
+		values := columnChunks[i].NumValues()
+		if numRows > rg.maxRows {
+			// The input will be split across multiple output row groups, so the
+			// whole-input value count over-sizes each group's filter.
+			if c.maxRepetitionLevel > 0 {
+				// Repeated columns can hold more values than rows, so we can't
+				// apportion the value count per group ahead of time. Leave the
+				// filter unallocated and let each group size itself exactly at
+				// flush time (see flushFilterPages).
+				continue
+			}
+			// Non-repeated columns hold at most one value per row, so a full
+			// output group holds at most maxRows values.
+			values = min(values, rg.maxRows)
+		}
+		c.resizeBloomFilter(values)
 	}
 }
 

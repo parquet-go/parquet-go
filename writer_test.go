@@ -24,6 +24,7 @@ import (
 	"github.com/hexops/gotextdiff/span"
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/bloom"
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/compress/zstd"
 	"github.com/parquet-go/parquet-go/encoding"
@@ -4504,5 +4505,64 @@ func TestWriterPlainDictionaryEncoding(t *testing.T) {
 	encodings := pf.Metadata().RowGroups[0].Columns[0].MetaData.Encoding
 	if slices.Contains(encodings, format.PlainDictionary) || !slices.Contains(encodings, format.RLEDictionary) {
 		t.Errorf("column chunk encodings = %v, want RLE_DICTIONARY and no PLAIN_DICTIONARY", encodings)
+	}
+}
+
+// TestWriterCorrectlySizesBloomFilterOnRowLimit verifies that when a single
+// input row group is split into multiple output row groups (because it exceeds
+// MaxRowsPerRowGroup), each output group's bloom filter is sized to the values
+// that actually land in that group rather than to the whole input. Without the
+// fix, filters were sized from the full-input value count and over-allocated on
+// every split group.
+func TestWriterCorrectlySizesBloomFilterOnRowLimit(t *testing.T) {
+	type Row struct {
+		ID int64 `parquet:"id"`
+	}
+
+	// Make sure the row group size is greater than max rows. This avoids the fast
+	// paths on purpose, and the splitting of groups would trigger the resize bug
+	// without the fix.
+	const (
+		writtenRows        = 60
+		maxRowsPerRowGroup = 50
+	)
+
+	inputGroup := parquet.NewGenericBuffer[Row]()
+	_, err := inputGroup.Write(make([]Row, writtenRows))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[Row](&buf,
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "id")),
+		parquet.MaxRowsPerRowGroup(maxRowsPerRowGroup),
+	)
+	if _, err := w.WriteRowGroup(inputGroup); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rg := range pf.Metadata().RowGroups {
+		meta := rg.Columns[0].MetaData
+		section := io.NewSectionReader(pf, meta.BloomFilterOffset, int64(meta.BloomFilterLength))
+		compact := thrift.CompactProtocol{}
+
+		var header format.BloomFilterHeader
+		if err := thrift.NewDecoder(compact.NewReader(section)).Decode(&header); err != nil {
+			t.Fatal(err)
+		}
+
+		expectBloomSize := bloom.BlockSize * bloom.NumSplitBlocksOf(rg.NumRows, 10)
+		gotBloomSize := int(header.NumBytes)
+		if gotBloomSize != expectBloomSize {
+			t.Errorf("got %v, want %v", gotBloomSize, expectBloomSize)
+		}
 	}
 }
