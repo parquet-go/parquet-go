@@ -13,7 +13,7 @@ import (
 //
 // Unlike the row-based write path (column_buffer_variant.go) — which decodes
 // each row into a variant.Value tree and shreds the tree — VariantColumnWriter
-// consumes variant.ValueWriter events and shreds them as they arrive: values
+// consumes variant.ValueBuilder events and shreds them as they arrive: values
 // matching the shredded type are appended directly to the typed_value column
 // buffers, and everything else is encoded to variant binary residuals with a
 // streaming variant.Builder. All rows share one metadata dictionary (reset
@@ -29,10 +29,10 @@ import (
 // shreddedVariantGroup tree.
 
 // VariantColumnWriter writes one VARIANT column of a parquet file in
-// streaming, columnar form. It implements variant.ValueWriter: each row is
+// streaming, columnar form. It implements variant.ValueBuilder: each row is
 // bracketed by BeginRow and EndRow, and the row's value is described by the
 // event methods in between, following the event-sequence rules documented
-// on variant.ValueWriter. WriteValue and WriteNullRow are row-level
+// on variant.ValueBuilder. WriteValue and WriteNullRow are row-level
 // conveniences. String and []byte event arguments, and Field names, are
 // copied; callers may reuse their backing memory after the call returns.
 //
@@ -109,18 +109,18 @@ type variantResidualState struct {
 	base   int
 }
 
-// VariantWriterTarget is the writer surface VariantColumnWriter binds to;
+// WriterTarget is the writer surface VariantColumnWriter binds to;
 // it is satisfied by *Writer, *GenericWriter[T], and
 // *ConcurrentRowGroupWriter.
-type VariantWriterTarget interface {
+type WriterTarget interface {
 	Schema() *Schema
 	ColumnWriters() []*ColumnWriter
 }
 
 var (
-	_ VariantWriterTarget = (*Writer)(nil)
-	_ VariantWriterTarget = (*GenericWriter[any])(nil)
-	_ VariantWriterTarget = (*ConcurrentRowGroupWriter)(nil)
+	_ WriterTarget = (*Writer)(nil)
+	_ WriterTarget = (*GenericWriter[any])(nil)
+	_ WriterTarget = (*ConcurrentRowGroupWriter)(nil)
 )
 
 // NewVariantColumnWriter returns a streaming columnar writer for the VARIANT
@@ -128,7 +128,7 @@ var (
 // column, "attrs", "v" for one nested in a group). The column may be
 // unshredded (metadata, value) or shredded (metadata, value, typed_value)
 // in any shape permitted by the Variant Shredding specification.
-func NewVariantColumnWriter(w VariantWriterTarget, path ...string) (*VariantColumnWriter, error) {
+func NewVariantColumnWriter(w WriterTarget, path ...string) (*VariantColumnWriter, error) {
 	schema := w.Schema()
 	if schema == nil {
 		return nil, fmt.Errorf("variant: the writer has no schema configured")
@@ -841,4 +841,4 @@ func (w *VariantColumnWriter) Decimal16(unscaled [16]byte, scale byte) {
 	w.scalarEvent(variant.Decimal16(unscaled, scale))
 }
 
-var _ variant.ValueWriter = (*VariantColumnWriter)(nil)
+var _ variant.ValueBuilder = (*VariantColumnWriter)(nil)

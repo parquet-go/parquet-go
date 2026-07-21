@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// ValueWriter is a streaming event sink for variant values. Callers describe
+// ValueBuilder is a streaming event sink for variant values. Callers describe
 // a value as a sequence of events — scalars, or containers bracketed by
 // Begin/End calls — and implementations consume the events without ever
 // materializing the value as a tree.
@@ -23,10 +23,10 @@ import (
 // implementation-specific failures) are sticky and reported by Err; events
 // after an error are ignored.
 //
-// ValueWriter is implemented by Builder, which encodes the events to variant
+// ValueBuilder is implemented by Builder, which encodes the events to variant
 // binary, and by parquet.VariantColumnWriter, which shreds the events
 // directly into parquet column buffers.
-type ValueWriter interface {
+type ValueBuilder interface {
 	Null()
 	Bool(v bool)
 	Int8(v int8)
@@ -71,8 +71,8 @@ type ValueWriter interface {
 }
 
 // Write replays the value as a sequence of events on w. It is the bridge
-// from the tree representation to any ValueWriter.
-func (v Value) Write(w ValueWriter) {
+// from the tree representation to any ValueBuilder.
+func (v Value) Write(w ValueBuilder) {
 	switch v.basic {
 	case BasicObject:
 		w.BeginObject()
@@ -139,7 +139,7 @@ func (v Value) Write(w ValueWriter) {
 	}
 }
 
-// Builder is a streaming encoder for variant values: a ValueWriter that
+// Builder is a streaming encoder for variant values: a ValueBuilder that
 // encodes events directly to the variant binary format in a single growing
 // buffer, without building a Value tree.
 //
