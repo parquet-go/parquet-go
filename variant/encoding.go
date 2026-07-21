@@ -12,9 +12,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Encode encodes a variant Value into its binary representation.
-// Field names for objects are registered with the provided MetadataBuilder.
-// Returns the encoded value bytes.
+// Encode encodes a variant Value into its binary representation, registering
+// object field names with the provided MetadataBuilder.
 func Encode(b *MetadataBuilder, v Value) []byte {
 	switch v.basic {
 	case BasicObject:
@@ -412,7 +411,6 @@ func (e *encoder) encodeReflect(rv reflect.Value) (start, end int, err error) {
 		return start, end, nil
 	}
 
-	// Dereference pointers/interfaces
 	for rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
 		if rv.IsNil() {
 			start, end = e.encodeValuePrimitive(Null())
@@ -421,7 +419,9 @@ func (e *encoder) encodeReflect(rv reflect.Value) (start, end int, err error) {
 		rv = rv.Elem()
 	}
 
-	// Check concrete types first
+	// uuid.UUID and time.Time must be recognized before the Kind switch:
+	// uuid.UUID is a [16]byte array and time.Time a struct with no exported
+	// fields, so the generic cases would mishandle them.
 	if rv.Type() == reflect.TypeFor[uuid.UUID]() {
 		start, end = e.encodeValuePrimitive(UUID(rv.Interface().(uuid.UUID)))
 		return start, end, nil

@@ -81,20 +81,19 @@ func (k VariantCursorKind) String() string {
 // created at any time; cursors created after a call to Next take effect on
 // the following call.
 type VariantReader struct {
-	rowGroup    RowGroup
-	group       *shreddedVariantGroup
-	groupDef    int // definition level at which the variant group is present
-	groupMaxDef byte
-	baseColumn  int // first leaf column of the variant group
-	numRows     int64
-	rowOffset   int64
-	leafInfo    []variantLeafInfo
-	leaves      []*variantLeafReader // lazily created, indexed by relative column
-	metaLeaf    *variantLeafReader
-	root        *VariantCursor
-	metaCache   map[string]variant.Metadata
-	leafSet     map[*variantLeafReader]struct{} // reused by Next
-	err         error
+	rowGroup   RowGroup
+	group      *shreddedVariantGroup
+	groupDef   int // definition level at which the variant group is present
+	baseColumn int // first leaf column of the variant group
+	numRows    int64
+	rowOffset  int64
+	leafInfo   []variantLeafInfo
+	leaves     []*variantLeafReader // lazily created, indexed by relative column
+	metaLeaf   *variantLeafReader
+	root       *VariantCursor
+	metaCache  map[string]variant.Metadata
+	leafSet    map[*variantLeafReader]struct{} // reused by Next
+	err        error
 
 	// rootValueRequired is set for plain unshredded variant groups, whose
 	// value field is required rather than optional.
@@ -144,22 +143,45 @@ type variantLeafInfo struct {
 	maxRep byte
 }
 
-// NewVariantReader creates a reader for the variant column at the given path
-// in the row group. The path names the variant group node in the schema
-// (e.g. "event" for a top-level column, "attrs", "v" for a nested one). The
-// column may be unshredded (metadata, value) or shredded (metadata, value,
-// typed_value) in any shape permitted by the Variant Shredding
-// specification.
-func NewVariantReader(rowGroup RowGroup, path ...string) (*VariantReader, error) {
-	if len(path) == 0 {
-		return nil, fmt.Errorf("variant: NewVariantReader requires a column path")
+// variantColumnInfo is the result of resolving a variant column path in a
+// schema, shared by NewVariantReader and NewVariantColumnWriter.
+type variantColumnInfo struct {
+	node          Node
+	group         *shreddedVariantGroup
+	valueRequired bool // plain unshredded shape (required binary value)
+	col           int  // first leaf column of the variant group
+	def           int  // definition level at which the group is present
+	optional      bool // whether the group node itself is optional
+}
+
+// variantGroupOf builds the shredding tree of a variant group node,
+// accepting both the shredded shapes (optional value) and the plain
+// unshredded shape (required value) that VariantEncoding.md declares. The
+// boolean result reports the latter.
+func variantGroupOf(node Node) (*shreddedVariantGroup, bool, error) {
+	g, err := buildShreddedVariantGroup(node, 0, 0, 0)
+	if err != nil {
+		if u, ok := unshreddedVariantGroupOf(node); ok {
+			return u, true, nil
+		}
+		return nil, false, err
 	}
-	node := Node(rowGroup.Schema())
-	def := 0
-	col := 0
+	if g.metadataCol < 0 {
+		return nil, false, fmt.Errorf("variant: variant group has no metadata field")
+	}
+	return g, false, nil
+}
+
+// resolveVariantColumn walks the schema to the variant group node named by
+// path and builds its shredding tree.
+func resolveVariantColumn(schema Node, path []string) (info variantColumnInfo, err error) {
+	if len(path) == 0 {
+		return info, fmt.Errorf("variant: a column path is required")
+	}
+	node := schema
 	for _, name := range path {
 		if node.Leaf() {
-			return nil, fmt.Errorf("variant: column %q not found: %q is a leaf", joinPath(path), name)
+			return info, fmt.Errorf("variant: column %q not found: %q is a leaf", joinPath(path), name)
 		}
 		var next Node
 		for _, f := range node.Fields() {
@@ -167,50 +189,55 @@ func NewVariantReader(rowGroup RowGroup, path ...string) (*VariantReader, error)
 				next = f
 				break
 			}
-			col += int(numLeafColumnsOf(f))
+			info.col += int(numLeafColumnsOf(f))
 		}
 		if next == nil {
-			return nil, fmt.Errorf("variant: column %q not found: no field %q", joinPath(path), name)
+			return info, fmt.Errorf("variant: column %q not found: no field %q", joinPath(path), name)
 		}
 		if next.Repeated() {
-			return nil, fmt.Errorf("variant: column %q is beneath a repeated field, which VariantReader does not support", joinPath(path))
+			return info, fmt.Errorf("variant: column %q is beneath a repeated field, which the columnar variant APIs do not support", joinPath(path))
 		}
-		if next.Optional() {
-			def++
+		info.optional = next.Optional()
+		if info.optional {
+			info.def++
 		}
 		node = next
 	}
 	if node.Leaf() {
-		return nil, fmt.Errorf("variant: column %q is not a variant group", joinPath(path))
+		return info, fmt.Errorf("variant: column %q is not a variant group", joinPath(path))
 	}
-	group, err := buildShreddedVariantGroup(node, 0, 0, 0)
-	valueRequired := false
+	info.node = node
+	info.group, info.valueRequired, err = variantGroupOf(node)
 	if err != nil {
-		// Plain unshredded variant groups declare "required binary value"
-		// (VariantEncoding.md), which the shredded-schema validation
-		// rejects; accept that shape here.
-		if g, ok := unshreddedVariantGroupOf(node); ok {
-			group, valueRequired, err = g, true, nil
-		} else {
-			return nil, err
-		}
+		return info, fmt.Errorf("variant: column %q: %w", joinPath(path), err)
 	}
-	if group.metadataCol < 0 {
-		return nil, fmt.Errorf("variant: column %q has no metadata field", joinPath(path))
+	return info, nil
+}
+
+// NewVariantReader creates a reader for the variant column at the given path
+// in the row group. The path names the variant group node in the schema
+// (e.g. "event" for a top-level column, "attrs", "v" for a nested one). The
+// column may be unshredded (metadata, value) or shredded (metadata, value,
+// typed_value) in any shape permitted by the Variant Shredding
+// specification.
+func NewVariantReader(rowGroup RowGroup, path ...string) (*VariantReader, error) {
+	info, err := resolveVariantColumn(rowGroup.Schema(), path)
+	if err != nil {
+		return nil, err
 	}
+	group, node := info.group, info.node
 
 	r := &VariantReader{
-		rowGroup:    rowGroup,
-		group:       group,
-		groupDef:    def,
-		groupMaxDef: byte(def),
-		baseColumn:  col,
-		numRows:     rowGroup.NumRows(),
-		leafInfo:    make([]variantLeafInfo, group.numCols),
-		leaves:      make([]*variantLeafReader, group.numCols),
-		metaCache:   make(map[string]variant.Metadata),
+		rowGroup:   rowGroup,
+		group:      group,
+		groupDef:   info.def,
+		baseColumn: info.col,
+		numRows:    rowGroup.NumRows(),
+		leafInfo:   make([]variantLeafInfo, group.numCols),
+		leaves:     make([]*variantLeafReader, group.numCols),
+		metaCache:  make(map[string]variant.Metadata),
 
-		rootValueRequired: valueRequired,
+		rootValueRequired: info.valueRequired,
 	}
 
 	// Types in leaf order; the traversal order matches the column numbering
@@ -227,11 +254,11 @@ func NewVariantReader(rowGroup RowGroup, path ...string) (*VariantReader, error)
 	}
 	r.fillLeafLevels(group)
 
-	for _, info := range r.leafInfo {
-		switch info.typ.Kind() {
+	for _, li := range r.leafInfo {
+		switch li.typ.Kind() {
 		case Boolean, Int32, Int64, Float, Double, ByteArray, FixedLenByteArray:
 		default:
-			return nil, fmt.Errorf("variant: unsupported leaf type %s in shredded variant group", info.typ)
+			return nil, fmt.Errorf("variant: unsupported leaf type %s in shredded variant group", li.typ)
 		}
 	}
 
@@ -881,11 +908,11 @@ func (c *VariantCursor) processRoot(n int) error {
 	}
 	for row := range n {
 		e := c.appendEntry(int32(row), int32(row))
-		if mw.defs[row] < c.reader.groupMaxDef {
+		if mw.defs[row] < byte(c.reader.groupDef) {
 			c.locs[e] = variant.LocMissing
-			continue
+		} else {
+			c.computeOwn(e, int32(row), variant.LocNull)
 		}
-		c.computeOwn(e, int32(row), variant.LocNull)
 	}
 	return nil
 }
@@ -1252,27 +1279,19 @@ type variantLeafReader struct {
 	ppos   int // slots consumed
 	pdense int // non-null values consumed
 
-	// Typed data of the current page (one of these per kind), or dictionary
-	// indexes when the page is dictionary-encoded.
-	pi32    []int32
-	pi64    []int64
-	pf32    []float32
-	pf64    []float64
-	pba     []byte
-	pbaOff  []uint32
-	pflba   []byte
-	pflbaN  int
-	pbools  []bool
-	pidx    []int32
-	dictSet bool
-	di32    []int32
-	di64    []int64
-	df32    []float32
-	df64    []float64
-	dba     []byte
-	dbaOff  []uint32
-	dflba   []byte
-	dflbaN  int
+	// Typed data of the current page (one of these per kind). For
+	// dictionary-encoded pages this is the dictionary's data and pidx holds
+	// the per-value dictionary indexes; otherwise pidx is nil.
+	pi32   []int32
+	pi64   []int64
+	pf32   []float32
+	pf64   []float64
+	pba    []byte
+	pbaOff []uint32
+	pflba  []byte
+	pflbaN int
+	pbools []bool
+	pidx   []int32
 
 	win variantLeafWindow
 }
@@ -1386,26 +1405,10 @@ func (l *variantLeafReader) setPage(p Page) error {
 
 	data := p.Data()
 	if d := p.Dictionary(); d != nil {
+		// Dictionary-encoded page: the page data holds indexes and the
+		// typed values come from the dictionary's page (a zero-copy view).
 		l.pidx = data.Int32()
-		if !l.dictSet {
-			dd := d.Page().Data()
-			switch l.kind {
-			case Int32:
-				l.di32 = dd.Int32()
-			case Int64:
-				l.di64 = dd.Int64()
-			case Float:
-				l.df32 = dd.Float()
-			case Double:
-				l.df64 = dd.Double()
-			case ByteArray:
-				l.dba, l.dbaOff = dd.ByteArray()
-			case FixedLenByteArray:
-				l.dflba, l.dflbaN = dd.FixedLenByteArray()
-			}
-			l.dictSet = true
-		}
-		return l.checkPageValues()
+		data = d.Page().Data()
 	}
 	switch l.kind {
 	case Int32:
@@ -1511,51 +1514,27 @@ func (l *variantLeafReader) consumeSlot(w *variantLeafWindow, rep byte) {
 func (l *variantLeafReader) appendValue(w *variantLeafWindow) {
 	i := l.pdense
 	l.pdense++
-	switch l.kind {
-	case Boolean:
+	if l.kind == Boolean {
 		w.bools = append(w.bools, l.pbools[i])
+		return
+	}
+	if l.pidx != nil {
+		i = int(l.pidx[i])
+	}
+	switch l.kind {
 	case Int32:
-		if l.pidx != nil {
-			w.i32 = append(w.i32, l.di32[l.pidx[i]])
-		} else {
-			w.i32 = append(w.i32, l.pi32[i])
-		}
+		w.i32 = append(w.i32, l.pi32[i])
 	case Int64:
-		if l.pidx != nil {
-			w.i64 = append(w.i64, l.di64[l.pidx[i]])
-		} else {
-			w.i64 = append(w.i64, l.pi64[i])
-		}
+		w.i64 = append(w.i64, l.pi64[i])
 	case Float:
-		if l.pidx != nil {
-			w.f32 = append(w.f32, l.df32[l.pidx[i]])
-		} else {
-			w.f32 = append(w.f32, l.pf32[i])
-		}
+		w.f32 = append(w.f32, l.pf32[i])
 	case Double:
-		if l.pidx != nil {
-			w.f64 = append(w.f64, l.df64[l.pidx[i]])
-		} else {
-			w.f64 = append(w.f64, l.pf64[i])
-		}
+		w.f64 = append(w.f64, l.pf64[i])
 	case ByteArray:
-		var b []byte
-		if l.pidx != nil {
-			j := l.pidx[i]
-			b = l.dba[l.dbaOff[j]:l.dbaOff[j+1]]
-		} else {
-			b = l.pba[l.pbaOff[i]:l.pbaOff[i+1]]
-		}
-		w.slab = append(w.slab, b...)
+		w.slab = append(w.slab, l.pba[l.pbaOff[i]:l.pbaOff[i+1]]...)
 		w.offsets = append(w.offsets, uint32(len(w.slab)))
 	case FixedLenByteArray:
-		if l.pidx != nil {
-			j := int(l.pidx[i])
-			w.flba = append(w.flba, l.dflba[j*l.dflbaN:(j+1)*l.dflbaN]...)
-			w.flbaSize = l.dflbaN
-		} else {
-			w.flba = append(w.flba, l.pflba[i*l.pflbaN:(i+1)*l.pflbaN]...)
-			w.flbaSize = l.pflbaN
-		}
+		w.flba = append(w.flba, l.pflba[i*l.pflbaN:(i+1)*l.pflbaN]...)
+		w.flbaSize = l.pflbaN
 	}
 }

@@ -180,7 +180,8 @@ func arbitraryValue(data []byte, depth int) (Value, []byte) {
 // decode, and compare equal.
 func FuzzEncodeRoundTrip(f *testing.F) {
 	f.Add([]byte{})
-	// An object {a: 42, b: [int64]} followed by trailing bytes.
+	// Seed bytes that steer arbitraryValue into the object branch (leading
+	// tag 22) with nested fields, so the corpus starts with structure.
 	f.Add([]byte{22, 3, 1, 'a', 3, 42, 1, 'b', 21, 2, 6, 1, 2, 3, 4, 5, 6, 7, 8})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		v, _ := arbitraryValue(data, 0)

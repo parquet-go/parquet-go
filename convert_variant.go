@@ -6,32 +6,39 @@ import (
 	"github.com/parquet-go/parquet-go/variant"
 )
 
-// This file teaches schema conversion to read shredded variant columns.
-// When the target schema declares an unshredded variant group (metadata,
-// value) and the source schema stores the column shredded (metadata, value,
-// typed_value), the conversion reconstructs each value with the
-// construct_variant algorithm (see variant_shredded_read.go) and emits the
-// re-encoded variant binary. Without this, the generic column mapping would
-// silently drop the typed_value columns, losing every shredded value.
+// This file teaches schema conversion to re-shred variant columns. When the
+// target and source schemas declare the same variant column with different
+// shredding (including unshredded on either side), the conversion
+// reconstructs each value from the source columns with the
+// construct_variant algorithm (see variant_shredded_read.go) and re-shreds
+// it into the target columns (see variant_shredded_write.go). Without this,
+// the generic column mapping would silently drop the typed_value columns of
+// the source, losing every shredded value.
 //
 // Because every read path funnels through Convert when the reader and file
 // schemas differ, this single integration point makes shredded files
-// readable by any reader that declares a plain variant column.
+// readable by readers declaring any other variant shape, and makes
+// MergeRowGroups correct when the inputs disagree on shredding.
 
-// variantConversion reconstructs one shredded variant column during row
-// conversion.
+// variantConversion re-shreds one variant column during row conversion.
 type variantConversion struct {
-	group *shreddedVariantGroup
 	// A source group that cannot be reconstructed (e.g. an unsupported
 	// shredded type) fails when rows are read, not when the conversion is
 	// constructed, matching how readers report other malformed files.
-	err         error
-	numCols     int // leaf columns of the source variant group
-	sourceStart int // first source leaf column of the variant group
+	err error
 
-	targetMetaCol  int
-	targetValueCol int
-	targetDef      byte // definition level of the target leaves when present
+	source *shreddedVariantGroup
+	// sourceValueRequired marks plain unshredded sources (required binary
+	// value), whose value column does not contribute a definition level.
+	sourceValueRequired bool
+	sourceStart         int // first source leaf column of the variant group
+
+	target *shreddedVariantGroup
+	// targetValueRequired marks plain unshredded targets.
+	targetValueRequired bool
+	targetStart         int  // first target leaf column of the variant group
+	targetDef           byte // definition level of the target group when present
+	targetRep           byte // repetition depth of the target group
 
 	sourceGroupDef int // definition level at which the source group is present
 	sourceGroupRep int // repetition level of the source group
@@ -43,9 +50,17 @@ type variantConversion struct {
 	repLevels []byte
 }
 
+// variantNodesEquivalent reports whether two variant group nodes have the
+// same shredding, ignoring the repetition of the group node itself and
+// field order. Equivalent groups convert through the generic column
+// mapping; anything else needs re-shredding.
+func variantNodesEquivalent(a, b Node) bool {
+	return SameNodes(Required(a), Required(b))
+}
+
 // findVariantConversions walks the target and source schemas in parallel
-// and returns a conversion for every variant column that the target
-// declares unshredded and the source stores shredded.
+// and returns a conversion for every variant column whose shredding differs
+// between the two.
 func findVariantConversions(to, from Node) []variantConversion {
 	var conversions []variantConversion
 	walkVariantConversions(to, from, 0, 0, 0, 0, 0, 0, []byte{0}, []byte{0}, &conversions)
@@ -53,8 +68,11 @@ func findVariantConversions(to, from Node) []variantConversion {
 }
 
 func walkVariantConversions(t, s Node, tCol, sCol int, tRep, tDef, sRep, sDef byte, repLevels, defLevels []byte, conversions *[]variantConversion) {
-	if isVariant(t) && isVariant(s) && isUnshreddedVariant(t) && !isUnshreddedVariant(s) {
-		if vc := makeVariantConversion(t, s, tCol, sCol, tDef, sDef, sRep, repLevels, defLevels); vc != nil {
+	if isVariant(t) && isVariant(s) {
+		if variantNodesEquivalent(t, s) {
+			return // the generic column mapping handles it
+		}
+		if vc := makeVariantConversion(t, s, tCol, sCol, tDef, tRep, sDef, sRep, repLevels, defLevels); vc != nil {
 			*conversions = append(*conversions, *vc)
 		}
 		return
@@ -89,42 +107,42 @@ func walkVariantConversions(t, s Node, tCol, sCol int, tRep, tDef, sRep, sDef by
 
 // makeVariantConversion builds the conversion for one variant column. The
 // level arguments are those of the variant group nodes themselves. A nil
-// result means the target group does not have the expected metadata and
-// value leaves and the generic column mapping applies.
-func makeVariantConversion(t, s Node, tCol, sCol int, tDef, sDef, sRep byte, repLevels, defLevels []byte) *variantConversion {
-	vc := &variantConversion{
-		numCols:        int(numLeafColumnsOf(s)),
-		sourceStart:    sCol,
-		targetMetaCol:  -1,
-		targetValueCol: -1,
-		targetDef:      tDef,
-		sourceGroupDef: int(sDef),
-		sourceGroupRep: int(sRep),
-		defLevels:      defLevels,
-		repLevels:      repLevels,
-	}
-	col := tCol
-	for _, tf := range t.Fields() {
-		if !tf.Leaf() || tf.Type().Kind() != ByteArray || tf.Optional() {
-			return nil
-		}
-		switch tf.Name() {
-		case "metadata":
-			vc.targetMetaCol = col
-		case "value":
-			vc.targetValueCol = col
-		}
-		col++
-	}
-	if vc.targetMetaCol < 0 || vc.targetValueCol < 0 {
+// result means the target group does not have a recognizable variant shape
+// and the generic column mapping applies.
+func makeVariantConversion(t, s Node, tCol, sCol int, tDef, tRep, sDef, sRep byte, repLevels, defLevels []byte) *variantConversion {
+	target, targetValueRequired, err := variantGroupOf(t)
+	if err != nil {
 		return nil
 	}
-
-	vc.group, vc.err = buildShreddedVariantGroup(s, 0, 0, 0)
-	if vc.err == nil && vc.group.metadataCol < 0 {
-		vc.group, vc.err = nil, fmt.Errorf("variant: shredded variant group has no metadata field")
+	vc := &variantConversion{
+		target:              target,
+		targetValueRequired: targetValueRequired,
+		targetStart:         tCol,
+		targetDef:           tDef,
+		targetRep:           tRep,
+		sourceStart:         sCol,
+		sourceGroupDef:      int(sDef),
+		sourceGroupRep:      int(sRep),
+		defLevels:           defLevels,
+		repLevels:           repLevels,
 	}
+	vc.source, vc.sourceValueRequired, vc.err = variantGroupOf(s)
 	return vc
+}
+
+// sourceColumnFor returns the source leaf column backing the given relative
+// target column, used to keep the conversion's chunk mapping meaningful.
+// The metadata column maps to the source metadata; every other target
+// column maps to the source value column (or metadata when there is none).
+func (vc *variantConversion) sourceColumnFor(rel int) int {
+	if vc.source == nil {
+		return vc.sourceStart
+	}
+	col := vc.source.valueCol
+	if rel == vc.target.metadataCol || col < 0 {
+		col = vc.source.metadataCol
+	}
+	return vc.sourceStart + col
 }
 
 // setLevelMapping returns a copy of the source-to-target level mapping with
@@ -138,34 +156,38 @@ func setLevelMapping(levels []byte, source, target byte) []byte {
 }
 
 // variantScratch is the per-row state of one variant conversion, pooled in
-// conversionBuffer so converting a row does not allocate it anew.
+// conversionBuffer so converting a row does not allocate it anew. cols
+// holds the output values of every leaf column of the target variant group.
 type variantScratch struct {
-	pos    []int
-	metas  []Value
-	values []Value
+	pos  []int
+	cols [][]Value
+	meta variant.MetadataBuilder
 }
 
-// convert reconstructs every occurrence of the variant column in the
-// current row from the source columns, leaving the values of the target
-// metadata and value columns in the scratch space.
+// convert re-shreds every occurrence of the variant column in the current
+// row from the source columns into the target columns, leaving the output
+// values in the scratch space.
 func (vc *variantConversion) convert(source [][]Value, scratch *variantScratch) error {
 	if vc.err != nil {
 		return vc.err
 	}
-	columns := source[vc.sourceStart : vc.sourceStart+vc.numCols]
+	columns := source[vc.sourceStart : vc.sourceStart+vc.source.numCols]
 	if cap(scratch.pos) < len(columns) {
 		scratch.pos = make([]int, len(columns))
 	}
 	scratch.pos = scratch.pos[:len(columns)]
 	clear(scratch.pos)
-	scratch.metas = scratch.metas[:0]
-	scratch.values = scratch.values[:0]
+	if cap(scratch.cols) < vc.target.numCols {
+		scratch.cols = make([][]Value, vc.target.numCols)
+	}
+	scratch.cols = scratch.cols[:vc.target.numCols]
+	for i := range scratch.cols {
+		scratch.cols[i] = scratch.cols[i][:0]
+	}
 	reader := variantColumnReader{columns: columns, pos: scratch.pos}
-	metaIdx := ^uint16(vc.targetMetaCol)
-	valueIdx := ^uint16(vc.targetValueCol)
 
 	for {
-		metaVal, ok := reader.peek(vc.group.metadataCol)
+		metaVal, ok := reader.peek(vc.source.metadataCol)
 		if !ok {
 			break
 		}
@@ -177,59 +199,105 @@ func (vc *variantConversion) convert(source [][]Value, scratch *variantScratch) 
 			return fmt.Errorf("variant: metadata column has levels (r=%d, d=%d) outside the schema's levels",
 				metaVal.repetitionLevel, metaVal.definitionLevel)
 		}
+		rep := vc.repLevels[metaVal.repetitionLevel]
 
 		if int(metaVal.definitionLevel) < vc.sourceGroupDef {
 			// The variant group is null at this occurrence; every leaf
 			// column of the group carries exactly one value at the
 			// enclosing level to consume.
-			rep := vc.repLevels[metaVal.repetitionLevel]
 			def := vc.defLevels[metaVal.definitionLevel]
-			scratch.metas = append(scratch.metas, Value{repetitionLevel: rep, definitionLevel: def, columnIndex: metaIdx})
-			scratch.values = append(scratch.values, Value{repetitionLevel: rep, definitionLevel: def, columnIndex: valueIdx})
+			for col := range scratch.cols {
+				scratch.cols[col] = append(scratch.cols[col], Value{repetitionLevel: rep, definitionLevel: def})
+			}
 			for col := range columns {
 				reader.next(col)
 			}
 			continue
 		}
 
-		reader.next(vc.group.metadataCol)
-		m, err := variant.DecodeMetadata(metaVal.ByteArray())
-		if err != nil {
-			return fmt.Errorf("variant metadata: %w", err)
+		reader.next(vc.source.metadataCol)
+
+		var v variant.Value
+		if vc.sourceValueRequired {
+			// Plain unshredded source: the required value column holds the
+			// variant binary directly.
+			val, ok := reader.next(vc.source.valueCol)
+			if !ok {
+				return fmt.Errorf("variant: value column has fewer values than metadata")
+			}
+			if b := val.ByteArray(); len(b) == 0 {
+				// The plain unshredded write path stores a zero variant
+				// value as empty metadata and value bytes; read it as
+				// variant null like the row-based reader.
+				v = variant.Null()
+			} else {
+				m, err := variant.DecodeMetadata(metaVal.ByteArray())
+				if err != nil {
+					return fmt.Errorf("variant metadata: %w", err)
+				}
+				if v, err = variant.Decode(m, b); err != nil {
+					return fmt.Errorf("variant: decoding value: %w", err)
+				}
+			}
+		} else {
+			m, err := variant.DecodeMetadata(metaVal.ByteArray())
+			if err != nil {
+				return fmt.Errorf("variant metadata: %w", err)
+			}
+			var present bool
+			v, present, err = vc.source.read(&reader, m, vc.sourceGroupDef, vc.sourceGroupRep)
+			if err != nil {
+				return err
+			}
+			if !present {
+				// value and typed_value both null at the top level is
+				// invalid per the spec; read it as variant null (matching
+				// parquet-java).
+				v = variant.Null()
+			}
 		}
-		v, present, err := vc.group.read(&reader, m, vc.sourceGroupDef, vc.sourceGroupRep)
-		if err != nil {
-			return err
-		}
-		if !present {
-			// value and typed_value both null at the top level is invalid
-			// per the spec; read it as variant null (matching parquet-java).
-			v = variant.Null()
-		}
 
-		var b variant.MetadataBuilder
-		encoded := variant.Encode(&b, v)
-		_, metadata := b.Build()
-		rep := vc.repLevels[metaVal.repetitionLevel]
-
-		metaValue := ByteArrayValue(metadata)
-		metaValue.repetitionLevel = rep
-		metaValue.definitionLevel = vc.targetDef
-		metaValue.columnIndex = metaIdx
-
-		valueValue := ByteArrayValue(encoded)
-		valueValue.repetitionLevel = rep
-		valueValue.definitionLevel = vc.targetDef
-		valueValue.columnIndex = valueIdx
-
-		scratch.metas = append(scratch.metas, metaValue)
-		scratch.values = append(scratch.values, valueValue)
+		vc.emit(v, rep, scratch)
 	}
-	if len(scratch.metas) == 0 {
-		// No values in the source columns for this row; emit a null pair
-		// to maintain the one-value-per-column invariant.
-		scratch.metas = append(scratch.metas, Value{columnIndex: metaIdx})
-		scratch.values = append(scratch.values, Value{columnIndex: valueIdx})
+	if len(scratch.cols[0]) == 0 {
+		// No values in the source columns for this row; emit a null per
+		// target column to maintain the one-value-per-column invariant.
+		for col := range scratch.cols {
+			scratch.cols[col] = append(scratch.cols[col], Value{})
+		}
+	}
+	for col := range scratch.cols {
+		idx := ^uint16(vc.targetStart + col)
+		values := scratch.cols[col]
+		for i := range values {
+			values[i].columnIndex = idx
+		}
 	}
 	return nil
+}
+
+// emit re-shreds one occurrence of the variant value into the scratch
+// columns of the target group, mirroring the row-based shredded write path.
+func (vc *variantConversion) emit(v variant.Value, rep byte, scratch *variantScratch) {
+	b := &scratch.meta
+	b.Reset()
+	if vc.targetValueRequired {
+		// Plain unshredded target: encode the whole value into the
+		// required value column.
+		encoded := variant.Encode(b, v)
+		appendShredded(scratch.cols, 0, vc.target.valueCol, ByteArrayValue(encoded), vc.targetDef, rep)
+	} else {
+		// The row's metadata dictionary contains every object field name
+		// of the value, shredded or not (VariantShredding.md).
+		addVariantFieldNames(b, v)
+		vc.target.write(scratch.cols, 0, b, v, true, shredLevels{
+			baseDef: int(vc.targetDef),
+			baseRep: int(vc.targetRep),
+			rep:     rep,
+		})
+	}
+	// The metadata column is written last so the dictionary includes the
+	// field IDs assigned while encoding residual values.
+	_, metadata := b.Build()
+	appendShredded(scratch.cols, 0, vc.target.metadataCol, ByteArrayValue(metadata), vc.targetDef, rep)
 }

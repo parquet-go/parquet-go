@@ -62,8 +62,8 @@ type Conversion interface {
 
 type conversion struct {
 	columns []conversionColumn
-	// Shredded variant columns of the source being reconstructed to
-	// unshredded variant columns of the target (see convert_variant.go).
+	// Variant columns being re-shredded from the source's shredding schema
+	// to the target's (see convert_variant.go).
 	variants []variantConversion
 	schema   *Schema
 	buffers  memory.Pool[conversionBuffer]
@@ -85,8 +85,8 @@ type conversionColumn struct {
 	targetKind    Kind // Target column kind for creating proper null values
 	isOptional    bool // Whether the target column is optional (for null handling)
 	// Index in conversion.variants of the variant conversion producing this
-	// column, or -1; variantOutput selects its metadata (0) or value (1)
-	// output column.
+	// column, or -1; variantOutput is the column's index within the target
+	// variant group's leaf columns (its slot in variantScratch.cols).
 	variantIndex  int
 	variantOutput int
 }
@@ -273,8 +273,8 @@ func (c *conversion) Convert(rows []Row) (int, error) {
 		})
 		row = row[:0]
 
-		// Reconstruct shredded variant columns once per row; the column
-		// loop below picks up the metadata and value outputs.
+		// Convert variant columns once per row; the column loop below
+		// appends each target leaf column from the conversion's scratch.
 		for k := range c.variants {
 			if err := c.variants[k].convert(source.columns, &source.variants[k]); err != nil {
 				return n, err
@@ -285,11 +285,7 @@ func (c *conversion) Convert(rows []Row) (int, error) {
 			if conv.variantIndex >= 0 {
 				// Values already carry final levels and column indexes.
 				scratch := &source.variants[conv.variantIndex]
-				if conv.variantOutput == 0 {
-					row = append(row, scratch.metas...)
-				} else {
-					row = append(row, scratch.values...)
-				}
+				row = append(row, scratch.cols[conv.variantOutput]...)
 				continue
 			}
 
@@ -360,10 +356,10 @@ func (id identity) Schema() *Schema                 { return id.schema }
 // stripped out of the rows. Extra columns in the target schema will be set to
 // null or zero values.
 //
-// Variant columns that the target declares unshredded but the source stores
-// shredded are reconstructed with the construct_variant algorithm of the
-// Variant Shredding specification instead of being mapped column-by-column
-// (see convert_variant.go).
+// Variant columns whose shredding differs between the target and the source
+// (including unshredded on either side) are reconstructed and re-shredded
+// per the Variant Shredding specification instead of being mapped
+// column-by-column (see convert_variant.go).
 //
 // The returned function is intended to be used to append the converted source
 // row to the destination buffer.
@@ -377,31 +373,16 @@ func Convert(to, from Node) (conv Conversion, err error) {
 		return identity{schema}, nil
 	}
 
-	// Variant columns that the target declares unshredded but the source
-	// stores shredded are reconstructed, not mapped column-by-column (see
-	// convert_variant.go).
 	variants := findVariantConversions(to, from)
 	variantColumns := make(map[int]conversionColumn, 2*len(variants))
 	for k := range variants {
 		vc := &variants[k]
-		metaSource, valueSource := 0, 0
-		if vc.group != nil {
-			metaSource = vc.group.metadataCol
-			// Shredded groups without a value column are legal; any column
-			// of the group keeps the source chunk mapping meaningful.
-			valueSource = max(vc.group.valueCol, 0)
-		}
-		variantColumns[vc.targetMetaCol] = conversionColumn{
-			sourceIndex:   vc.sourceStart + metaSource,
-			targetKind:    ByteArray,
-			variantIndex:  k,
-			variantOutput: 0,
-		}
-		variantColumns[vc.targetValueCol] = conversionColumn{
-			sourceIndex:   vc.sourceStart + valueSource,
-			targetKind:    ByteArray,
-			variantIndex:  k,
-			variantOutput: 1,
+		for rel := range vc.target.numCols {
+			variantColumns[vc.targetStart+rel] = conversionColumn{
+				sourceIndex:   vc.sourceColumnFor(rel),
+				variantIndex:  k,
+				variantOutput: rel,
+			}
 		}
 	}
 
@@ -735,7 +716,10 @@ func maskMissingRowGroupColumns(r RowGroup, numColumns int, conv Conversion) Row
 	if c, ok := conv.(*conversion); ok {
 		for k := range c.variants {
 			vc := &c.variants[k]
-			for j := vc.sourceStart; j < vc.sourceStart+vc.numCols && j < len(columns); j++ {
+			if vc.source == nil {
+				continue // unrecognized source group; vc.err surfaces when rows are read
+			}
+			for j := vc.sourceStart; j < vc.sourceStart+vc.source.numCols && j < len(columns); j++ {
 				columns[j] = rowGroupColumns[j]
 			}
 		}

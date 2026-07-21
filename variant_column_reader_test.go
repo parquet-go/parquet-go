@@ -10,273 +10,20 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
-	"github.com/parquet-go/parquet-go/format"
 	"github.com/parquet-go/parquet-go/variant"
 )
 
 // This file tests the columnar variant reader (variant_column_reader.go).
 //
-// The main test is differential: a generic reconstruction routine rebuilds
-// every row's variant.Value purely from the cursor API (Locs, typed
-// vectors, ListOffsets, Residual) and the result must be structurally equal
-// to what the row-based read path produces. The routine only uses public
-// API and no knowledge of the shredding schema beyond what cursors expose,
-// so it doubles as a completeness check: if any value can't be rebuilt
-// from cursors, the API is missing something.
-
-// materializeVariantCursors creates cursors for every shredded position so
-// the reader projects all columns.
-func materializeVariantCursors(c *parquet.VariantCursor) {
-	switch c.Kind() {
-	case parquet.VariantCursorObject:
-		for _, name := range c.Fields() {
-			materializeVariantCursors(c.Field(name))
-		}
-	case parquet.VariantCursorList:
-		materializeVariantCursors(c.Elements())
-	}
-}
-
-// variantTypedIndexes inverts TypedRows: entry index -> dense index in the
-// typed vectors, or -1.
-func variantTypedIndexes(c *parquet.VariantCursor) []int32 {
-	idx := make([]int32, len(c.Locs()))
-	for i := range idx {
-		idx[i] = -1
-	}
-	for d, e := range c.TypedRows() {
-		idx[e] = int32(d)
-	}
-	return idx
-}
-
-// variantTypedValue converts the d-th dense typed value of a leaf cursor to
-// a variant value, mirroring the shredded types table using only the public
-// cursor accessors and the leaf's logical type.
-func variantTypedValue(c *parquet.VariantCursor, d int) (variant.Value, error) {
-	typ := c.LeafType()
-	lt := typ.LogicalType()
-	var value format.LogicalTypeValue
-	if lt != nil {
-		value = lt.Value
-	}
-	switch value := value.(type) {
-	case nil:
-		switch typ.Kind() {
-		case parquet.Boolean:
-			return variant.Bool(c.Booleans()[d]), nil
-		case parquet.Int32:
-			return variant.Int32(c.Int32s()[d]), nil
-		case parquet.Int64:
-			return variant.Int64(c.Int64s()[d]), nil
-		case parquet.Float:
-			return variant.Float(c.Floats()[d]), nil
-		case parquet.Double:
-			return variant.Double(c.Doubles()[d]), nil
-		case parquet.ByteArray:
-			slab, offsets := c.ByteArrays()
-			return variant.Binary(slab[offsets[d]:offsets[d+1]]), nil
-		}
-	case *format.StringType:
-		slab, offsets := c.ByteArrays()
-		return variant.String(string(slab[offsets[d]:offsets[d+1]])), nil
-	case *format.IntType:
-		switch value.BitWidth {
-		case 8:
-			return variant.Int8(int8(c.Int32s()[d])), nil
-		case 16:
-			return variant.Int16(int16(c.Int32s()[d])), nil
-		case 32:
-			return variant.Int32(c.Int32s()[d]), nil
-		case 64:
-			return variant.Int64(c.Int64s()[d]), nil
-		}
-	case *format.DateType:
-		return variant.Date(c.Int32s()[d]), nil
-	case *format.TimeType:
-		return variant.Time(c.Int64s()[d]), nil
-	case *format.TimestampType:
-		v := c.Int64s()[d]
-		switch value.Unit.Value.(type) {
-		case *format.MicroSeconds:
-			if value.IsAdjustedToUTC {
-				return variant.Timestamp(v), nil
-			}
-			return variant.TimestampNTZ(v), nil
-		case *format.NanoSeconds:
-			if value.IsAdjustedToUTC {
-				return variant.TimestampNanos(v), nil
-			}
-			return variant.TimestampNTZNanos(v), nil
-		}
-	case *format.DecimalType:
-		scale := byte(value.Scale)
-		switch typ.Kind() {
-		case parquet.Int32:
-			return variant.Decimal4(c.Int32s()[d], scale), nil
-		case parquet.Int64:
-			return variant.Decimal8(c.Int64s()[d], scale), nil
-		case parquet.FixedLenByteArray:
-			slab, size := c.FixedLenByteArrays()
-			return variant.Decimal16(bigEndianDecimal16(slab[d*size:(d+1)*size]), scale), nil
-		case parquet.ByteArray:
-			slab, offsets := c.ByteArrays()
-			return variant.Decimal16(bigEndianDecimal16(slab[offsets[d]:offsets[d+1]]), scale), nil
-		}
-	case *format.UUIDType:
-		slab, size := c.FixedLenByteArrays()
-		return variant.UUID(uuid.UUID(slab[d*size : (d+1)*size])), nil
-	}
-	return variant.Null(), fmt.Errorf("unsupported leaf type %s", typ)
-}
-
-// bigEndianDecimal16 converts a big-endian two's complement decimal of up
-// to 16 bytes to the little-endian representation of variant decimal16.
-func bigEndianDecimal16(b []byte) [16]byte {
-	var out [16]byte
-	for i := range b {
-		out[i] = b[len(b)-1-i]
-	}
-	if len(b) > 0 && b[0]&0x80 != 0 {
-		for i := len(b); i < 16; i++ {
-			out[i] = 0xFF
-		}
-	}
-	return out
-}
-
-// reconstructVariantEntry rebuilds the variant value of entry e of a cursor
-// from the columnar API. The boolean result reports presence (false means
-// the value is missing, e.g. an absent object field).
-func reconstructVariantEntry(c *parquet.VariantCursor, e int, typedIdx map[*parquet.VariantCursor][]int32) (variant.Value, bool, error) {
-	switch c.Locs()[e] {
-	case variant.LocMissing:
-		return variant.Null(), false, nil
-	case variant.LocNull:
-		return variant.Null(), true, nil
-	case variant.LocResidual:
-		v, ok, err := c.Residual(e)
-		if err != nil {
-			return variant.Null(), false, err
-		}
-		if !ok {
-			return variant.Null(), false, fmt.Errorf("residual entry %d has no residual value", e)
-		}
-		return v, true, nil
-	case variant.LocTyped:
-		d := typedIdx[c][e]
-		if d < 0 {
-			return variant.Null(), false, fmt.Errorf("typed entry %d not in TypedRows", e)
-		}
-		v, err := variantTypedValue(c, int(d))
-		return v, true, err
-	case variant.LocTypedObject:
-		shredded := c.Fields()
-		var fields []variant.Field
-		for _, name := range shredded {
-			fv, present, err := reconstructVariantEntry(c.Field(name), e, typedIdx)
-			if err != nil {
-				return variant.Null(), false, err
-			}
-			if present {
-				fields = append(fields, variant.Field{Name: name, Value: fv})
-			}
-		}
-		if r, ok, err := c.Residual(e); err != nil {
-			return variant.Null(), false, err
-		} else if ok {
-			if r.Basic() != variant.BasicObject {
-				return variant.Null(), false, fmt.Errorf("partial object residual is not an object")
-			}
-			isShredded := func(name string) bool {
-				return slices.Contains(shredded, name)
-			}
-			for _, f := range r.ObjectValue().Fields {
-				if !isShredded(f.Name) {
-					fields = append(fields, f)
-				}
-			}
-		}
-		return variant.MakeObject(fields), true, nil
-	case variant.LocTypedList:
-		offsets := c.ListOffsets()
-		el := c.Elements()
-		elems := []variant.Value{}
-		for i := offsets[e]; i < offsets[e+1]; i++ {
-			ev, present, err := reconstructVariantEntry(el, int(i), typedIdx)
-			if err != nil {
-				return variant.Null(), false, err
-			}
-			if !present {
-				ev = variant.Null()
-			}
-			elems = append(elems, ev)
-		}
-		return variant.MakeArray(elems), true, nil
-	}
-	return variant.Null(), false, fmt.Errorf("unknown loc %v", c.Locs()[e])
-}
-
-// fillTypedIndexes populates the entry->dense mapping of every materialized
-// cursor for the current window.
-func fillTypedIndexes(c *parquet.VariantCursor, into map[*parquet.VariantCursor][]int32) {
-	into[c] = variantTypedIndexes(c)
-	switch c.Kind() {
-	case parquet.VariantCursorObject:
-		for _, name := range c.Fields() {
-			fillTypedIndexes(c.Field(name), into)
-		}
-	case parquet.VariantCursorList:
-		fillTypedIndexes(c.Elements(), into)
-	}
-}
-
-// readVariantColumnar reads every row of the file's variant column through
-// the columnar reader, reconstructing each row's value from cursors.
-// Windows of the given size exercise page/window boundary handling. The
-// boolean per row reports presence (false = null variant row).
-func readVariantColumnar(t *testing.T, data []byte, window int, path ...string) ([]variant.Value, []bool) {
-	t.Helper()
-	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatalf("opening file: %v", err)
-	}
-	var values []variant.Value
-	var present []bool
-	for _, rg := range f.RowGroups() {
-		r, err := parquet.NewVariantReader(rg, path...)
-		if err != nil {
-			t.Fatalf("NewVariantReader: %v", err)
-		}
-		root := r.Root()
-		materializeVariantCursors(root)
-		typedIdx := make(map[*parquet.VariantCursor][]int32)
-		for {
-			n, err := r.Next(window)
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				t.Fatalf("Next: %v", err)
-			}
-			fillTypedIndexes(root, typedIdx)
-			for e := range n {
-				v, ok, err := reconstructVariantEntry(root, e, typedIdx)
-				if err != nil {
-					t.Fatalf("reconstructing row %d: %v", len(values), err)
-				}
-				values = append(values, v)
-				present = append(present, ok)
-			}
-		}
-		if err := r.Close(); err != nil {
-			t.Fatalf("Close: %v", err)
-		}
-	}
-	return values, present
-}
+// The main test is differential: a generic reconstruction routine
+// (readVariantColumnar and its helpers, in variant_fixtures_test.go)
+// rebuilds every row's variant.Value purely from the cursor API (Locs,
+// typed vectors, ListOffsets, Residual) and the result must be structurally
+// equal to what the row-based read path produces. The routine only uses
+// public API and no knowledge of the shredding schema beyond what cursors
+// expose, so it doubles as a completeness check: if any value can't be
+// rebuilt from cursors, the API is missing something.
 
 // TestVariantReaderRandomizedDifferential runs the randomized shredding
 // schema × value matrix through the columnar reader and asserts the
@@ -333,8 +80,9 @@ func TestVariantReaderRandomizedDifferential(t *testing.T) {
 	}
 }
 
-// TestVariantReaderUnshredded reads a plain (metadata, value) variant
-// column through the columnar reader.
+// TestVariantReaderUnshredded verifies that cursor-based reconstruction of
+// a plain (metadata, value) variant column, written by the row-based
+// writer, matches the values written.
 func TestVariantReaderUnshredded(t *testing.T) {
 	r := rand.New(rand.NewPCG(21, 42))
 	values := make([]variant.Value, 17)
@@ -415,44 +163,6 @@ func TestVariantReaderSpecFiles(t *testing.T) {
 	}
 }
 
-// buildVariantFile writes the given variant values (nil means a null
-// variant row) into a file with the given typed_value shredding schema
-// (nil means unshredded), returning the file bytes.
-func buildVariantFile(t *testing.T, shred parquet.Node, values []*variant.Value, options ...parquet.WriterOption) []byte {
-	t.Helper()
-	variantNode := parquet.Variant()
-	if shred != nil {
-		shredded, err := parquet.ShreddedVariant(shred)
-		if err != nil {
-			t.Fatalf("building shredded variant node: %v", err)
-		}
-		variantNode = shredded
-	}
-	schema := parquet.NewSchema("table", parquet.Group{
-		"id":  parquet.Int(32),
-		"var": parquet.Optional(variantNode),
-	})
-	rows := make([]shreddedVariantRow, len(values))
-	for i, v := range values {
-		rows[i] = shreddedVariantRow{ID: int32(i)}
-		if v != nil {
-			rows[i].Var = encodeRawVariant(*v)
-		}
-	}
-	buf := new(bytes.Buffer)
-	opts := append([]parquet.WriterOption{schema}, options...)
-	w := parquet.NewGenericWriter[shreddedVariantRow](buf, opts...)
-	if _, err := w.Write(rows); err != nil {
-		t.Fatalf("writing rows: %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("closing writer: %v", err)
-	}
-	return buf.Bytes()
-}
-
-func vptr(v variant.Value) *variant.Value { return &v }
-
 // TestVariantReaderErrors exercises the error paths of the constructor and
 // the positioning methods.
 func TestVariantReaderErrors(t *testing.T) {
@@ -490,6 +200,59 @@ func TestVariantReaderErrors(t *testing.T) {
 	}
 	if _, err := r.Next(1); err != io.EOF {
 		t.Errorf("Next after exhaustion: err = %v, want io.EOF", err)
+	}
+}
+
+// TestVariantReaderAccessors covers the small informational accessors: the
+// String forms of location tags and cursor kinds, NumRows, and the nil
+// results of typed accessors on non-leaf cursors.
+func TestVariantReaderAccessors(t *testing.T) {
+	for want, loc := range map[string]variant.Loc{
+		"missing": variant.LocMissing, "null": variant.LocNull,
+		"typed": variant.LocTyped, "typed-object": variant.LocTypedObject,
+		"typed-list": variant.LocTypedList, "residual": variant.LocResidual,
+		"unknown": variant.Loc(99),
+	} {
+		if got := loc.String(); got != want {
+			t.Errorf("variant.Loc(%d).String() = %q, want %q", loc, got, want)
+		}
+	}
+	for want, kind := range map[string]parquet.VariantCursorKind{
+		"unshredded": parquet.VariantCursorUnshredded, "leaf": parquet.VariantCursorLeaf,
+		"object": parquet.VariantCursorObject, "list": parquet.VariantCursorList,
+		"unknown": parquet.VariantCursorKind(99),
+	} {
+		if got := kind.String(); got != want {
+			t.Errorf("VariantCursorKind(%d).String() = %q, want %q", kind, got, want)
+		}
+	}
+
+	values := []*variant.Value{vptr(variant.MakeObject([]variant.Field{
+		{Name: "a", Value: variant.Int64(1)},
+	}))}
+	data := buildVariantFile(t, parquet.Group{"a": parquet.Int(64)}, values)
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := parquet.NewVariantReader(f.RowGroups()[0], "var")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if n := r.NumRows(); n != 1 {
+		t.Errorf("NumRows() = %d, want 1", n)
+	}
+	root := r.Root() // object cursor: every typed accessor returns nothing
+	if root.LeafType() != nil {
+		t.Errorf("LeafType() = %v on an object cursor, want nil", root.LeafType())
+	}
+	slab, offsets := root.ByteArrays()
+	flba, size := root.FixedLenByteArrays()
+	if root.Booleans() != nil || root.Int32s() != nil || root.Int64s() != nil ||
+		root.Floats() != nil || root.Doubles() != nil ||
+		slab != nil || offsets != nil || flba != nil || size != 0 {
+		t.Error("typed accessors on an object cursor returned values, want none")
 	}
 }
 

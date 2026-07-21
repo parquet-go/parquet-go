@@ -198,7 +198,7 @@ func decodePrimitive(pt PrimitiveType, data []byte) (Value, int, error) {
 }
 
 func decodeObject(m Metadata, header byte, data []byte) (Value, int, error) {
-	// Object header byte layout (see encodeObject): bits 2-3 hold
+	// Object header byte layout (see buildObjectBytes): bits 2-3 hold
 	// field_offset_size_minus_one, bits 4-5 hold field_id_size_minus_one,
 	// bit 6 holds is_large.
 	offsetSzCode := (header >> 2) & 0x03
@@ -210,7 +210,6 @@ func decodeObject(m Metadata, header byte, data []byte) (Value, int, error) {
 
 	pos := 0
 
-	// Read num_elements
 	var numElements int
 	if isLarge == 1 {
 		if len(data) < 4 {
@@ -235,7 +234,6 @@ func decodeObject(m Metadata, header byte, data []byte) (Value, int, error) {
 		return Null(), 0, fmt.Errorf("variant value: object element count %d exceeds data", numElements)
 	}
 
-	// Read field IDs
 	fieldIDs := make([]int, numElements)
 	for i := range numElements {
 		v, n, err := readUint(data[pos:], fieldIDSize)
@@ -246,7 +244,6 @@ func decodeObject(m Metadata, header byte, data []byte) (Value, int, error) {
 		pos += n
 	}
 
-	// Read offsets (numElements+1)
 	offsets := make([]int, numElements+1)
 	for i := range numElements + 1 {
 		v, n, err := readUint(data[pos:], offsetSz)
@@ -257,8 +254,8 @@ func decodeObject(m Metadata, header byte, data []byte) (Value, int, error) {
 		pos += n
 	}
 
-	// Value data starts at pos. The last offset is the total size of the
-	// value data region. Fields must NOT be sliced as [offset[i],
+	// The last offset is the total size of the value data region, which
+	// starts at pos. Fields must NOT be sliced as [offset[i],
 	// offset[i+1]) — per VariantEncoding.md, "the actual value entries do
 	// not need to be in any particular order. This implies that the
 	// field_offset values may not be monotonically increasing." (Spark
@@ -330,7 +327,6 @@ func decodeArray(m Metadata, header byte, data []byte) (Value, int, error) {
 
 	pos := 0
 
-	// Read num_elements
 	var numElements int
 	if isLarge == 1 {
 		if len(data) < 4 {
@@ -357,7 +353,6 @@ func decodeArray(m Metadata, header byte, data []byte) (Value, int, error) {
 		return Null(), 0, fmt.Errorf("variant value: array element count %d exceeds data", numElements)
 	}
 
-	// Read offsets (numElements+1)
 	offsets := make([]int, numElements+1)
 	for i := range numElements + 1 {
 		v, n, err := readUint(data[pos:], offsetSz)
@@ -368,7 +363,6 @@ func decodeArray(m Metadata, header byte, data []byte) (Value, int, error) {
 		pos += n
 	}
 
-	// Value data starts at pos
 	valueDataStart := pos
 
 	elements := make([]Value, numElements)
