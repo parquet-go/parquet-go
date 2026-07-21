@@ -1960,6 +1960,63 @@ func TestWriterMaxRowsPerRowGroup(t *testing.T) {
 	}
 }
 
+func TestWriterEncodingStatsDoNotAliasRowGroups(t *testing.T) {
+	type Row struct {
+		Value string `parquet:"value,plain"`
+	}
+
+	output := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[Row](output, parquet.PageBufferSize(64))
+
+	writeRow := func(value string) {
+		t.Helper()
+		if _, err := writer.Write([]Row{{Value: value}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for i := range 3 {
+		writeRow(strings.Repeat(string(rune('a'+i)), 128))
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	writeRow(strings.Repeat("z", 128))
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := parquet.OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.RowGroups()) != 2 {
+		t.Fatalf("wrong number of row groups: got %d, want 2", len(f.RowGroups()))
+	}
+
+	wantPages := []int{3, 1}
+	for i, rowGroup := range f.RowGroups() {
+		offsetIndex, err := rowGroup.ColumnChunks()[0].OffsetIndex()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if numPages := offsetIndex.NumPages(); numPages != wantPages[i] {
+			t.Fatalf("row group %d has %d pages, want %d", i, numPages, wantPages[i])
+		}
+
+		var dataPageCount int32
+		for _, stats := range f.Metadata().RowGroups[i].Columns[0].MetaData.EncodingStats {
+			if stats.PageType == format.DataPage || stats.PageType == format.DataPageV2 {
+				dataPageCount += stats.Count
+			}
+		}
+		if dataPageCount != int32(wantPages[i]) {
+			t.Errorf("row group %d encoding stats report %d data pages, want %d", i, dataPageCount, wantPages[i])
+		}
+	}
+}
+
 func TestSetKeyValueMetadata(t *testing.T) {
 	testKey := "test-key"
 	testValue := "test-value"
