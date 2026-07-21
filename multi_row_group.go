@@ -218,10 +218,20 @@ func (c *multiColumnChunk) OffsetIndex() (OffsetIndex, error) {
 		offsets[i+1] = offsets[i] + index.NumPages()
 	}
 
-	// Build cumulative row offsets for each chunk
+	// Build cumulative row offsets for each chunk. Use rowCounts when
+	// available (flattened chunks), otherwise fall back to rowGroups; the
+	// chunk count can exceed len(rowGroups) when merging already-merged
+	// row groups.
+	rowCounts := c.rowCounts
 	rowOffsets := make([]int64, len(c.chunks)+1)
 	for i := range c.chunks {
-		rowOffsets[i+1] = rowOffsets[i] + c.rowGroup.rowGroups[i].NumRows()
+		var numRows int64
+		if i < len(rowCounts) {
+			numRows = rowCounts[i]
+		} else {
+			numRows = c.rowGroup.rowGroups[i].NumRows()
+		}
+		rowOffsets[i+1] = rowOffsets[i] + numRows
 	}
 
 	return &multiOffsetIndex{
