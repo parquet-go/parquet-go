@@ -65,6 +65,7 @@ type shreddedTypedValue struct {
 	typ     Type                   // primitive
 	element *shreddedVariantGroup  // list
 	fields  []shreddedVariantField // object
+	index   map[string]int         // object: field name to position in fields
 }
 
 type shreddedVariantField struct {
@@ -74,10 +75,8 @@ type shreddedVariantField struct {
 
 // fieldByName returns the shredded field with the given name, or nil.
 func (t *shreddedTypedValue) fieldByName(name string) *shreddedVariantGroup {
-	for _, f := range t.fields {
-		if f.name == name {
-			return f.group
-		}
+	if i, ok := t.index[name]; ok {
+		return t.fields[i].group
 	}
 	return nil
 }
@@ -204,6 +203,13 @@ func buildShreddedTypedValue(node Node, startCol, defLevel, repDepth int) (*shre
 			// An empty object group has no columns to carry its own
 			// presence, so it cannot be reconstructed.
 			return nil, fmt.Errorf("variant: object typed_value group must have at least one field")
+		}
+		// Object field events resolve names against this map; a linear
+		// scan makes wide shredded objects quadratic per row (measurably
+		// dominant from a few dozen fields up).
+		t.index = make(map[string]int, len(t.fields))
+		for i := range t.fields {
+			t.index[t.fields[i].name] = i
 		}
 		t.numCols = col - startCol
 	}
