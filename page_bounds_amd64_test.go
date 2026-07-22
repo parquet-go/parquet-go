@@ -23,7 +23,7 @@ func TestInt64PageBoundsAVX512VectorSlots(t *testing.T) {
 	count := combinedBoundsInt64Threshold + (vectorWidth - combinedBoundsInt64Threshold%vectorWidth) + 1
 
 	t.Run("all-lanes", func(t *testing.T) {
-		for slot := 0; slot < vectorWidth; slot++ {
+		for slot := range vectorWidth {
 			values := make([]int64, count)
 			state := uint64(count) + 0x9E3779B97F4A7C15
 			for i := range values {
