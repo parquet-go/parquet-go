@@ -93,13 +93,19 @@ func (r *binaryReader) ReadFloat64() (float64, error) {
 }
 
 func (r *binaryReader) ReadBytes() ([]byte, error) {
+	return r.ReadBytesAppend(nil)
+}
+
+// ReadBytesAppend reads a length-prefixed byte sequence and appends it to b,
+// writing into b's spare capacity when the value fits and never overwriting
+// b[:len(b)]. The decoder uses it to make streaming decodes into reused
+// targets allocation free; see the reuse semantics documented on Unmarshal.
+func (r *binaryReader) ReadBytesAppend(b []byte) ([]byte, error) {
 	n, err := r.ReadLength()
 	if err != nil {
-		return nil, err
+		return b, err
 	}
-	b := make([]byte, n)
-	_, err = io.ReadFull(r.r, b)
-	if err == nil {
+	if b, err = readBytesAppend(r.r, b, n); err == nil {
 		r.n += n
 	}
 	return b, err
@@ -413,6 +419,18 @@ func (r *binaryBytesReader) Reader() io.Reader {
 	return bytes.NewReader(r.data[r.offset:])
 }
 
+// Discard advances the reader past the next n bytes, reporting how many
+// bytes were discarded. Unlike reading through Reader(), it moves the
+// reader's own offset, which skip operations rely on.
+func (r *binaryBytesReader) Discard(n int) (int, error) {
+	if remain := len(r.data) - r.offset; remain < n {
+		r.offset = len(r.data)
+		return remain, io.ErrUnexpectedEOF
+	}
+	r.offset += n
+	return n, nil
+}
+
 func (r *binaryBytesReader) ReadBool() (bool, error) {
 	b, err := r.ReadByte()
 	// Thrift protocol treats both 0 and 2 as false.
@@ -471,6 +489,15 @@ func (r *binaryBytesReader) ReadBytes() ([]byte, error) {
 	b := r.data[r.offset : r.offset+n]
 	r.offset += n
 	return b, nil
+}
+
+// ReadBytesAppend reads a length-prefixed byte sequence and appends it to b.
+// When len(b) == 0 the value is returned as an alias into the reader's input
+// buffer instead of being copied, preserving the zero-copy behavior of
+// ReadBytes.
+func (r *binaryBytesReader) ReadBytesAppend(b []byte) ([]byte, error) {
+	v, err := r.ReadBytes()
+	return appendBytesValue(b, v, err)
 }
 
 func (r *binaryBytesReader) ReadString() (string, error) {
