@@ -16,6 +16,9 @@ import (
 type GenericReader[T any] struct {
 	base Reader
 	read readFunc[T]
+	// fast, when non-nil, holds the bulk read state for struct fields
+	// storing lists of primitive values (see list_column_reader.go).
+	fast *listFastPathReader
 }
 
 // NewGenericReader is like NewReader but returns GenericReader[T] suited to write
@@ -62,6 +65,8 @@ func NewGenericReader[T any](input io.ReaderAt, options ...ReaderOption) *Generi
 
 	if !EqualNodes(c.Schema, f.schema) {
 		r.base.file.rowGroup = convertRowGroupTo(r.base.file.rowGroup, c.Schema)
+	} else {
+		r.fast = newListFastPathReader(c.Schema, r.base.file.rowGroup, t)
 	}
 
 	r.base.read.init(r.base.file.schema, r.base.file.rowGroup)
@@ -95,6 +100,8 @@ func NewGenericRowGroupReader[T any](rowGroup RowGroup, options ...ReaderOption)
 
 	if !EqualNodes(c.Schema, rowGroup.Schema()) {
 		r.base.file.rowGroup = convertRowGroupTo(r.base.file.rowGroup, c.Schema)
+	} else {
+		r.fast = newListFastPathReader(c.Schema, r.base.file.rowGroup, t)
 	}
 
 	r.base.read.init(r.base.file.schema, r.base.file.rowGroup)
@@ -134,7 +141,14 @@ func (r *GenericReader[T]) SeekToRow(rowIndex int64) error {
 }
 
 func (r *GenericReader[T]) Close() error {
-	return r.base.Close()
+	var fastErr error
+	if r.fast != nil {
+		fastErr = r.fast.Close()
+	}
+	if err := r.base.Close(); err != nil {
+		return err
+	}
+	return fastErr
 }
 
 // File returns a FileView of the underlying parquet file.
@@ -150,6 +164,9 @@ func (r *GenericReader[T]) File() FileView {
 // The method returns the number of rows read and io.EOF when no more rows
 // can be read from the reader.
 func (r *GenericReader[T]) readRows(rows []T) (int, error) {
+	if r.fast != nil {
+		return r.readRowsFast(rows)
+	}
 	nRequest := len(rows)
 	if cap(r.base.rowbuf) < nRequest {
 		r.base.rowbuf = make([]Row, nRequest)
@@ -176,6 +193,83 @@ func (r *GenericReader[T]) readRows(rows []T) (int, error) {
 			}
 		}
 		nTotal += n
+		if n == 0 || nTotal == nRequest || err != nil {
+			break
+		}
+	}
+
+	return nTotal, err
+}
+
+// readRowsFast is the bulk variant of readRows used when the schema has
+// struct fields storing lists of primitive values (see list_column_reader.go):
+// those columns are read straight from page data into the rows' slice fields,
+// while the remaining columns go through the regular row reconstruction.
+func (r *GenericReader[T]) readRowsFast(rows []T) (int, error) {
+	f := r.fast
+	nRequest := len(rows)
+	if cap(r.base.rowbuf) < nRequest {
+		r.base.rowbuf = make([]Row, nRequest)
+	} else {
+		r.base.rowbuf = r.base.rowbuf[:nRequest]
+	}
+
+	// The reader's logical position is r.base.rowIndex (updated by both this
+	// function and SeekToRow); realign the fast path readers whenever it does
+	// not match their current position.
+	if target := r.base.rowIndex; f.rowIndex != target {
+		if err := f.SeekToRow(target); err != nil {
+			return 0, err
+		}
+	}
+
+	schema := r.base.Schema()
+	rowsValue := reflect.ValueOf(rows)
+	var nTotal int
+	var err error
+
+	for {
+		var n int
+		if f.allDetached {
+			// Every column is read by the fast path: there are no rows to
+			// read from the regular pipeline, the number of rows is derived
+			// from the row group.
+			n = nRequest - nTotal
+			if remain := f.numRows - f.rowIndex; int64(n) > remain {
+				n = int(remain)
+			}
+			if n == 0 {
+				err = io.EOF
+			}
+		} else {
+			n, err = f.baseRows().ReadRows(r.base.rowbuf[:nRequest-nTotal])
+			for i, row := range r.base.rowbuf[:n] {
+				if err2 := schema.Reconstruct(&rows[nTotal+i], row); err2 != nil {
+					// Rows of this batch are incomplete: their list fields
+					// have not been assembled yet, only report the rows of
+					// the batches completed before the error.
+					f.invalidate()
+					return nTotal, err2
+				}
+			}
+		}
+
+		if n > 0 {
+			batch := nTotal
+			rowOf := func(i int) reflect.Value { return rowsValue.Index(batch + i) }
+			for c := range f.columns {
+				col := &f.columns[c]
+				if err2 := col.reader.readLists(n); err2 != nil {
+					f.invalidate()
+					return nTotal, err2
+				}
+				col.setRowSlices(rowOf, n)
+			}
+		}
+
+		nTotal += n
+		f.rowIndex += int64(n)
+		r.base.rowIndex = f.rowIndex
 		if n == 0 || nTotal == nRequest || err != nil {
 			break
 		}

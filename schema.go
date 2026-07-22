@@ -397,6 +397,10 @@ func (s *Schema) Reconstruct(value any, row Row) error {
 	state := s.lazyLoadState()
 	funcs := s.lazyLoadFuncs()
 	columns := b.reserve(len(state.columns))
+	// The buffer is pooled: clear stale column values from previous calls so
+	// that columns without values in this row (e.g. columns read outside of
+	// the row pipeline by the list fast path) are seen as empty.
+	clear(columns)
 	row.Range(func(columnIndex int, columnValues []Value) bool {
 		if columnIndex < len(columns) {
 			columns[columnIndex] = columnValues

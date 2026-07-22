@@ -397,6 +397,7 @@ func errPageBoundsOutOfRange(i, j, n int64) error {
 var (
 	_ Page       = (*optionalPage)(nil)
 	_ Page       = (*repeatedPage)(nil)
+	_ Page       = (*fixedRepeatedPage)(nil)
 	_ Page       = (*booleanPage)(nil)
 	_ Page       = (*int32Page)(nil)
 	_ Page       = (*int64Page)(nil)
