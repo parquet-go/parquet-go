@@ -748,31 +748,50 @@ func (c *Column) decodeDataPageV1(header DataPageHeaderV1, page *buffer[byte], d
 		numValues        = int(header.NumValues())
 		repetitionLevels *buffer[byte]
 		definitionLevels *buffer[byte]
+		fixedListLength  = 0
 	)
 
-	if c.maxRepetitionLevel > 0 {
-		encoding := lookupLevelEncoding(header.RepetitionLevelEncoding(), c.maxRepetitionLevel)
-		repetitionLevels, pageData, err = decodeLevelsV1(encoding, numValues, pageData)
-		if err != nil {
-			return nil, fmt.Errorf("decoding repetition levels of data page v1: %w", err)
+	// Fast path: if the encoded level streams show that the page contains
+	// only complete lists of the same length with no nulls, skip decoding
+	// the levels entirely and compute row boundaries arithmetically.
+	if fixedListFastPathEnabled && c.maxRepetitionLevel == 1 &&
+		header.RepetitionLevelEncoding() == format.RLE &&
+		header.DefinitionLevelEncoding() == format.RLE {
+		if repData, rest, err := splitLevelsV1(pageData); err == nil {
+			if defData, rest, err := splitLevelsV1(rest); err == nil {
+				if n, ok := detectFixedList(repData, defData, numValues, c.maxDefinitionLevel); ok {
+					fixedListLength = n
+					pageData = rest
+				}
+			}
 		}
-		defer repetitionLevels.unref()
 	}
 
-	if c.maxDefinitionLevel > 0 {
-		encoding := lookupLevelEncoding(header.DefinitionLevelEncoding(), c.maxDefinitionLevel)
-		definitionLevels, pageData, err = decodeLevelsV1(encoding, numValues, pageData)
-		if err != nil {
-			return nil, fmt.Errorf("decoding definition levels of data page v1: %w", err)
+	if fixedListLength == 0 {
+		if c.maxRepetitionLevel > 0 {
+			encoding := lookupLevelEncoding(header.RepetitionLevelEncoding(), c.maxRepetitionLevel)
+			repetitionLevels, pageData, err = decodeLevelsV1(encoding, numValues, pageData)
+			if err != nil {
+				return nil, fmt.Errorf("decoding repetition levels of data page v1: %w", err)
+			}
+			defer repetitionLevels.unref()
 		}
-		defer definitionLevels.unref()
 
-		// Data pages v1 did not embed the number of null values,
-		// so we have to compute it from the definition levels.
-		numValues -= countLevelsNotEqual(definitionLevels.data.Slice(), c.maxDefinitionLevel)
+		if c.maxDefinitionLevel > 0 {
+			encoding := lookupLevelEncoding(header.DefinitionLevelEncoding(), c.maxDefinitionLevel)
+			definitionLevels, pageData, err = decodeLevelsV1(encoding, numValues, pageData)
+			if err != nil {
+				return nil, fmt.Errorf("decoding definition levels of data page v1: %w", err)
+			}
+			defer definitionLevels.unref()
+
+			// Data pages v1 did not embed the number of null values,
+			// so we have to compute it from the definition levels.
+			numValues -= countLevelsNotEqual(definitionLevels.data.Slice(), c.maxDefinitionLevel)
+		}
 	}
 
-	return c.decodeDataPage(header, numValues, repetitionLevels, definitionLevels, page, pageData, dict)
+	return c.decodeDataPage(header, numValues, fixedListLength, repetitionLevels, definitionLevels, page, pageData, dict)
 }
 
 // DecodeDataPageV2 decodes a data page from the header, compressed data, and
@@ -788,8 +807,30 @@ func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], d
 
 	var repetitionLevels *buffer[byte]
 	var definitionLevels *buffer[byte]
+	fixedListLength := 0
 
-	if length := header.RepetitionLevelsByteLength(); length > 0 {
+	// Fast path: if the encoded level streams show that the page contains
+	// only complete lists of the same length with no nulls, skip decoding
+	// the levels entirely and compute row boundaries arithmetically.
+	if repLength, defLength := header.RepetitionLevelsByteLength(), header.DefinitionLevelsByteLength(); fixedListFastPathEnabled &&
+		c.maxRepetitionLevel == 1 && c.maxDefinitionLevel > 0 &&
+		header.NumNulls() == 0 && repLength > 0 && defLength > 0 &&
+		(repLength+defLength) <= int64(len(pageData)) {
+		repData := pageData[:repLength]
+		defData := pageData[repLength : repLength+defLength]
+		if n, ok := detectFixedList(repData, defData, numValues, c.maxDefinitionLevel); ok {
+			// Data pages v2 embed the number of rows, use it to cross check
+			// the detected list length.
+			if int64(numValues/n) == header.NumRows() {
+				fixedListLength = n
+				pageData = pageData[repLength+defLength:]
+			}
+		}
+	}
+
+	if fixedListLength > 0 {
+		// Levels were validated without being decoded.
+	} else if length := header.RepetitionLevelsByteLength(); length > 0 {
 		if c.maxRepetitionLevel == 0 {
 			// In some cases we've observed files which have a non-zero
 			// repetition level despite the column not being repeated
@@ -815,7 +856,7 @@ func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], d
 		}
 	}
 
-	if length := header.DefinitionLevelsByteLength(); length > 0 {
+	if length := header.DefinitionLevelsByteLength(); fixedListLength == 0 && length > 0 {
 		if c.maxDefinitionLevel == 0 {
 			pageData, err = skipLevelsV2(pageData, length)
 		} else {
@@ -839,10 +880,10 @@ func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], d
 	}
 
 	numValues -= int(header.NumNulls())
-	return c.decodeDataPage(header, numValues, repetitionLevels, definitionLevels, page, pageData, dict)
+	return c.decodeDataPage(header, numValues, fixedListLength, repetitionLevels, definitionLevels, page, pageData, dict)
 }
 
-func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetitionLevels, definitionLevels, page *buffer[byte], data []byte, dict Dictionary) (Page, error) {
+func (c *Column) decodeDataPage(header DataPageHeader, numValues, fixedListLength int, repetitionLevels, definitionLevels, page *buffer[byte], data []byte, dict Dictionary) (Page, error) {
 	pageEncoding := LookupEncoding(header.Encoding())
 	pageType := c.Type()
 	pageKind := pageType.Kind()
@@ -891,6 +932,12 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 
 	newPage := pageType.NewPage(c.Index(), numValues, values)
 	switch {
+	case fixedListLength > 0:
+		newPage = newFixedRepeatedPage(
+			newPage,
+			fixedListLength,
+			c.maxDefinitionLevel,
+		)
 	case c.maxRepetitionLevel > 0:
 		newPage = newRepeatedPage(
 			newPage,
@@ -921,6 +968,20 @@ func decodeLevelsV1(enc encoding.Encoding, numValues int, data []byte) (*buffer[
 	}
 	levels, err := decodeLevels(enc, numValues, data[i:j])
 	return levels, data[j:], err
+}
+
+// splitLevelsV1 slices the length-prefixed level section at the beginning of
+// a data page v1 without decoding it, returning the encoded level stream and
+// the remainder of the page.
+func splitLevelsV1(data []byte) (levels, rest []byte, err error) {
+	if len(data) < 4 {
+		return nil, data, io.ErrUnexpectedEOF
+	}
+	j := 4 + int(binary.LittleEndian.Uint32(data))
+	if j < 4 || j > len(data) {
+		return nil, data, io.ErrUnexpectedEOF
+	}
+	return data[4:j], data[j:], nil
 }
 
 func decodeLevelsV2(enc encoding.Encoding, numValues int, data []byte, length int64) (*buffer[byte], []byte, error) {
