@@ -52,10 +52,7 @@ func (w *Writer) columnOrientedRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool)
 		return nil, false
 	}
 	for _, col := range columns {
-		switch col.(type) {
-		case *FileColumnChunk:
-		case ColumnBuffer:
-		default:
+		if !columnOrientedChunk(col) {
 			return nil, false
 		}
 	}
@@ -63,6 +60,22 @@ func (w *Writer) columnOrientedRowGroup(rowGroup RowGroup) ([]ColumnChunk, bool)
 		return nil, false
 	}
 	return columns, true
+}
+
+// columnOrientedChunk reports whether a column chunk can be read column-wise
+// while preserving row order: file-backed chunks, in-memory column buffers,
+// and row-range views over either.
+func columnOrientedChunk(col ColumnChunk) bool {
+	switch c := col.(type) {
+	case *FileColumnChunk:
+		return true
+	case ColumnBuffer:
+		return true
+	case *rangeColumnChunk:
+		return columnOrientedChunk(c.base)
+	default:
+		return false
+	}
 }
 
 // reencodableRowGroup reports whether rowGroup can be written via the L3
@@ -157,17 +170,25 @@ func (w *Writer) packSegmentsByColumn(segments []RowGroup, schema *Schema, sorti
 }
 
 // configureBloomFiltersForSegments sizes each column's bloom filter for the
-// total number of values across all segments being packed together.
+// total number of values across all segments being packed together. Columns
+// whose value count is only an upper bound (row-range views of repeated
+// columns) are left unallocated so flushFilterPages sizes the filter from the
+// number of values actually written.
 func (w *Writer) configureBloomFiltersForSegments(segments []RowGroup) {
 	for i, c := range w.writer.currentRowGroup.columns {
 		if c.columnFilter == nil {
 			continue
 		}
-		var total int64
+		total := int64(0)
+		exact := true
 		for _, seg := range segments {
-			total += seg.ColumnChunks()[i].NumValues()
+			chunk := seg.ColumnChunks()[i]
+			exact = exact && chunkNumValuesIsExact(chunk)
+			total += chunk.NumValues()
 		}
-		c.resizeBloomFilter(total)
+		if exact {
+			c.resizeBloomFilter(total)
+		}
 	}
 }
 

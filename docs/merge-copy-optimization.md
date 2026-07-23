@@ -415,3 +415,39 @@ workload, but its benefit is workload-dependent and its peak memory scales with
 the worker count (decompressed column working sets held concurrently). It was
 left out for now to keep L3 simple and allocation-light; it can be added later as
 an opt-in `WriterConfig` knob if a concrete workload justifies it.
+
+### Row-range overlap refinement (DONE)
+
+Overlap was previously classified at whole-row-group granularity: one row of
+overlap condemned both row groups to the row-by-row merge in full. Overlapping
+segments are now refined (`merge_refine.go`) with a key-space sweep over the
+exact row group bounds: stretches covered by a single row group are sliced off
+as **row-range views** (`row_range.go`) that stream through the column-oriented
+write paths, leaving only the truly overlapping stretches for the loser-tree
+merge.
+
+Key design points:
+
+- **Lone-only cuts.** Cuts are only applied to the row group that is alone in a
+  stretch of key space, validated against the exact bounds of the others.
+  Page-granular cuts of *different* row groups at one nominal key land at
+  different actual keys and could reorder rows across regions; lone-only cuts
+  guarantee region concatenation preserves sorted order.
+- **Page-granular planning.** Cut positions come from the first sorting
+  column's column/offset indexes (descending-aware); no page is decoded during
+  planning. Missing indexes or null pages disable slicing for that row group
+  only. Lone stretches under 1024 rows stay merged (`minStreamedRegionRows`).
+- **Contract.** Sorted output, per-source row order, same multiset. The
+  interleaving of equal keys across row groups may differ from the unrefined
+  merge (it already differs between merge arities), so refinement is skipped
+  under `DropDuplicatedRows`, where tie order decides which duplicate survives.
+- **Exact bloom filters without demotion.** Range views of repeated columns
+  only know an upper bound of their value count; the writer skips filter
+  preallocation for inexact counts and lets `flushFilterPages` build the filter
+  post hoc from the values actually written.
+
+Benchmarks (8 files × 20k rows, ~2% boundary overlap chain, 4KB source pages):
+write 22.9ms → 11.6ms (**~1.9×**, 2.5× less memory); read 11.4ms → 9.5ms
+(~1.2× — the loser-tree run detection already made disjoint merging cheap;
+the write side gains more because streamed regions skip row assembly
+entirely). Full-overlap and sliver-heavy workloads are unchanged.
