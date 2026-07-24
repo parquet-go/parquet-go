@@ -385,14 +385,7 @@ func (s *Schema) Reconstruct(value any, row Row) error {
 		v = v.Elem()
 	}
 
-	b := valuesSliceBufferPool.Get(
-		func() *valuesSliceBuffer {
-			return &valuesSliceBuffer{
-				values: make([][]Value, 0, 64),
-			}
-		},
-		func(v *valuesSliceBuffer) { v.values = v.values[:0] },
-	)
+	b := acquireValuesSliceBuffer()
 
 	state := s.lazyLoadState()
 	funcs := s.lazyLoadFuncs()
@@ -431,6 +424,17 @@ func (v *valuesSliceBuffer) release() {
 }
 
 var valuesSliceBufferPool memory.Pool[valuesSliceBuffer]
+
+func acquireValuesSliceBuffer() *valuesSliceBuffer {
+	return valuesSliceBufferPool.Get(
+		func() *valuesSliceBuffer {
+			return &valuesSliceBuffer{
+				values: make([][]Value, 0, 64),
+			}
+		},
+		func(v *valuesSliceBuffer) { v.values = v.values[:0] },
+	)
+}
 
 // Lookup returns the leaf column at the given path.
 //
