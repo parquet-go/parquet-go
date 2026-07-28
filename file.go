@@ -1084,6 +1084,12 @@ type FilePages struct {
 	protocol thrift.CompactProtocol
 	decoder  thrift.Decoder
 
+	// header is the decode target reused across pages by ReadPage; see the
+	// comment there for why the reuse is safe. readDictionary is excluded
+	// from the reuse because it can run (through the readDataPage* helpers)
+	// while a header decoded by ReadPage is still in use.
+	header format.PageHeader
+
 	baseOffset int64
 	dataOffset int64
 	dictOffset int64
@@ -1208,19 +1214,21 @@ func (f *FilePages) ReadPage() (Page, error) {
 				continue
 			}
 		} else {
-			// Instantiate a new format.PageHeader for each page.
+			// Decode into a page header owned by this FilePages and reused
+			// across pages, so that steady-state page reads do not allocate:
+			// the struct itself is retained, and the streaming thrift decoder
+			// reuses the capacity of its statistics byte slices.
 			//
-			// A previous implementation reused page headers to save allocations.
-			// https://github.com/segmentio/parquet-go/pull/484
-			// The optimization turned out to be less effective than expected,
-			// because all the values referenced by pointers in the page header
-			// are lost when the header is reset and put back in the pool.
-			// https://github.com/parquet-go/parquet-go/pull/11
-			//
-			// Even after being reset, reusing page headers still produced instability
-			// issues.
-			// https://github.com/parquet-go/parquet-go/issues/70
-			header = new(format.PageHeader)
+			// An earlier reuse attempt shared pooled headers with pointer
+			// sub-headers across consumers and was reverted
+			// (segmentio/parquet-go#484, parquet-go#11, parquet-go#70).
+			// Neither hazard exists here: the sub-headers are inline
+			// thrift.Null values, the header is owned by a single FilePages
+			// (which is not safe for concurrent use), and it does not escape
+			// ReadPage — the decode helpers only read scalar fields from it,
+			// and the returned Page retains nothing from the header.
+			f.header.Reset()
+			header = &f.header
 			if err = f.decoder.Decode(header); err != nil {
 				return nil, err
 			}

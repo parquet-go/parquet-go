@@ -82,6 +82,12 @@ func (d *debugReader) ReadBytes() ([]byte, error) {
 	return v, err
 }
 
+func (d *debugReader) ReadBytesAppend(b []byte) ([]byte, error) {
+	v, err := d.r.ReadBytesAppend(b)
+	d.log("ReadBytesAppend", v, err)
+	return v, err
+}
+
 func (d *debugReader) ReadString() (string, error) {
 	v, err := d.r.ReadString()
 	d.log("ReadString", v, err)
@@ -126,6 +132,16 @@ func (d *debugReader) ReadMap() (Map, error) {
 
 func (d *debugReader) BytesRead() int {
 	return d.r.BytesRead()
+}
+
+// Discard forwards discards to the wrapped reader. Without it, a
+// debug-wrapped bytes-backed reader would fall through to a throwaway
+// Reader() view and the discard would not advance the wrapped reader's
+// offset, silently desynchronizing the stream.
+func (d *debugReader) Discard(n int) (int, error) {
+	v, err := discard(d.r, n)
+	d.log("Discard", v, err)
+	return v, err
 }
 
 type debugWriter struct {

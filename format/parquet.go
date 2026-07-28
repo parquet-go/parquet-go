@@ -1143,15 +1143,22 @@ type RowGroup struct {
 	Ordinal int16 `thrift:"7,optional,writezero"`
 }
 
+// Reset clears r in place, retaining allocated capacity for reuse. Elements
+// of the retained slices are recursively cleared so that values from a
+// previous thrift decode cannot leak into the next one (the decoder only
+// writes fields present in its input).
 func (r *RowGroup) Reset() {
-	r.FileOffset = 0
-	r.NumRows = 0
-	r.TotalByteSize = 0
-	r.SortingColumns = r.SortingColumns[:0]
+	for i := range r.Columns {
+		r.Columns[i].Reset()
+	}
 	r.Columns = r.Columns[:0]
-	r.Ordinal = 0
 	r.TotalByteSize = 0
+	r.NumRows = 0
+	clear(r.SortingColumns)
+	r.SortingColumns = r.SortingColumns[:0]
+	r.FileOffset = 0
 	r.TotalCompressedSize = 0
+	r.Ordinal = 0
 }
 
 // Empty struct to signal the order defined by the physical or logical type.

@@ -1,6 +1,7 @@
 package thrift_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/deprecated"
@@ -45,10 +46,11 @@ func BenchmarkDecodeSchemaElement(b *testing.B) {
 	}
 }
 
-// BenchmarkDecodePageHeader benchmarks decoding of PageHeader.
-// PageHeader is decoded for every page, making it high impact.
-func BenchmarkDecodePageHeader(b *testing.B) {
-	header := format.PageHeader{
+// benchPageHeader returns the encoded form of a representative data page
+// header, shared by the page header decoding benchmarks.
+func benchPageHeader(b *testing.B, protocol thrift.Protocol) []byte {
+	b.Helper()
+	data, err := thrift.Marshal(protocol, format.PageHeader{
 		Type:                 format.DataPage,
 		UncompressedPageSize: 4096,
 		CompressedPageSize:   2048,
@@ -68,19 +70,47 @@ func BenchmarkDecodePageHeader(b *testing.B) {
 			},
 			Valid: true,
 		},
-	}
-
-	protocol := &thrift.CompactProtocol{}
-	data, err := thrift.Marshal(protocol, header)
+	})
 	if err != nil {
 		b.Fatal(err)
 	}
+	return data
+}
+
+// BenchmarkDecodePageHeader benchmarks decoding of PageHeader.
+// PageHeader is decoded for every page, making it high impact.
+func BenchmarkDecodePageHeader(b *testing.B) {
+	protocol := &thrift.CompactProtocol{}
+	data := benchPageHeader(b, protocol)
 
 	b.ReportAllocs()
 
 	for b.Loop() {
 		var decoded format.PageHeader
 		if err := thrift.Unmarshal(protocol, data, &decoded); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkDecodePageHeaderReused benchmarks the zero-allocation page header
+// decode path used by parquet.FilePages: a streaming reader decoding into a
+// reused header that is Reset between decodes, so that the header struct and
+// the capacity of its statistics byte slices are retained across pages.
+func BenchmarkDecodePageHeaderReused(b *testing.B) {
+	protocol := &thrift.CompactProtocol{}
+	data := benchPageHeader(b, protocol)
+
+	rd := bytes.NewReader(data)
+	decoder := thrift.NewDecoder(protocol.NewReader(rd))
+	decoded := new(format.PageHeader)
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		rd.Reset(data)
+		decoded.Reset()
+		if err := decoder.Decode(decoded); err != nil {
 			b.Fatal(err)
 		}
 	}
