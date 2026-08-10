@@ -221,9 +221,12 @@ physical hosts across stop/start cycles, so only same-boot ratios are valid):
 | rle detector | 476ns | 654ns | +37% |
 
 Broadcast now beats the assembly at large sizes and Count matches it in the
-memory-bound regime. Still open: Broadcast tiny sizes (scalar path lacks the
-asm's 8-byte IMUL splat trick), Count in the L2-resident regime, rle
-detector's last +37% (movemask-to-GPR transfers per group are the suspect).
+memory-bound regime. The asm's 8-byte splat trick for small sizes ports to
+pure Go directly (`0x0101010101010101 * uint64(src)` + `PutUint64` stores
+with an overlapping tail): Broadcast/size=10 went from 7.0ns to 2.6ns, vs
+1.9ns for asm — the remaining ~0.7ns is dispatch/prologue overhead. Still
+open: Count in the L2-resident regime (+36%), rle detector's last +37%
+(movemask-to-GPR transfers per group are the suspect).
 
 Lessons from the tuning rounds (all confirmed by pprof + objdump on the VM):
 
