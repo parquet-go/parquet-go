@@ -224,9 +224,22 @@ Broadcast now beats the assembly at large sizes and Count matches it in the
 memory-bound regime. The asm's 8-byte splat trick for small sizes ports to
 pure Go directly (`0x0101010101010101 * uint64(src)` + `PutUint64` stores
 with an overlapping tail): Broadcast/size=10 went from 7.0ns to 2.6ns, vs
-1.9ns for asm — the remaining ~0.7ns is dispatch/prologue overhead. Still
-open: Count in the L2-resident regime (+36%), rle detector's last +37%
-(movemask-to-GPR transfers per group are the suspect).
+1.9ns for asm — the remaining ~0.7ns is dispatch/prologue overhead.
+
+Count deep-dive: `d = d[256:]` loop control costs ~8 scalar ops per
+iteration (dual len/cap updates plus a branchless clamp of the pointer
+advance — Go refuses to materialize a past-the-end pointer for an empty
+result). Ranging over `unsafecast.Slice[[256]uint8](d)` reduces control to
+inc/cmp/branch and took 256KiB from +36% to +21% (2MB stays at parity).
+The final ~20% at cache-resident sizes is upstream compiler codegen, visible
+in binutils objdump: (a) the four chunk loads each materialize their own
+base register per iteration instead of one base with folded 64/128/192
+displacements — archsimd intrinsics lack the addressing-mode folding of
+ordinary loads; (b) a spilled byte value is reloaded from the stack every
+iteration. Not fixable from source; report upstream with the ShiftAll bug.
+
+Still open: rle detector's last +37% (movemask-to-GPR transfers per group
+are the suspect).
 
 Lessons from the tuning rounds (all confirmed by pprof + objdump on the VM):
 
