@@ -164,6 +164,32 @@ AVX-512 Count path that Rosetta cannot.
 | Count/256KiB | 1.60µs | 2.99µs | +87% |
 | rle run detector | 429ns | 927ns | +116% |
 
+### GOAMD64 matters as much as the code
+
+The table above was measured at the default GOAMD64=v1. At that level,
+`math/bits.OnesCount*` is not a bare POPCNT: the compiler emits a load of
+`runtime.x86HasPOPCNT`, a test-and-branch, and keeps a fallback CALL to
+`math/bits.OnesCount64` in the loop body — which forces register
+spills/reloads around every popcount. Rebuilding both modes with
+**GOAMD64=v4** (Emerald Rapids, n=10):
+
+| Benchmark | asm v4 | archsimd v4 | delta | (delta at v1) |
+|---|---|---|---|---|
+| BlockInsert | 1.80ns | 1.81ns | +0.7% | +7% |
+| BlockCheck | 1.65ns | 1.40ns | **-15.5%** | +9% |
+| FilterInsert | 2.22ns | 2.45ns | +10.5% | +14% |
+| FilterCheck | 2.08ns | 2.20ns | +5.8% | +14% |
+| FilterInsertBulk | 15.9ns | 16.8ns | +5.9% | +19% |
+| Count/256KiB | 1.68µs | 1.98µs | +17.8% | +87% |
+| Broadcast/10KB | 47.8ns | 84.9ns | +77% | +92% |
+| RLE detector | 381ns | 779ns | +104% | +116% |
+
+Bloom reaches parity (geomean +1%, BlockCheck faster than asm) and Count's
+gap collapses to +18%. Broadcast and the RLE detector don't use popcount and
+keep their gap: it comes from per-iteration bounds checks and slice-header
+updates around loops whose body is 1-2 vector instructions. Conclusion:
+benchmark and ship the GOEXPERIMENT=simd path with GOAMD64=v3/v4.
+
 Lessons from the tuning rounds (all confirmed by pprof + objdump on the VM):
 
 1. **Avoid `ShiftAll*` with a scalar count.** Go 1.26 materializes the count
