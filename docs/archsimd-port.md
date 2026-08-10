@@ -138,6 +138,13 @@ Done (Tier 1, 2026-08-10):
   plus `broadcastValueInt32`/`writePointersBE128` carried over —
   column_buffer_simd_amd64.go, value_simd_amd64.go, tests in
   simd_amd64_test.go
+- **memsetValues is deliberately NOT SIMD**: Value contains a pointer, and
+  the assembly version stores it with raw vector writes that bypass GC write
+  barriers — a latent use-after-free hazard if the pointee's only other
+  reference goes away during a concurrent mark. The simd build uses a
+  doubling `copy` instead (typedslicecopy = one bulk barrier pass + memmove,
+  ~65GB/s). The default build still ships the unsafe assembly
+  (`memsetValuesAVX2`); consider retiring it independently of this effort.
 - `encoding/rle`: run detector `encodeInt32IndexEqual8ContiguousSIMD`,
   injected through the existing function-pointer dispatch by a later-ordered
   init — rle_simd_amd64.go (no tag changes needed; the blocked BMI2 kernels

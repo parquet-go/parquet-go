@@ -38,3 +38,12 @@ func TestMemsetValuesSimd(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkMemsetValues(b *testing.B) {
+	model := makeValueBytes(ByteArray, []byte("0123456789"))
+	values := make([]Value, 1024)
+	b.SetBytes(int64(len(values) * 24))
+	for i := 0; i < b.N; i++ {
+		memsetValues(values, model)
+	}
+}
