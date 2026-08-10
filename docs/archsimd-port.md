@@ -190,6 +190,41 @@ keep their gap: it comes from per-iteration bounds checks and slice-header
 updates around loops whose body is 1-2 vector instructions. Conclusion:
 benchmark and ship the GOEXPERIMENT=simd path with GOAMD64=v3/v4.
 
+### Bounds-check elimination and amortization round
+
+Two composable techniques closed most of the remaining gap (numbers at
+GOAMD64=v4, same boot as their asm baseline — note the VM lands on different
+physical hosts across stop/start cycles, so only same-boot ratios are valid):
+
+- **Array-pointer chunking**: `c := (*[256]uint8)(d)` carries one provable
+  check per chunk; constant-bounds subslices (`c[64:128]`) then compile with
+  zero checks (verified with `-d=ssa/check_bce/debug=1`). This also turns
+  indexed addressing into constant offsets. Needed because the prove pass
+  does NOT derive `words[n+3]` safety from `n+4 <= len(words)` — the naive
+  unroll kept 4 bounds checks + 4 shift/add address computations per
+  iteration.
+- **Wider iterations**: Broadcast 256B/iter, Count 256B (AVX-512) and 128B
+  (AVX2) per iter, rle detector 4 groups/iter with a single-branch
+  "any uniform" test (`(e+1)&0x100` carry trick — note the naive
+  `e0&e1&e2&e3` test is WRONG, it loses uniform groups).
+- **Rotate-compare** in the rle detector: uniform ⇔ `w == w.Permute(rot1)`,
+  replacing the memory→GPR→vector broadcast of the first element.
+
+| Benchmark | asm v4 | archsimd v4 | delta |
+|---|---|---|---|
+| Broadcast/1KB | 12.1ns | 7.9ns | **-35%** |
+| Broadcast/10KB | 69.8ns | 53.8ns | **-23%** |
+| Broadcast/100B | 2.44ns | 2.78ns | +14% |
+| Count/2MiB | 20.2µs | 19.5µs | **-4%** |
+| Count/4KiB | 25.5ns | 29.4ns | +15% |
+| Count/256KiB | 1.81µs | 2.45µs | +36% |
+| rle detector | 476ns | 654ns | +37% |
+
+Broadcast now beats the assembly at large sizes and Count matches it in the
+memory-bound regime. Still open: Broadcast tiny sizes (scalar path lacks the
+asm's 8-byte IMUL splat trick), Count in the L2-resident regime, rle
+detector's last +37% (movemask-to-GPR transfers per group are the suspect).
+
 Lessons from the tuning rounds (all confirmed by pprof + objdump on the VM):
 
 1. **Avoid `ShiftAll*` with a scalar count.** Go 1.26 materializes the count
