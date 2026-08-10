@@ -146,8 +146,48 @@ Done (Tier 1, 2026-08-10):
 Validation: both GOARCH=amd64 builds (with and without GOEXPERIMENT=simd)
 compile; affected package tests pass in both modes, run under Rosetta 2 which
 exposes AVX2 (not AVX-512), so the AVX2 paths execute for real on the arm64
-dev machine. First benchmark signal (Rosetta, indicative only): archsimd
-bloom block ops ~0.6x asm throughput — needs profiling on native x86.
+dev machine. All tests also pass on native x86 with full AVX-512
+(GCP c4-standard-8, Xeon Platinum 8581C Emerald Rapids), which exercises the
+AVX-512 Count path that Rosetta cannot.
+
+### Benchmarks: assembly vs archsimd (c4-standard-8, Emerald Rapids, n=10)
+
+| Benchmark | asm | archsimd | delta |
+|---|---|---|---|
+| BlockInsert | 1.96ns | 2.10ns | +7% |
+| BlockCheck | 1.80ns | 1.97ns | +9% |
+| FilterInsert | 2.40ns | 2.72ns | +14% |
+| FilterCheck | 2.24ns | 2.56ns | +14% |
+| FilterInsertBulk | 16.6ns | 19.6ns | +19% |
+| Broadcast/100B | 2.22ns | 2.39ns | +8% |
+| Broadcast/10KB | 55.6ns | 106.5ns | +92% |
+| Count/256KiB | 1.60µs | 2.99µs | +87% |
+| rle run detector | 429ns | 927ns | +116% |
+
+Lessons from the tuning rounds (all confirmed by pprof + objdump on the VM):
+
+1. **Avoid `ShiftAll*` with a scalar count.** Go 1.26 materializes the count
+   with a legacy (non-VEX) `MOVQ`, and mixing legacy SSE into 256-bit VEX
+   code triggers an AVX/SSE state-transition penalty on every call — the
+   bloom kernels were **65x slower** until switched to the per-lane
+   `ShiftLeft`/`ShiftRight` with a constant vector loaded from memory.
+   Worth reporting upstream to the Go project.
+2. **Iterate with shrinking slices** (`d = d[256:]` with constant-offset
+   loads) instead of `Load...Slice(data[i:])` — re-sliced loads rebuild
+   slice headers and bounds logic per iteration (~2x on Count).
+3. **Don't round-trip vector lanes through stack arrays** in hot loops;
+   store-to-load forwarding stalls made a "vectorized" 4-way hash slower
+   than the scalar one.
+4. Remaining gaps (Count ~1.9x, Broadcast/10KB ~1.9x, rle detector ~2.2x)
+   are scalar loop-overhead the compiler doesn't yet eliminate around the
+   intrinsics — acceptable for an experiment, revisit as the toolchain
+   matures.
+
+Benchmark infra: GCP instance `parquet-archsimd-bench` (c4-standard-8,
+us-central1-b, project achille-demo-test), currently **stopped** — restart
+with `gcloud compute instances start parquet-archsimd-bench
+--project=achille-demo-test --zone=us-central1-b`; it has Go 1.26.5 in
+/usr/local/go and the repo cloned at ~/parquet-go.
 
 ## Suggested execution order
 
