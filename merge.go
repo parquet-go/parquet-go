@@ -84,18 +84,38 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 	dropDuplicatedRows := config.Sorting.DropDuplicatedRows
 
 	// Optimization: detect non-overlapping row groups and create segments
+	makeMerged := func(rowGroups []RowGroup) RowGroup {
+		merged := &mergedRowGroup{
+			compare:            mergedCompare,
+			dropDuplicatedRows: dropDuplicatedRows,
+		}
+		merged.init(schema, mergedSortingColumns, rowGroups)
+		return merged
+	}
+
 	rowGroupSegments := make([]RowGroup, 0)
 	for segment := range overlappingRowGroups(mergedRowGroups, schema, mergedSortingColumns, mergedCompare) {
 		if len(segment) == 1 {
-			rowGroupSegments = append(rowGroupSegments, segment[0])
-		} else {
-			merged := &mergedRowGroup{
-				compare:            mergedCompare,
-				dropDuplicatedRows: dropDuplicatedRows,
-			}
-			merged.init(schema, mergedSortingColumns, segment)
-			rowGroupSegments = append(rowGroupSegments, merged)
+			rowGroupSegments = append(rowGroupSegments, segment[0].rowGroup)
+			continue
 		}
+		// Refine partially overlapping segments: stretches of key space
+		// covered by a single row group are sliced off as row-range views,
+		// leaving only the truly overlapping stretches for the merge. Not
+		// applied when dropping duplicated rows: which physical row of an
+		// equal-key run survives depends on the interleaving of ties across
+		// row groups, which refinement does not preserve.
+		if !dropDuplicatedRows && !disableMergeRefinement {
+			if refined := refineSegment(newRefineTargets(segment, schema, mergedSortingColumns), mergedCompare, makeMerged); refined != nil {
+				rowGroupSegments = append(rowGroupSegments, refined...)
+				continue
+			}
+		}
+		rowGroups := make([]RowGroup, len(segment))
+		for i := range segment {
+			rowGroups[i] = segment[i].rowGroup
+		}
+		rowGroupSegments = append(rowGroupSegments, makeMerged(rowGroups))
 	}
 
 	if len(rowGroupSegments) == 1 {
@@ -120,18 +140,20 @@ func MergeRowGroups(rowGroups []RowGroup, options ...RowGroupOption) (RowGroup, 
 	}, nil
 }
 
+// rowGroupRange associates a row group with the bounds of its sorting columns
+// (nil when the bounds could not be determined).
+type rowGroupRange struct {
+	rowGroup RowGroup
+	minRow   Row
+	maxRow   Row
+}
+
 // overlappingRowGroups analyzes row groups to find non-overlapping segments
 // Returns groups of row groups where each group either:
 // 1. Contains a single non-overlapping row group (can be concatenated)
 // 2. Contains multiple overlapping row groups (need to be merged)
-func overlappingRowGroups(rowGroups []RowGroup, schema *Schema, sorting []SortingColumn, compare func(Row, Row) int) iter.Seq[[]RowGroup] {
-	return func(yield func([]RowGroup) bool) {
-		type rowGroupRange struct {
-			rowGroup RowGroup
-			minRow   Row
-			maxRow   Row
-		}
-
+func overlappingRowGroups(rowGroups []RowGroup, schema *Schema, sorting []SortingColumn, compare func(Row, Row) int) iter.Seq[[]rowGroupRange] {
+	return func(yield func([]rowGroupRange) bool) {
 		rowGroupRanges := make([]rowGroupRange, 0, len(rowGroups))
 		for _, rg := range rowGroups {
 			if rg.NumRows() == 0 {
@@ -139,7 +161,13 @@ func overlappingRowGroups(rowGroups []RowGroup, schema *Schema, sorting []Sortin
 			}
 			minRow, maxRow, err := rowGroupRangeOfSortedColumns(rg, schema, sorting)
 			if err != nil {
-				yield(rowGroups)
+				// Bounds unavailable: yield all row groups as a single segment
+				// with nil bounds, which the caller merges without refinement.
+				all := make([]rowGroupRange, len(rowGroups))
+				for i, rg := range rowGroups {
+					all[i] = rowGroupRange{rowGroup: rg}
+				}
+				yield(all)
 				return
 			}
 			rowGroupRanges = append(rowGroupRanges, rowGroupRange{
@@ -152,7 +180,7 @@ func overlappingRowGroups(rowGroups []RowGroup, schema *Schema, sorting []Sortin
 			return
 		}
 		if len(rowGroupRanges) == 1 {
-			yield([]RowGroup{rowGroupRanges[0].rowGroup})
+			yield(rowGroupRanges[:1])
 			return
 		}
 
@@ -162,29 +190,26 @@ func overlappingRowGroups(rowGroups []RowGroup, schema *Schema, sorting []Sortin
 		})
 
 		// Detect overlapping segments
-		currentSegment := []RowGroup{rowGroupRanges[0].rowGroup}
+		segmentStart := 0
 		currentMax := rowGroupRanges[0].maxRow
 
-		for _, rr := range rowGroupRanges[1:] {
+		for i, rr := range rowGroupRanges[1:] {
 			if compare(rr.minRow, currentMax) <= 0 {
-				// Overlapping - add to current segment and extend max if necessary
-				currentSegment = append(currentSegment, rr.rowGroup)
+				// Overlapping - extend max if necessary
 				if compare(rr.maxRow, currentMax) > 0 {
 					currentMax = rr.maxRow
 				}
 			} else {
 				// Non-overlapping - yield current segment
-				if !yield(currentSegment) {
+				if !yield(rowGroupRanges[segmentStart : i+1]) {
 					return
 				}
-				currentSegment = []RowGroup{rr.rowGroup}
+				segmentStart = i + 1
 				currentMax = rr.maxRow
 			}
 		}
 
-		if len(currentSegment) > 0 {
-			yield(currentSegment)
-		}
+		yield(rowGroupRanges[segmentStart:])
 	}
 }
 
