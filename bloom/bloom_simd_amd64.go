@@ -14,14 +14,25 @@ import (
 
 var hasAVX2 = archsimd.X86.AVX2()
 
-var blockSalt = [8]uint32{salt0, salt1, salt2, salt3, salt4, salt5, salt6, salt7}
+var (
+	blockSalt  = [8]uint32{salt0, salt1, salt2, salt3, salt4, salt5, salt6, salt7}
+	blockOnes  = [8]uint32{1, 1, 1, 1, 1, 1, 1, 1}
+	blockShift = [8]uint32{27, 27, 27, 27, 27, 27, 27, 27}
+)
 
 // blockMask computes the 8 bit masks of the parquet split-block bloom filter:
 // mask[i] = 1 << ((x * salt[i]) >> 27).
+//
+// The 27 shift uses the per-lane ShiftRight with a constant vector rather
+// than ShiftAllRight(27): as of Go 1.26 the compiler materializes the scalar
+// shift count of ShiftAllRight with a legacy SSE (non-VEX) MOVQ, and mixing
+// legacy SSE with 256-bit VEX code pays an AVX/SSE state transition penalty
+// on every call that makes the function ~60x slower.
 func blockMask(x uint32) archsimd.Uint32x8 {
 	salt := archsimd.LoadUint32x8Slice(blockSalt[:])
-	return archsimd.BroadcastUint32x8(1).
-		ShiftLeft(archsimd.BroadcastUint32x8(x).Mul(salt).ShiftAllRight(27))
+	return archsimd.LoadUint32x8Slice(blockOnes[:]).
+		ShiftLeft(archsimd.BroadcastUint32x8(x).Mul(salt).
+			ShiftRight(archsimd.LoadUint32x8Slice(blockShift[:])))
 }
 
 func (b *Block) Insert(x uint32) {
