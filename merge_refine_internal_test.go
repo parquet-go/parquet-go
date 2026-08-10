@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -317,7 +318,7 @@ func TestMergeRefinementOracle(t *testing.T) {
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
 			var rowGroups []RowGroup
-			for _, name := range sortedKeys(sc.files) {
+			for _, name := range slices.Sorted(maps.Keys(sc.files)) {
 				rowGroups = append(rowGroups, newFile(t, name, sc.files[name]).RowGroups()[0])
 			}
 
@@ -404,15 +405,6 @@ func TestMergeRefinementOracle(t *testing.T) {
 			}
 		})
 	}
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // TestMergeRefinementSkippedWithDedup verifies that DropDuplicatedRows disables
