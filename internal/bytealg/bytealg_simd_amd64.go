@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"math/bits"
 	"simd/archsimd"
+
+	"github.com/parquet-go/bitpack/unsafecast"
 )
 
 // This file provides implementations of the bytealg functions based on the
@@ -28,17 +30,19 @@ func Count(data []byte, value byte) int {
 	if hasAVX512 && len(d) >= 64 {
 		v := archsimd.BroadcastUint8x64(value)
 		c0, c1, c2, c3 := 0, 0, 0, 0
-		// The array pointer conversion carries the only bounds check of the
-		// loop body; the constant-bounds subslices below are proven safe at
-		// compile time.
-		for len(d) >= 256 {
-			c := (*[256]uint8)(d)
+		// Ranging over 256-byte chunks compiles to a plain pointer increment:
+		// unlike a `d = d[256:]` loop, there is no cap update and no
+		// branchless clamp of the pointer advance, and the constant-bounds
+		// subslices of the chunk are proven safe at compile time.
+		chunks := unsafecast.Slice[[256]uint8](d)
+		for i := range chunks {
+			c := &chunks[i]
 			c0 += bits.OnesCount64(archsimd.LoadUint8x64Slice(c[0:64]).Equal(v).ToBits())
 			c1 += bits.OnesCount64(archsimd.LoadUint8x64Slice(c[64:128]).Equal(v).ToBits())
 			c2 += bits.OnesCount64(archsimd.LoadUint8x64Slice(c[128:192]).Equal(v).ToBits())
 			c3 += bits.OnesCount64(archsimd.LoadUint8x64Slice(c[192:256]).Equal(v).ToBits())
-			d = d[256:]
 		}
+		d = d[len(chunks)*256:]
 		for len(d) >= 64 {
 			c0 += bits.OnesCount64(archsimd.LoadUint8x64Slice(d).Equal(v).ToBits())
 			d = d[64:]
@@ -46,14 +50,15 @@ func Count(data []byte, value byte) int {
 		n = c0 + c1 + c2 + c3
 	} else if hasAVX2 && len(d) >= 32 {
 		v := archsimd.BroadcastUint8x32(value)
-		for len(d) >= 128 {
-			c := (*[128]uint8)(d)
+		chunks := unsafecast.Slice[[128]uint8](d)
+		for i := range chunks {
+			c := &chunks[i]
 			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(c[0:32]).Equal(v).ToBits())
 			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(c[32:64]).Equal(v).ToBits())
 			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(c[64:96]).Equal(v).ToBits())
 			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(c[96:128]).Equal(v).ToBits())
-			d = d[128:]
 		}
+		d = d[len(chunks)*128:]
 		for len(d) >= 32 {
 			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(d).Equal(v).ToBits())
 			d = d[32:]
