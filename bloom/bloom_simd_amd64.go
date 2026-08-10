@@ -67,31 +67,23 @@ func (b *Block) Check(x uint32) bool {
 		((b[7] & (1 << ((x * salt7) >> 27))) != 0)
 }
 
-var filterShift32 = [4]uint64{32, 32, 32, 32}
-
 func filterInsertBulk(f []Block, x []uint64) {
-	i := 0
 	if hasAVX2 {
-		// Vectorized fasthash1x64 of 4 values at a time: the block index is
-		// ((x >> 32) * len(f)) >> 32, computed with MulEvenWiden (VPMULUDQ)
-		// on the low 32-bit lanes left by the first shift.
-		shift := archsimd.LoadUint64x4Slice(filterShift32[:])
-		scale := archsimd.BroadcastUint32x8(uint32(len(f)))
-		var idx [4]uint64
-		for ; i+4 <= len(x); i += 4 {
-			archsimd.LoadUint64x4Slice(x[i:]).
-				ShiftRight(shift).
-				AsUint32x8().
-				MulEvenWiden(scale).
-				ShiftRight(shift).
-				StoreSlice(idx[:])
-			f[idx[0]].Insert(uint32(x[i]))
-			f[idx[1]].Insert(uint32(x[i+1]))
-			f[idx[2]].Insert(uint32(x[i+2]))
-			f[idx[3]].Insert(uint32(x[i+3]))
+		// Same structure as filterInsert, but with the constant vectors
+		// hoisted out of the loop; the hash stays scalar (2 shifts and a
+		// multiply in general purpose registers pipeline for free).
+		salt := archsimd.LoadUint32x8Slice(blockSalt[:])
+		ones := archsimd.LoadUint32x8Slice(blockOnes[:])
+		shift := archsimd.LoadUint32x8Slice(blockShift[:])
+		scale := int32(len(f))
+		for _, h := range x {
+			m := ones.ShiftLeft(archsimd.BroadcastUint32x8(uint32(h)).Mul(salt).ShiftRight(shift))
+			w := unsafecast.Slice[uint32](f[fasthash1x64(h, scale)][:])
+			archsimd.LoadUint32x8Slice(w).Or(m).StoreSlice(w)
 		}
+		return
 	}
-	for ; i < len(x); i++ {
+	for i := range x {
 		filterInsert(f, x[i])
 	}
 }
