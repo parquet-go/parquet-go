@@ -3,6 +3,7 @@
 package bytealg
 
 import (
+	"encoding/binary"
 	"math/bits"
 	"simd/archsimd"
 )
@@ -95,6 +96,21 @@ func Broadcast(dst []byte, src byte) {
 		}
 		if len(d) > 0 {
 			v.StoreSlice(dst[len(dst)-32:])
+		}
+		return
+	}
+	if len(dst) >= 8 {
+		// Splat the byte across a word with a single multiply and store 8
+		// bytes at a time, with one overlapping store for the tail;
+		// PutUint64 compiles to a plain 8-byte store.
+		x := 0x0101010101010101 * uint64(src)
+		d := dst
+		for len(d) >= 8 {
+			binary.LittleEndian.PutUint64(d, x)
+			d = d[8:]
+		}
+		if len(d) > 0 {
+			binary.LittleEndian.PutUint64(dst[len(dst)-8:], x)
 		}
 		return
 	}
