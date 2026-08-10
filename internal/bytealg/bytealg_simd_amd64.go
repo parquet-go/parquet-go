@@ -22,32 +22,37 @@ var (
 // accumulates the population counts in independent counters to break the
 // dependency chain, mirroring the structure of the retired assembly version.
 func Count(data []byte, value byte) int {
-	i, n := 0, 0
-	if hasAVX512 && len(data) >= 256 {
+	n := 0
+	d := data
+	if hasAVX512 && len(d) >= 64 {
 		v := archsimd.BroadcastUint8x64(value)
 		c0, c1, c2, c3 := 0, 0, 0, 0
-		for ; i+256 <= len(data); i += 256 {
-			c0 += bits.OnesCount64(archsimd.LoadUint8x64Slice(data[i:]).Equal(v).ToBits())
-			c1 += bits.OnesCount64(archsimd.LoadUint8x64Slice(data[i+64:]).Equal(v).ToBits())
-			c2 += bits.OnesCount64(archsimd.LoadUint8x64Slice(data[i+128:]).Equal(v).ToBits())
-			c3 += bits.OnesCount64(archsimd.LoadUint8x64Slice(data[i+192:]).Equal(v).ToBits())
+		for len(d) >= 256 {
+			c0 += bits.OnesCount64(archsimd.LoadUint8x64Slice(d).Equal(v).ToBits())
+			c1 += bits.OnesCount64(archsimd.LoadUint8x64Slice(d[64:]).Equal(v).ToBits())
+			c2 += bits.OnesCount64(archsimd.LoadUint8x64Slice(d[128:]).Equal(v).ToBits())
+			c3 += bits.OnesCount64(archsimd.LoadUint8x64Slice(d[192:]).Equal(v).ToBits())
+			d = d[256:]
+		}
+		for len(d) >= 64 {
+			c0 += bits.OnesCount64(archsimd.LoadUint8x64Slice(d).Equal(v).ToBits())
+			d = d[64:]
 		}
 		n = c0 + c1 + c2 + c3
-		for ; i+64 <= len(data); i += 64 {
-			n += bits.OnesCount64(archsimd.LoadUint8x64Slice(data[i:]).Equal(v).ToBits())
-		}
-	} else if hasAVX2 && len(data) >= 32 {
+	} else if hasAVX2 && len(d) >= 32 {
 		v := archsimd.BroadcastUint8x32(value)
-		for ; i+64 <= len(data); i += 64 {
-			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(data[i:]).Equal(v).ToBits())
-			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(data[i+32:]).Equal(v).ToBits())
+		for len(d) >= 64 {
+			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(d).Equal(v).ToBits())
+			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(d[32:]).Equal(v).ToBits())
+			d = d[64:]
 		}
-		for ; i+32 <= len(data); i += 32 {
-			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(data[i:]).Equal(v).ToBits())
+		for len(d) >= 32 {
+			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(d).Equal(v).ToBits())
+			d = d[32:]
 		}
 	}
-	for ; i < len(data); i++ {
-		if data[i] == value {
+	for i := range d {
+		if d[i] == value {
 			n++
 		}
 	}
@@ -58,11 +63,17 @@ func Count(data []byte, value byte) int {
 func Broadcast(dst []byte, src byte) {
 	if hasAVX2 && len(dst) >= 32 {
 		v := archsimd.BroadcastUint8x32(src)
-		i := 0
-		for ; i+32 <= len(dst); i += 32 {
-			v.StoreSlice(dst[i:])
+		d := dst
+		for len(d) >= 64 {
+			v.StoreSlice(d)
+			v.StoreSlice(d[32:])
+			d = d[64:]
 		}
-		if i < len(dst) {
+		if len(d) >= 32 {
+			v.StoreSlice(d)
+			d = d[32:]
+		}
+		if len(d) > 0 {
 			v.StoreSlice(dst[len(dst)-32:])
 		}
 		return

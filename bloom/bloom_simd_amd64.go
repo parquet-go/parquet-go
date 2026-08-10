@@ -67,8 +67,31 @@ func (b *Block) Check(x uint32) bool {
 		((b[7] & (1 << ((x * salt7) >> 27))) != 0)
 }
 
+var filterShift32 = [4]uint64{32, 32, 32, 32}
+
 func filterInsertBulk(f []Block, x []uint64) {
-	for i := range x {
+	i := 0
+	if hasAVX2 {
+		// Vectorized fasthash1x64 of 4 values at a time: the block index is
+		// ((x >> 32) * len(f)) >> 32, computed with MulEvenWiden (VPMULUDQ)
+		// on the low 32-bit lanes left by the first shift.
+		shift := archsimd.LoadUint64x4Slice(filterShift32[:])
+		scale := archsimd.BroadcastUint32x8(uint32(len(f)))
+		var idx [4]uint64
+		for ; i+4 <= len(x); i += 4 {
+			archsimd.LoadUint64x4Slice(x[i:]).
+				ShiftRight(shift).
+				AsUint32x8().
+				MulEvenWiden(scale).
+				ShiftRight(shift).
+				StoreSlice(idx[:])
+			f[idx[0]].Insert(uint32(x[i]))
+			f[idx[1]].Insert(uint32(x[i+1]))
+			f[idx[2]].Insert(uint32(x[i+2]))
+			f[idx[3]].Insert(uint32(x[i+3]))
+		}
+	}
+	for ; i < len(x); i++ {
 		filterInsert(f, x[i])
 	}
 }
