@@ -30,11 +30,16 @@ var rotate1x8 = [8]uint32{1, 2, 3, 4, 5, 6, 7, 0}
 // checking the group masks in order preserves the first-match semantics.
 func encodeInt32IndexEqual8ContiguousSIMD(words [][8]int32) (n int) {
 	rot := archsimd.LoadUint32x8Slice(rotate1x8[:])
-	for n+4 <= len(words) {
-		w0 := archsimd.LoadInt32x8Slice(words[n][:])
-		w1 := archsimd.LoadInt32x8Slice(words[n+1][:])
-		w2 := archsimd.LoadInt32x8Slice(words[n+2][:])
-		w3 := archsimd.LoadInt32x8Slice(words[n+3][:])
+	// The array pointer conversion carries the only bounds check of the loop
+	// body; the constant group indexes below compile to constant address
+	// offsets with no checks.
+	d := words
+	for len(d) >= 4 {
+		c := (*[4][8]int32)(d)
+		w0 := archsimd.LoadInt32x8Slice(c[0][:])
+		w1 := archsimd.LoadInt32x8Slice(c[1][:])
+		w2 := archsimd.LoadInt32x8Slice(c[2][:])
+		w3 := archsimd.LoadInt32x8Slice(c[3][:])
 		e0 := w0.Equal(w0.Permute(rot)).ToBits()
 		e1 := w1.Equal(w1.Permute(rot)).ToBits()
 		e2 := w2.Equal(w2.Permute(rot)).ToBits()
@@ -43,9 +48,10 @@ func encodeInt32IndexEqual8ContiguousSIMD(words [][8]int32) (n int) {
 		// any of the four groups is uniform with a single branch.
 		any := (uint32(e0) + 1) | (uint32(e1) + 1) | (uint32(e2) + 1) | (uint32(e3) + 1)
 		if any&0x100 == 0 {
-			n += 4
+			d = d[4:]
 			continue
 		}
+		n = len(words) - len(d)
 		switch {
 		case e0 == 0xFF:
 		case e1 == 0xFF:
@@ -57,12 +63,11 @@ func encodeInt32IndexEqual8ContiguousSIMD(words [][8]int32) (n int) {
 		}
 		return n
 	}
-	for n < len(words) {
+	for n = len(words) - len(d); n < len(words); n++ {
 		w := archsimd.LoadInt32x8Slice(words[n][:])
 		if w.Equal(w.Permute(rot)).ToBits() == 0xFF {
 			break
 		}
-		n++
 	}
 	return n
 }
