@@ -413,6 +413,18 @@ func (r *binaryBytesReader) Reader() io.Reader {
 	return bytes.NewReader(r.data[r.offset:])
 }
 
+// Discard advances the reader past the next n bytes, reporting how many
+// bytes were discarded. Unlike reading through Reader(), it moves the
+// reader's own offset, which skip operations rely on.
+func (r *binaryBytesReader) Discard(n int) (int, error) {
+	if remain := len(r.data) - r.offset; remain < n {
+		r.offset = len(r.data)
+		return remain, io.ErrUnexpectedEOF
+	}
+	r.offset += n
+	return n, nil
+}
+
 func (r *binaryBytesReader) ReadBool() (bool, error) {
 	b, err := r.ReadByte()
 	// Thrift protocol treats both 0 and 2 as false.
