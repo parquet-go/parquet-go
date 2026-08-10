@@ -30,6 +30,30 @@ func BenchmarkValueAppend(b *testing.B) {
 	b.SetBytes(N * int64(unsafe.Sizeof(parquet.Value{})))
 }
 
+func TestValueString(t *testing.T) {
+	tests := []struct {
+		value  parquet.Value
+		expect string
+	}{
+		{parquet.Value{}, "<null>"},
+		{parquet.BooleanValue(true), "true"},
+		{parquet.Int32Value(-123), "-123"},
+		{parquet.Int64Value(math.MaxInt64), "9223372036854775807"},
+		{parquet.FloatValue(0.5), "0.5"},
+		{parquet.DoubleValue(0.1), "0.1"},
+		// Regression test for https://github.com/parquet-go/parquet-go/issues/582:
+		// doubles must be formatted with 64-bit precision.
+		{parquet.DoubleValue(1.0000000596046448), "1.0000000596046448"},
+		{parquet.ByteArrayValue([]byte("hello")), "hello"},
+	}
+
+	for _, test := range tests {
+		if s := test.value.String(); s != test.expect {
+			t.Errorf("%s: got %q, want %q", test.value.GoString(), s, test.expect)
+		}
+	}
+}
+
 func TestValueClone(t *testing.T) {
 	tests := []struct {
 		scenario string

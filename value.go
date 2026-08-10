@@ -788,7 +788,7 @@ func (v Value) String() string {
 	case Float:
 		return strconv.FormatFloat(float64(v.float()), 'g', -1, 32)
 	case Double:
-		return strconv.FormatFloat(v.double(), 'g', -1, 32)
+		return strconv.FormatFloat(v.double(), 'g', -1, 64)
 	case ByteArray, FixedLenByteArray:
 		return string(v.byteArray())
 	default:
