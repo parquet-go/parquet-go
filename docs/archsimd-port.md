@@ -238,6 +238,13 @@ displacements — archsimd intrinsics lack the addressing-mode folding of
 ordinary loads; (b) a spilled byte value is reloaded from the stack every
 iteration. Not fixable from source; report upstream with the ShiftAll bug.
 
+Reference point — the standard library: `bytes.Count` (what the purego build
+uses, backed by the stdlib's AVX2 assembly) is far slower than both
+(same boot, GOAMD64=v4, 256KiB: repo asm 1.63µs < archsimd 2.06µs <
+bytes.Count 3.04µs; archsimd beats the stdlib by 30-50% at every size). So
+even compiler-limited, the archsimd Count is a strong upgrade over falling
+back to the standard library.
+
 Still open: rle detector's last +37% (movemask-to-GPR transfers per group
 are the suspect).
 
