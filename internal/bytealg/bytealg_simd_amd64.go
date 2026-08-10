@@ -83,7 +83,13 @@ func Broadcast(dst []byte, src byte) {
 			v.StoreSlice(c[224:256])
 			d = d[256:]
 		}
-		for len(d) >= 32 {
+		for len(d) >= 64 {
+			c := (*[64]uint8)(d)
+			v.StoreSlice(c[0:32])
+			v.StoreSlice(c[32:64])
+			d = d[64:]
+		}
+		if len(d) >= 32 {
 			v.StoreSlice(d)
 			d = d[32:]
 		}
