@@ -262,6 +262,27 @@ Final same-boot standings vs asm at v4: +13% (4KiB), +14% (256KiB), +41%
 compiler gap: four lea/mov per iteration to materialize load addresses.
 Report upstream with the ShiftAll bug.
 
+### Constant CPU feature checks (custom toolchain experiment, 2026-08-11)
+
+Tested the `constant-amd64-checks` branch of github.com/achille-roussel/go
+(go1.28-devel), which makes `archsimd.X86.AVX2()`/`AVX512()` return
+build-tag constants under GOAMD64=v3/v4 so guards fold and fallback paths
+DCE. Verified in the binary: Count went from 3 `cmpb (%rip)` feature guards
+to 0, and the entire AVX2 case was eliminated at v4. Same-boot results
+(GOAMD64=v4, GOEXPERIMENT=simd; asm-under-both-toolchains as drift control,
+which measured ±0.2%):
+
+- bloom geomean **-12%** (BlockCheck -35%, FilterCheck -11%); bloom vs asm
+  reaches **overall parity (+0.5% geomean)**
+- rle detector -8.7% (gap vs asm narrows to +25%)
+- Broadcast dispatch-dominated sizes -22%
+- Count ±0.5% (its single per-call guard was already negligible; the
+  addressing-fold gap keeps it at +13-14% vs asm)
+
+Caveat: master's archsimd renamed APIs since 1.26.5 — `Load*Slice`→`Load*`,
+`StoreSlice`→`Store`, `SumAbsDiff`→`SumOf8AbsDiff` (returns Uint64x8
+directly) — the branch will need those renames when it targets a newer Go.
+
 Reference point — the standard library: `bytes.Count` (what the purego build
 uses, backed by the stdlib's AVX2 assembly) is far slower than both
 (same boot, GOAMD64=v4, 256KiB: repo asm 1.63µs < archsimd 2.06µs <
