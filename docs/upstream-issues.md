@@ -291,8 +291,17 @@ CMPQ BX, $0x100
 ```
 
 versus 3 instructions (`add`/`cmp`/`jcc`) for the equivalent assembly loop.
-Measured ~15% on a byte-count kernel. Workaround: reinterpret as a slice of
-chunk arrays and `range` over it, which compiles to a pointer increment.
+Measured ~15% on a byte-count kernel.
+
+The only workaround we found requires unsafe: reinterpret the buffer as a
+slice of chunk arrays (`unsafe.Slice((*[256]uint8)(unsafe.Pointer(&d[0])),
+len(d)/256)`) and `range` over it, which compiles to a plain pointer
+increment. The safe alternatives all keep some of the cost: the safe
+per-chunk array pointer conversion `(*[256]uint8)(d)` still advances with
+`d = d[256:]` and keeps the clamp, and `slices.Chunk` yields subslices whose
+lengths are not compile-time constants, so interior bounds checks return.
+Idiomatic safe code cannot currently express a pointer-increment chunked
+loop.
 
 ### What did you expect to see?
 
