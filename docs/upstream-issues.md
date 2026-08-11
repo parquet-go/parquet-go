@@ -93,24 +93,24 @@ func countLoop(chunks [][256]uint8, v archsimd.Uint8x64) int {
 ### What did you see?
 
 Seven `LEA`s per iteration materialize four separate base registers — the
-common base `(%rax,%r9)` is even recomputed four times — and every load uses
+common base `(AX)(R9*1)` is even recomputed four times — and every load uses
 a zero displacement:
 
 ```
-leaq (%rax,%r9), %r10
-leaq (%rax,%r9), %r11
-leaq 0x40(%r11), %r11
-leaq (%rax,%r9), %r12
-leaq 0x80(%r12), %r12
-leaq (%rax,%r9), %r9
-leaq 0xc0(%r9), %r9
-vmovdqu64 (%r10), %zmm1
+LEAQ (AX)(R9*1), R10
+LEAQ (AX)(R9*1), R11
+LEAQ 0x40(R11), R11
+LEAQ (AX)(R9*1), R12
+LEAQ 0x80(R12), R12
+LEAQ (AX)(R9*1), R9
+LEAQ 0xc0(R9), R9
+VMOVDQU64 (R10), Z1
 ...
-vmovdqu64 (%r11), %zmm1
+VMOVDQU64 (R11), Z1
 ...
-vmovdqu64 (%r12), %zmm1
+VMOVDQU64 (R12), Z1
 ...
-vmovdqu64 (%r9), %zmm1
+VMOVDQU64 (R9), Z1
 ```
 
 ### What did you expect to see?
@@ -119,10 +119,10 @@ One base register with folded displacements (EVEX disp8*N compression makes
 them 1-byte):
 
 ```
-vmovdqu64 (%r10), %zmm1
-vmovdqu64 0x40(%r10), %zmm2
-vmovdqu64 0x80(%r10), %zmm3
-vmovdqu64 0xc0(%r10), %zmm4
+VMOVDQU64 (R10), Z1
+VMOVDQU64 0x40(R10), Z2
+VMOVDQU64 0x80(R10), Z3
+VMOVDQU64 0xc0(R10), Z4
 ```
 
 Ordinary (non-intrinsic) Go memory operations get this folding. In an
@@ -197,9 +197,9 @@ instructions with both compare and broadcast competing for the shuffle port
 (port 5):
 
 ```
-vpcmpeqb    %zmm0, %zmm8, %k1
-vpbroadcastb %xmm2, %zmm8{%k1}{z}   ; port 5
-vpaddb      %zmm7, %zmm8, %zmm7
+VPCMPEQB Z0, Z8, K1
+VPBROADCASTB.Z X2, K1, Z8   // port 5
+VPADDB Z7, Z8, Z7
 ```
 
 In a loop with four such chains per iteration, port 5 serializes the loop:
@@ -214,8 +214,8 @@ acc = acc.Add(ones).Merge(acc, mask)
 lowers to a single merge-masked add on port 0:
 
 ```
-vpcmpeqb %zmm0, %zmm8, %k1
-vpaddb   %zmm4, %zmm7, %zmm7{%k1}
+VPCMPEQB Z0, Z8, K1
+VPADDB Z4, Z7, K1, Z7
 ```
 
 and the same kernel runs at 2.26µs (-24%).
@@ -252,13 +252,13 @@ branchless clamp of the pointer advance (the compiler avoids materializing a
 past-the-end pointer when the resulting slice is empty):
 
 ```
-addq $-0x100, %rcx      ; cap
-movq %rcx, %r10
-sarq $0x3f, %r10        ; sign mask
-andl $0x100, %r10
-addq %r10, %rax         ; clamped pointer advance
-addq $-0x100, %rbx      ; len
-cmpq $0x100, %rbx
+ADDQ $-0x100, CX        // cap
+MOVQ CX, R10
+SARQ $0x3f, R10         // sign mask
+ANDL $0x100, R10
+ADDQ R10, AX            // clamped pointer advance
+ADDQ $-0x100, BX        // len
+CMPQ BX, $0x100
 ```
 
 versus 3 instructions (`add`/`cmp`/`jcc`) for the equivalent assembly loop.
