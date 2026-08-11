@@ -19,7 +19,10 @@ import (
 // The counts accumulate in vector registers: each compare adds 1 to a lane
 // of a byte accumulator (via a masked add), and the byte accumulators are
 // flushed into 64-bit lane totals with SumAbsDiff (VPSADBW against zero)
-// before they can overflow, at most every 255 rounds. Unlike the retired
+// before they can overflow, at most every 255 rounds. The add uses the
+// Add+Merge form so it lowers to a single merge-masked VPADDB on AVX-512;
+// the Masked (zeroing) form lowers to a masked broadcast, which competes
+// with the compares for the shuffle port and halves the loop throughput. Unlike the retired
 // assembly version, which moved every compare result to a general purpose
 // register and popcounted it, the inner loop performs no scalar work at all.
 func Count(data []byte, value byte) int {
@@ -37,10 +40,10 @@ func Count(data []byte, value byte) int {
 			a0, a1, a2, a3 := zero, zero, zero, zero
 			for ; i < m; i++ {
 				c := &chunks[i]
-				a0 = a0.Add(ones.Masked(archsimd.LoadUint8x64Slice(c[0:64]).Equal(v)))
-				a1 = a1.Add(ones.Masked(archsimd.LoadUint8x64Slice(c[64:128]).Equal(v)))
-				a2 = a2.Add(ones.Masked(archsimd.LoadUint8x64Slice(c[128:192]).Equal(v)))
-				a3 = a3.Add(ones.Masked(archsimd.LoadUint8x64Slice(c[192:256]).Equal(v)))
+				a0 = a0.Add(ones).Merge(a0, archsimd.LoadUint8x64Slice(c[0:64]).Equal(v))
+				a1 = a1.Add(ones).Merge(a1, archsimd.LoadUint8x64Slice(c[64:128]).Equal(v))
+				a2 = a2.Add(ones).Merge(a2, archsimd.LoadUint8x64Slice(c[128:192]).Equal(v))
+				a3 = a3.Add(ones).Merge(a3, archsimd.LoadUint8x64Slice(c[192:256]).Equal(v))
 			}
 			total = total.Add(a0.SumAbsDiff(zero).AsUint64x8()).
 				Add(a1.SumAbsDiff(zero).AsUint64x8()).
@@ -68,10 +71,10 @@ func Count(data []byte, value byte) int {
 			a0, a1, a2, a3 := zero, zero, zero, zero
 			for ; i < m; i++ {
 				c := &chunks[i]
-				a0 = a0.Add(ones.Masked(archsimd.LoadUint8x32Slice(c[0:32]).Equal(v)))
-				a1 = a1.Add(ones.Masked(archsimd.LoadUint8x32Slice(c[32:64]).Equal(v)))
-				a2 = a2.Add(ones.Masked(archsimd.LoadUint8x32Slice(c[64:96]).Equal(v)))
-				a3 = a3.Add(ones.Masked(archsimd.LoadUint8x32Slice(c[96:128]).Equal(v)))
+				a0 = a0.Add(ones).Merge(a0, archsimd.LoadUint8x32Slice(c[0:32]).Equal(v))
+				a1 = a1.Add(ones).Merge(a1, archsimd.LoadUint8x32Slice(c[32:64]).Equal(v))
+				a2 = a2.Add(ones).Merge(a2, archsimd.LoadUint8x32Slice(c[64:96]).Equal(v))
+				a3 = a3.Add(ones).Merge(a3, archsimd.LoadUint8x32Slice(c[96:128]).Equal(v))
 			}
 			total = total.Add(a0.SumAbsDiff(zero).AsUint64x4()).
 				Add(a1.SumAbsDiff(zero).AsUint64x4()).
