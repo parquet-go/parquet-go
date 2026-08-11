@@ -50,12 +50,42 @@ following the legacy `MOVQ`. Replacing the scalar-count shift with a
 per-lane `ShiftRight` fed by a constant vector loaded from memory restored
 the expected performance.
 
-A second manifestation: storing a vector accumulator to a stack array for a
-final reduction (`total.StoreSlice(totals[:])` with `var totals [8]uint64`)
-emitted a legacy `MOVUPS X14, 0(R8)`. The per-call transition cost was
-~155ns, observed in profiles as time attributed to the *first EVEX
-instruction of the next call*. Rewriting the reduction with
-`GetHi`/`GetLo`/`GetElem` (register-only) removed it.
+A second manifestation is the compiler's stack zeroing idiom, which clears
+zeroed stack memory with legacy-encoded `MOVUPS` stores of the X15 zero
+register even inside functions full of EVEX instructions:
+
+```go
+func ReduceStore(x archsimd.Uint64x8) uint64 {
+	var t [8]uint64
+	acc := archsimd.LoadUint64x8Slice(t[:])
+	acc = acc.Add(x)
+	acc.StoreSlice(t[:])
+	var n uint64
+	for _, v := range t {
+		n += v
+	}
+	return n
+}
+```
+
+compiles to:
+
+```
+MOVUPS X15, (CX)       // 44 0f 11 39     <- legacy SSE zeroing stores
+MOVUPS X15, 0x10(CX)   // 44 0f 11 79 10
+MOVUPS X15, 0x20(CX)
+MOVUPS X15, 0x30(CX)
+VPADDQ (SP), Z0, Z0    // 62 f1 fd 48 d4  <- EVEX
+VMOVDQU64 Z0, (SP)     // 62 f1 fe 48 7f
+```
+
+(the vector load/store intrinsics themselves are correctly EVEX-encoded;
+only the zeroing is legacy). In the code where we found this — a vector
+accumulator reduced through a stack array once per call — the transition
+penalty cost ~155ns per call, and in CPU profiles the time is attributed to
+the *first EVEX instruction of the next call*, which makes the root cause
+hard to find. Rewriting the reduction with `GetHi`/`GetLo`/`GetElem`
+(register-only, no stack array to zero) removed it.
 
 ### What did you expect to see?
 
@@ -81,8 +111,18 @@ VMOVQ AX, X1           // c4 e1 f9 6e c8 — VEX encoding of the same move
 VPSRLD X1, Y0, Y0      // c5 fd d2 c1
 ```
 
-Similarly, the stack store in the second manifestation should be
-`VMOVUPS`/`VMOVDQU` rather than legacy `MOVUPS`.
+For the second manifestation, the zeroing stores should use the VEX
+encoding of the same instruction:
+
+```
+VMOVUPS X15, (CX)       // c5 78 11 39 — VEX encoding of the same store
+VMOVUPS X15, 0x10(CX)
+VMOVUPS X15, 0x20(CX)
+VMOVUPS X15, 0x30(CX)
+```
+
+(or, in a function already using ZMM registers, a single 64-byte zeroing
+store).
 
 ---
 
