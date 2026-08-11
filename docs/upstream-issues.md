@@ -65,6 +65,25 @@ spills, stack copies, zeroing), or the compiler should manage the state with
 VZEROUPPER at the boundaries. GCC/Clang emit `vmovq`/`vmovups` in AVX
 functions for this reason.
 
+For this specific repro, the ideal lowering uses the immediate form of the
+shift, which needs no scalar materialization at all:
+
+```
+VPSRLD $0x1b, Y0, Y0   // c5 fd 72 d0 1b — immediate form, single instruction
+```
+
+and if the register-count form is kept, the move should at minimum be
+VEX-encoded:
+
+```
+MOVL $0x1b, AX
+VMOVQ AX, X1           // c4 e1 f9 6e c8 — VEX encoding of the same move
+VPSRLD X1, Y0, Y0      // c5 fd d2 c1
+```
+
+Similarly, the stack store in the second manifestation should be
+`VMOVUPS`/`VMOVDQU` rather than legacy `MOVUPS`.
+
 ---
 
 ## Issue 2: cmd/compile: simd intrinsic loads do not fold constant offsets into addressing modes
