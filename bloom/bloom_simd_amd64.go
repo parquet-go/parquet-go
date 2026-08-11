@@ -12,8 +12,6 @@ import (
 // on the simd/archsimd package, replacing the hand-written assembly of
 // block_amd64.s and filter_amd64.s when GOEXPERIMENT=simd is set.
 
-var hasAVX2 = archsimd.X86.AVX2()
-
 var (
 	blockSalt  = [8]uint32{salt0, salt1, salt2, salt3, salt4, salt5, salt6, salt7}
 	blockOnes  = [8]uint32{1, 1, 1, 1, 1, 1, 1, 1}
@@ -36,7 +34,7 @@ func blockMask(x uint32) archsimd.Uint32x8 {
 }
 
 func (b *Block) Insert(x uint32) {
-	if hasAVX2 {
+	if archsimd.X86.AVX2() {
 		w := unsafecast.Slice[uint32](b[:])
 		archsimd.LoadUint32x8Slice(w).Or(blockMask(x)).StoreSlice(w)
 		return
@@ -52,7 +50,7 @@ func (b *Block) Insert(x uint32) {
 }
 
 func (b *Block) Check(x uint32) bool {
-	if hasAVX2 {
+	if archsimd.X86.AVX2() {
 		m := blockMask(x)
 		w := unsafecast.Slice[uint32](b[:])
 		return archsimd.LoadUint32x8Slice(w).And(m).Equal(m).ToBits() == 0xFF
@@ -68,7 +66,7 @@ func (b *Block) Check(x uint32) bool {
 }
 
 func filterInsertBulk(f []Block, x []uint64) {
-	if hasAVX2 {
+	if archsimd.X86.AVX2() {
 		// Same structure as filterInsert, but with the constant vectors
 		// hoisted out of the loop; the hash stays scalar (2 shifts and a
 		// multiply in general purpose registers pipeline for free).

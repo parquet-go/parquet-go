@@ -14,11 +14,6 @@ import (
 // simd/archsimd package, replacing the hand-written assembly of
 // count_amd64.s and broadcast_amd64.s when GOEXPERIMENT=simd is set.
 
-var (
-	hasAVX2   = archsimd.X86.AVX2()
-	hasAVX512 = archsimd.X86.AVX512()
-)
-
 // Count returns the number of occurrences of value in data.
 //
 // The AVX-512 path compares 256 bytes per iteration into mask registers and
@@ -27,7 +22,7 @@ var (
 func Count(data []byte, value byte) int {
 	n := 0
 	d := data
-	if hasAVX512 && len(d) >= 64 {
+	if archsimd.X86.AVX512() && len(d) >= 64 {
 		v := archsimd.BroadcastUint8x64(value)
 		c0, c1, c2, c3 := 0, 0, 0, 0
 		// Ranging over 256-byte chunks compiles to a plain pointer increment:
@@ -48,7 +43,7 @@ func Count(data []byte, value byte) int {
 			d = d[64:]
 		}
 		n = c0 + c1 + c2 + c3
-	} else if hasAVX2 && len(d) >= 32 {
+	} else if archsimd.X86.AVX2() && len(d) >= 32 {
 		v := archsimd.BroadcastUint8x32(value)
 		chunks := unsafecast.Slice[[128]uint8](d)
 		for i := range chunks {
@@ -74,7 +69,7 @@ func Count(data []byte, value byte) int {
 
 // Broadcast writes the src value to all bytes of dst.
 func Broadcast(dst []byte, src byte) {
-	if hasAVX2 && len(dst) >= 32 {
+	if archsimd.X86.AVX2() && len(dst) >= 32 {
 		v := archsimd.BroadcastUint8x32(src)
 		d := dst
 		for len(d) >= 256 {
