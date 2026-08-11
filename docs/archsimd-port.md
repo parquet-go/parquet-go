@@ -240,13 +240,27 @@ Count deep-dive: `d = d[256:]` loop control costs ~8 scalar ops per
 iteration (dual len/cap updates plus a branchless clamp of the pointer
 advance — Go refuses to materialize a past-the-end pointer for an empty
 result). Ranging over `unsafecast.Slice[[256]uint8](d)` reduces control to
-inc/cmp/branch and took 256KiB from +36% to +21% (2MB stays at parity).
-The final ~20% at cache-resident sizes is upstream compiler codegen, visible
-in binutils objdump: (a) the four chunk loads each materialize their own
-base register per iteration instead of one base with folded 64/128/192
-displacements — archsimd intrinsics lack the addressing-mode folding of
-ordinary loads; (b) a spilled byte value is reloaded from the stack every
-iteration. Not fixable from source; report upstream with the ShiftAll bug.
+inc/cmp/branch and took 256KiB from +36% to +21%.
+
+Count round 2 — vector accumulation. Replacing the kmov+popcnt+add scalar
+chain with byte accumulators flushed through SumAbsDiff (VPSADBW) beat the
+popcount version by 10-20%, after two lowering traps were profiled out:
+
+1. `ones.Masked(mask)` lowers to a masked VPBROADCASTB — a shuffle-port uop
+   that pairs with every compare and serializes the loop on port 5. The
+   `a.Add(ones).Merge(a, mask)` form lowers to a single merge-masked VPADDB
+   on port 0 instead.
+2. Storing the vector total to a stack array for the final reduction emits a
+   legacy (non-VEX) MOVUPS — the third sighting of the AVX/SSE transition
+   penalty, costing ~155ns per call (4KiB was +600% until fixed). Reduce in
+   registers with GetHi/GetLo/GetElem instead.
+
+Final same-boot standings vs asm at v4: +13% (4KiB), +14% (256KiB), +41%
+(2MB — only visible on hosts with very high memory bandwidth; the earlier
+"parity at 2MB" was a slow-host artifact, the Go loop runs ~6.4 cycles per
+256B chunk vs the asm's ~4.3). The residual is the addressing-mode-folding
+compiler gap: four lea/mov per iteration to materialize load addresses.
+Report upstream with the ShiftAll bug.
 
 Reference point — the standard library: `bytes.Count` (what the purego build
 uses, backed by the stdlib's AVX2 assembly) is far slower than both
