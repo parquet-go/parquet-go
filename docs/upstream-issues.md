@@ -4,7 +4,8 @@ Drafts for golang/go issues, from porting parquet-go's amd64 assembly kernels
 to `simd/archsimd` (parquet-go/parquet-go#584, details in
 docs/archsimd-port.md). All repros verified against go1.26.5 with
 `GOEXPERIMENT=simd`, measurements on GCP c4-standard-8 (Intel Xeon Platinum
-8581C, Emerald Rapids). NOT SUBMITTED — for review.
+8581C, Emerald Rapids). Issue 1 filed as golang/go#80835; issues 2-5 pending
+review.
 
 ---
 
