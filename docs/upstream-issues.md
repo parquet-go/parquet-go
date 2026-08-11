@@ -167,9 +167,38 @@ address recomputation per iteration.
 
 `i+4 <= len(words)` (with `i >= 0` from the induction variable) implies
 `i+k < len(words)` for k in 0..3, so prove should eliminate all four checks.
-This is the natural shape of any manually unrolled loop; the workaround we
-found (convert to an array pointer per group: `c := (*[4][8]int32)(s)` and
-index `c[0]..c[3]`) recovers the performance but is non-obvious.
+This is the natural shape of any manually unrolled loop.
+
+Other natural formulations fail as well:
+
+```go
+// Also keeps all 4 checks: i <= len(words) with i-4..i-1 indexing.
+for i := 4; i <= len(words); i += 4 {
+	n += words[i-4][0] + words[i-3][0] + words[i-2][0] + words[i-1][0]
+}
+
+// Keeps 1 check (the slice bound; the element accesses are proven
+// from len(w) == 4):
+for i := 4; i <= len(words); i += 4 {
+	w := words[i-4 : i : i]
+	n += w[0][0] + w[1][0] + w[2][0] + w[3][0]
+}
+```
+
+The only formulation we found with zero checks converts each group to an
+array pointer:
+
+```go
+d := words
+for len(d) >= 4 {
+	c := (*[4][8]int32)(d)
+	n += c[0][0] + c[1][0] + c[2][0] + c[3][0]
+	d = d[4:]
+}
+```
+
+which is effective but non-obvious, and trades the checks for the reslice
+cost described in the companion issue about `s = s[N:]` loops.
 
 Measured impact on an unrolled scan kernel: eliminating these checks via the
 array-pointer workaround improved throughput ~26% (927ns → 654ns together
