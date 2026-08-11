@@ -10,6 +10,8 @@ docs/archsimd-port.md). All repros verified against go1.26.5 with
 
 ## Issue 1: cmd/compile: legacy SSE encodings emitted inside VEX/EVEX simd code cause AVX-SSE transition penalties
 
+**FILED: https://github.com/golang/go/issues/80835 (2026-08-11)**
+
 **Go version**: go1.26.5, `GOEXPERIMENT=simd`, GOARCH=amd64
 
 ### What did you do?
