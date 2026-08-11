@@ -28,7 +28,8 @@ import (
 func Count(data []byte, value byte) int {
 	n := 0
 	d := data
-	if archsimd.X86.AVX512() && len(d) >= 64 {
+	switch {
+	case archsimd.X86.AVX512() && len(d) >= 64:
 		v := archsimd.BroadcastUint8x64(value)
 		ones := archsimd.BroadcastUint8x64(1)
 		zero := archsimd.BroadcastUint8x64(0)
@@ -60,7 +61,8 @@ func Count(data []byte, value byte) int {
 			n += bits.OnesCount64(archsimd.LoadUint8x64Slice(d).Equal(v).ToBits())
 			d = d[64:]
 		}
-	} else if archsimd.X86.AVX2() && len(d) >= 32 {
+
+	case archsimd.X86.AVX2() && len(d) >= 32:
 		v := archsimd.BroadcastUint8x32(value)
 		ones := archsimd.BroadcastUint8x32(1)
 		zero := archsimd.BroadcastUint8x32(0)
