@@ -16,42 +16,71 @@ import (
 
 // Count returns the number of occurrences of value in data.
 //
-// The AVX-512 path compares 256 bytes per iteration into mask registers and
-// accumulates the population counts in independent counters to break the
-// dependency chain, mirroring the structure of the retired assembly version.
+// The counts accumulate in vector registers: each compare adds 1 to a lane
+// of a byte accumulator (via a masked add), and the byte accumulators are
+// flushed into 64-bit lane totals with SumAbsDiff (VPSADBW against zero)
+// before they can overflow, at most every 255 rounds. Unlike the retired
+// assembly version, which moved every compare result to a general purpose
+// register and popcounted it, the inner loop performs no scalar work at all.
 func Count(data []byte, value byte) int {
 	n := 0
 	d := data
 	if archsimd.X86.AVX512() && len(d) >= 64 {
 		v := archsimd.BroadcastUint8x64(value)
-		c0, c1, c2, c3 := 0, 0, 0, 0
-		// Ranging over 256-byte chunks compiles to a plain pointer increment:
-		// unlike a `d = d[256:]` loop, there is no cap update and no
-		// branchless clamp of the pointer advance, and the constant-bounds
-		// subslices of the chunk are proven safe at compile time.
+		ones := archsimd.BroadcastUint8x64(1)
+		zero := archsimd.BroadcastUint8x64(0)
+		var totals [8]uint64
+		total := archsimd.LoadUint64x8Slice(totals[:])
 		chunks := unsafecast.Slice[[256]uint8](d)
-		for i := range chunks {
-			c := &chunks[i]
-			c0 += bits.OnesCount64(archsimd.LoadUint8x64Slice(c[0:64]).Equal(v).ToBits())
-			c1 += bits.OnesCount64(archsimd.LoadUint8x64Slice(c[64:128]).Equal(v).ToBits())
-			c2 += bits.OnesCount64(archsimd.LoadUint8x64Slice(c[128:192]).Equal(v).ToBits())
-			c3 += bits.OnesCount64(archsimd.LoadUint8x64Slice(c[192:256]).Equal(v).ToBits())
+		for i := 0; i < len(chunks); {
+			m := min(i+255, len(chunks))
+			a0, a1, a2, a3 := zero, zero, zero, zero
+			for ; i < m; i++ {
+				c := &chunks[i]
+				a0 = a0.Add(ones.Masked(archsimd.LoadUint8x64Slice(c[0:64]).Equal(v)))
+				a1 = a1.Add(ones.Masked(archsimd.LoadUint8x64Slice(c[64:128]).Equal(v)))
+				a2 = a2.Add(ones.Masked(archsimd.LoadUint8x64Slice(c[128:192]).Equal(v)))
+				a3 = a3.Add(ones.Masked(archsimd.LoadUint8x64Slice(c[192:256]).Equal(v)))
+			}
+			total = total.Add(a0.SumAbsDiff(zero).AsUint64x8()).
+				Add(a1.SumAbsDiff(zero).AsUint64x8()).
+				Add(a2.SumAbsDiff(zero).AsUint64x8()).
+				Add(a3.SumAbsDiff(zero).AsUint64x8())
+		}
+		total.StoreSlice(totals[:])
+		for _, t := range totals {
+			n += int(t)
 		}
 		d = d[len(chunks)*256:]
 		for len(d) >= 64 {
-			c0 += bits.OnesCount64(archsimd.LoadUint8x64Slice(d).Equal(v).ToBits())
+			n += bits.OnesCount64(archsimd.LoadUint8x64Slice(d).Equal(v).ToBits())
 			d = d[64:]
 		}
-		n = c0 + c1 + c2 + c3
 	} else if archsimd.X86.AVX2() && len(d) >= 32 {
 		v := archsimd.BroadcastUint8x32(value)
+		ones := archsimd.BroadcastUint8x32(1)
+		zero := archsimd.BroadcastUint8x32(0)
+		var totals [4]uint64
+		total := archsimd.LoadUint64x4Slice(totals[:])
 		chunks := unsafecast.Slice[[128]uint8](d)
-		for i := range chunks {
-			c := &chunks[i]
-			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(c[0:32]).Equal(v).ToBits())
-			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(c[32:64]).Equal(v).ToBits())
-			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(c[64:96]).Equal(v).ToBits())
-			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(c[96:128]).Equal(v).ToBits())
+		for i := 0; i < len(chunks); {
+			m := min(i+255, len(chunks))
+			a0, a1, a2, a3 := zero, zero, zero, zero
+			for ; i < m; i++ {
+				c := &chunks[i]
+				a0 = a0.Add(ones.Masked(archsimd.LoadUint8x32Slice(c[0:32]).Equal(v)))
+				a1 = a1.Add(ones.Masked(archsimd.LoadUint8x32Slice(c[32:64]).Equal(v)))
+				a2 = a2.Add(ones.Masked(archsimd.LoadUint8x32Slice(c[64:96]).Equal(v)))
+				a3 = a3.Add(ones.Masked(archsimd.LoadUint8x32Slice(c[96:128]).Equal(v)))
+			}
+			total = total.Add(a0.SumAbsDiff(zero).AsUint64x4()).
+				Add(a1.SumAbsDiff(zero).AsUint64x4()).
+				Add(a2.SumAbsDiff(zero).AsUint64x4()).
+				Add(a3.SumAbsDiff(zero).AsUint64x4())
+		}
+		total.StoreSlice(totals[:])
+		for _, t := range totals {
+			n += int(t)
 		}
 		d = d[len(chunks)*128:]
 		for len(d) >= 32 {
