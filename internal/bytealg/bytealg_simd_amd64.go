@@ -32,8 +32,7 @@ func Count(data []byte, value byte) int {
 		v := archsimd.BroadcastUint8x64(value)
 		ones := archsimd.BroadcastUint8x64(1)
 		zero := archsimd.BroadcastUint8x64(0)
-		var totals [8]uint64
-		total := archsimd.LoadUint64x8Slice(totals[:])
+		total := zero.AsUint64x8()
 		chunks := unsafecast.Slice[[256]uint8](d)
 		for i := 0; i < len(chunks); {
 			m := min(i+255, len(chunks))
@@ -50,10 +49,12 @@ func Count(data []byte, value byte) int {
 				Add(a2.SumAbsDiff(zero).AsUint64x8()).
 				Add(a3.SumAbsDiff(zero).AsUint64x8())
 		}
-		total.StoreSlice(totals[:])
-		for _, t := range totals {
-			n += int(t)
-		}
+		// Reduce in registers: storing the totals to a stack array compiles to
+		// a legacy (non-VEX) MOVUPS, and mixing legacy SSE into EVEX code pays
+		// an AVX/SSE state transition penalty on every call.
+		t4 := total.GetHi().Add(total.GetLo())
+		t2 := t4.GetHi().Add(t4.GetLo())
+		n += int(t2.GetElem(0) + t2.GetElem(1))
 		d = d[len(chunks)*256:]
 		for len(d) >= 64 {
 			n += bits.OnesCount64(archsimd.LoadUint8x64Slice(d).Equal(v).ToBits())
@@ -63,8 +64,7 @@ func Count(data []byte, value byte) int {
 		v := archsimd.BroadcastUint8x32(value)
 		ones := archsimd.BroadcastUint8x32(1)
 		zero := archsimd.BroadcastUint8x32(0)
-		var totals [4]uint64
-		total := archsimd.LoadUint64x4Slice(totals[:])
+		total := zero.AsUint64x4()
 		chunks := unsafecast.Slice[[128]uint8](d)
 		for i := 0; i < len(chunks); {
 			m := min(i+255, len(chunks))
@@ -81,10 +81,8 @@ func Count(data []byte, value byte) int {
 				Add(a2.SumAbsDiff(zero).AsUint64x4()).
 				Add(a3.SumAbsDiff(zero).AsUint64x4())
 		}
-		total.StoreSlice(totals[:])
-		for _, t := range totals {
-			n += int(t)
-		}
+		t2 := total.GetHi().Add(total.GetLo())
+		n += int(t2.GetElem(0) + t2.GetElem(1))
 		d = d[len(chunks)*128:]
 		for len(d) >= 32 {
 			n += bits.OnesCount32(archsimd.LoadUint8x32Slice(d).Equal(v).ToBits())
