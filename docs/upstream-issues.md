@@ -130,6 +130,15 @@ issue-width-limited loop whose vector body is ~12 uops, the 7 extra LEAs
 account for a measured ~15-20% throughput loss versus equivalent
 hand-written assembly.
 
+Narrowing the scope: constant displacements DO fold when the base is a
+single register — the same four-access pattern against a plain slice
+pointer (e.g. in a `d = d[256:]` shrinking loop) compiles to
+`VMOVDQU (AX)` / `VMOVDQU 0x20(AX)` / `VMOVDQU 0x40(AX)` / `VMOVDQU
+0x60(AX)`. The problem occurs when the base is `ptr + index*scale`: the
+compiler neither CSEs the common two-register address into one LEA nor
+folds the constant offsets onto it, recomputing `LEAQ (AX)(R9*1)` once per
+access instead.
+
 ---
 
 ## Issue 3: cmd/compile: prove does not eliminate bounds checks for constant-offset indexes guarded by `i+4 <= len(s)`
