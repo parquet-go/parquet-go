@@ -121,8 +121,12 @@ VMOVUPS X15, 0x20(CX)
 VMOVUPS X15, 0x30(CX)
 ```
 
-(or, in a function already using ZMM registers, a single 64-byte zeroing
-store).
+Adopting VEX encodings would also allow wider zeroing stores: 32 bytes per
+`VMOVDQU` from a YMM register, or 64 bytes per `VMOVDQU64` from a ZMM
+register, halving or quartering the number of stores in functions that
+already use those register widths (provided the zero register's upper bits
+are known zero, e.g. by materializing it with a VEX `VPXOR`, which zeroes
+the full width).
 
 ---
 
