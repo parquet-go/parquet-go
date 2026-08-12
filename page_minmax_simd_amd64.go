@@ -191,6 +191,7 @@ func minInt32(data []int32) int32 {
 		acc0H := acc0.GetLo().Min(acc0.GetHi())
 		acc0Q := acc0H.GetLo().Min(acc0H.GetHi())
 		acc0R := reduceMinInt32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 16:
 		acc0 := archsimd.BroadcastInt32x8(m)
@@ -214,6 +215,7 @@ func minInt32(data []int32) int32 {
 		acc0 = acc0.Min(acc1)
 		acc0Q := acc0.GetLo().Min(acc0.GetHi())
 		acc0R := reduceMinInt32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -254,6 +256,7 @@ func maxInt32(data []int32) int32 {
 		acc0H := acc0.GetLo().Max(acc0.GetHi())
 		acc0Q := acc0H.GetLo().Max(acc0H.GetHi())
 		acc0R := reduceMaxInt32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 16:
 		acc0 := archsimd.BroadcastInt32x8(m)
@@ -277,6 +280,7 @@ func maxInt32(data []int32) int32 {
 		acc0 = acc0.Max(acc1)
 		acc0Q := acc0.GetLo().Max(acc0.GetHi())
 		acc0R := reduceMaxInt32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -317,6 +321,7 @@ func minInt64(data []int64) int64 {
 		acc0H := acc0.GetLo().Min(acc0.GetHi())
 		acc0Q := acc0H.GetLo().Min(acc0H.GetHi())
 		acc0R := reduceMinInt64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 8:
 		acc0 := archsimd.BroadcastInt64x4(m)
@@ -340,6 +345,7 @@ func minInt64(data []int64) int64 {
 		acc0 = acc1.Merge(acc0, acc0.Greater(acc1))
 		acc0Q := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetLo().Greater(acc0.GetHi()))
 		acc0R := reduceMinInt64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -380,6 +386,7 @@ func maxInt64(data []int64) int64 {
 		acc0H := acc0.GetLo().Max(acc0.GetHi())
 		acc0Q := acc0H.GetLo().Max(acc0H.GetHi())
 		acc0R := reduceMaxInt64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 8:
 		acc0 := archsimd.BroadcastInt64x4(m)
@@ -403,6 +410,7 @@ func maxInt64(data []int64) int64 {
 		acc0 = acc0.Merge(acc1, acc0.Greater(acc1))
 		acc0Q := acc0.GetLo().Merge(acc0.GetHi(), acc0.GetLo().Greater(acc0.GetHi()))
 		acc0R := reduceMaxInt64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -443,6 +451,7 @@ func minUint32(data []uint32) uint32 {
 		acc0H := acc0.GetLo().Min(acc0.GetHi())
 		acc0Q := acc0H.GetLo().Min(acc0H.GetHi())
 		acc0R := reduceMinUint32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 16:
 		acc0 := archsimd.BroadcastUint32x8(m)
@@ -466,6 +475,7 @@ func minUint32(data []uint32) uint32 {
 		acc0 = acc0.Min(acc1)
 		acc0Q := acc0.GetLo().Min(acc0.GetHi())
 		acc0R := reduceMinUint32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -506,6 +516,7 @@ func maxUint32(data []uint32) uint32 {
 		acc0H := acc0.GetLo().Max(acc0.GetHi())
 		acc0Q := acc0H.GetLo().Max(acc0H.GetHi())
 		acc0R := reduceMaxUint32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 16:
 		acc0 := archsimd.BroadcastUint32x8(m)
@@ -529,6 +540,7 @@ func maxUint32(data []uint32) uint32 {
 		acc0 = acc0.Max(acc1)
 		acc0Q := acc0.GetLo().Max(acc0.GetHi())
 		acc0R := reduceMaxUint32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -569,6 +581,7 @@ func minUint64(data []uint64) uint64 {
 		acc0H := acc0.GetLo().Min(acc0.GetHi())
 		acc0Q := acc0H.GetLo().Min(acc0H.GetHi())
 		acc0R := reduceMinUint64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 8:
 		sign := archsimd.BroadcastUint64x4(1 << 63)
@@ -594,6 +607,7 @@ func minUint64(data []uint64) uint64 {
 		acc0 = acc1.Merge(acc0, acc0.Xor(sign).AsInt64x4().Greater(acc1.Xor(sign).AsInt64x4()))
 		acc0Q := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetLo().Xor(sign2).AsInt64x2().Greater(acc0.GetHi().Xor(sign2).AsInt64x2()))
 		acc0R := reduceMinUint64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -634,6 +648,7 @@ func maxUint64(data []uint64) uint64 {
 		acc0H := acc0.GetLo().Max(acc0.GetHi())
 		acc0Q := acc0H.GetLo().Max(acc0H.GetHi())
 		acc0R := reduceMaxUint64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 8:
 		sign := archsimd.BroadcastUint64x4(1 << 63)
@@ -659,6 +674,7 @@ func maxUint64(data []uint64) uint64 {
 		acc0 = acc0.Merge(acc1, acc0.Xor(sign).AsInt64x4().Greater(acc1.Xor(sign).AsInt64x4()))
 		acc0Q := acc0.GetLo().Merge(acc0.GetHi(), acc0.GetLo().Xor(sign2).AsInt64x2().Greater(acc0.GetHi().Xor(sign2).AsInt64x2()))
 		acc0R := reduceMaxUint64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -699,6 +715,7 @@ func minFloat32(data []float32) float32 {
 		acc0H := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetHi().Less(acc0.GetLo()))
 		acc0Q := acc0H.GetHi().Merge(acc0H.GetLo(), acc0H.GetHi().Less(acc0H.GetLo()))
 		acc0R := reduceMinFloat32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 16:
 		acc0 := archsimd.BroadcastFloat32x8(m)
@@ -722,6 +739,7 @@ func minFloat32(data []float32) float32 {
 		acc0 = acc1.Merge(acc0, acc1.Less(acc0))
 		acc0Q := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetHi().Less(acc0.GetLo()))
 		acc0R := reduceMinFloat32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -762,6 +780,7 @@ func maxFloat32(data []float32) float32 {
 		acc0H := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetHi().Greater(acc0.GetLo()))
 		acc0Q := acc0H.GetHi().Merge(acc0H.GetLo(), acc0H.GetHi().Greater(acc0H.GetLo()))
 		acc0R := reduceMaxFloat32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 16:
 		acc0 := archsimd.BroadcastFloat32x8(m)
@@ -785,6 +804,7 @@ func maxFloat32(data []float32) float32 {
 		acc0 = acc1.Merge(acc0, acc1.Greater(acc0))
 		acc0Q := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetHi().Greater(acc0.GetLo()))
 		acc0R := reduceMaxFloat32x4(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -825,6 +845,7 @@ func minFloat64(data []float64) float64 {
 		acc0H := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetHi().Less(acc0.GetLo()))
 		acc0Q := acc0H.GetHi().Merge(acc0H.GetLo(), acc0H.GetHi().Less(acc0H.GetLo()))
 		acc0R := reduceMinFloat64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 8:
 		acc0 := archsimd.BroadcastFloat64x4(m)
@@ -848,6 +869,7 @@ func minFloat64(data []float64) float64 {
 		acc0 = acc1.Merge(acc0, acc1.Less(acc0))
 		acc0Q := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetHi().Less(acc0.GetLo()))
 		acc0R := reduceMinFloat64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -888,6 +910,7 @@ func maxFloat64(data []float64) float64 {
 		acc0H := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetHi().Greater(acc0.GetLo()))
 		acc0Q := acc0H.GetHi().Merge(acc0H.GetLo(), acc0H.GetHi().Greater(acc0H.GetLo()))
 		acc0R := reduceMaxFloat64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	case archsimd.X86.AVX2() && len(d) >= 8:
 		acc0 := archsimd.BroadcastFloat64x4(m)
@@ -911,6 +934,7 @@ func maxFloat64(data []float64) float64 {
 		acc0 = acc1.Merge(acc0, acc1.Greater(acc0))
 		acc0Q := acc0.GetHi().Merge(acc0.GetLo(), acc0.GetHi().Greater(acc0.GetLo()))
 		acc0R := reduceMaxFloat64x2(acc0Q)
+		archsimd.ClearAVXUpperBits()
 		return acc0R
 	}
 	for _, v := range d {
@@ -962,6 +986,7 @@ func boundsInt32(data []int32) (min, max int32) {
 		maxAcc0H := maxAcc0.GetLo().Max(maxAcc0.GetHi())
 		maxAcc0Q := maxAcc0H.GetLo().Max(maxAcc0H.GetHi())
 		maxAcc0R := reduceMaxInt32x4(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	case archsimd.X86.AVX2() && len(d) >= 16:
 		minAcc0 := archsimd.BroadcastInt32x8(min)
@@ -994,6 +1019,7 @@ func boundsInt32(data []int32) (min, max int32) {
 		minAcc0R := reduceMinInt32x4(minAcc0Q)
 		maxAcc0Q := maxAcc0.GetLo().Max(maxAcc0.GetHi())
 		maxAcc0R := reduceMaxInt32x4(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	}
 	for _, v := range d {
@@ -1048,6 +1074,7 @@ func boundsInt64(data []int64) (min, max int64) {
 		maxAcc0H := maxAcc0.GetLo().Max(maxAcc0.GetHi())
 		maxAcc0Q := maxAcc0H.GetLo().Max(maxAcc0H.GetHi())
 		maxAcc0R := reduceMaxInt64x2(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	case archsimd.X86.AVX2() && len(d) >= 8:
 		minAcc0 := archsimd.BroadcastInt64x4(min)
@@ -1080,6 +1107,7 @@ func boundsInt64(data []int64) (min, max int64) {
 		minAcc0R := reduceMinInt64x2(minAcc0Q)
 		maxAcc0Q := maxAcc0.GetLo().Merge(maxAcc0.GetHi(), maxAcc0.GetLo().Greater(maxAcc0.GetHi()))
 		maxAcc0R := reduceMaxInt64x2(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	}
 	for _, v := range d {
@@ -1134,6 +1162,7 @@ func boundsUint32(data []uint32) (min, max uint32) {
 		maxAcc0H := maxAcc0.GetLo().Max(maxAcc0.GetHi())
 		maxAcc0Q := maxAcc0H.GetLo().Max(maxAcc0H.GetHi())
 		maxAcc0R := reduceMaxUint32x4(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	case archsimd.X86.AVX2() && len(d) >= 16:
 		minAcc0 := archsimd.BroadcastUint32x8(min)
@@ -1166,6 +1195,7 @@ func boundsUint32(data []uint32) (min, max uint32) {
 		minAcc0R := reduceMinUint32x4(minAcc0Q)
 		maxAcc0Q := maxAcc0.GetLo().Max(maxAcc0.GetHi())
 		maxAcc0R := reduceMaxUint32x4(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	}
 	for _, v := range d {
@@ -1220,6 +1250,7 @@ func boundsUint64(data []uint64) (min, max uint64) {
 		maxAcc0H := maxAcc0.GetLo().Max(maxAcc0.GetHi())
 		maxAcc0Q := maxAcc0H.GetLo().Max(maxAcc0H.GetHi())
 		maxAcc0R := reduceMaxUint64x2(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	case archsimd.X86.AVX2() && len(d) >= 8:
 		sign := archsimd.BroadcastUint64x4(1 << 63)
@@ -1254,6 +1285,7 @@ func boundsUint64(data []uint64) (min, max uint64) {
 		minAcc0R := reduceMinUint64x2(minAcc0Q)
 		maxAcc0Q := maxAcc0.GetLo().Merge(maxAcc0.GetHi(), maxAcc0.GetLo().Xor(sign2).AsInt64x2().Greater(maxAcc0.GetHi().Xor(sign2).AsInt64x2()))
 		maxAcc0R := reduceMaxUint64x2(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	}
 	for _, v := range d {
@@ -1308,6 +1340,7 @@ func boundsFloat32(data []float32) (min, max float32) {
 		maxAcc0H := maxAcc0.GetHi().Merge(maxAcc0.GetLo(), maxAcc0.GetHi().Greater(maxAcc0.GetLo()))
 		maxAcc0Q := maxAcc0H.GetHi().Merge(maxAcc0H.GetLo(), maxAcc0H.GetHi().Greater(maxAcc0H.GetLo()))
 		maxAcc0R := reduceMaxFloat32x4(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	case archsimd.X86.AVX2() && len(d) >= 16:
 		minAcc0 := archsimd.BroadcastFloat32x8(min)
@@ -1340,6 +1373,7 @@ func boundsFloat32(data []float32) (min, max float32) {
 		minAcc0R := reduceMinFloat32x4(minAcc0Q)
 		maxAcc0Q := maxAcc0.GetHi().Merge(maxAcc0.GetLo(), maxAcc0.GetHi().Greater(maxAcc0.GetLo()))
 		maxAcc0R := reduceMaxFloat32x4(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	}
 	for _, v := range d {
@@ -1394,6 +1428,7 @@ func boundsFloat64(data []float64) (min, max float64) {
 		maxAcc0H := maxAcc0.GetHi().Merge(maxAcc0.GetLo(), maxAcc0.GetHi().Greater(maxAcc0.GetLo()))
 		maxAcc0Q := maxAcc0H.GetHi().Merge(maxAcc0H.GetLo(), maxAcc0H.GetHi().Greater(maxAcc0H.GetLo()))
 		maxAcc0R := reduceMaxFloat64x2(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	case archsimd.X86.AVX2() && len(d) >= 8:
 		minAcc0 := archsimd.BroadcastFloat64x4(min)
@@ -1426,6 +1461,7 @@ func boundsFloat64(data []float64) (min, max float64) {
 		minAcc0R := reduceMinFloat64x2(minAcc0Q)
 		maxAcc0Q := maxAcc0.GetHi().Merge(maxAcc0.GetLo(), maxAcc0.GetHi().Greater(maxAcc0.GetLo()))
 		maxAcc0R := reduceMaxFloat64x2(maxAcc0Q)
+		archsimd.ClearAVXUpperBits()
 		return minAcc0R, maxAcc0R
 	}
 	for _, v := range d {

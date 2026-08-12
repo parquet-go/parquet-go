@@ -35,6 +35,7 @@ func orderAscendingInt32(data []int32) bool {
 			a := archsimd.LoadInt32x16Slice(data[i:])
 			b := archsimd.LoadInt32x16Slice(data[i+1:])
 			if a.LessEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -42,6 +43,7 @@ func orderAscendingInt32(data []int32) bool {
 			a := archsimd.LoadInt32x16Slice(data[len(data)-17:])
 			b := archsimd.LoadInt32x16Slice(data[len(data)-16:])
 			if a.LessEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -52,6 +54,7 @@ func orderAscendingInt32(data []int32) bool {
 			a := archsimd.LoadInt32x8Slice(data[i:])
 			b := archsimd.LoadInt32x8Slice(data[i+1:])
 			if a.Greater(b).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -59,9 +62,11 @@ func orderAscendingInt32(data []int32) bool {
 			a := archsimd.LoadInt32x8Slice(data[len(data)-9:])
 			b := archsimd.LoadInt32x8Slice(data[len(data)-8:])
 			if a.Greater(b).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -80,6 +85,7 @@ func orderDescendingInt32(data []int32) bool {
 			a := archsimd.LoadInt32x16Slice(data[i:])
 			b := archsimd.LoadInt32x16Slice(data[i+1:])
 			if a.GreaterEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -87,6 +93,7 @@ func orderDescendingInt32(data []int32) bool {
 			a := archsimd.LoadInt32x16Slice(data[len(data)-17:])
 			b := archsimd.LoadInt32x16Slice(data[len(data)-16:])
 			if a.GreaterEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -97,6 +104,7 @@ func orderDescendingInt32(data []int32) bool {
 			a := archsimd.LoadInt32x8Slice(data[i:])
 			b := archsimd.LoadInt32x8Slice(data[i+1:])
 			if b.Greater(a).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -104,9 +112,11 @@ func orderDescendingInt32(data []int32) bool {
 			a := archsimd.LoadInt32x8Slice(data[len(data)-9:])
 			b := archsimd.LoadInt32x8Slice(data[len(data)-8:])
 			if b.Greater(a).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -125,6 +135,7 @@ func orderAscendingInt64(data []int64) bool {
 			a := archsimd.LoadInt64x8Slice(data[i:])
 			b := archsimd.LoadInt64x8Slice(data[i+1:])
 			if a.LessEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -132,6 +143,7 @@ func orderAscendingInt64(data []int64) bool {
 			a := archsimd.LoadInt64x8Slice(data[len(data)-9:])
 			b := archsimd.LoadInt64x8Slice(data[len(data)-8:])
 			if a.LessEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -142,6 +154,7 @@ func orderAscendingInt64(data []int64) bool {
 			a := archsimd.LoadInt64x4Slice(data[i:])
 			b := archsimd.LoadInt64x4Slice(data[i+1:])
 			if a.Greater(b).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -149,9 +162,11 @@ func orderAscendingInt64(data []int64) bool {
 			a := archsimd.LoadInt64x4Slice(data[len(data)-5:])
 			b := archsimd.LoadInt64x4Slice(data[len(data)-4:])
 			if a.Greater(b).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -170,6 +185,7 @@ func orderDescendingInt64(data []int64) bool {
 			a := archsimd.LoadInt64x8Slice(data[i:])
 			b := archsimd.LoadInt64x8Slice(data[i+1:])
 			if a.GreaterEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -177,6 +193,7 @@ func orderDescendingInt64(data []int64) bool {
 			a := archsimd.LoadInt64x8Slice(data[len(data)-9:])
 			b := archsimd.LoadInt64x8Slice(data[len(data)-8:])
 			if a.GreaterEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -187,6 +204,7 @@ func orderDescendingInt64(data []int64) bool {
 			a := archsimd.LoadInt64x4Slice(data[i:])
 			b := archsimd.LoadInt64x4Slice(data[i+1:])
 			if b.Greater(a).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -194,9 +212,11 @@ func orderDescendingInt64(data []int64) bool {
 			a := archsimd.LoadInt64x4Slice(data[len(data)-5:])
 			b := archsimd.LoadInt64x4Slice(data[len(data)-4:])
 			if b.Greater(a).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -215,6 +235,7 @@ func orderAscendingUint32(data []uint32) bool {
 			a := archsimd.LoadUint32x16Slice(data[i:])
 			b := archsimd.LoadUint32x16Slice(data[i+1:])
 			if a.LessEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -222,6 +243,7 @@ func orderAscendingUint32(data []uint32) bool {
 			a := archsimd.LoadUint32x16Slice(data[len(data)-17:])
 			b := archsimd.LoadUint32x16Slice(data[len(data)-16:])
 			if a.LessEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -233,6 +255,7 @@ func orderAscendingUint32(data []uint32) bool {
 			a := archsimd.LoadUint32x8Slice(data[i:])
 			b := archsimd.LoadUint32x8Slice(data[i+1:])
 			if a.Xor(sign).AsInt32x8().Greater(b.Xor(sign).AsInt32x8()).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -240,9 +263,11 @@ func orderAscendingUint32(data []uint32) bool {
 			a := archsimd.LoadUint32x8Slice(data[len(data)-9:])
 			b := archsimd.LoadUint32x8Slice(data[len(data)-8:])
 			if a.Xor(sign).AsInt32x8().Greater(b.Xor(sign).AsInt32x8()).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -261,6 +286,7 @@ func orderDescendingUint32(data []uint32) bool {
 			a := archsimd.LoadUint32x16Slice(data[i:])
 			b := archsimd.LoadUint32x16Slice(data[i+1:])
 			if a.GreaterEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -268,6 +294,7 @@ func orderDescendingUint32(data []uint32) bool {
 			a := archsimd.LoadUint32x16Slice(data[len(data)-17:])
 			b := archsimd.LoadUint32x16Slice(data[len(data)-16:])
 			if a.GreaterEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -279,6 +306,7 @@ func orderDescendingUint32(data []uint32) bool {
 			a := archsimd.LoadUint32x8Slice(data[i:])
 			b := archsimd.LoadUint32x8Slice(data[i+1:])
 			if b.Xor(sign).AsInt32x8().Greater(a.Xor(sign).AsInt32x8()).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -286,9 +314,11 @@ func orderDescendingUint32(data []uint32) bool {
 			a := archsimd.LoadUint32x8Slice(data[len(data)-9:])
 			b := archsimd.LoadUint32x8Slice(data[len(data)-8:])
 			if b.Xor(sign).AsInt32x8().Greater(a.Xor(sign).AsInt32x8()).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -307,6 +337,7 @@ func orderAscendingUint64(data []uint64) bool {
 			a := archsimd.LoadUint64x8Slice(data[i:])
 			b := archsimd.LoadUint64x8Slice(data[i+1:])
 			if a.LessEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -314,6 +345,7 @@ func orderAscendingUint64(data []uint64) bool {
 			a := archsimd.LoadUint64x8Slice(data[len(data)-9:])
 			b := archsimd.LoadUint64x8Slice(data[len(data)-8:])
 			if a.LessEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -325,6 +357,7 @@ func orderAscendingUint64(data []uint64) bool {
 			a := archsimd.LoadUint64x4Slice(data[i:])
 			b := archsimd.LoadUint64x4Slice(data[i+1:])
 			if a.Xor(sign).AsInt64x4().Greater(b.Xor(sign).AsInt64x4()).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -332,9 +365,11 @@ func orderAscendingUint64(data []uint64) bool {
 			a := archsimd.LoadUint64x4Slice(data[len(data)-5:])
 			b := archsimd.LoadUint64x4Slice(data[len(data)-4:])
 			if a.Xor(sign).AsInt64x4().Greater(b.Xor(sign).AsInt64x4()).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -353,6 +388,7 @@ func orderDescendingUint64(data []uint64) bool {
 			a := archsimd.LoadUint64x8Slice(data[i:])
 			b := archsimd.LoadUint64x8Slice(data[i+1:])
 			if a.GreaterEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -360,6 +396,7 @@ func orderDescendingUint64(data []uint64) bool {
 			a := archsimd.LoadUint64x8Slice(data[len(data)-9:])
 			b := archsimd.LoadUint64x8Slice(data[len(data)-8:])
 			if a.GreaterEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -371,6 +408,7 @@ func orderDescendingUint64(data []uint64) bool {
 			a := archsimd.LoadUint64x4Slice(data[i:])
 			b := archsimd.LoadUint64x4Slice(data[i+1:])
 			if b.Xor(sign).AsInt64x4().Greater(a.Xor(sign).AsInt64x4()).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -378,9 +416,11 @@ func orderDescendingUint64(data []uint64) bool {
 			a := archsimd.LoadUint64x4Slice(data[len(data)-5:])
 			b := archsimd.LoadUint64x4Slice(data[len(data)-4:])
 			if b.Xor(sign).AsInt64x4().Greater(a.Xor(sign).AsInt64x4()).ToBits() != 0 {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -399,6 +439,7 @@ func orderAscendingFloat32(data []float32) bool {
 			a := archsimd.LoadFloat32x16Slice(data[i:])
 			b := archsimd.LoadFloat32x16Slice(data[i+1:])
 			if a.LessEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -406,6 +447,7 @@ func orderAscendingFloat32(data []float32) bool {
 			a := archsimd.LoadFloat32x16Slice(data[len(data)-17:])
 			b := archsimd.LoadFloat32x16Slice(data[len(data)-16:])
 			if a.LessEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -416,6 +458,7 @@ func orderAscendingFloat32(data []float32) bool {
 			a := archsimd.LoadFloat32x8Slice(data[i:])
 			b := archsimd.LoadFloat32x8Slice(data[i+1:])
 			if a.LessEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -423,9 +466,11 @@ func orderAscendingFloat32(data []float32) bool {
 			a := archsimd.LoadFloat32x8Slice(data[len(data)-9:])
 			b := archsimd.LoadFloat32x8Slice(data[len(data)-8:])
 			if a.LessEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -444,6 +489,7 @@ func orderDescendingFloat32(data []float32) bool {
 			a := archsimd.LoadFloat32x16Slice(data[i:])
 			b := archsimd.LoadFloat32x16Slice(data[i+1:])
 			if a.GreaterEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -451,6 +497,7 @@ func orderDescendingFloat32(data []float32) bool {
 			a := archsimd.LoadFloat32x16Slice(data[len(data)-17:])
 			b := archsimd.LoadFloat32x16Slice(data[len(data)-16:])
 			if a.GreaterEqual(b).ToBits() != 0xffff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -461,6 +508,7 @@ func orderDescendingFloat32(data []float32) bool {
 			a := archsimd.LoadFloat32x8Slice(data[i:])
 			b := archsimd.LoadFloat32x8Slice(data[i+1:])
 			if a.GreaterEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -468,9 +516,11 @@ func orderDescendingFloat32(data []float32) bool {
 			a := archsimd.LoadFloat32x8Slice(data[len(data)-9:])
 			b := archsimd.LoadFloat32x8Slice(data[len(data)-8:])
 			if a.GreaterEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -489,6 +539,7 @@ func orderAscendingFloat64(data []float64) bool {
 			a := archsimd.LoadFloat64x8Slice(data[i:])
 			b := archsimd.LoadFloat64x8Slice(data[i+1:])
 			if a.LessEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -496,6 +547,7 @@ func orderAscendingFloat64(data []float64) bool {
 			a := archsimd.LoadFloat64x8Slice(data[len(data)-9:])
 			b := archsimd.LoadFloat64x8Slice(data[len(data)-8:])
 			if a.LessEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -506,6 +558,7 @@ func orderAscendingFloat64(data []float64) bool {
 			a := archsimd.LoadFloat64x4Slice(data[i:])
 			b := archsimd.LoadFloat64x4Slice(data[i+1:])
 			if a.LessEqual(b).ToBits() != 0xf {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -513,9 +566,11 @@ func orderAscendingFloat64(data []float64) bool {
 			a := archsimd.LoadFloat64x4Slice(data[len(data)-5:])
 			b := archsimd.LoadFloat64x4Slice(data[len(data)-4:])
 			if a.LessEqual(b).ToBits() != 0xf {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
@@ -534,6 +589,7 @@ func orderDescendingFloat64(data []float64) bool {
 			a := archsimd.LoadFloat64x8Slice(data[i:])
 			b := archsimd.LoadFloat64x8Slice(data[i+1:])
 			if a.GreaterEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -541,6 +597,7 @@ func orderDescendingFloat64(data []float64) bool {
 			a := archsimd.LoadFloat64x8Slice(data[len(data)-9:])
 			b := archsimd.LoadFloat64x8Slice(data[len(data)-8:])
 			if a.GreaterEqual(b).ToBits() != 0xff {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -551,6 +608,7 @@ func orderDescendingFloat64(data []float64) bool {
 			a := archsimd.LoadFloat64x4Slice(data[i:])
 			b := archsimd.LoadFloat64x4Slice(data[i+1:])
 			if a.GreaterEqual(b).ToBits() != 0xf {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
@@ -558,9 +616,11 @@ func orderDescendingFloat64(data []float64) bool {
 			a := archsimd.LoadFloat64x4Slice(data[len(data)-5:])
 			b := archsimd.LoadFloat64x4Slice(data[len(data)-4:])
 			if a.GreaterEqual(b).ToBits() != 0xf {
+				archsimd.ClearAVXUpperBits()
 				return false
 			}
 		}
+		archsimd.ClearAVXUpperBits()
 		return true
 	}
 	for i := 0; i+1 < len(data); i++ {
