@@ -5,8 +5,6 @@ package sparse
 import (
 	"unsafe"
 
-	"simd/archsimd"
-
 	"github.com/parquet-go/bitpack/unsafecast"
 )
 
@@ -46,14 +44,14 @@ func gather128(dst [][16]byte, src Uint128Array) int {
 	c := unsafecast.Slice[[4][16]byte](dst[:n])
 	for j := range c {
 		d := &c[j]
-		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(p), 16)).StoreSlice(d[0][:])
-		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(unsafe.Add(p, off)), 16)).StoreSlice(d[1][:])
-		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(unsafe.Add(p, 2*off)), 16)).StoreSlice(d[2][:])
-		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(unsafe.Add(p, 3*off)), 16)).StoreSlice(d[3][:])
+		d[0] = *(*[16]byte)(p)
+		d[1] = *(*[16]byte)(unsafe.Add(p, off))
+		d[2] = *(*[16]byte)(unsafe.Add(p, 2*off))
+		d[3] = *(*[16]byte)(unsafe.Add(p, 3*off))
 		p = unsafe.Add(p, 4*off)
 	}
 	for i := len(c) * 4; i < n; i++ {
-		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(p), 16)).StoreSlice(dst[i][:])
+		dst[i] = *(*[16]byte)(p)
 		p = unsafe.Add(p, off)
 	}
 	return n
