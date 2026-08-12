@@ -318,6 +318,24 @@ with `gcloud compute instances start parquet-archsimd-bench
 --project=achille-demo-test --zone=us-central1-b`; it has Go 1.26.5 in
 /usr/local/go and the repo cloned at ~/parquet-go.
 
+### Tier 2 progress (branch archsimd-tier2)
+
+- **page min/max/bounds (19 kernels)**: done — one generated Go file
+  (page_minmax_simd_amd64.go) replaces ~1800 lines of assembly across three
+  .s files. New capability: AVX2 tiers (the assembly was AVX-512-only, so
+  AVX2 CPUs ran scalar). Two lowering rules learned:
+  1. float Min/Max must use compare-and-merge — archsimd NaN semantics are
+     undocumented and the compiler canonicalizes commutative operands, so
+     the assembly's operand-order trick is not expressible;
+  2. 64-bit integer Min/Max at the AVX2 tier must use compare-and-merge —
+     Int64x4.Min lowers to VPMINSQ (AVX-512-only) and SIGILLs on AVX2 CPUs;
+     VPCMPGTQ+blend instead, with a 1<<63 bias for unsigned.
+  The lowercase page kernels ignore interior NaN on amd64 (asm and simd)
+  but propagate NaN in purego (slices.Min) — pre-existing divergence,
+  documented in page_bounds_vector_nan_test.go.
+- Remaining tier 2: orderOf* (6), hashprobe multiProbe (3), delta
+  length_byte_array (2), aeshash (6). Benchmarks on the VM pending.
+
 ## Suggested execution order
 
 1. Tier 1 kernels one PR at a time, benchmarked against asm (`bytealg.Count`
