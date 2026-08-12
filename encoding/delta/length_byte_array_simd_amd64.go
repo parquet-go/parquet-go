@@ -63,6 +63,9 @@ var (
 	shiftLanes2x16 = [16]uint32{0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
 	shiftLanes4x16 = [16]uint32{0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
 	shiftLanes8x16 = [16]uint32{0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7}
+
+	lastLanex8  = [8]uint32{7, 7, 7, 7, 7, 7, 7, 7}
+	lastLanex16 = [16]uint32{15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15}
 )
 
 // decodeByteArrayLengths computes the exclusive prefix sum of lengths into
@@ -88,6 +91,13 @@ func decodeByteArrayLengths(offsets []uint32, lengths []int32) (uint32, int32) {
 		m2 := archsimd.Mask32x16FromBits(0xFFFC)
 		m4 := archsimd.Mask32x16FromBits(0xFFF0)
 		m8 := archsimd.Mask32x16FromBits(0xFF00)
+		last := archsimd.LoadUint32x16Slice(lastLanex16[:])
+		// The running total stays in a vector (all lanes equal): extracting
+		// it to a general purpose register and broadcasting it back every
+		// chunk puts a long serial chain on the loop's critical path, while
+		// the vector-resident carry costs one add (the prefix ladders
+		// pipeline across chunks; only the carry is serial).
+		carry := zero
 		cl := unsafecast.Slice[[16]int32](lengths)
 		co := unsafecast.Slice[[16]uint32](offsets)
 		for j := 0; j < len(cl) && j < len(co); j, i = j+1, i+16 {
@@ -100,10 +110,11 @@ func decodeByteArrayLengths(offsets []uint32, lengths []int32) (uint32, int32) {
 			s = s.Add(s.Permute(idx2).Merge(zero, m2))
 			s = s.Add(s.Permute(idx4).Merge(zero, m4))
 			s = s.Add(s.Permute(idx8).Merge(zero, m8))
-			ex := s.Permute(idx1).Merge(zero, m1).Add(archsimd.BroadcastInt32x16(int32(lastOffset)))
+			ex := s.Permute(idx1).Merge(zero, m1).Add(carry)
 			ex.AsUint32x16().StoreSlice(co[j][:])
-			lastOffset += uint32(s.GetHi().GetHi().GetElem(3))
+			carry = carry.Add(s.Permute(last))
 		}
+		lastOffset = uint32(carry.GetLo().GetLo().GetElem(0))
 		archsimd.ClearAVXUpperBits()
 	case archsimd.X86.AVX2() && len(lengths) >= 8:
 		zero := archsimd.BroadcastInt32x8(0)
@@ -117,6 +128,8 @@ func decodeByteArrayLengths(offsets []uint32, lengths []int32) (uint32, int32) {
 		m1 := iota8.Greater(zero)
 		m2 := iota8.Greater(archsimd.BroadcastInt32x8(1))
 		m4 := iota8.Greater(archsimd.BroadcastInt32x8(3))
+		last := archsimd.LoadUint32x8Slice(lastLanex8[:])
+		carry := zero
 		cl := unsafecast.Slice[[8]int32](lengths)
 		co := unsafecast.Slice[[8]uint32](offsets)
 		for j := 0; j < len(cl) && j < len(co); j, i = j+1, i+8 {
@@ -131,10 +144,11 @@ func decodeByteArrayLengths(offsets []uint32, lengths []int32) (uint32, int32) {
 			s = s.Add(s.Permute(idx4).Merge(zero, m4))
 			// The offsets are the exclusive prefix sums plus the running
 			// total: shift the inclusive sums up one lane.
-			ex := s.Permute(idx1).Merge(zero, m1).Add(archsimd.BroadcastInt32x8(int32(lastOffset)))
+			ex := s.Permute(idx1).Merge(zero, m1).Add(carry)
 			ex.AsUint32x8().StoreSlice(co[j][:])
-			lastOffset += uint32(s.GetHi().GetElem(3))
+			carry = carry.Add(s.Permute(last))
 		}
+		lastOffset = uint32(carry.GetLo().GetElem(0))
 		archsimd.ClearAVXUpperBits()
 	}
 	for ; i < len(lengths); i++ {
