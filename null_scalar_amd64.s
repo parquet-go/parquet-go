@@ -2,6 +2,12 @@
 
 #include "textflag.h"
 
+GLOBL scale4x8<>(SB), RODATA|NOPTR, $32
+DATA scale4x8<>+0(SB)/8,  $0
+DATA scale4x8<>+8(SB)/8,  $1
+DATA scale4x8<>+16(SB)/8, $2
+DATA scale4x8<>+24(SB)/8, $3
+
 TEXT ·nullIndex8(SB), NOSPLIT, $0-32
     MOVQ bits+0(FP), AX
     MOVQ rows_array_ptr+8(FP), BX
