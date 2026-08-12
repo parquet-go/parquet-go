@@ -395,8 +395,16 @@ rounds encrypt two blocks per instruction, with interleaves packing
 Result: **+21% throughput over the assembly** (11.9 -> 14.5 GiB/s), hash
 values bit-identical (golden tests on VAES hardware). The same treatment
 would fit MultiHash32/MultiHash128, and an AVX512VAES variant could do 4
-blocks per instruction. The remaining Uint64Table gap (+55% small N) is now
-on the probe side.
+blocks per instruction. The probe gap was then closed
+in three steps: pre-slicing values to hoist its bounds check, testing
+group fullness with >= so prove can elide the group insert bounds checks
+(it cannot see through OnesCount32 + ==), and reading densely packed keys
+through a plain slice instead of the strided Index (whose per-key multiply
+and register pressure spilled slice headers into the probe loop). With
+VAES MultiHash32 added (the 32-bit state is the 64-bit one with a
+VPMOVZXDQ-widened value), the hash table benchmarks landed at **+7..+34%
+vs assembly** (from +65..+83%), with the remaining delta in the
+insert-heavy portion of the benchmark.
 
 ## Suggested execution order
 
