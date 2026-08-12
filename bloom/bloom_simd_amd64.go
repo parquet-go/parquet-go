@@ -37,6 +37,7 @@ func (b *Block) Insert(x uint32) {
 	if archsimd.X86.AVX2() {
 		w := unsafecast.Slice[uint32](b[:])
 		archsimd.LoadUint32x8Slice(w).Or(blockMask(x)).StoreSlice(w)
+		archsimd.ClearAVXUpperBits()
 		return
 	}
 	b[0] |= 1 << ((x * salt0) >> 27)
@@ -53,7 +54,9 @@ func (b *Block) Check(x uint32) bool {
 	if archsimd.X86.AVX2() {
 		m := blockMask(x)
 		w := unsafecast.Slice[uint32](b[:])
-		return archsimd.LoadUint32x8Slice(w).And(m).Equal(m).ToBits() == 0xFF
+		ok := archsimd.LoadUint32x8Slice(w).And(m).Equal(m).ToBits() == 0xFF
+		archsimd.ClearAVXUpperBits()
+		return ok
 	}
 	return ((b[0] & (1 << ((x * salt0) >> 27))) != 0) &&
 		((b[1] & (1 << ((x * salt1) >> 27))) != 0) &&
@@ -79,6 +82,7 @@ func filterInsertBulk(f []Block, x []uint64) {
 			w := unsafecast.Slice[uint32](f[fasthash1x64(h, scale)][:])
 			archsimd.LoadUint32x8Slice(w).Or(m).StoreSlice(w)
 		}
+		archsimd.ClearAVXUpperBits()
 		return
 	}
 	for i := range x {

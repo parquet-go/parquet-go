@@ -53,6 +53,7 @@ func encodeInt32IndexEqual8ContiguousSIMD(words [][8]int32) (n int) {
 			d = d[4:]
 			continue
 		}
+		archsimd.ClearAVXUpperBits()
 		n = len(words) - len(d)
 		switch {
 		case e0 == 0xFF:
@@ -71,5 +72,6 @@ func encodeInt32IndexEqual8ContiguousSIMD(words [][8]int32) (n int) {
 			break
 		}
 	}
+	archsimd.ClearAVXUpperBits()
 	return n
 }
