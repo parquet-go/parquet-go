@@ -16,6 +16,11 @@ func TestOrderOfVectorCoverage(t *testing.T) {
 
 	for _, n := range lengths {
 		for pos := 0; pos < n-1; pos++ {
+			if n == 2 {
+				// A single violated pair is a valid sequence of the
+				// opposite order.
+				break
+			}
 			asc := make([]int32, n)
 			for i := range asc {
 				asc[i] = int32(2 * i)
