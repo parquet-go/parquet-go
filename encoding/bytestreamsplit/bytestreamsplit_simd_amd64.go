@@ -132,35 +132,43 @@ func encodeFloat(dst, src []byte) {
 	}
 }
 
+//go:noinline
+func decodeFloatChunks(dst, src []byte, n, chunks int) {
+	g := archsimd.LoadUint8x64Slice(bssDecGroup4[:])
+	blo := archsimd.LoadUint32x16Slice(bssBlkLo4[:])
+	bhi := archsimd.LoadUint32x16Slice(bssBlkHi4[:])
+	hlo := archsimd.LoadUint32x16Slice(bssHalfLo4[:])
+	hhi := archsimd.LoadUint32x16Slice(bssHalfHi4[:])
+	dc := unsafecast.Slice[[256]uint8](dst)[:chunks]
+	p0 := unsafecast.Slice[[64]uint8](src[0*n : 1*n])[:chunks]
+	p1 := unsafecast.Slice[[64]uint8](src[1*n : 2*n])[:chunks]
+	p2 := unsafecast.Slice[[64]uint8](src[2*n : 3*n])[:chunks]
+	p3 := unsafecast.Slice[[64]uint8](src[3*n : 4*n])[:chunks]
+	for j := range dc {
+		c := &dc[j]
+		q0 := archsimd.LoadUint8x64Slice(p0[j][:]).AsUint32x16()
+		q1 := archsimd.LoadUint8x64Slice(p1[j][:]).AsUint32x16()
+		q2 := archsimd.LoadUint8x64Slice(p2[j][:]).AsUint32x16()
+		q3 := archsimd.LoadUint8x64Slice(p3[j][:]).AsUint32x16()
+		t0 := q0.ConcatPermute(q1, blo)
+		t1 := q0.ConcatPermute(q1, bhi)
+		t2 := q2.ConcatPermute(q3, blo)
+		t3 := q2.ConcatPermute(q3, bhi)
+		t0.ConcatPermute(t2, hlo).AsUint8x64().Permute(g).StoreSlice(c[0:64])
+		t0.ConcatPermute(t2, hhi).AsUint8x64().Permute(g).StoreSlice(c[64:128])
+		t1.ConcatPermute(t3, hlo).AsUint8x64().Permute(g).StoreSlice(c[128:192])
+		t1.ConcatPermute(t3, hhi).AsUint8x64().Permute(g).StoreSlice(c[192:256])
+	}
+	archsimd.ClearAVXUpperBits()
+}
+
 func decodeFloat(dst, src []byte) {
 	n := len(src) / 4
 	i := 0
 	if archsimd.X86.AVX512() && archsimd.X86.AVX512VBMI() && n >= 64 {
-		g := archsimd.LoadUint8x64Slice(bssDecGroup4[:])
-		blo := archsimd.LoadUint32x16Slice(bssBlkLo4[:])
-		bhi := archsimd.LoadUint32x16Slice(bssBlkHi4[:])
-		hlo := archsimd.LoadUint32x16Slice(bssHalfLo4[:])
-		hhi := archsimd.LoadUint32x16Slice(bssHalfHi4[:])
 		chunks := n / 64
-		dc := unsafecast.Slice[[256]uint8](dst)[:chunks]
-		ps := unsafecast.Slice[[64]uint8](src)[:4*chunks]
-		for j := range dc {
-			c := &dc[j]
-			q0 := archsimd.LoadUint8x64Slice(ps[j][:]).AsUint32x16()
-			q1 := archsimd.LoadUint8x64Slice(ps[chunks+j][:]).AsUint32x16()
-			q2 := archsimd.LoadUint8x64Slice(ps[2*chunks+j][:]).AsUint32x16()
-			q3 := archsimd.LoadUint8x64Slice(ps[3*chunks+j][:]).AsUint32x16()
-			t0 := q0.ConcatPermute(q1, blo)
-			t1 := q0.ConcatPermute(q1, bhi)
-			t2 := q2.ConcatPermute(q3, blo)
-			t3 := q2.ConcatPermute(q3, bhi)
-			t0.ConcatPermute(t2, hlo).AsUint8x64().Permute(g).StoreSlice(c[0:64])
-			t0.ConcatPermute(t2, hhi).AsUint8x64().Permute(g).StoreSlice(c[64:128])
-			t1.ConcatPermute(t3, hlo).AsUint8x64().Permute(g).StoreSlice(c[128:192])
-			t1.ConcatPermute(t3, hhi).AsUint8x64().Permute(g).StoreSlice(c[192:256])
-		}
+		decodeFloatChunks(dst, src, n, chunks)
 		i = chunks * 64
-		archsimd.ClearAVXUpperBits()
 	}
 	if i < n {
 		b0 := src[0*n : 1*n]
@@ -277,42 +285,54 @@ func encodeDouble(dst, src []byte) {
 	}
 }
 
+//go:noinline
+func decodeDoubleChunks(dst, src []byte, n, chunks int) {
+	g := archsimd.LoadUint8x64Slice(bssDecGroup8[:])
+	lo1 := archsimd.LoadUint64x8Slice(bssQLo1[:])
+	hi1 := archsimd.LoadUint64x8Slice(bssQHi1[:])
+	lo2 := archsimd.LoadUint64x8Slice(bssQLo2[:])
+	hi2 := archsimd.LoadUint64x8Slice(bssQHi2[:])
+	lo3 := archsimd.LoadUint64x8Slice(bssQLo3[:])
+	hi3 := archsimd.LoadUint64x8Slice(bssQHi3[:])
+	dc := unsafecast.Slice[[512]uint8](dst)[:chunks]
+	p0 := unsafecast.Slice[[64]uint8](src[0*n : 1*n])[:chunks]
+	p1 := unsafecast.Slice[[64]uint8](src[1*n : 2*n])[:chunks]
+	p2 := unsafecast.Slice[[64]uint8](src[2*n : 3*n])[:chunks]
+	p3 := unsafecast.Slice[[64]uint8](src[3*n : 4*n])[:chunks]
+	p4 := unsafecast.Slice[[64]uint8](src[4*n : 5*n])[:chunks]
+	p5 := unsafecast.Slice[[64]uint8](src[5*n : 6*n])[:chunks]
+	p6 := unsafecast.Slice[[64]uint8](src[6*n : 7*n])[:chunks]
+	p7 := unsafecast.Slice[[64]uint8](src[7*n : 8*n])[:chunks]
+	for j := range dc {
+		c := &dc[j]
+		q0 := archsimd.LoadUint8x64Slice(p0[j][:]).AsUint64x8()
+		q1 := archsimd.LoadUint8x64Slice(p1[j][:]).AsUint64x8()
+		q2 := archsimd.LoadUint8x64Slice(p2[j][:]).AsUint64x8()
+		q3 := archsimd.LoadUint8x64Slice(p3[j][:]).AsUint64x8()
+		q4 := archsimd.LoadUint8x64Slice(p4[j][:]).AsUint64x8()
+		q5 := archsimd.LoadUint8x64Slice(p5[j][:]).AsUint64x8()
+		q6 := archsimd.LoadUint8x64Slice(p6[j][:]).AsUint64x8()
+		q7 := archsimd.LoadUint8x64Slice(p7[j][:]).AsUint64x8()
+		o0, o1, o2, o3, o4, o5, o6, o7 := transpose8x8Q(q0, q1, q2, q3, q4, q5, q6, q7, lo1, hi1, lo2, hi2, lo3, hi3)
+		o0.AsUint8x64().Permute(g).StoreSlice(c[0:64])
+		o1.AsUint8x64().Permute(g).StoreSlice(c[64:128])
+		o2.AsUint8x64().Permute(g).StoreSlice(c[128:192])
+		o3.AsUint8x64().Permute(g).StoreSlice(c[192:256])
+		o4.AsUint8x64().Permute(g).StoreSlice(c[256:320])
+		o5.AsUint8x64().Permute(g).StoreSlice(c[320:384])
+		o6.AsUint8x64().Permute(g).StoreSlice(c[384:448])
+		o7.AsUint8x64().Permute(g).StoreSlice(c[448:512])
+	}
+	archsimd.ClearAVXUpperBits()
+}
+
 func decodeDouble(dst, src []byte) {
 	n := len(src) / 8
 	i := 0
 	if archsimd.X86.AVX512() && archsimd.X86.AVX512VBMI() && n >= 64 {
-		g := archsimd.LoadUint8x64Slice(bssDecGroup8[:])
-		lo1 := archsimd.LoadUint64x8Slice(bssQLo1[:])
-		hi1 := archsimd.LoadUint64x8Slice(bssQHi1[:])
-		lo2 := archsimd.LoadUint64x8Slice(bssQLo2[:])
-		hi2 := archsimd.LoadUint64x8Slice(bssQHi2[:])
-		lo3 := archsimd.LoadUint64x8Slice(bssQLo3[:])
-		hi3 := archsimd.LoadUint64x8Slice(bssQHi3[:])
 		chunks := n / 64
-		dc := unsafecast.Slice[[512]uint8](dst)[:chunks]
-		ps := unsafecast.Slice[[64]uint8](src)[:8*chunks]
-		for j := range dc {
-			c := &dc[j]
-			q0 := archsimd.LoadUint8x64Slice(ps[j][:]).AsUint64x8()
-			q1 := archsimd.LoadUint8x64Slice(ps[chunks+j][:]).AsUint64x8()
-			q2 := archsimd.LoadUint8x64Slice(ps[2*chunks+j][:]).AsUint64x8()
-			q3 := archsimd.LoadUint8x64Slice(ps[3*chunks+j][:]).AsUint64x8()
-			q4 := archsimd.LoadUint8x64Slice(ps[4*chunks+j][:]).AsUint64x8()
-			q5 := archsimd.LoadUint8x64Slice(ps[5*chunks+j][:]).AsUint64x8()
-			q6 := archsimd.LoadUint8x64Slice(ps[6*chunks+j][:]).AsUint64x8()
-			q7 := archsimd.LoadUint8x64Slice(ps[7*chunks+j][:]).AsUint64x8()
-			o0, o1, o2, o3, o4, o5, o6, o7 := transpose8x8Q(q0, q1, q2, q3, q4, q5, q6, q7, lo1, hi1, lo2, hi2, lo3, hi3)
-			o0.AsUint8x64().Permute(g).StoreSlice(c[0:64])
-			o1.AsUint8x64().Permute(g).StoreSlice(c[64:128])
-			o2.AsUint8x64().Permute(g).StoreSlice(c[128:192])
-			o3.AsUint8x64().Permute(g).StoreSlice(c[192:256])
-			o4.AsUint8x64().Permute(g).StoreSlice(c[256:320])
-			o5.AsUint8x64().Permute(g).StoreSlice(c[320:384])
-			o6.AsUint8x64().Permute(g).StoreSlice(c[384:448])
-			o7.AsUint8x64().Permute(g).StoreSlice(c[448:512])
-		}
+		decodeDoubleChunks(dst, src, n, chunks)
 		i = chunks * 64
-		archsimd.ClearAVXUpperBits()
 	}
 	if i < n {
 		b0 := src[0*n : 1*n]
