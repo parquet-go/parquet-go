@@ -67,9 +67,6 @@ jobs:
         goamd64:
           - v3
           - v4
-        tags:
-          - ""
-          - purego
 
     runs-on: ubuntu-latest
 
@@ -107,11 +104,20 @@ jobs:
 
       - name: Run Tests
         if: steps.cpu.outputs.supported == 'true'
-        run: go test -trimpath -race -tags=${{ matrix.tags }} ./...
+        run: go test -trimpath -race ./...
 
       - name: Run Benchmarks
         if: steps.cpu.outputs.supported == 'true'
-        run: go test -trimpath -short -tags=${{ matrix.tags }} -run '^$' -bench . -benchtime 1x ./...
+        run: go test -trimpath -short -run '^$' -bench . -benchtime 1x ./...
+
+      # The purego+simd combination builds the archsimd code paths with the
+      # purego fallbacks for the remaining assembly kernels. The archsimd
+      # code is identical to the runs above and the fallbacks are tested by
+      # the main job, so compiling (vet also compiles test files) is enough
+      # to validate the tag combination.
+      - name: Build with purego
+        if: steps.cpu.outputs.supported == 'true' && matrix.goamd64 == 'v3'
+        run: go vet -tags purego ./...
 
   format:
     runs-on: ubuntu-latest
