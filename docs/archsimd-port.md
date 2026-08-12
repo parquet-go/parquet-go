@@ -531,6 +531,32 @@ heavier than VPERMB on Emerald Rapids. Shuffle-port pressure is not the
 bottleneck; keep grouping and combining as separate cheap instructions
 (commit 670be28, reverted by f76185b, preserves the experiment).
 
+**Negative result #2 — bounds check elimination in the transpose loops**:
+rewriting the computed-offset slicing (`dst[k*n+i : k*n+i+64]`, 8-16
+checks per iteration) as ranged chunk views produced loops with ZERO
+bounds checks and ~30% fewer instructions — and measured up to **65%
+slower** for the encoders at L2 sizes (interleaved same-boot A/B,
+EncodeDouble 256KiB 6.9µs → 11.4µs), with only ~-11% gains at 4KiB.
+Per-plane views spill (fixable with //go:noinline helpers), but even
+spill-free versions kept the regression, so spills were not the
+mechanism. All plane stores share one 4KiB page offset for power-of-two
+inputs; leading hypothesis: the tighter loop keeps more stores in flight
+per load and amplifies 4K load/store aliasing stalls that the fatter
+loop naturally paced out (GCP does not virtualize the PMU, so this is a
+hypothesis, not a measurement). Lesson: predictable bounds checks in a
+port-5-bound vector loop are nearly free — measure before "optimizing"
+them away. Also: a single strided view (`pd[k*chunks+j]`) is WRONG when
+n is not a multiple of 64 (planes start at byte k*n, not chunk k*chunks)
+— the differential tests on AVX-512VBMI hardware caught it; Rosetta
+cannot (no VBMI).
+
+**Endian bug found during review**: the purego bytestreamsplit codecs
+read values via `unsafecast.Slice[uint32/uint64]` + shifts, which swaps
+the plane order on big-endian platforms (s390x): pages roundtrip
+locally but are byte-swapped relative to the spec. Fixed with
+`binary.LittleEndian` accessors (same codegen on little-endian). CI's
+s390x job never caught it because roundtrips are self-consistent.
+
 Also note: benchmark the asm's *production* dispatch, not the exported
 scalar wrappers — encodeMiniBlockInt64 in the amd64 build is the scalar
 Default; the real path is encodeMiniBlockInt64AVX2 (kernel benchmarks
