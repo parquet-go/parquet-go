@@ -139,16 +139,52 @@ pure maintenance win, independent of archsimd.
 - `decodeByteArrayOffsets`, `encodeMiniBlock*Default`, `decodeBlock*Default`
 - `gather128`, `gatherBitsDefault`
 
+### Tier 5 results (branch archsimd-tier5)
+
+All scalar assembly is replaced with Go under GOEXPERIMENT=simd (the
+gather/scatter-blocked kernels keep their assembly in every build; their
+scalar siblings moved to *_scalar_amd64.s files tagged !goexperiment.simd
+because Go and assembly definitions of one symbol cannot coexist).
+
+Outcomes vs the assembly (Emerald Rapids, GOAMD64=v4):
+
+- nullIndex8/128 (generic nullIndex[T]): **parity** (+0.9% geomean)
+- gather128: **parity** on strided input after three iterations (see
+  below), plus a memmove fast path for stride==16 (packed dictionary
+  pages, the common case) that beats the assembly
+- wyhash MultiHash 32/64/128: +24% — accepted: the kernel is unreachable
+  on any CPU with AES-NI (hashprobe dispatches to aeshash), i.e. on
+  every CPU that can run the simd build
+- xxhash Sum64: +11/+32/+8% at 4/16/100 B, ~parity at 4KB+ — accepted:
+  the hot batched paths are the tier-3 MultiSum64 kernels, which beat
+  the assembly
+- rle encodeInt32Bitpack 1-16 bits (an AVX2 kernel the earlier tiers
+  missed, hidden behind a function variable; ported with the mini-block
+  fold): -10% B/s vs the AVX2 assembly — accepted after a 2-group
+  interleave recovered part of the gap
+
+**"The compiler generates comparable code" must be measured, never
+assumed.** The naive purego loops started at wyhash +54..106% and
+gather128 +206%. What closed the gaps, in order of impact: walk strided
+pointers additively (a per-element Index() call costs an IMUL), process
+4 elements per iteration writing through [4]T chunk views (prove cannot
+derive hashes[i+3] from i+4 <= len), specialize per element width (a
+load closure is an indirect call), and let the compiler emit 16-byte
+copies itself (`*(*[16]byte)(p)` assignments compile to MOVUPS pairs;
+wrapping them in unsafe.Slice + archsimd loads added per-element setup
+worth +40% on its own).
+
 ## Dead code found during the audit (delete regardless)
 
 - `dictionaryLookupByteArrayString` / `dictionaryLookupFixedLenByteArray{String,Pointer}`
-  — calls commented out since segmentio/parquet-go#368 (GC race).
+  — calls commented out since segmentio/parquet-go#368 (GC race). **DELETED (tier 5).**
 - Five `//go:noescape` declarations in binary_packed_amd64.go with **no assembly
   body** (`decodeMiniBlockInt32Default`, `...x1to16bitsAVX2`, `...x17to26bitsAVX2`,
   `...x27to31bitsAVX2`, `decodeMiniBlockInt64Default`) — callers are dead; the
-  live path uses the external `bitpack` module.
+  live path uses the external `bitpack` module. **DELETED (tier 5), along with
+  the dead dispatchers and their purego twins.**
 - `combinedBoundsBool` / `combinedBoundsBE128` declared in page_bounds_amd64.go
-  with no body and no callers.
+  with no body and no callers. **DELETED (tier 5).**
 
 ## Incidental bugs / gate mismatches surfaced
 
