@@ -183,9 +183,19 @@ caller-provided offsets and of prefix/suffix lengths read from the page, and
 
 Possible follow-ups:
 
-- Widen the compare to 16/32-byte blocks (`bytes.Equal` on chunks, or
-  NEON/AVX2, or the Go 1.26 `simd` experiment) with a word-wise tail, as
-  arrow-rs did — helps values with very long shared prefixes.
+- SIMD-widening the compare to 16/32-byte blocks is *not* a free win: the
+  portable version (`bytes.Equal` on 32B chunks, as arrow-rs did with
+  `chunks_exact(32)`) measured slower than the word loop at every size on
+  Apple M4 (4.0 vs 3.5 ns at 128B, 22 vs 18 ns at 1000B) because `memequal`
+  is an out-of-line call while the word loop is 4 inline load/xor pairs per
+  32B. A real vector kernel needs inline SIMD (AVX2 `VPCMPEQB`+`VPMOVMSKB`+
+  `TZCNT`, or NEON `CMEQ`+`SHRN`) via asm or the Go 1.26 `simd` experiment,
+  must handle tails without over-reading caller memory (AVX-512 masked
+  loads), and only engages on long shared prefixes. A CPU profile after this
+  change bounds the payoff: the prefix search is ~19% of encode on
+  prefix-heavy data, so even an infinitely fast kernel caps at ~1.2x; the
+  larger targets are the DELTA_BINARY_PACKED encoding of the two length
+  streams (~48%, pure Go on arm64) and the suffix memmoves (~11%).
 - Velox-style in-place decode to eliminate the prefix copy in
   `decodeByteArray`.
 - Skip the copy when `p == 0` / `n == 0` in decoders (arrow#37873's
