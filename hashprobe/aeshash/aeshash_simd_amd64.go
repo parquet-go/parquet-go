@@ -108,7 +108,36 @@ func Hash128(value [16]byte, seed uintptr) uintptr {
 
 func MultiHashUint32Array(hashes []uintptr, values sparse.Uint32Array, seed uintptr) {
 	k0, k1, k2 := roundKeys()
-	for i := range hashes {
+	i := 0
+	n := min(len(hashes), values.Len())
+	// Same VAES fast path as MultiHashUint64Array: the 32 bits hash state is
+	// the 64 bits one with a zero extended value, so the only difference is
+	// the VPMOVZXDQ widening of the loaded values.
+	if archsimd.X86.VAES() && archsimd.X86.AVX2() && n >= 4 {
+		if a := values.UnsafeArray(); uintptr(a.Index(1))-uintptr(a.Index(0)) == 4 {
+			v := unsafe.Slice((*uint32)(a.Index(0)), n)
+			h := unsafecast.Slice[uint64](hashes)
+			var zk archsimd.Uint32x8
+			k0y := zk.SetLo(k0).SetHi(k0)
+			k1y := zk.SetLo(k1).SetHi(k1)
+			k2y := zk.SetLo(k2).SetHi(k2)
+			seedY := archsimd.BroadcastUint64x4(uint64(seed))
+			for ; i+4 <= n; i += 4 {
+				vv := archsimd.LoadUint32x4Slice(v[i:]).ExtendToUint64()
+				sA := seedY.InterleaveLoGrouped(vv).AsUint8x32()
+				sB := seedY.InterleaveHiGrouped(vv).AsUint8x32()
+				sA = sA.AESEncryptOneRound(k0y)
+				sB = sB.AESEncryptOneRound(k0y)
+				sA = sA.AESEncryptOneRound(k1y)
+				sB = sB.AESEncryptOneRound(k1y)
+				sA = sA.AESEncryptOneRound(k2y)
+				sB = sB.AESEncryptOneRound(k2y)
+				sA.AsUint64x4().InterleaveLoGrouped(sB.AsUint64x4()).StoreSlice(h[i:])
+			}
+			archsimd.ClearAVXUpperBits()
+		}
+	}
+	for ; i < len(hashes); i++ {
 		hashes[i] = hash32(values.Index(i), seed, k0, k1, k2)
 	}
 }

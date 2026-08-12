@@ -34,34 +34,48 @@ func multiProbe32SIMD(table []table32Group, numKeys int, hashes []uintptr, keys 
 	// slices of the same length.
 	values = values[:len(hashes)]
 
+	if a := keys.UnsafeArray(); a.Len() >= 2 && uintptr(a.Index(1))-uintptr(a.Index(0)) == 4 {
+		ks := unsafe.Slice((*uint32)(a.Index(0)), len(hashes))
+		for i, hash := range hashes {
+			kv := archsimd.BroadcastUint32x8(ks[i])
+			numKeys = probeInsert32(table, modulo, hash, ks[i], kv, i, numKeys, values)
+		}
+		return numKeys
+	}
+
 	for i, hash := range hashes {
 		key := keys.Index(i)
 		kv := archsimd.BroadcastUint32x8(key)
-		for {
-			group := &table[hash&modulo]
-			g := (*[16]uint32)(unsafe.Pointer(group))
-			m := uint32(kv.Equal(archsimd.LoadUint32x8Slice(g[0:8])).ToBits()) & group.bits
-
-			if m != 0 {
-				values[i] = int32(group.values[bits.TrailingZeros32(m)])
-				break
-			}
-			// The >= comparison lets the compiler prove n < table32GroupSize
-			// below and elide the bounds checks of the group insert.
-			n := bits.OnesCount32(group.bits)
-			if n >= table32GroupSize {
-				hash++
-				continue
-			}
-			group.bits = (group.bits << 1) | 1
-			group.keys[n] = key
-			group.values[n] = uint32(numKeys)
-			values[i] = int32(numKeys)
-			numKeys++
-			break
-		}
+		numKeys = probeInsert32(table, modulo, hash, key, kv, i, numKeys, values)
 	}
 
+	return numKeys
+}
+
+func probeInsert32(table []table32Group, modulo, hash uintptr, key uint32, kv archsimd.Uint32x8, i, numKeys int, values []int32) int {
+	for {
+		group := &table[hash&modulo]
+		g := (*[16]uint32)(unsafe.Pointer(group))
+		m := uint32(kv.Equal(archsimd.LoadUint32x8Slice(g[0:8])).ToBits()) & group.bits
+
+		if m != 0 {
+			values[i] = int32(group.values[bits.TrailingZeros32(m)])
+			break
+		}
+		// The >= comparison lets the compiler prove n < table32GroupSize
+		// below and elide the bounds checks of the group insert.
+		n := bits.OnesCount32(group.bits)
+		if n >= table32GroupSize {
+			hash++
+			continue
+		}
+		group.bits = (group.bits << 1) | 1
+		group.keys[n] = key
+		group.values[n] = uint32(numKeys)
+		values[i] = int32(numKeys)
+		numKeys++
+		break
+	}
 	return numKeys
 }
 
