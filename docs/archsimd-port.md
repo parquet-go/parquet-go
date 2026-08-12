@@ -94,8 +94,26 @@ Intricate lane choreography, but every instruction has an archsimd equivalent.
   rotate + carry blend on the 32-bit view); scalar GetElem reductions
   lose to in-register shuffle ladders (SelectFromPair via a float view —
   shuffles are bit agnostic — flipped bitwidths from +49% to -4%).
-- Remaining tier 3: the general 2/3-16 bit mini block packers, delta
-  byte_array validate, minBE128/maxBE128.
+- **2-16 bit mini block packer**: done — two fold steps of variable
+  shifts and permutes leave 4 packed values in each of two qword lanes,
+  and a scalar 128-bit stitch stores each byte-aligned 8-value group
+  (replacing both the PDEP 2-bit path and the general 3-16 bit asm).
+- **delta byte_array**: done — vectorized prefix/suffix validation
+  (rotate+carry compares, Or-accumulated negative detection), 32-byte
+  over-copy decoders, 16-byte fixed-length specialization with the
+  previous value register-resident. The AVX2-gated paths are exercised
+  under Rosetta.
+- **minBE128/maxBE128**: done — 8 values per iteration as byteswapped
+  (grouped VPSHUFB) hi/lo uint64 lanes, lexicographic compare masks with
+  index tracking, one store+scan reduction per call. Vs asm: +21% (4KiB),
+  parity (256KiB), +6% (2MB). Caught in review: sentinel seeds tie with
+  real extreme values and can return a wrong index — seed from the first
+  chunk instead (pinned by a differential test vs the scalar code).
+
+Tier 3 complete: every assembly kernel that archsimd can express now has
+a Go implementation. Remaining assembly under GOEXPERIMENT=simd is only
+the tier 4 blocked set (gather/scatter/PDEP users) and scalar tier 5
+code.
 
 ## Tier 4 — blocked: needs instructions archsimd doesn't expose
 
