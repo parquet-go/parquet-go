@@ -388,7 +388,15 @@ ConcatPermute (the asm's VPERMI2D trick, trailing pairs covered by one or
 two overlapping window compares) brought it to **-13.5%..+21%** — Int64 and
 Float64 beat the asm at most sizes. Correctness pinned by an exhaustive
 violation-at-every-position test (order_simd_test.go) run on AVX-512
-hardware. Remaining headroom: MultiHash64 at +48% (aesenc pipelining).
+hardware. MultiHash64 follow-up: a VAES fast path (gated on X86.VAES, dense input
+detected via pointer stride) hashes 4 values per iteration — 256-bit AES
+rounds encrypt two blocks per instruction, with interleaves packing
+[seed, value] block pairs and reassembling the hashes for a single store.
+Result: **+21% throughput over the assembly** (11.9 -> 14.5 GiB/s), hash
+values bit-identical (golden tests on VAES hardware). The same treatment
+would fit MultiHash32/MultiHash128, and an AVX512VAES variant could do 4
+blocks per instruction. The remaining Uint64Table gap (+55% small N) is now
+on the probe side.
 
 ## Suggested execution order
 
