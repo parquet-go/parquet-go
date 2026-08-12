@@ -37,6 +37,12 @@ func gather128(dst [][16]byte, src Uint128Array) int {
 	}
 	p := src.index(0)
 	off := src.off
+	if off == 16 {
+		// Dense values: the gather is a contiguous copy, and memmove beats
+		// an explicit load/store loop at every size.
+		copy(unsafecast.Slice[byte](dst[:n]), unsafe.Slice((*byte)(p), 16*n))
+		return n
+	}
 	c := unsafecast.Slice[[4][16]byte](dst[:n])
 	for j := range c {
 		d := &c[j]
