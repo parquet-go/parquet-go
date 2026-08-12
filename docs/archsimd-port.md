@@ -382,11 +382,13 @@ New lessons (beyond tier 1):
    elements instead of scalar tails (idempotent ops), eliminating both tail
    scalar float compares and tail loops.
 
-Known gap: orderOf* at ~2-2.5x — the two overlapping slice loads per
-iteration cost more than the asm's single load + VPERMI2D. A rolling
-single-load + ConcatPermute design would close it (AVX-512 tier only;
-ConcatPermute at 256-bit is EVEX). Deferred: orderOf runs once per column
-index build. MultiHash64 at +48% (aesenc pipelining) also has headroom.
+orderOf* follow-up: the two-overlapping-loads scan was ~2-2.5x slower than
+the asm; rewriting the AVX-512 tier as a rolling single-load scan with
+ConcatPermute (the asm's VPERMI2D trick, trailing pairs covered by one or
+two overlapping window compares) brought it to **-13.5%..+21%** — Int64 and
+Float64 beat the asm at most sizes. Correctness pinned by an exhaustive
+violation-at-every-position test (order_simd_test.go) run on AVX-512
+hardware. Remaining headroom: MultiHash64 at +48% (aesenc pipelining).
 
 ## Suggested execution order
 
