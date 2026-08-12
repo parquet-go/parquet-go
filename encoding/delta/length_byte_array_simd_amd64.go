@@ -2,7 +2,11 @@
 
 package delta
 
-import "simd/archsimd"
+import (
+	"simd/archsimd"
+
+	"github.com/parquet-go/bitpack/unsafecast"
+)
 
 // This file provides implementations of the DELTA_LENGTH_BYTE_ARRAY length
 // kernels based on the simd/archsimd package, replacing the hand-written
@@ -11,12 +15,22 @@ import "simd/archsimd"
 
 func encodeByteArrayLengths(lengths []int32, offsets []uint32) {
 	i := 0
-	if archsimd.X86.AVX2() {
-		for ; i+8 <= len(lengths); i += 8 {
-			a := archsimd.LoadUint32x8Slice(offsets[i:])
-			b := archsimd.LoadUint32x8Slice(offsets[i+1:])
-			b.Sub(a).AsInt32x8().StoreSlice(lengths[i:])
+	if archsimd.X86.AVX2() && len(lengths) >= 8 && len(offsets) > len(lengths) {
+		// The two loads are offset by one element, which defeats a single
+		// chunk view; two chunk views (one over offsets, one over
+		// offsets[1:]) turn both into constant-length loads that need no
+		// bounds checks or per-iteration slice headers.
+		n := len(lengths) / 8
+		ca := unsafecast.Slice[[8]uint32](offsets)[:n]
+		cb := unsafecast.Slice[[8]uint32](offsets[1:])[:n]
+		cl := unsafecast.Slice[[8]int32](lengths)[:n]
+		for j := range cl {
+			a := archsimd.LoadUint32x8Slice(ca[j][:])
+			b := archsimd.LoadUint32x8Slice(cb[j][:])
+			b.Sub(a).AsInt32x8().StoreSlice(cl[j][:])
 		}
+		i = len(cl) * 8
+		archsimd.ClearAVXUpperBits()
 	}
 	for ; i < len(lengths); i++ {
 		lengths[i] = int32(offsets[i+1] - offsets[i])
@@ -54,8 +68,10 @@ func decodeByteArrayLengths(offsets []uint32, lengths []int32) (uint32, int32) {
 		m1 := iota8.Greater(zero)
 		m2 := iota8.Greater(archsimd.BroadcastInt32x8(1))
 		m4 := iota8.Greater(archsimd.BroadcastInt32x8(3))
-		for ; i+8 <= len(lengths); i += 8 {
-			v := archsimd.LoadInt32x8Slice(lengths[i:])
+		cl := unsafecast.Slice[[8]int32](lengths)
+		co := unsafecast.Slice[[8]uint32](offsets)
+		for j := 0; j < len(cl) && j < len(co); j, i = j+1, i+8 {
+			v := archsimd.LoadInt32x8Slice(cl[j][:])
 			if v.Less(zero).ToBits() != 0 {
 				// A negative length: let the scalar loop locate it.
 				break
@@ -67,9 +83,10 @@ func decodeByteArrayLengths(offsets []uint32, lengths []int32) (uint32, int32) {
 			// The offsets are the exclusive prefix sums plus the running
 			// total: shift the inclusive sums up one lane.
 			ex := s.Permute(idx1).Merge(zero, m1).Add(archsimd.BroadcastInt32x8(int32(lastOffset)))
-			ex.AsUint32x8().StoreSlice(offsets[i:])
+			ex.AsUint32x8().StoreSlice(co[j][:])
 			lastOffset += uint32(s.GetHi().GetElem(3))
 		}
+		archsimd.ClearAVXUpperBits()
 	}
 	for ; i < len(lengths); i++ {
 		n := lengths[i]
