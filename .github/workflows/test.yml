@@ -59,6 +59,60 @@ jobs:
       - name: Run Benchmarks
         run: go test -trimpath -short -tags=${{ matrix.tags }} -run '^$' -bench . -benchtime 1x ./...
 
+  # Test the experimental simd/archsimd code paths on linux/amd64 at the
+  # GOAMD64 microarchitecture levels they are intended to be used with.
+  simd:
+    strategy:
+      matrix:
+        goamd64:
+          - v3
+          - v4
+        tags:
+          - ""
+          - purego
+
+    runs-on: ubuntu-latest
+
+    env:
+      PARQUETGODEBUG: tracebuf=1
+      GOEXPERIMENT: simd
+      GOAMD64: ${{ matrix.goamd64 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # simd/archsimd requires Go 1.26; its API has breaking changes in
+          # later releases, see the SIMD section of the README.
+          go-version: 1.26.x
+
+      # GitHub amd64 runners are a mix of CPUs with and without AVX-512;
+      # GOAMD64=v4 binaries fail at startup on the latter, so skip the run
+      # when the runner cannot execute it.
+      - name: Check CPU features
+        id: cpu
+        run: |
+          if [ "${{ matrix.goamd64 }}" = "v4" ] && ! grep -q avx512bw /proc/cpuinfo; then
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+            echo "runner CPU does not support AVX-512, skipping GOAMD64=v4"
+          else
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Dependencies
+        if: steps.cpu.outputs.supported == 'true'
+        run: go mod download
+
+      - name: Run Tests
+        if: steps.cpu.outputs.supported == 'true'
+        run: go test -trimpath -race -tags=${{ matrix.tags }} ./...
+
+      - name: Run Benchmarks
+        if: steps.cpu.outputs.supported == 'true'
+        run: go test -trimpath -short -tags=${{ matrix.tags }} -run '^$' -bench . -benchtime 1x ./...
+
   format:
     runs-on: ubuntu-latest
 
