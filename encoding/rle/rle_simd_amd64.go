@@ -2,7 +2,13 @@
 
 package rle
 
-import "simd/archsimd"
+import (
+	"encoding/binary"
+
+	"simd/archsimd"
+
+	"github.com/parquet-go/bitpack/unsafecast"
+)
 
 // The functions in this file are simd/archsimd replacements for some of the
 // kernels dispatched through the function variables of rle_amd64.go (assembly
@@ -16,6 +22,9 @@ import "simd/archsimd"
 func init() {
 	if archsimd.X86.AVX2() {
 		encodeInt32IndexEqual8Contiguous = encodeInt32IndexEqual8ContiguousSIMD
+	}
+	if archsimd.X86.AVX512() {
+		encodeInt32Bitpack = encodeInt32BitpackSIMD
 	}
 }
 
@@ -74,4 +83,85 @@ func encodeInt32IndexEqual8ContiguousSIMD(words [][8]int32) (n int) {
 	}
 	archsimd.ClearAVXUpperBits()
 	return n
+}
+
+// Lane indexes folding odd lanes onto even lanes and lanes {2,6} onto {0,4}
+// in the packing reduction (same shape as the DELTA_BINARY_PACKED mini block
+// packer; the useful results live in lanes 0 and 4 afterwards).
+var (
+	bitpackFoldOdd  = [8]uint64{1, 1, 3, 3, 5, 5, 7, 7}
+	bitpackFoldPair = [8]uint64{2, 2, 2, 2, 6, 6, 6, 6}
+)
+
+func encodeInt32BitpackSIMD(dst []byte, src [][8]int32, bitWidth uint) int {
+	switch {
+	case bitWidth == 0:
+		return 0
+	case bitWidth <= 16:
+		return encodeInt32Bitpack1to16bitsSIMD(dst, src, bitWidth)
+	default:
+		return encodeInt32BitpackDefault(dst, src, bitWidth)
+	}
+}
+
+// encodeInt32Bitpack1to16bitsSIMD packs groups of 8 values of 1 to 16 bits
+// each with the fold reduction used by the DELTA_BINARY_PACKED mini block
+// packers: two vector fold steps leave 4 packed values in lane 0 and 4 in
+// lane 4, and a scalar 128 bits stitch combines them. Each group spans
+// exactly bitWidth bytes and stores 16 bytes at its byte aligned offset; the
+// zeroed tail is overwritten by the next group and the caller reserves 32
+// bytes of headroom (appendBitPackedInt32), like it did for the assembly.
+func encodeInt32Bitpack1to16bitsSIMD(dst []byte, src [][8]int32, bitWidth uint) int {
+	w := uint64(bitWidth)
+	var sh1v [8]uint64
+	var sh2v [8]uint64
+	for i := range sh1v {
+		if i%2 == 1 {
+			sh1v[i] = w
+		}
+		if i == 2 || i == 6 {
+			sh2v[i] = 2 * w
+		}
+	}
+	sh1 := archsimd.LoadUint64x8Slice(sh1v[:])
+	sh2 := archsimd.LoadUint64x8Slice(sh2v[:])
+	fo := archsimd.LoadUint64x8Slice(bitpackFoldOdd[:])
+	fp := archsimd.LoadUint64x8Slice(bitpackFoldPair[:])
+	off := uint(0)
+	j := 0
+	for ; j+2 <= len(src); j += 2 {
+		u0 := unsafecast.Slice[uint32](src[j][:])
+		u1 := unsafecast.Slice[uint32](src[j+1][:])
+		t0 := archsimd.LoadUint32x8Slice(u0).ExtendToUint64().ShiftLeft(sh1)
+		t1 := archsimd.LoadUint32x8Slice(u1).ExtendToUint64().ShiftLeft(sh1)
+		t0 = t0.Or(t0.Permute(fo))
+		t1 = t1.Or(t1.Permute(fo))
+		t0 = t0.ShiftLeft(sh2)
+		t1 = t1.ShiftLeft(sh2)
+		t0 = t0.Or(t0.Permute(fp))
+		t1 = t1.Or(t1.Permute(fp))
+		a0 := t0.GetLo().GetLo().GetElem(0)
+		a1 := t0.GetHi().GetLo().GetElem(0)
+		b0 := t1.GetLo().GetLo().GetElem(0)
+		b1 := t1.GetHi().GetLo().GetElem(0)
+		binary.LittleEndian.PutUint64(dst[off:], a0|a1<<(4*w))
+		binary.LittleEndian.PutUint64(dst[off+8:], a1>>(64-4*w))
+		binary.LittleEndian.PutUint64(dst[off+uint(w):], b0|b1<<(4*w))
+		binary.LittleEndian.PutUint64(dst[off+uint(w)+8:], b1>>(64-4*w))
+		off += 2 * uint(w)
+	}
+	for ; j < len(src); j++ {
+		u := unsafecast.Slice[uint32](src[j][:])
+		t := archsimd.LoadUint32x8Slice(u).ExtendToUint64().ShiftLeft(sh1)
+		t = t.Or(t.Permute(fo))
+		t = t.ShiftLeft(sh2)
+		t = t.Or(t.Permute(fp))
+		q0 := t.GetLo().GetLo().GetElem(0)
+		q1 := t.GetHi().GetLo().GetElem(0)
+		binary.LittleEndian.PutUint64(dst[off:], q0|q1<<(4*w))
+		binary.LittleEndian.PutUint64(dst[off+8:], q1>>(64-4*w))
+		off += uint(w)
+	}
+	archsimd.ClearAVXUpperBits()
+	return int(off)
 }
