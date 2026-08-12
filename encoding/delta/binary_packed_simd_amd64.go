@@ -470,10 +470,51 @@ func encodeMiniBlockInt32SIMD(dst []byte, src *[miniBlockSize]int32, bitWidth ui
 	}
 }
 
+// encodeMiniBlockInt64Packed packs 32 values of 2 to 16 bits each, using the
+// same fold reduction as encodeMiniBlockInt32Packed: the values are already
+// 64 bits wide so the widening step disappears. The assembly only had a PDEP
+// fast path for 2 bits and fell back to scalar for everything else, so this
+// covers more widths than it did.
+func encodeMiniBlockInt64Packed(dst []byte, src *[miniBlockSize]int64, bitWidth uint) {
+	w := uint64(bitWidth)
+	var sh1v [8]uint64
+	var sh2v [8]uint64
+	for i := range sh1v {
+		if i%2 == 1 {
+			sh1v[i] = w
+		}
+		if i == 2 || i == 6 {
+			sh2v[i] = 2 * w
+		}
+	}
+	sh1 := archsimd.LoadUint64x8Slice(sh1v[:])
+	sh2 := archsimd.LoadUint64x8Slice(sh2v[:])
+	fo := archsimd.LoadUint64x8Slice(foldOdd[:])
+	fp := archsimd.LoadUint64x8Slice(foldPair[:])
+	u := unsafecast.Slice[uint64](src[:])
+	off := uint(0)
+	for g := 0; g < miniBlockSize; g += 8 {
+		t := archsimd.LoadUint64x8Slice(u[g : g+8]).ShiftLeft(sh1)
+		t = t.Or(t.Permute(fo))
+		t = t.ShiftLeft(sh2)
+		t = t.Or(t.Permute(fp))
+		q0 := t.GetLo().GetLo().GetElem(0)
+		q1 := t.GetHi().GetLo().GetElem(0)
+		lo := q0 | q1<<(4*w)
+		hi := q1 >> (64 - 4*w)
+		binary.LittleEndian.PutUint64(dst[off:], lo)
+		binary.LittleEndian.PutUint64(dst[off+8:], hi)
+		off += uint(w)
+	}
+	archsimd.ClearAVXUpperBits()
+}
+
 func encodeMiniBlockInt64SIMD(dst []byte, src *[miniBlockSize]int64, bitWidth uint) {
 	switch {
 	case bitWidth == 1 && archsimd.X86.AVX512():
 		encodeMiniBlockInt64x1bit(dst, src)
+	case bitWidth >= 2 && bitWidth <= 16 && archsimd.X86.AVX512():
+		encodeMiniBlockInt64Packed(dst, src, bitWidth)
 	case bitWidth == 64:
 		copy(dst, unsafecast.Slice[byte](src[:]))
 	default:

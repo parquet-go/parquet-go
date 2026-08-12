@@ -59,3 +59,11 @@ func BenchmarkBlockSubInt32SIMD(b *testing.B) {
 func BenchmarkBlockBitWidthsInt32SIMD(b *testing.B) {
 	benchmarkBlockBitWidthsInt32(b, blockBitWidthsInt32SIMD)
 }
+
+func BenchmarkEncodeMiniBlockInt32SIMD(b *testing.B) {
+	benchmarkEncodeMiniBlockInt32(b, encodeMiniBlockInt32SIMD)
+}
+
+func BenchmarkEncodeMiniBlockInt64SIMD(b *testing.B) {
+	benchmarkEncodeMiniBlockInt64(b, encodeMiniBlockInt64SIMD)
+}
