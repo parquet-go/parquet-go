@@ -1545,36 +1545,47 @@ func boundsFloat32(data []float32) (min, max float32) {
 	d := data
 	switch {
 	case archsimd.X86.AVX512() && len(d) >= 32:
-		minAcc := archsimd.BroadcastFloat32x16(data[0])
-		maxAcc := minAcc
-		sumAcc := archsimd.BroadcastFloat32x16(0)
+		minA0 := archsimd.BroadcastFloat32x16(data[0])
+		minA1 := minA0
+		maxA0 := minA0
+		maxA1 := minA0
+		// The zero is built with an integer broadcast: a floating point
+		// constant materializes through a legacy (non-VEX) XORPS, which
+		// pays an AVX-SSE transition penalty inside EVEX code.
+		sumA0 := archsimd.BroadcastUint32x16(0).AsFloat32x16()
+		sumA1 := sumA0
 		chunks := unsafecast.Slice[[32]float32](d)
 		for i := range chunks {
 			c := &chunks[i]
 			v0 := archsimd.LoadFloat32x16Slice(c[0:16])
 			v1 := archsimd.LoadFloat32x16Slice(c[16:32])
-			minAcc = minAcc.Min(v0).Min(v1)
-			maxAcc = maxAcc.Max(v0).Max(v1)
-			sumAcc = sumAcc.Add(v0).Add(v1)
+			minA0 = minA0.Min(v0)
+			minA1 = minA1.Min(v1)
+			maxA0 = maxA0.Max(v0)
+			maxA1 = maxA1.Max(v1)
+			sumA0 = sumA0.Add(v0)
+			sumA1 = sumA1.Add(v1)
 		}
 		if rem := len(d) - len(chunks)*32; rem > 0 {
 			t0 := archsimd.LoadFloat32x16Slice(d[len(d)-16:])
-			minAcc = minAcc.Min(t0)
-			maxAcc = maxAcc.Max(t0)
-			sumAcc = sumAcc.Add(t0)
+			minA0 = minA0.Min(t0)
+			maxA0 = maxA0.Max(t0)
+			sumA0 = sumA0.Add(t0)
 			if rem > 16 {
 				t1 := archsimd.LoadFloat32x16Slice(d[len(d)-32:])
-				minAcc = minAcc.Min(t1)
-				maxAcc = maxAcc.Max(t1)
-				sumAcc = sumAcc.Add(t1)
+				minA1 = minA1.Min(t1)
+				maxA1 = maxA1.Max(t1)
+				sumA1 = sumA1.Add(t1)
 			}
 		}
-		if sumAcc.IsNaN().ToBits() != 0 {
+		if sumA0.Add(sumA1).IsNaN().ToBits() != 0 {
 			archsimd.ClearAVXUpperBits()
 			return boundsFloat32Merge(data)
 		}
-		minH := minAcc.GetLo().Min(minAcc.GetHi())
-		maxH := maxAcc.GetLo().Max(maxAcc.GetHi())
+		minA0 = minA0.Min(minA1)
+		maxA0 = maxA0.Max(maxA1)
+		minH := minA0.GetLo().Min(minA0.GetHi())
+		maxH := maxA0.GetLo().Max(maxA0.GetHi())
 		minQ := minH.GetLo().Min(minH.GetHi())
 		maxQ := maxH.GetLo().Max(maxH.GetHi())
 		min = reduceMinFloat32x4(minQ)
@@ -1582,36 +1593,44 @@ func boundsFloat32(data []float32) (min, max float32) {
 		archsimd.ClearAVXUpperBits()
 		return min, max
 	case archsimd.X86.AVX2() && len(d) >= 16:
-		minAcc := archsimd.BroadcastFloat32x8(data[0])
-		maxAcc := minAcc
-		sumAcc := archsimd.BroadcastFloat32x8(0)
+		minA0 := archsimd.BroadcastFloat32x8(data[0])
+		minA1 := minA0
+		maxA0 := minA0
+		maxA1 := minA0
+		sumA0 := archsimd.BroadcastUint32x8(0).AsFloat32x8()
+		sumA1 := sumA0
 		chunks := unsafecast.Slice[[16]float32](d)
 		for i := range chunks {
 			c := &chunks[i]
 			v0 := archsimd.LoadFloat32x8Slice(c[0:8])
 			v1 := archsimd.LoadFloat32x8Slice(c[8:16])
-			minAcc = minAcc.Min(v0).Min(v1)
-			maxAcc = maxAcc.Max(v0).Max(v1)
-			sumAcc = sumAcc.Add(v0).Add(v1)
+			minA0 = minA0.Min(v0)
+			minA1 = minA1.Min(v1)
+			maxA0 = maxA0.Max(v0)
+			maxA1 = maxA1.Max(v1)
+			sumA0 = sumA0.Add(v0)
+			sumA1 = sumA1.Add(v1)
 		}
 		if rem := len(d) - len(chunks)*16; rem > 0 {
 			t0 := archsimd.LoadFloat32x8Slice(d[len(d)-8:])
-			minAcc = minAcc.Min(t0)
-			maxAcc = maxAcc.Max(t0)
-			sumAcc = sumAcc.Add(t0)
+			minA0 = minA0.Min(t0)
+			maxA0 = maxA0.Max(t0)
+			sumA0 = sumA0.Add(t0)
 			if rem > 8 {
 				t1 := archsimd.LoadFloat32x8Slice(d[len(d)-16:])
-				minAcc = minAcc.Min(t1)
-				maxAcc = maxAcc.Max(t1)
-				sumAcc = sumAcc.Add(t1)
+				minA1 = minA1.Min(t1)
+				maxA1 = maxA1.Max(t1)
+				sumA1 = sumA1.Add(t1)
 			}
 		}
-		if sumAcc.IsNaN().ToBits() != 0 {
+		if sumA0.Add(sumA1).IsNaN().ToBits() != 0 {
 			archsimd.ClearAVXUpperBits()
 			return boundsFloat32Merge(data)
 		}
-		minQ := minAcc.GetLo().Min(minAcc.GetHi())
-		maxQ := maxAcc.GetLo().Max(maxAcc.GetHi())
+		minA0 = minA0.Min(minA1)
+		maxA0 = maxA0.Max(maxA1)
+		minQ := minA0.GetLo().Min(minA0.GetHi())
+		maxQ := maxA0.GetLo().Max(maxA0.GetHi())
 		min = reduceMinFloat32x4(minQ)
 		max = reduceMaxFloat32x4(maxQ)
 		archsimd.ClearAVXUpperBits()
@@ -1627,36 +1646,47 @@ func boundsFloat64(data []float64) (min, max float64) {
 	d := data
 	switch {
 	case archsimd.X86.AVX512() && len(d) >= 16:
-		minAcc := archsimd.BroadcastFloat64x8(data[0])
-		maxAcc := minAcc
-		sumAcc := archsimd.BroadcastFloat64x8(0)
+		minA0 := archsimd.BroadcastFloat64x8(data[0])
+		minA1 := minA0
+		maxA0 := minA0
+		maxA1 := minA0
+		// The zero is built with an integer broadcast: a floating point
+		// constant materializes through a legacy (non-VEX) XORPS, which
+		// pays an AVX-SSE transition penalty inside EVEX code.
+		sumA0 := archsimd.BroadcastUint64x8(0).AsFloat64x8()
+		sumA1 := sumA0
 		chunks := unsafecast.Slice[[16]float64](d)
 		for i := range chunks {
 			c := &chunks[i]
 			v0 := archsimd.LoadFloat64x8Slice(c[0:8])
 			v1 := archsimd.LoadFloat64x8Slice(c[8:16])
-			minAcc = minAcc.Min(v0).Min(v1)
-			maxAcc = maxAcc.Max(v0).Max(v1)
-			sumAcc = sumAcc.Add(v0).Add(v1)
+			minA0 = minA0.Min(v0)
+			minA1 = minA1.Min(v1)
+			maxA0 = maxA0.Max(v0)
+			maxA1 = maxA1.Max(v1)
+			sumA0 = sumA0.Add(v0)
+			sumA1 = sumA1.Add(v1)
 		}
 		if rem := len(d) - len(chunks)*16; rem > 0 {
 			t0 := archsimd.LoadFloat64x8Slice(d[len(d)-8:])
-			minAcc = minAcc.Min(t0)
-			maxAcc = maxAcc.Max(t0)
-			sumAcc = sumAcc.Add(t0)
+			minA0 = minA0.Min(t0)
+			maxA0 = maxA0.Max(t0)
+			sumA0 = sumA0.Add(t0)
 			if rem > 8 {
 				t1 := archsimd.LoadFloat64x8Slice(d[len(d)-16:])
-				minAcc = minAcc.Min(t1)
-				maxAcc = maxAcc.Max(t1)
-				sumAcc = sumAcc.Add(t1)
+				minA1 = minA1.Min(t1)
+				maxA1 = maxA1.Max(t1)
+				sumA1 = sumA1.Add(t1)
 			}
 		}
-		if sumAcc.IsNaN().ToBits() != 0 {
+		if sumA0.Add(sumA1).IsNaN().ToBits() != 0 {
 			archsimd.ClearAVXUpperBits()
 			return boundsFloat64Merge(data)
 		}
-		minH := minAcc.GetLo().Min(minAcc.GetHi())
-		maxH := maxAcc.GetLo().Max(maxAcc.GetHi())
+		minA0 = minA0.Min(minA1)
+		maxA0 = maxA0.Max(maxA1)
+		minH := minA0.GetLo().Min(minA0.GetHi())
+		maxH := maxA0.GetLo().Max(maxA0.GetHi())
 		minQ := minH.GetLo().Min(minH.GetHi())
 		maxQ := maxH.GetLo().Max(maxH.GetHi())
 		min = reduceMinFloat64x2(minQ)
@@ -1664,36 +1694,44 @@ func boundsFloat64(data []float64) (min, max float64) {
 		archsimd.ClearAVXUpperBits()
 		return min, max
 	case archsimd.X86.AVX2() && len(d) >= 8:
-		minAcc := archsimd.BroadcastFloat64x4(data[0])
-		maxAcc := minAcc
-		sumAcc := archsimd.BroadcastFloat64x4(0)
+		minA0 := archsimd.BroadcastFloat64x4(data[0])
+		minA1 := minA0
+		maxA0 := minA0
+		maxA1 := minA0
+		sumA0 := archsimd.BroadcastUint64x4(0).AsFloat64x4()
+		sumA1 := sumA0
 		chunks := unsafecast.Slice[[8]float64](d)
 		for i := range chunks {
 			c := &chunks[i]
 			v0 := archsimd.LoadFloat64x4Slice(c[0:4])
 			v1 := archsimd.LoadFloat64x4Slice(c[4:8])
-			minAcc = minAcc.Min(v0).Min(v1)
-			maxAcc = maxAcc.Max(v0).Max(v1)
-			sumAcc = sumAcc.Add(v0).Add(v1)
+			minA0 = minA0.Min(v0)
+			minA1 = minA1.Min(v1)
+			maxA0 = maxA0.Max(v0)
+			maxA1 = maxA1.Max(v1)
+			sumA0 = sumA0.Add(v0)
+			sumA1 = sumA1.Add(v1)
 		}
 		if rem := len(d) - len(chunks)*8; rem > 0 {
 			t0 := archsimd.LoadFloat64x4Slice(d[len(d)-4:])
-			minAcc = minAcc.Min(t0)
-			maxAcc = maxAcc.Max(t0)
-			sumAcc = sumAcc.Add(t0)
+			minA0 = minA0.Min(t0)
+			maxA0 = maxA0.Max(t0)
+			sumA0 = sumA0.Add(t0)
 			if rem > 4 {
 				t1 := archsimd.LoadFloat64x4Slice(d[len(d)-8:])
-				minAcc = minAcc.Min(t1)
-				maxAcc = maxAcc.Max(t1)
-				sumAcc = sumAcc.Add(t1)
+				minA1 = minA1.Min(t1)
+				maxA1 = maxA1.Max(t1)
+				sumA1 = sumA1.Add(t1)
 			}
 		}
-		if sumAcc.IsNaN().ToBits() != 0 {
+		if sumA0.Add(sumA1).IsNaN().ToBits() != 0 {
 			archsimd.ClearAVXUpperBits()
 			return boundsFloat64Merge(data)
 		}
-		minQ := minAcc.GetLo().Min(minAcc.GetHi())
-		maxQ := maxAcc.GetLo().Max(maxAcc.GetHi())
+		minA0 = minA0.Min(minA1)
+		maxA0 = maxA0.Max(maxA1)
+		minQ := minA0.GetLo().Min(minA0.GetHi())
+		maxQ := maxA0.GetLo().Max(maxA0.GetHi())
 		min = reduceMinFloat64x2(minQ)
 		max = reduceMaxFloat64x2(maxQ)
 		archsimd.ClearAVXUpperBits()
