@@ -1,16 +1,18 @@
-//go:build !purego && goexperiment.simd
+//go:build goexperiment.simd
 
 package rle
 
 import "simd/archsimd"
 
 // The functions in this file are simd/archsimd replacements for some of the
-// assembly kernels declared in rle_amd64.go. The BMI2 bit-packing kernels
-// have no archsimd equivalent (PDEP/PEXT are not exposed) and remain in
-// assembly.
+// kernels dispatched through the function variables of rle_amd64.go (assembly
+// builds) or rle_purego.go (purego builds). The BMI2 bit-packing kernels have
+// no archsimd equivalent (PDEP/PEXT are not exposed) and keep their default
+// dispatch.
 //
-// Go compiles the files of a package in file name order, so this init runs
-// after the one in rle_amd64.go and overrides its choice of implementation.
+// The override is safe in both builds: package variable initializers run
+// before all init functions, and Go compiles the files of a package in file
+// name order, so this init runs after the one in rle_amd64.go.
 func init() {
 	if archsimd.X86.AVX2() {
 		encodeInt32IndexEqual8Contiguous = encodeInt32IndexEqual8ContiguousSIMD

@@ -1,4 +1,4 @@
-//go:build !purego && goexperiment.simd
+//go:build goexperiment.simd
 
 package rle
 
