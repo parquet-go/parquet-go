@@ -82,8 +82,8 @@ func scrambledSeed(seed uintptr, k0 archsimd.Uint32x4) archsimd.Uint8x16 {
 	return x.AESEncryptOneRound(x.AsUint32x4())
 }
 
-func hash128(value [16]byte, scrambled archsimd.Uint8x16) uintptr {
-	x := archsimd.LoadUint8x16Slice(value[:]).Xor(scrambled)
+func hash128(x archsimd.Uint8x16, scrambled archsimd.Uint8x16) uintptr {
+	x = x.Xor(scrambled)
 	x = x.AESEncryptOneRound(x.AsUint32x4())
 	x = x.AESEncryptOneRound(x.AsUint32x4())
 	x = x.AESEncryptOneRound(x.AsUint32x4())
@@ -102,7 +102,7 @@ func Hash64(value uint64, seed uintptr) uintptr {
 
 func Hash128(value [16]byte, seed uintptr) uintptr {
 	k0, _, _ := roundKeys()
-	return hash128(value, scrambledSeed(seed, k0))
+	return hash128(archsimd.LoadUint8x16Slice(value[:]), scrambledSeed(seed, k0))
 }
 
 func MultiHashUint32Array(hashes []uintptr, values sparse.Uint32Array, seed uintptr) {
@@ -122,7 +122,12 @@ func MultiHashUint64Array(hashes []uintptr, values sparse.Uint64Array, seed uint
 func MultiHashUint128Array(hashes []uintptr, values sparse.Uint128Array, seed uintptr) {
 	k0, _, _ := roundKeys()
 	scrambled := scrambledSeed(seed, k0)
+	// Load the values directly from the strided array: going through the
+	// [16]byte copy that Index returns adds a stack round trip on every
+	// element, which defeats store forwarding.
+	a := values.UnsafeArray()
 	for i := range hashes {
-		hashes[i] = hash128(values.Index(i), scrambled)
+		v := (*[16]uint8)(a.Index(i))
+		hashes[i] = hash128(archsimd.LoadUint8x16Slice(v[:]), scrambled)
 	}
 }
