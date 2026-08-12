@@ -1299,7 +1299,7 @@ func boundsUint64(data []uint64) (min, max uint64) {
 	return min, max
 }
 
-func boundsFloat32(data []float32) (min, max float32) {
+func boundsFloat32Merge(data []float32) (min, max float32) {
 	if len(data) == 0 {
 		return 0, 0
 	}
@@ -1387,7 +1387,7 @@ func boundsFloat32(data []float32) (min, max float32) {
 	return min, max
 }
 
-func boundsFloat64(data []float64) (min, max float64) {
+func boundsFloat64Merge(data []float64) (min, max float64) {
 	if len(data) == 0 {
 		return 0, 0
 	}
@@ -1526,4 +1526,178 @@ func boundsBE128(data [][16]byte) (min, max []byte) {
 	min = minBE128(data)
 	max = maxBE128(data)
 	return min, max
+}
+
+// boundsFloat32 and boundsFloat64 optimistically scan with native Min/Max
+// (one instruction per update instead of the NaN-safe compare-and-merge's
+// two) while accumulating a sum of every loaded vector. Addition propagates
+// NaN unconditionally — unlike VMINPS, which can silently erase one — so if
+// the final sum has no NaN lane the data had no NaN and the fast result is
+// exact; otherwise the compare-and-merge implementation rescans the data.
+// A sum of +Inf and -Inf forces the rescan spuriously, costing time but
+// never correctness. The native Min/Max may report the other sign of a
+// tied +0/-0 bound than the merge implementation; the parquet float order
+// treats them as equal.
+func boundsFloat32(data []float32) (min, max float32) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+	d := data
+	switch {
+	case archsimd.X86.AVX512() && len(d) >= 32:
+		minAcc := archsimd.BroadcastFloat32x16(data[0])
+		maxAcc := minAcc
+		sumAcc := archsimd.BroadcastFloat32x16(0)
+		chunks := unsafecast.Slice[[32]float32](d)
+		for i := range chunks {
+			c := &chunks[i]
+			v0 := archsimd.LoadFloat32x16Slice(c[0:16])
+			v1 := archsimd.LoadFloat32x16Slice(c[16:32])
+			minAcc = minAcc.Min(v0).Min(v1)
+			maxAcc = maxAcc.Max(v0).Max(v1)
+			sumAcc = sumAcc.Add(v0).Add(v1)
+		}
+		if rem := len(d) - len(chunks)*32; rem > 0 {
+			t0 := archsimd.LoadFloat32x16Slice(d[len(d)-16:])
+			minAcc = minAcc.Min(t0)
+			maxAcc = maxAcc.Max(t0)
+			sumAcc = sumAcc.Add(t0)
+			if rem > 16 {
+				t1 := archsimd.LoadFloat32x16Slice(d[len(d)-32:])
+				minAcc = minAcc.Min(t1)
+				maxAcc = maxAcc.Max(t1)
+				sumAcc = sumAcc.Add(t1)
+			}
+		}
+		if sumAcc.IsNaN().ToBits() != 0 {
+			archsimd.ClearAVXUpperBits()
+			return boundsFloat32Merge(data)
+		}
+		minH := minAcc.GetLo().Min(minAcc.GetHi())
+		maxH := maxAcc.GetLo().Max(maxAcc.GetHi())
+		minQ := minH.GetLo().Min(minH.GetHi())
+		maxQ := maxH.GetLo().Max(maxH.GetHi())
+		min = reduceMinFloat32x4(minQ)
+		max = reduceMaxFloat32x4(maxQ)
+		archsimd.ClearAVXUpperBits()
+		return min, max
+	case archsimd.X86.AVX2() && len(d) >= 16:
+		minAcc := archsimd.BroadcastFloat32x8(data[0])
+		maxAcc := minAcc
+		sumAcc := archsimd.BroadcastFloat32x8(0)
+		chunks := unsafecast.Slice[[16]float32](d)
+		for i := range chunks {
+			c := &chunks[i]
+			v0 := archsimd.LoadFloat32x8Slice(c[0:8])
+			v1 := archsimd.LoadFloat32x8Slice(c[8:16])
+			minAcc = minAcc.Min(v0).Min(v1)
+			maxAcc = maxAcc.Max(v0).Max(v1)
+			sumAcc = sumAcc.Add(v0).Add(v1)
+		}
+		if rem := len(d) - len(chunks)*16; rem > 0 {
+			t0 := archsimd.LoadFloat32x8Slice(d[len(d)-8:])
+			minAcc = minAcc.Min(t0)
+			maxAcc = maxAcc.Max(t0)
+			sumAcc = sumAcc.Add(t0)
+			if rem > 8 {
+				t1 := archsimd.LoadFloat32x8Slice(d[len(d)-16:])
+				minAcc = minAcc.Min(t1)
+				maxAcc = maxAcc.Max(t1)
+				sumAcc = sumAcc.Add(t1)
+			}
+		}
+		if sumAcc.IsNaN().ToBits() != 0 {
+			archsimd.ClearAVXUpperBits()
+			return boundsFloat32Merge(data)
+		}
+		minQ := minAcc.GetLo().Min(minAcc.GetHi())
+		maxQ := maxAcc.GetLo().Max(maxAcc.GetHi())
+		min = reduceMinFloat32x4(minQ)
+		max = reduceMaxFloat32x4(maxQ)
+		archsimd.ClearAVXUpperBits()
+		return min, max
+	}
+	return boundsFloat32Merge(data)
+}
+
+func boundsFloat64(data []float64) (min, max float64) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+	d := data
+	switch {
+	case archsimd.X86.AVX512() && len(d) >= 16:
+		minAcc := archsimd.BroadcastFloat64x8(data[0])
+		maxAcc := minAcc
+		sumAcc := archsimd.BroadcastFloat64x8(0)
+		chunks := unsafecast.Slice[[16]float64](d)
+		for i := range chunks {
+			c := &chunks[i]
+			v0 := archsimd.LoadFloat64x8Slice(c[0:8])
+			v1 := archsimd.LoadFloat64x8Slice(c[8:16])
+			minAcc = minAcc.Min(v0).Min(v1)
+			maxAcc = maxAcc.Max(v0).Max(v1)
+			sumAcc = sumAcc.Add(v0).Add(v1)
+		}
+		if rem := len(d) - len(chunks)*16; rem > 0 {
+			t0 := archsimd.LoadFloat64x8Slice(d[len(d)-8:])
+			minAcc = minAcc.Min(t0)
+			maxAcc = maxAcc.Max(t0)
+			sumAcc = sumAcc.Add(t0)
+			if rem > 8 {
+				t1 := archsimd.LoadFloat64x8Slice(d[len(d)-16:])
+				minAcc = minAcc.Min(t1)
+				maxAcc = maxAcc.Max(t1)
+				sumAcc = sumAcc.Add(t1)
+			}
+		}
+		if sumAcc.IsNaN().ToBits() != 0 {
+			archsimd.ClearAVXUpperBits()
+			return boundsFloat64Merge(data)
+		}
+		minH := minAcc.GetLo().Min(minAcc.GetHi())
+		maxH := maxAcc.GetLo().Max(maxAcc.GetHi())
+		minQ := minH.GetLo().Min(minH.GetHi())
+		maxQ := maxH.GetLo().Max(maxH.GetHi())
+		min = reduceMinFloat64x2(minQ)
+		max = reduceMaxFloat64x2(maxQ)
+		archsimd.ClearAVXUpperBits()
+		return min, max
+	case archsimd.X86.AVX2() && len(d) >= 8:
+		minAcc := archsimd.BroadcastFloat64x4(data[0])
+		maxAcc := minAcc
+		sumAcc := archsimd.BroadcastFloat64x4(0)
+		chunks := unsafecast.Slice[[8]float64](d)
+		for i := range chunks {
+			c := &chunks[i]
+			v0 := archsimd.LoadFloat64x4Slice(c[0:4])
+			v1 := archsimd.LoadFloat64x4Slice(c[4:8])
+			minAcc = minAcc.Min(v0).Min(v1)
+			maxAcc = maxAcc.Max(v0).Max(v1)
+			sumAcc = sumAcc.Add(v0).Add(v1)
+		}
+		if rem := len(d) - len(chunks)*8; rem > 0 {
+			t0 := archsimd.LoadFloat64x4Slice(d[len(d)-4:])
+			minAcc = minAcc.Min(t0)
+			maxAcc = maxAcc.Max(t0)
+			sumAcc = sumAcc.Add(t0)
+			if rem > 4 {
+				t1 := archsimd.LoadFloat64x4Slice(d[len(d)-8:])
+				minAcc = minAcc.Min(t1)
+				maxAcc = maxAcc.Max(t1)
+				sumAcc = sumAcc.Add(t1)
+			}
+		}
+		if sumAcc.IsNaN().ToBits() != 0 {
+			archsimd.ClearAVXUpperBits()
+			return boundsFloat64Merge(data)
+		}
+		minQ := minAcc.GetLo().Min(minAcc.GetHi())
+		maxQ := maxAcc.GetLo().Max(maxAcc.GetHi())
+		min = reduceMinFloat64x2(minQ)
+		max = reduceMaxFloat64x2(maxQ)
+		archsimd.ClearAVXUpperBits()
+		return min, max
+	}
+	return boundsFloat64Merge(data)
 }
