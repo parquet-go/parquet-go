@@ -333,8 +333,21 @@ with `gcloud compute instances start parquet-archsimd-bench
   The lowercase page kernels ignore interior NaN on amd64 (asm and simd)
   but propagate NaN in purego (slices.Min) — pre-existing divergence,
   documented in page_bounds_vector_nan_test.go.
-- Remaining tier 2: orderOf* (6), hashprobe multiProbe (3), delta
-  length_byte_array (2), aeshash (6). Benchmarks on the VM pending.
+- **orderOf* (6 kernels)**: done — shifted-pair vector compares with AVX2
+  tiers (new vs the AVX-512-only asm); floats report undefined order on NaN
+  (matches asm; purego generic differs).
+- **delta length_byte_array (2 kernels)**: done — AVX2 (asm was SSE2-only);
+  the decode prefix sum uses a Permute shift-and-add ladder with
+  compare-built lane masks: **Mask32x8FromBits lowers to KMOVD
+  (AVX-512-only) and faults on AVX2 CPUs** — second sighting of the
+  compiles-at-AVX2-width-but-needs-AVX-512 trap after Int64x4.Min.
+- **hashprobe multiProbe (3 kernels)**: done — broadcast + group compare +
+  occupancy-filtered mask, mirroring the asm structure.
+- **aeshash (6 functions)**: done — bit-identical to the assembly (golden
+  tests pass unchanged); gate is AVXAES (VEX encoding needs AVX), and the
+  purego+simd build gains a working AES hash where the stub panicked.
+
+Tier 2 complete. Benchmarks on the VM pending.
 
 ## Suggested execution order
 
