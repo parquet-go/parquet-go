@@ -1,4 +1,4 @@
-//go:build purego || !amd64 || goexperiment.simd
+//go:build purego || !amd64
 
 package wyhash
 

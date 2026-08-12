@@ -2,6 +2,12 @@
 
 package sparse
 
+import (
+	"unsafe"
+
+	"simd/archsimd"
+)
+
 // The assembly versions of these kernels are scalar loops; the Go
 // implementations below compile to comparable code, so the GOEXPERIMENT=simd
 // build uses them instead of the assembly. The AVX2 gather kernels keep
@@ -25,7 +31,8 @@ func gatherBitsDefault(dst []byte, src Uint8Array) {
 func gather128(dst [][16]byte, src Uint128Array) int {
 	n := min(len(dst), src.Len())
 	for i := range dst[:n] {
-		dst[i] = src.Index(i)
+		b := unsafe.Slice((*byte)(src.index(i)), 16)
+		archsimd.LoadUint8x16Slice(b).StoreSlice(dst[i][:])
 	}
 	return n
 }

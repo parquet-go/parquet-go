@@ -33,15 +33,6 @@ func dictionaryLookup32(dict []uint32, indexes []int32, rows sparse.Array) errno
 //go:noescape
 func dictionaryLookup64(dict []uint64, indexes []int32, rows sparse.Array) errno
 
-//go:noescape
-func dictionaryLookupByteArrayString(dict []uint32, page []byte, indexes []int32, rows sparse.Array) errno
-
-//go:noescape
-func dictionaryLookupFixedLenByteArrayString(dict []byte, len int, indexes []int32, rows sparse.Array) errno
-
-//go:noescape
-func dictionaryLookupFixedLenByteArrayPointer(dict []byte, len int, indexes []int32, rows sparse.Array) errno
-
 func (d *int32Dictionary) lookup(indexes []int32, rows sparse.Array) {
 	checkLookupIndexBounds(indexes, rows)
 	dict := unsafecast.Slice[uint32](d.values.Slice())
@@ -78,7 +69,6 @@ func (d *byteArrayDictionary) lookupString(indexes []int32, rows sparse.Array) {
 	//
 	// https://github.com/segmentio/parquet-go/issues/368
 	//
-	//dictionaryLookupByteArrayString(d.offsets, d.values, indexes, rows).check()
 	for i, j := range indexes {
 		*(*string)(rows.Index(i)) = unsafecast.String(d.index(int(j)))
 	}
@@ -86,7 +76,6 @@ func (d *byteArrayDictionary) lookupString(indexes []int32, rows sparse.Array) {
 
 func (d *fixedLenByteArrayDictionary) lookupString(indexes []int32, rows sparse.Array) {
 	checkLookupIndexBounds(indexes, rows)
-	//dictionaryLookupFixedLenByteArrayString(d.data, d.size, indexes, rows).check()
 	for i, j := range indexes {
 		*(*string)(rows.Index(i)) = unsafecast.String(d.index(j))
 	}
@@ -105,7 +94,6 @@ func (d *uint64Dictionary) lookup(indexes []int32, rows sparse.Array) {
 func (d *be128Dictionary) lookupString(indexes []int32, rows sparse.Array) {
 	checkLookupIndexBounds(indexes, rows)
 	//dict := unsafecast.Slice[byte](d.values)
-	//dictionaryLookupFixedLenByteArrayString(dict, 16, indexes, rows).check()
 	s := "0123456789ABCDEF"
 	for i, j := range indexes {
 		*(**[16]byte)(unsafe.Pointer(&s)) = d.index(j)
@@ -116,7 +104,6 @@ func (d *be128Dictionary) lookupString(indexes []int32, rows sparse.Array) {
 func (d *be128Dictionary) lookupPointer(indexes []int32, rows sparse.Array) {
 	checkLookupIndexBounds(indexes, rows)
 	//dict := unsafecast.Slice[byte](d.values)
-	//dictionaryLookupFixedLenByteArrayPointer(dict, 16, indexes, rows).check()
 	for i, j := range indexes {
 		*(**[16]byte)(rows.Index(i)) = d.index(j)
 	}
