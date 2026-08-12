@@ -28,9 +28,6 @@ func dictionaryBoundsUint32(dict []uint32, indexes []int32) (min, max uint32, er
 func dictionaryBoundsUint64(dict []uint64, indexes []int32) (min, max uint64, err errno)
 
 //go:noescape
-func dictionaryBoundsBE128(dict [][16]byte, indexes []int32) (min, max *[16]byte, err errno)
-
-//go:noescape
 func dictionaryLookup32(dict []uint32, indexes []int32, rows sparse.Array) errno
 
 //go:noescape

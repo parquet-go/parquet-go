@@ -93,3 +93,21 @@ func TestDecodeInt32LargeRun(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkEncodeInt32Bitpack(b *testing.B) {
+	words := make([][8]int32, 128)
+	for i := range words {
+		for j := range words[i] {
+			words[i][j] = int32(i+j) & 0x7FFF
+		}
+	}
+	dst := make([]byte, len(words)*16+32)
+	for _, bitWidth := range []uint{1, 2, 5, 8, 15} {
+		b.Run(fmt.Sprintf("bitWidth=%d", bitWidth), func(b *testing.B) {
+			b.SetBytes(int64(len(words) * 32))
+			for b.Loop() {
+				encodeInt32Bitpack(dst, words, bitWidth)
+			}
+		})
+	}
+}
