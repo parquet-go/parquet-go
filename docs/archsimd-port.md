@@ -497,5 +497,47 @@ insert-heavy portion of the benchmark.
 2. Tier 5 deletions + dead-code removal in parallel (no archsimd needed).
 3. Tier 2, leading with page min/max/bounds (one generic replaces 19 functions).
 4. Tier 3 as appetite allows.
-5. Revisit Tier 4 when archsimd grows gather/scatter (tracked upstream in the
-   simd proposal), or attempt the bytestreamsplit transpose redesign.
+### Tier 4 results (branch archsimd-tier4, benchmarked on c4-standard-8 Emerald Rapids, GOAMD64=v4, same boot)
+
+bytestreamsplit, asm (gather/scatter) -> archsimd (permute transpose):
+
+| Kernel | 4KiB | 256KiB | 2048KiB |
+|---|---|---|---|
+| EncodeFloat | **-82%** | **-80%** | **-48%** |
+| DecodeFloat | **-54%** | **-37%** | ~ |
+| EncodeDouble | **-57%** | **-63%** | **-23%** |
+| DecodeDouble | ~ | +12% | ~ |
+
+The gathers/scatters the assembly relied on are simply slow; the shuffle
+transpose is up to 5.6x faster and the only residual regression is
+DecodeDouble at 256KiB (+12%), where the assembly's decode was already
+shuffle-based and well tuned.
+
+miniblock packers, asm production path -> archsimd:
+
+- int64 widths 3-16: **-33..-54%** (asm fell back to scalar there; the fold
+  packer covers 2-16)
+- width 2 (both int32 and int64): the fold packer was 4x slower than the
+  asm PDEP kernels; replaced by a multiply-add-pairs packer (byte permute
+  gather + VPMADDUBSW + VPMADDWD) which **beats PDEP**: int32 -19%, int64
+  -28%.
+
+**Negative result worth remembering**: fusing the standalone VPERMB byte
+grouping into the adjacent permute round via composed VPERMI2B indexes
+(cutting 512-bit shuffle counts by 20-25%) made every size SLOWER (+7.5%
+geomean). VPERMI2B's destructive index operand forces a vector register
+copy per use (no SIMD move elimination on Ice Lake+) and it decodes
+heavier than VPERMB on Emerald Rapids. Shuffle-port pressure is not the
+bottleneck; keep grouping and combining as separate cheap instructions
+(commit 670be28, reverted by f76185b, preserves the experiment).
+
+Also note: benchmark the asm's *production* dispatch, not the exported
+scalar wrappers — encodeMiniBlockInt64 in the amd64 build is the scalar
+Default; the real path is encodeMiniBlockInt64AVX2 (kernel benchmarks
+carry the AVX2 suffix). The first width-2 comparison accidentally beat
+the scalar fallback and missed the 4x PDEP gap.
+
+5. Tier 4 done for everything redesignable: bytestreamsplit and the 2-bit
+   packers are ported (see results above). The remaining blocked set is
+   gather/scatter only (sparse, nullIndex32/64, dictionary kernels) plus the
+   BMI2 rle byte packers.
