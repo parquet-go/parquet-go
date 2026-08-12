@@ -8,7 +8,6 @@ import (
 
 	"simd/archsimd"
 
-	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
@@ -100,42 +99,11 @@ func multiProbe64SIMD(table []table64Group, numKeys int, hashes []uintptr, keys 
 	return numKeys
 }
 
+// multiProbe128 delegates to the scalar implementation: a 16 bytes key
+// compare is two 8 bytes compares in general purpose registers, and holding
+// the key in a vector register across the probe loop makes the compiler
+// spill it with a legacy (non-VEX) MOVUPS on every iteration, which costs
+// more than the compare itself.
 func multiProbe128(table []byte, tableCap, tableLen int, hashes []uintptr, keys sparse.Uint128Array, values []int32) int {
-	if archsimd.X86.AVX() {
-		return multiProbe128SIMD(table, tableCap, tableLen, hashes, keys, values)
-	}
 	return multiProbe128Default(table, tableCap, tableLen, hashes, keys, values)
-}
-
-func multiProbe128SIMD(table []byte, tableCap, tableLen int, hashes []uintptr, keys sparse.Uint128Array, values []int32) int {
-	modulo := uintptr(tableCap) - 1
-	offset := uintptr(tableCap) * 16
-	tableKeys := unsafecast.Slice[[16]byte](table[:offset])
-	tableValues := unsafecast.Slice[int32](table[offset:])
-
-	for i, hash := range hashes {
-		key := keys.Index(i)
-		kv := archsimd.LoadUint8x16Slice(key[:])
-		for {
-			j := hash & modulo
-			v := tableValues[j]
-
-			if v == 0 {
-				values[i] = int32(tableLen)
-				tableLen++
-				tableKeys[j] = key
-				tableValues[j] = int32(tableLen)
-				break
-			}
-
-			if kv.Equal(archsimd.LoadUint8x16Slice(tableKeys[j][:])).ToBits() == 0xFFFF {
-				values[i] = v - 1
-				break
-			}
-
-			hash++
-		}
-	}
-
-	return tableLen
 }
