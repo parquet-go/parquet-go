@@ -10,6 +10,7 @@
 package rle
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/encoding/fuzz"
