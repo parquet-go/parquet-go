@@ -91,6 +91,7 @@ func Count(data []byte, value byte) int {
 			d = d[32:]
 		}
 	}
+	archsimd.ClearAVXUpperBits()
 	for i := range d {
 		if d[i] == value {
 			n++
@@ -129,6 +130,7 @@ func Broadcast(dst []byte, src byte) {
 		if len(d) > 0 {
 			v.StoreSlice(dst[len(dst)-32:])
 		}
+		archsimd.ClearAVXUpperBits()
 		return
 	}
 	if len(dst) >= 8 {

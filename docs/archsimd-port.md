@@ -283,6 +283,46 @@ Caveat: master's archsimd renamed APIs since 1.26.5 — `Load*Slice`→`Load*`,
 `StoreSlice`→`Store`, `SumAbsDiff`→`SumOf8AbsDiff` (returns Uint64x8
 directly) — the branch will need those renames when it targets a newer Go.
 
+### AVX-512 tiers for the delta length kernels
+
+The assembly stayed SSE2 ("keeps the code simple... already yields most of
+the performance"); in Go a wider tier is the same code at different type
+widths, so both kernels gained AVX-512 tiers (16 lanes vs the asm's 4) —
+and the 512-bit tier is simpler than the AVX2 one because Mask32x16FromBits
+is legal under the AVX-512 gate. Results vs the SSE2 asm (Emerald Rapids,
+v4): encode **-27%**, decode **+7%**. Two lessons:
+
+- Chunk views also solve *shifted* streams: the encode loads are offset by
+  one element, so one chunk view over `offsets` and one over `offsets[1:]`
+  make both loads constant-length chunk accesses. Views must be clamped to
+  a common length (`[:n]`) for prove to elide cross-view indexing checks.
+- **Prefix-sum carries must stay in vector registers**: extracting the
+  running total to a GPR and re-broadcasting per chunk serialized the loop
+  (decode was +31% before the fix); a vector-resident carry (all lanes
+  equal, updated by one add from a last-lane permute — the asm's PSHUFD
+  trick) leaves a single add on the critical path.
+
+### Optimistic float bounds (NaN witness)
+
+The +36% float bounds gap at cache-resident sizes was the cost of NaN-safe
+compare-and-merge (2 uops per update vs VMINPS's 1), forced because
+archsimd's float Min/Max NaN semantics are undocumented and the compiler
+canonicalizes commutative operands (so the assembly's operand-order trick is
+inexpressible). The fix: scan optimistically with native Min/Max while
+accumulating a sum of every loaded vector — addition propagates NaN
+unconditionally, unlike VMINPS which can erase one, so a NaN-free sum proves
+the fast result exact; NaN (or a spurious +Inf/-Inf sum) triggers a rescan
+with the compare-and-merge fallback. Results: 4KiB +36% → +24%, 256KiB -19%,
+2MB -30..35% vs asm. The remaining 4KiB delta is structural (6 vector ops
+per chunk vs the asm's 4 — the two NaN-witness adds); only upstream changes
+(documented Min/Max NaN semantics, or not canonicalizing FP min/max
+operands, which is semantics-changing under NaN) can close it.
+
+Two more #80835 manifestations found here: BroadcastFloat32x16(0)
+materializes the float constant with a legacy XORPS (fixed by building the
+zero via an integer broadcast), and the template's single-accumulator
+Min chains serialized on latency (restored dual accumulators).
+
 Reference point — the standard library: `bytes.Count` (what the purego build
 uses, backed by the stdlib's AVX2 assembly) is far slower than both
 (same boot, GOAMD64=v4, 256KiB: repo asm 1.63µs < archsimd 2.06µs <
@@ -317,6 +357,94 @@ us-central1-b, project achille-demo-test), currently **stopped** — restart
 with `gcloud compute instances start parquet-archsimd-bench
 --project=achille-demo-test --zone=us-central1-b`; it has Go 1.26.5 in
 /usr/local/go and the repo cloned at ~/parquet-go.
+
+### Tier 2 progress (branch archsimd-tier2)
+
+- **page min/max/bounds (19 kernels)**: done — one generated Go file
+  (page_minmax_simd_amd64.go) replaces ~1800 lines of assembly across three
+  .s files. New capability: AVX2 tiers (the assembly was AVX-512-only, so
+  AVX2 CPUs ran scalar). Two lowering rules learned:
+  1. float Min/Max must use compare-and-merge — archsimd NaN semantics are
+     undocumented and the compiler canonicalizes commutative operands, so
+     the assembly's operand-order trick is not expressible;
+  2. 64-bit integer Min/Max at the AVX2 tier must use compare-and-merge —
+     Int64x4.Min lowers to VPMINSQ (AVX-512-only) and SIGILLs on AVX2 CPUs;
+     VPCMPGTQ+blend instead, with a 1<<63 bias for unsigned.
+  The lowercase page kernels ignore interior NaN on amd64 (asm and simd)
+  but propagate NaN in purego (slices.Min) — pre-existing divergence,
+  documented in page_bounds_vector_nan_test.go.
+- **orderOf* (6 kernels)**: done — shifted-pair vector compares with AVX2
+  tiers (new vs the AVX-512-only asm); floats report undefined order on NaN
+  (matches asm; purego generic differs).
+- **delta length_byte_array (2 kernels)**: done — AVX2 (asm was SSE2-only);
+  the decode prefix sum uses a Permute shift-and-add ladder with
+  compare-built lane masks: **Mask32x8FromBits lowers to KMOVD
+  (AVX-512-only) and faults on AVX2 CPUs** — second sighting of the
+  compiles-at-AVX2-width-but-needs-AVX-512 trap after Int64x4.Min.
+- **hashprobe multiProbe (3 kernels)**: done — broadcast + group compare +
+  occupancy-filtered mask, mirroring the asm structure.
+- **aeshash (6 functions)**: done — bit-identical to the assembly (golden
+  tests pass unchanged); gate is AVXAES (VEX encoding needs AVX), and the
+  purego+simd build gains a working AES hash where the stub panicked.
+
+Tier 2 benchmarked on Emerald Rapids (GOAMD64=v4, same-boot vs asm, n=8).
+The first run exposed four issues, all diagnosed with pprof + objdump and
+fixed; final standings:
+
+| Kernel group | vs assembly |
+|---|---|
+| bounds int/uint (all sizes) | -28% .. +6% (mostly faster than asm) |
+| bounds float 256KiB/2MB | -9% .. -34% (faster than asm) |
+| bounds float 4KiB | +24% (optimistic NaN-witness path; structural floor, see below) |
+| orderOf* | +109% .. +217% (known gap, see below) |
+| hash tables 32/64 | +12% .. +83% (hash-bound) |
+| hash table 128 | +8% .. +70% |
+| MultiHash64 | +48% |
+
+New lessons (beyond tier 1):
+
+1. **Call ClearAVXUpperBits() before returning from vector code.** The asm
+   ends with VZEROUPPER; without it the CALLER's scalar float code pays the
+   AVX-SSE transition penalty on every call (float bounds 4KiB was +2091%
+   from this + scalar reductions). The compiler does not insert it.
+2. **Never round-trip vector values through stack arrays or [N]byte copies**:
+   two narrow stores followed by a wide load defeat store forwarding and
+   serialize loops (aeshash was 16x slower). Build vectors with SetElem
+   (register-only) or load directly from source memory (UnsafeArray for
+   sparse); note BroadcastUint64x2 is VPBROADCASTQ = AVX2, SetElem from a
+   zero value is plain AVX.
+3. **Scalar float compares (UCOMISS) and vector spills (MOVUPS) are legacy
+   SSE encodings** — more manifestations of golang/go#80835. Float
+   reductions must be in-register shuffle ladders; if the compiler spills a
+   vector held across a loop (multiProbe128), consider not using a vector at
+   all (two GPR compares beat a spilled vector compare).
+4. Min/max overlap-tail trick: reload full vectors overlapping processed
+   elements instead of scalar tails (idempotent ops), eliminating both tail
+   scalar float compares and tail loops.
+
+orderOf* follow-up: the two-overlapping-loads scan was ~2-2.5x slower than
+the asm; rewriting the AVX-512 tier as a rolling single-load scan with
+ConcatPermute (the asm's VPERMI2D trick, trailing pairs covered by one or
+two overlapping window compares) brought it to **-13.5%..+21%** — Int64 and
+Float64 beat the asm at most sizes. Correctness pinned by an exhaustive
+violation-at-every-position test (order_simd_test.go) run on AVX-512
+hardware. MultiHash64 follow-up: a VAES fast path (gated on X86.VAES, dense input
+detected via pointer stride) hashes 4 values per iteration — 256-bit AES
+rounds encrypt two blocks per instruction, with interleaves packing
+[seed, value] block pairs and reassembling the hashes for a single store.
+Result: **+21% throughput over the assembly** (11.9 -> 14.5 GiB/s), hash
+values bit-identical (golden tests on VAES hardware). The same treatment
+would fit MultiHash32/MultiHash128, and an AVX512VAES variant could do 4
+blocks per instruction. The probe gap was then closed
+in three steps: pre-slicing values to hoist its bounds check, testing
+group fullness with >= so prove can elide the group insert bounds checks
+(it cannot see through OnesCount32 + ==), and reading densely packed keys
+through a plain slice instead of the strided Index (whose per-key multiply
+and register pressure spilled slice headers into the probe loop). With
+VAES MultiHash32 added (the 32-bit state is the 64-bit one with a
+VPMOVZXDQ-widened value), the hash table benchmarks landed at **+7..+34%
+vs assembly** (from +65..+83%), with the remaining delta in the
+insert-heavy portion of the benchmark.
 
 ## Suggested execution order
 

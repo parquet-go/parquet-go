@@ -29,6 +29,7 @@ func broadcastRangeInt32(dst []int32, base int32) {
 			v.StoreSlice(dst[i:])
 			v = v.Add(step)
 		}
+		archsimd.ClearAVXUpperBits()
 	}
 	for ; i < len(dst); i++ {
 		dst[i] = base + int32(i)

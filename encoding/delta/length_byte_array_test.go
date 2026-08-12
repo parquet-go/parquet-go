@@ -32,3 +32,27 @@ func TestDecodeByteArrayLengths(t *testing.T) {
 		t.Fatalf("wrong last offset: want=%d got=%d", lastOffset, offsets[len(lengths)])
 	}
 }
+
+func BenchmarkEncodeByteArrayLengths(b *testing.B) {
+	offsets := make([]uint32, 1001)
+	lengths := make([]int32, 1000)
+	for i := range offsets {
+		offsets[i] = uint32(i * 3)
+	}
+	b.SetBytes(int64(len(lengths) * 4))
+	for b.Loop() {
+		encodeByteArrayLengths(lengths, offsets)
+	}
+}
+
+func BenchmarkDecodeByteArrayLengths(b *testing.B) {
+	offsets := make([]uint32, 1001)
+	lengths := make([]int32, 1000)
+	for i := range lengths {
+		lengths[i] = int32(i % 100)
+	}
+	b.SetBytes(int64(len(lengths) * 4))
+	for b.Loop() {
+		decodeByteArrayLengths(offsets, lengths)
+	}
+}
