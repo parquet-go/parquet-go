@@ -41,7 +41,7 @@ func (e *ByteArrayEncoding) EncodeByteArray(dst []byte, src []byte, offsets []ui
 			p := 0
 			baseOffset = endOffset
 
-			p = wordSearchPrefixLength(lastValue, v)
+			p = searchPrefixLength(lastValue, v)
 
 			prefix.values = append(prefix.values, int32(p))
 			length.values = append(length.values, int32(n-p))
@@ -96,7 +96,7 @@ func (e *ByteArrayEncoding) EncodeFixedLenByteArray(dst []byte, src []byte, size
 
 	for i := size; i <= len(src); i += size {
 		v := src[i-size : i : i]
-		p := wordSearchPrefixLength(lastValue, v)
+		p := searchPrefixLength(lastValue, v)
 		n := size - p
 		prefix.values = append(prefix.values, int32(p))
 		length.values = append(length.values, int32(n))

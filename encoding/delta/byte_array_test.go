@@ -14,6 +14,10 @@ func TestWordSearchPrefixLength(t *testing.T) {
 	testSearchPrefixLength(t, wordSearchPrefixLength)
 }
 
+func TestSearchPrefixLength(t *testing.T) {
+	testSearchPrefixLength(t, searchPrefixLength)
+}
+
 func TestBinarySearchPrefixLength(t *testing.T) {
 	testSearchPrefixLength(t, func(base, data []byte) int {
 		return binarySearchPrefixLength(base, data)
@@ -139,6 +143,10 @@ func BenchmarkLinearSearchPrefixLength(b *testing.B) {
 
 func BenchmarkWordSearchPrefixLength(b *testing.B) {
 	benchmarkSearchPrefixLength(b, wordSearchPrefixLength)
+}
+
+func BenchmarkSearchPrefixLength(b *testing.B) {
+	benchmarkSearchPrefixLength(b, searchPrefixLength)
 }
 
 func BenchmarkBinarySearchPrefixLength(b *testing.B) {

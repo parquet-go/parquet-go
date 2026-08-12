@@ -3,6 +3,7 @@
 package delta
 
 import (
+	"math/bits"
 	"simd/archsimd"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -82,6 +83,31 @@ var (
 	lastLane8x32Delta = [8]uint32{7, 7, 7, 7, 7, 7, 7, 7}
 )
 
+// searchPrefixLengthSIMD returns the length of the longest common prefix of
+// base and data, comparing 32 bytes at a time; the first mismatching byte is
+// recovered from the movemask of the byte equality.
+func searchPrefixLengthSIMD(base, data []byte) int {
+	n := min(len(base), len(data))
+	i := 0
+	for ; i+32 <= n; i += 32 {
+		b := archsimd.LoadUint8x32Slice(base[i : i+32])
+		d := archsimd.LoadUint8x32Slice(data[i : i+32])
+		if eq := b.Equal(d).ToBits(); eq != 0xFFFFFFFF {
+			archsimd.ClearAVXUpperBits()
+			return i + bits.TrailingZeros32(^eq)
+		}
+	}
+	archsimd.ClearAVXUpperBits()
+	return i + wordSearchPrefixLength(base[i:], data[i:])
+}
+
+func searchPrefixLength(base, data []byte) int {
+	if archsimd.X86.AVX2() && min(len(base), len(data)) >= 32 {
+		return searchPrefixLengthSIMD(base, data)
+	}
+	return wordSearchPrefixLength(base, data)
+}
+
 func reduceAddInt32x8(v archsimd.Int32x8) int32 {
 	q := v.GetLo().Add(v.GetHi())
 	p := q.AsFloat32x4().SelectFromPair(2, 3, 0, 1, q.AsFloat32x4()).AsInt32x4()
@@ -152,13 +178,13 @@ func decodeByteArraySIMD(dst, src []byte, prefix, suffix []int32) int {
 		n := int(suffix[k])
 		valueOffset := i
 		archsimd.LoadUint8x32Slice(dst[lastValue : lastValue+32]).StoreSlice(dst[i : i+32])
-		if p > 32 {
-			copy(dst[i:i+p], dst[lastValue:lastValue+p])
+		for m := 32; m < p; m += 32 {
+			archsimd.LoadUint8x32Slice(dst[lastValue+m : lastValue+m+32]).StoreSlice(dst[i+m : i+m+32])
 		}
 		i += p
 		archsimd.LoadUint8x32Slice(src[j : j+32]).StoreSlice(dst[i : i+32])
-		if n > 32 {
-			copy(dst[i:i+n], src[j:j+n])
+		for m := 32; m < n; m += 32 {
+			archsimd.LoadUint8x32Slice(src[j+m : j+m+32]).StoreSlice(dst[i+m : i+m+32])
 		}
 		i += n
 		j += n

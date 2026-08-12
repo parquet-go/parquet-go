@@ -181,21 +181,38 @@ arm64 purego path. The remaining checks are load-bearing: the per-value
 caller-provided offsets and of prefix/suffix lengths read from the page, and
 `lastValue = dst[j:]` after appends is unprovable but negligible.
 
-Possible follow-ups:
+## 6. SIMD prefix search (GOEXPERIMENT=simd, amd64)
 
-- SIMD-widening the compare to 16/32-byte blocks is *not* a free win: the
-  portable version (`bytes.Equal` on 32B chunks, as arrow-rs did with
-  `chunks_exact(32)`) measured slower than the word loop at every size on
-  Apple M4 (4.0 vs 3.5 ns at 128B, 22 vs 18 ns at 1000B) because `memequal`
-  is an out-of-line call while the word loop is 4 inline load/xor pairs per
-  32B. A real vector kernel needs inline SIMD (AVX2 `VPCMPEQB`+`VPMOVMSKB`+
-  `TZCNT`, or NEON `CMEQ`+`SHRN`) via asm or the Go 1.26 `simd` experiment,
-  must handle tails without over-reading caller memory (AVX-512 masked
-  loads), and only engages on long shared prefixes. A CPU profile after this
-  change bounds the payoff: the prefix search is ~19% of encode on
-  prefix-heavy data, so even an infinitely fast kernel caps at ~1.2x; the
-  larger targets are the DELTA_BINARY_PACKED encoding of the two length
-  streams (~48%, pure Go on arm64) and the suffix memmoves (~11%).
+SIMD-widening the compare is *not* a free win in portable Go: 32B chunks via
+`bytes.Equal` (as arrow-rs did with `chunks_exact(32)`) measured slower than
+the word loop at every size on Apple M4 (4.0 vs 3.5 ns at 128B, 22 vs 18 ns
+at 1000B) because `memequal` is an out-of-line call while the word loop is 4
+inline load/xor pairs per 32B. On arm64 the word loop stays the best shape.
+The prefix search is also only ~19% of encode on prefix-heavy data (the
+DELTA_BINARY_PACKED encoding of the two length streams is ~48%, suffix
+memmoves ~11%), bounding any kernel's end-to-end payoff at ~1.2x there.
+
+On amd64 the picture differs: benchmarked on real x86 (GCE c3, Xeon Platinum
+8481C Sapphire Rapids — Rosetta on Apple silicon is not representative), the
+word loop is ~3x slower per byte than on M4 (10.3 ns at 100B), so a real
+vector kernel pays. `searchPrefixLengthSIMD` (goexperiment.simd build) uses
+`Uint8x32.Equal` + `ToBits` + `TrailingZeros32(^mask)` — the classic
+VPCMPEQB/VPMOVMSKB idiom — gated to values ≥32B, with the word loop for
+short values and tails (encode inputs are caller memory: no over-read
+allowed). Results on the c3: isolated search −22% at LCP 500 (30.9→24.0 ns),
+end-to-end prefix-heavy encode +17% (1.82→2.12 GB/s). Correctness verified
+on-host under both builds.
+
+The same session found and fixed a regression in the tier-1
+`decodeByteArraySIMD` (#584): when a prefix or suffix exceeded 32 bytes —
+the common case on prefix-heavy pages, where LCPs run 24–53B — it fell back
+to `copy(dst[i:i+p], ...)`, an overlapping memmove per value re-copying from
+byte 0 (43% of decode CPU). Replacing the fallback with 32B vector-chunk
+extension (mirroring the asm's `copyPrefix`/`copySuffix`) took prefix-heavy
+decode from 0.50 to 3.61 GB/s on the c3. A general ~2x gap vs the
+hand-written asm remains in the simd decode build (`Uint8x32.StoreSlice` is
+44% flat in the profile, random-data decode 1.97 vs 4.03 GB/s) — that is
+archsimd codegen overhead, tracked separately by the archsimd port.
 - Velox-style in-place decode to eliminate the prefix copy in
   `decodeByteArray`.
 - Skip the copy when `p == 0` / `n == 0` in decoders (arrow#37873's
