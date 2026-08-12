@@ -4,12 +4,6 @@ package parquet
 
 import "github.com/parquet-go/parquet-go/sparse"
 
-//go:noescape
-func nullIndex32(bits *uint64, rows sparse.Array)
-
-//go:noescape
-func nullIndex64(bits *uint64, rows sparse.Array)
-
 func nullIndexBool(bits []uint64, rows sparse.Array) {
 	nullIndex8(&bits[0], rows)
 }

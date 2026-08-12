@@ -3,15 +3,22 @@
 package sparse
 
 import (
+	"encoding/binary"
 	"unsafe"
+
+	"simd/archsimd"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 )
 
-// The assembly versions of these kernels are scalar loops; the Go
-// implementations below compile to comparable code, so the GOEXPERIMENT=simd
-// build uses them instead of the assembly. The AVX2 gather kernels keep
-// their assembly (no gather in archsimd).
+// The GOEXPERIMENT=simd build replaces all the gather kernels with Go: the
+// scalar ones compile to comparable code, and the VPGATHER based ones
+// (gatherBits, gather32, gather64) are tiered instead of gathered — a
+// dense stride is a contiguous copy (or a vector compare for gatherBits),
+// and other strides walk the pointer additively 4 elements per iteration
+// through chunk views (the prove pass cannot derive dst[i+3] from
+// i+4 <= len). VPGATHERDD costs about 2 cycles per element, which plain
+// loads meet or beat without the AVX2 CPUID gate.
 
 func gatherBitsDefault(dst []byte, src Uint8Array) {
 	n := src.Len() / 8
@@ -52,6 +59,97 @@ func gather128(dst [][16]byte, src Uint128Array) int {
 	}
 	for i := len(c) * 4; i < n; i++ {
 		dst[i] = *(*[16]byte)(p)
+		p = unsafe.Add(p, off)
+	}
+	return n
+}
+
+func gatherBits(dst []byte, src Uint8Array) int {
+	n := min(len(dst)*8, src.Len())
+	i := 0
+	if k := (n / 64) * 64; k > 0 && src.off == 1 && archsimd.X86.AVX512() {
+		b := unsafe.Slice((*byte)(src.index(0)), k)
+		one := archsimd.BroadcastUint8x64(1)
+		for ; i+64 <= k; i += 64 {
+			m := archsimd.LoadUint8x64Slice(b[i : i+64]).And(one).Equal(one).ToBits()
+			binary.LittleEndian.PutUint64(dst[i/8:], m)
+		}
+		archsimd.ClearAVXUpperBits()
+	}
+	if k := (n / 8) * 8; i < k {
+		p := src.index(i)
+		off := src.off
+		for ; i+8 <= k; i += 8 {
+			dst[i/8] = (*(*byte)(p) & 1) |
+				((*(*byte)(unsafe.Add(p, off)) & 1) << 1) |
+				((*(*byte)(unsafe.Add(p, 2*off)) & 1) << 2) |
+				((*(*byte)(unsafe.Add(p, 3*off)) & 1) << 3) |
+				((*(*byte)(unsafe.Add(p, 4*off)) & 1) << 4) |
+				((*(*byte)(unsafe.Add(p, 5*off)) & 1) << 5) |
+				((*(*byte)(unsafe.Add(p, 6*off)) & 1) << 6) |
+				((*(*byte)(unsafe.Add(p, 7*off)) & 1) << 7)
+			p = unsafe.Add(p, 8*off)
+		}
+	}
+	for i < n {
+		x := i / 8
+		y := i % 8
+		b := src.Index(i)
+		dst[x] = ((b & 1) << y) | (dst[x] & ^(1 << y))
+		i++
+	}
+	return n
+}
+
+func gather32(dst []uint32, src Uint32Array) int {
+	n := min(len(dst), src.Len())
+	if n == 0 {
+		return 0
+	}
+	p := src.index(0)
+	off := src.off
+	if off == 4 {
+		copy(dst[:n], unsafe.Slice((*uint32)(p), n))
+		return n
+	}
+	c := unsafecast.Slice[[4]uint32](dst[:n])
+	for j := range c {
+		d := &c[j]
+		d[0] = *(*uint32)(p)
+		d[1] = *(*uint32)(unsafe.Add(p, off))
+		d[2] = *(*uint32)(unsafe.Add(p, 2*off))
+		d[3] = *(*uint32)(unsafe.Add(p, 3*off))
+		p = unsafe.Add(p, 4*off)
+	}
+	for i := len(c) * 4; i < n; i++ {
+		dst[i] = *(*uint32)(p)
+		p = unsafe.Add(p, off)
+	}
+	return n
+}
+
+func gather64(dst []uint64, src Uint64Array) int {
+	n := min(len(dst), src.Len())
+	if n == 0 {
+		return 0
+	}
+	p := src.index(0)
+	off := src.off
+	if off == 8 {
+		copy(dst[:n], unsafe.Slice((*uint64)(p), n))
+		return n
+	}
+	c := unsafecast.Slice[[4]uint64](dst[:n])
+	for j := range c {
+		d := &c[j]
+		d[0] = *(*uint64)(p)
+		d[1] = *(*uint64)(unsafe.Add(p, off))
+		d[2] = *(*uint64)(unsafe.Add(p, 2*off))
+		d[3] = *(*uint64)(unsafe.Add(p, 3*off))
+		p = unsafe.Add(p, 4*off)
+	}
+	for i := len(c) * 4; i < n; i++ {
+		dst[i] = *(*uint64)(p)
 		p = unsafe.Add(p, off)
 	}
 	return n

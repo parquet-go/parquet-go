@@ -264,3 +264,28 @@ func benchmarkThroughput(b *testing.B, m string, f func() int) {
 	seconds := time.Since(start).Seconds()
 	b.ReportMetric(float64(count)/seconds, m+"/s")
 }
+
+func BenchmarkGatherBits(b *testing.B) {
+	type record struct {
+		Flag bool
+		Pad  [7]byte
+	}
+	buf := make([]record, benchmarkGatherPerLoop)
+	dst := make([]byte, benchmarkGatherPerLoop/8)
+
+	b.Run("dense", func(b *testing.B) {
+		bits := make([]byte, benchmarkGatherPerLoop)
+		src := sparse.UnsafeUint8Array(unsafe.Pointer(&bits[0]), len(bits), 1)
+		b.SetBytes(benchmarkGatherPerLoop / 8)
+		benchmarkThroughput(b, "gather", func() int {
+			return sparse.GatherBits(dst, src)
+		})
+	})
+	b.Run("strided", func(b *testing.B) {
+		src := sparse.UnsafeUint8Array(unsafe.Pointer(&buf[0].Flag), len(buf), unsafe.Sizeof(buf[0]))
+		b.SetBytes(benchmarkGatherPerLoop / 8)
+		benchmarkThroughput(b, "gather", func() int {
+			return sparse.GatherBits(dst, src)
+		})
+	})
+}
