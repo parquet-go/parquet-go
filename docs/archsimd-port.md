@@ -83,9 +83,19 @@ Intricate lane choreography, but every instruction has an archsimd equivalent.
   the stack per use — individual locals stay in registers (32 ZMM regs
   exist for this); and latency-bound mul chains need 4 streams, exactly
   like the assembly.
-- Remaining tier 3: delta binary_packed block kernels (delta/min/sub/
-  bitwidths/decodeBlock), the general bit-packers, delta byte_array
-  validate, minBE128/maxBE128.
+- **delta binary_packed block kernels**: done — delta/min/sub/bitwidths
+  for int32/int64 (AVX-512 + AVX2 tiers), vector-carried decodeBlockInt32
+  prefix sum, compare-to-bits 1-bit mini block encoders, full-width
+  copies; validated through the same parameterized test harnesses as the
+  assembly. Vs asm (int32): **delta -9%, min -20%, bitwidths -4%**,
+  sub +6%. The 2-bit (PDEP in asm) and 3-16 bit packers fall back to the
+  scalar packer for now. Traps re-confirmed: ConcatPermute and 64-bit
+  lane permutes at 256 bits are EVEX (AVX2 tier uses full-cross VPERMD
+  rotate + carry blend on the 32-bit view); scalar GetElem reductions
+  lose to in-register shuffle ladders (SelectFromPair via a float view —
+  shuffles are bit agnostic — flipped bitwidths from +49% to -4%).
+- Remaining tier 3: the general 2/3-16 bit mini block packers, delta
+  byte_array validate, minBE128/maxBE128.
 
 ## Tier 4 — blocked: needs instructions archsimd doesn't expose
 
