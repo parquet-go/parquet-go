@@ -6,6 +6,8 @@ import (
 	"unsafe"
 
 	"simd/archsimd"
+
+	"github.com/parquet-go/bitpack/unsafecast"
 )
 
 // The assembly versions of these kernels are scalar loops; the Go
@@ -30,9 +32,23 @@ func gatherBitsDefault(dst []byte, src Uint8Array) {
 
 func gather128(dst [][16]byte, src Uint128Array) int {
 	n := min(len(dst), src.Len())
-	for i := range dst[:n] {
-		b := unsafe.Slice((*byte)(src.index(i)), 16)
-		archsimd.LoadUint8x16Slice(b).StoreSlice(dst[i][:])
+	if n == 0 {
+		return 0
+	}
+	p := src.index(0)
+	off := src.off
+	c := unsafecast.Slice[[4][16]byte](dst[:n])
+	for j := range c {
+		d := &c[j]
+		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(p), 16)).StoreSlice(d[0][:])
+		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(unsafe.Add(p, off)), 16)).StoreSlice(d[1][:])
+		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(unsafe.Add(p, 2*off)), 16)).StoreSlice(d[2][:])
+		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(unsafe.Add(p, 3*off)), 16)).StoreSlice(d[3][:])
+		p = unsafe.Add(p, 4*off)
+	}
+	for i := len(c) * 4; i < n; i++ {
+		archsimd.LoadUint8x16Slice(unsafe.Slice((*byte)(p), 16)).StoreSlice(dst[i][:])
+		p = unsafe.Add(p, off)
 	}
 	return n
 }
