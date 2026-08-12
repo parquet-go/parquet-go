@@ -123,9 +123,9 @@ code.
 | `nullIndex32` / `nullIndex64` | null_amd64.s | VPGATHERDD/QQ (strided sparse.Array) | same as above; when stride == elem size a contiguous compare+`ToBits` version is portable and covers the common dense case |
 | `dictionaryBounds{Int32,Int64,Uint32,Uint64,Float32,Float64}` | dictionary_amd64.s | AVX-512 k-masked gathers | none without gather |
 | `dictionaryLookup32` / `dictionaryLookup64` | dictionary_amd64.s | gather **and** the tree's only scatters (VPSCATTERDD/DQ) | none without gather+scatter |
-| `encodeFloat/encodeDouble/decodeFloat/decodeDouble` | encoding/bytestreamsplit | gather+scatter used to transpose | redesignable: BYTE_STREAM_SPLIT is an N×4/N×8 byte transpose, expressible as load + `Permute`/`Interleave` network with no memory gather. Blocked as-written, portable with redesign |
+| `encodeFloat/encodeDouble/decodeFloat/decodeDouble` | encoding/bytestreamsplit | gather+scatter used to transpose | **PORTED via redesign** (branch archsimd-tier4): in-register byte transpose — `VPERMB` groups plane bytes within each 64-byte vector, then two-source permute trees assemble whole plane vectors (4×4 block transpose of 16-byte blocks at dword granularity for float; 3-round qword butterfly for double). No gather/scatter at all. Gated on AVX512VBMI for VPERMB. ~20 vector ops per 256 B (float), ~48 per 512 B (double) |
 | `encodeBytesBitpackBMI2` / `decodeBytesBitpackBMI2` | encoding/rle/rle_amd64.s | scalar PDEP/PEXT (no Go intrinsic) | bitWidth ≤ 8: plain Go shift loop is decent; SIMD alternative would want VPMULTISHIFTQB/GFNI, not exposed |
-| `encodeMiniBlockInt32x2bitsAVX2` / `Int64x2bitsAVX2` | encoding/delta/binary_packed_amd64.s | PDEPQ bit-plane interleave | two `ToBits` planes + scalar interleave, or fold into the general 3-16-bit path |
+| `encodeMiniBlockInt32x2bitsAVX2` / `Int64x2bitsAVX2` | encoding/delta/binary_packed_amd64.s | PDEPQ bit-plane interleave | **PORTED**: folded into the general packed path. Int32 2-bit was already covered by `encodeMiniBlockInt32Packed` (tier 3); tier 4 adds `encodeMiniBlockInt64Packed` covering widths 2-16 with the same fold reduction on native 64-bit lanes — wider coverage than the asm, which only had the PDEP path for 2 bits |
 
 ## Tier 5 — scalar assembly: replace with plain Go, not archsimd
 
@@ -497,5 +497,75 @@ insert-heavy portion of the benchmark.
 2. Tier 5 deletions + dead-code removal in parallel (no archsimd needed).
 3. Tier 2, leading with page min/max/bounds (one generic replaces 19 functions).
 4. Tier 3 as appetite allows.
-5. Revisit Tier 4 when archsimd grows gather/scatter (tracked upstream in the
-   simd proposal), or attempt the bytestreamsplit transpose redesign.
+### Tier 4 results (branch archsimd-tier4, benchmarked on c4-standard-8 Emerald Rapids, GOAMD64=v4, same boot)
+
+bytestreamsplit, asm (gather/scatter) -> archsimd (permute transpose):
+
+| Kernel | 4KiB | 256KiB | 2048KiB |
+|---|---|---|---|
+| EncodeFloat | **-82%** | **-79%** | **-45%** |
+| DecodeFloat | **-53%** | **-46%** | ~ |
+| EncodeDouble | **-56%** | **-62%** | **-21%** |
+| DecodeDouble | ~ | +10% | +5% |
+
+(final-HEAD interleaved run; geomean +81% throughput across the twelve points)
+
+The gathers/scatters the assembly relied on are simply slow; the shuffle
+transpose is up to 5.6x faster and the only residual regression is
+DecodeDouble at 256KiB (+12%), where the assembly's decode was already
+shuffle-based and well tuned.
+
+miniblock packers, asm production path -> archsimd:
+
+- int64 widths 3-16: **-33..-54%** (asm fell back to scalar there; the fold
+  packer covers 2-16)
+- width 2 (both int32 and int64): the fold packer was 4x slower than the
+  asm PDEP kernels; replaced by a multiply-add-pairs packer (byte permute
+  gather + VPMADDUBSW + VPMADDWD) which **beats PDEP**: int32 -19%, int64
+  -28%.
+
+**Negative result worth remembering**: fusing the standalone VPERMB byte
+grouping into the adjacent permute round via composed VPERMI2B indexes
+(cutting 512-bit shuffle counts by 20-25%) made every size SLOWER (+7.5%
+geomean). VPERMI2B's destructive index operand forces a vector register
+copy per use (no SIMD move elimination on Ice Lake+) and it decodes
+heavier than VPERMB on Emerald Rapids. Shuffle-port pressure is not the
+bottleneck; keep grouping and combining as separate cheap instructions
+(commit 670be28, reverted by f76185b, preserves the experiment).
+
+**Negative result #2 — bounds check elimination in the transpose loops**:
+rewriting the computed-offset slicing (`dst[k*n+i : k*n+i+64]`, 8-16
+checks per iteration) as ranged chunk views produced loops with ZERO
+bounds checks and ~30% fewer instructions — and measured up to **65%
+slower** for the encoders at L2 sizes (interleaved same-boot A/B,
+EncodeDouble 256KiB 6.9µs → 11.4µs), with only ~-11% gains at 4KiB.
+Per-plane views spill (fixable with //go:noinline helpers), but even
+spill-free versions kept the regression, so spills were not the
+mechanism. All plane stores share one 4KiB page offset for power-of-two
+inputs; leading hypothesis: the tighter loop keeps more stores in flight
+per load and amplifies 4K load/store aliasing stalls that the fatter
+loop naturally paced out (GCP does not virtualize the PMU, so this is a
+hypothesis, not a measurement). Lesson: predictable bounds checks in a
+port-5-bound vector loop are nearly free — measure before "optimizing"
+them away. Also: a single strided view (`pd[k*chunks+j]`) is WRONG when
+n is not a multiple of 64 (planes start at byte k*n, not chunk k*chunks)
+— the differential tests on AVX-512VBMI hardware caught it; Rosetta
+cannot (no VBMI).
+
+**Endian bug found during review**: the purego bytestreamsplit codecs
+read values via `unsafecast.Slice[uint32/uint64]` + shifts, which swaps
+the plane order on big-endian platforms (s390x): pages roundtrip
+locally but are byte-swapped relative to the spec. Fixed with
+`binary.LittleEndian` accessors (same codegen on little-endian). CI's
+s390x job never caught it because roundtrips are self-consistent.
+
+Also note: benchmark the asm's *production* dispatch, not the exported
+scalar wrappers — encodeMiniBlockInt64 in the amd64 build is the scalar
+Default; the real path is encodeMiniBlockInt64AVX2 (kernel benchmarks
+carry the AVX2 suffix). The first width-2 comparison accidentally beat
+the scalar fallback and missed the 4x PDEP gap.
+
+5. Tier 4 done for everything redesignable: bytestreamsplit and the 2-bit
+   packers are ported (see results above). The remaining blocked set is
+   gather/scatter only (sparse, nullIndex32/64, dictionary kernels) plus the
+   BMI2 rle byte packers.
