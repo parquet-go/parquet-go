@@ -71,6 +71,22 @@ Intricate lane choreography, but every instruction has an archsimd equivalent.
 | `validatePrefixAndSuffixLengthValuesAVX2` + `decodeByteArray*` | encoding/delta/byte_array_amd64.s | validation is portable (rotate+compare+movemask); the decode over-copy tricks are mostly `copy` logic — may end up plain Go |
 | `minBE128` / `maxBE128` | page_min/page_max_amd64.s | lexicographic u128 min/max with index tracking: byte-swap `Permute`, paired `VPCMPUQ` → mask bit-fixup → `Merge`. Hardest portable kernel; also fixes ungated AVX512BW use (VPSHUFB on ZMM) |
 
+## Tier 3 progress (branch archsimd-tier3)
+
+- **xxhash MultiSum64 (5 kernels)**: done — 8 hashes per Uint64x8, four
+  independent streams, register-resident constants. Validated by the
+  property tests (every element vs the canonical Sum64) on AVX-512
+  hardware. Vs assembly: Uint8/16/32/64 within **-6..-9%**, Uint128
+  **+49% faster**. The gate is an honest X86.AVX512 (the asm tested
+  AVX512CD, unused, while relying on unchecked AVX512DQ).
+  Lesson reinforced: constants in a pointer-accessed struct reload from
+  the stack per use — individual locals stay in registers (32 ZMM regs
+  exist for this); and latency-bound mul chains need 4 streams, exactly
+  like the assembly.
+- Remaining tier 3: delta binary_packed block kernels (delta/min/sub/
+  bitwidths/decodeBlock), the general bit-packers, delta byte_array
+  validate, minBE128/maxBE128.
+
 ## Tier 4 — blocked: needs instructions archsimd doesn't expose
 
 | Kernel | File | Blocker | Possible redesign |
