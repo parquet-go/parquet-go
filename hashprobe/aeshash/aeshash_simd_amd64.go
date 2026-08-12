@@ -52,8 +52,12 @@ func roundKeys() (k0, k1, k2 archsimd.Uint32x4) {
 }
 
 func hash32(value uint32, seed uintptr, k0, k1, k2 archsimd.Uint32x4) uintptr {
-	s := [4]uint32{uint32(seed), uint32(uint64(seed) >> 32), value, 0}
-	x := archsimd.LoadUint32x4Slice(s[:]).AsUint8x16()
+	// The state vector is [seed, value] built with register-only inserts:
+	// materializing it through a stack array serializes iterations of the
+	// Multi loops on a store-forwarding stall (two 8 bytes stores followed
+	// by a 16 bytes load of the same slot cannot forward).
+	var z archsimd.Uint64x2
+	x := z.SetElem(0, uint64(seed)).SetElem(1, uint64(value)).AsUint8x16()
 	x = x.AESEncryptOneRound(k0)
 	x = x.AESEncryptOneRound(k1)
 	x = x.AESEncryptOneRound(k2)
@@ -61,8 +65,8 @@ func hash32(value uint32, seed uintptr, k0, k1, k2 archsimd.Uint32x4) uintptr {
 }
 
 func hash64(value uint64, seed uintptr, k0, k1, k2 archsimd.Uint32x4) uintptr {
-	s := [2]uint64{uint64(seed), value}
-	x := archsimd.LoadUint64x2Slice(s[:]).AsUint8x16()
+	var z archsimd.Uint64x2
+	x := z.SetElem(0, uint64(seed)).SetElem(1, value).AsUint8x16()
 	x = x.AESEncryptOneRound(k0)
 	x = x.AESEncryptOneRound(k1)
 	x = x.AESEncryptOneRound(k2)
@@ -73,8 +77,8 @@ func hash64(value uint64, seed uintptr, k0, k1, k2 archsimd.Uint32x4) uintptr {
 // per-call seed with the value length (16) repeated in the high words, mixed
 // with the per-process key and scrambled with one AES round against itself.
 func scrambledSeed(seed uintptr, k0 archsimd.Uint32x4) archsimd.Uint8x16 {
-	s := [2]uint64{uint64(seed), 0x0010001000100010}
-	x := archsimd.LoadUint64x2Slice(s[:]).AsUint8x16().Xor(k0.AsUint8x16())
+	var z archsimd.Uint64x2
+	x := z.SetElem(0, uint64(seed)).SetElem(1, 0x0010001000100010).AsUint8x16().Xor(k0.AsUint8x16())
 	return x.AESEncryptOneRound(x.AsUint32x4())
 }
 
