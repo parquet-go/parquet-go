@@ -283,6 +283,25 @@ Caveat: master's archsimd renamed APIs since 1.26.5 — `Load*Slice`→`Load*`,
 `StoreSlice`→`Store`, `SumAbsDiff`→`SumOf8AbsDiff` (returns Uint64x8
 directly) — the branch will need those renames when it targets a newer Go.
 
+### AVX-512 tiers for the delta length kernels
+
+The assembly stayed SSE2 ("keeps the code simple... already yields most of
+the performance"); in Go a wider tier is the same code at different type
+widths, so both kernels gained AVX-512 tiers (16 lanes vs the asm's 4) —
+and the 512-bit tier is simpler than the AVX2 one because Mask32x16FromBits
+is legal under the AVX-512 gate. Results vs the SSE2 asm (Emerald Rapids,
+v4): encode **-27%**, decode **+7%**. Two lessons:
+
+- Chunk views also solve *shifted* streams: the encode loads are offset by
+  one element, so one chunk view over `offsets` and one over `offsets[1:]`
+  make both loads constant-length chunk accesses. Views must be clamped to
+  a common length (`[:n]`) for prove to elide cross-view indexing checks.
+- **Prefix-sum carries must stay in vector registers**: extracting the
+  running total to a GPR and re-broadcasting per chunk serialized the loop
+  (decode was +31% before the fix); a vector-resident carry (all lanes
+  equal, updated by one add from a last-lane permute — the asm's PSHUFD
+  trick) leaves a single add on the critical path.
+
 ### Optimistic float bounds (NaN witness)
 
 The +36% float bounds gap at cache-resident sizes was the cost of NaN-safe
