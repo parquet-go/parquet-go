@@ -113,17 +113,11 @@ func blockMinInt32SIMD(block *[blockSize]int32) int32 {
 }
 
 func reduceMinInt32x4Delta(v archsimd.Int32x4) int32 {
-	m := v.GetElem(0)
-	if x := v.GetElem(1); x < m {
-		m = x
-	}
-	if x := v.GetElem(2); x < m {
-		m = x
-	}
-	if x := v.GetElem(3); x < m {
-		m = x
-	}
-	return m
+	p := v.AsFloat32x4().SelectFromPair(2, 3, 0, 1, v.AsFloat32x4()).AsInt32x4()
+	v = v.Min(p)
+	p = v.AsFloat32x4().SelectFromPair(1, 0, 3, 2, v.AsFloat32x4()).AsInt32x4()
+	v = v.Min(p)
+	return v.GetElem(0)
 }
 
 func blockSubInt32SIMD(block *[blockSize]int32, value int32) {
@@ -166,18 +160,15 @@ func blockBitWidthsInt32SIMD(bitWidths *[numMiniBlocks]byte, block *[blockSize]i
 	archsimd.ClearAVXUpperBits()
 }
 
+// reduceMaxUint32x4Delta reduces in registers with a shuffle ladder; the
+// float view is only a reinterpretation for SelectFromPair (shuffles are bit
+// agnostic), the comparisons are the unsigned integer Max.
 func reduceMaxUint32x4Delta(v archsimd.Uint32x4) uint32 {
-	m := v.GetElem(0)
-	if x := v.GetElem(1); x > m {
-		m = x
-	}
-	if x := v.GetElem(2); x > m {
-		m = x
-	}
-	if x := v.GetElem(3); x > m {
-		m = x
-	}
-	return m
+	p := v.AsFloat32x4().SelectFromPair(2, 3, 0, 1, v.AsFloat32x4()).AsUint32x4()
+	v = v.Max(p)
+	p = v.AsFloat32x4().SelectFromPair(1, 0, 3, 2, v.AsFloat32x4()).AsUint32x4()
+	v = v.Max(p)
+	return v.GetElem(0)
 }
 
 func decodeBlockInt32(dst []int32, minDelta, lastValue int32) int32 {
