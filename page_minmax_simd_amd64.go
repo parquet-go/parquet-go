@@ -1475,10 +1475,121 @@ func boundsFloat64Merge(data []float64) (min, max float64) {
 	return min, max
 }
 
-// The big endian 128 bits kernels are scalar; vectorizing them is complex
-// (lexicographic compare with index tracking) and left for a later tier.
+// The big endian 128 bits kernels compare 8 values per iteration: the
+// values are loaded as pairs of uint64 lanes, byte swapped with a grouped
+// byte shuffle (VPSHUFB, part of the AVX-512 feature bundle), and
+// deinterleaved into high/low lanes; a lexicographic compare mask selects
+// running minima together with their indexes. The final reduction stores
+// the eight candidates once and scans them; the winning index recovers the
+// pointer into the input.
+
+var (
+	bswap64x64 = [64]int8{
+		7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8,
+		7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8,
+		7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8,
+		7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8,
+	}
+	evenLanes64 = [8]uint64{0, 2, 4, 6, 8, 10, 12, 14}
+	oddLanes64  = [8]uint64{1, 3, 5, 7, 9, 11, 13, 15}
+	iotaLanes64 = [8]uint64{0, 1, 2, 3, 4, 5, 6, 7}
+)
+
+func minMaxBE128SIMD(data [][16]byte, max bool) int {
+	bswap := archsimd.LoadInt8x64Slice(bswap64x64[:])
+	even := archsimd.LoadUint64x8Slice(evenLanes64[:])
+	odd := archsimd.LoadUint64x8Slice(oddLanes64[:])
+	eight := archsimd.BroadcastUint64x8(8)
+
+	m := len(data) / 8
+	cv := unsafecast.Slice[[16]uint64](data)[:m]
+
+	// Seed the running best from the first chunk: sentinel seeds would tie
+	// with real extreme values and could report a wrong index.
+	s0 := archsimd.LoadUint64x8Slice(cv[0][0:8]).AsUint8x64().PermuteOrZeroGrouped(bswap).AsUint64x8()
+	s1 := archsimd.LoadUint64x8Slice(cv[0][8:16]).AsUint8x64().PermuteOrZeroGrouped(bswap).AsUint64x8()
+	bestHi := s0.ConcatPermute(s1, even)
+	bestLo := s0.ConcatPermute(s1, odd)
+	bestIdx := archsimd.LoadUint64x8Slice(iotaLanes64[:])
+	curIdx := bestIdx.Add(eight)
+
+	for j := 1; j < m; j++ {
+		z0 := archsimd.LoadUint64x8Slice(cv[j][0:8]).AsUint8x64().PermuteOrZeroGrouped(bswap).AsUint64x8()
+		z1 := archsimd.LoadUint64x8Slice(cv[j][8:16]).AsUint8x64().PermuteOrZeroGrouped(bswap).AsUint64x8()
+		hi := z0.ConcatPermute(z1, even)
+		lo := z0.ConcatPermute(z1, odd)
+		var better archsimd.Mask64x8
+		if max {
+			better = hi.Greater(bestHi).Or(hi.Equal(bestHi).And(lo.Greater(bestLo)))
+		} else {
+			better = hi.Less(bestHi).Or(hi.Equal(bestHi).And(lo.Less(bestLo)))
+		}
+		bestHi = hi.Merge(bestHi, better)
+		bestLo = lo.Merge(bestLo, better)
+		bestIdx = curIdx.Merge(bestIdx, better)
+		curIdx = curIdx.Add(eight)
+	}
+
+	var his, los, idxs [8]uint64
+	bestHi.StoreSlice(his[:])
+	bestLo.StoreSlice(los[:])
+	bestIdx.StoreSlice(idxs[:])
+	archsimd.ClearAVXUpperBits()
+
+	bh, bl, bi := his[0], los[0], int(idxs[0])
+	for k := 1; k < 8; k++ {
+		replace := false
+		if max {
+			replace = his[k] > bh || (his[k] == bh && los[k] > bl)
+		} else {
+			replace = his[k] < bh || (his[k] == bh && los[k] < bl)
+		}
+		// Prefer the earliest index on exact ties, matching the scalar scan.
+		if !replace && his[k] == bh && los[k] == bl && int(idxs[k]) < bi {
+			replace = true
+		}
+		if replace {
+			bh, bl, bi = his[k], los[k], int(idxs[k])
+		}
+	}
+
+	for k := m * 8; k < len(data); k++ {
+		hi := binary.BigEndian.Uint64(data[k][:8])
+		lo := binary.BigEndian.Uint64(data[k][8:])
+		replace := false
+		if max {
+			replace = hi > bh || (hi == bh && lo > bl)
+		} else {
+			replace = hi < bh || (hi == bh && lo < bl)
+		}
+		if replace {
+			bh, bl, bi = hi, lo, k
+		}
+	}
+	return bi
+}
 
 func minBE128(data [][16]byte) (min []byte) {
+	if len(data) == 0 {
+		return nil
+	}
+	if archsimd.X86.AVX512() && len(data) >= 8 {
+		return data[minMaxBE128SIMD(data, false)][:]
+	}
+	return minBE128Scalar(data)
+}
+
+func maxBE128(data [][16]byte) (max []byte) {
+	if len(data) == 0 {
+		return nil
+	}
+	if archsimd.X86.AVX512() && len(data) >= 8 {
+		return data[minMaxBE128SIMD(data, true)][:]
+	}
+	return maxBE128Scalar(data)
+}
+
+func minBE128Scalar(data [][16]byte) (min []byte) {
 	if len(data) > 0 {
 		m := binary.BigEndian.Uint64(data[0][:8])
 		j := 0
@@ -1500,7 +1611,7 @@ func minBE128(data [][16]byte) (min []byte) {
 	return min
 }
 
-func maxBE128(data [][16]byte) (max []byte) {
+func maxBE128Scalar(data [][16]byte) (max []byte) {
 	if len(data) > 0 {
 		m := binary.BigEndian.Uint64(data[0][:8])
 		j := 0
