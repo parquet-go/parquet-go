@@ -283,6 +283,27 @@ Caveat: master's archsimd renamed APIs since 1.26.5 — `Load*Slice`→`Load*`,
 `StoreSlice`→`Store`, `SumAbsDiff`→`SumOf8AbsDiff` (returns Uint64x8
 directly) — the branch will need those renames when it targets a newer Go.
 
+### Optimistic float bounds (NaN witness)
+
+The +36% float bounds gap at cache-resident sizes was the cost of NaN-safe
+compare-and-merge (2 uops per update vs VMINPS's 1), forced because
+archsimd's float Min/Max NaN semantics are undocumented and the compiler
+canonicalizes commutative operands (so the assembly's operand-order trick is
+inexpressible). The fix: scan optimistically with native Min/Max while
+accumulating a sum of every loaded vector — addition propagates NaN
+unconditionally, unlike VMINPS which can erase one, so a NaN-free sum proves
+the fast result exact; NaN (or a spurious +Inf/-Inf sum) triggers a rescan
+with the compare-and-merge fallback. Results: 4KiB +36% → +24%, 256KiB -19%,
+2MB -30..35% vs asm. The remaining 4KiB delta is structural (6 vector ops
+per chunk vs the asm's 4 — the two NaN-witness adds); only upstream changes
+(documented Min/Max NaN semantics, or not canonicalizing FP min/max
+operands, which is semantics-changing under NaN) can close it.
+
+Two more #80835 manifestations found here: BroadcastFloat32x16(0)
+materializes the float constant with a legacy XORPS (fixed by building the
+zero via an integer broadcast), and the template's single-accumulator
+Min chains serialized on latency (restored dual accumulators).
+
 Reference point — the standard library: `bytes.Count` (what the purego build
 uses, backed by the stdlib's AVX2 assembly) is far slower than both
 (same boot, GOAMD64=v4, 256KiB: repo asm 1.63µs < archsimd 2.06µs <
@@ -355,7 +376,7 @@ fixed; final standings:
 |---|---|
 | bounds int/uint (all sizes) | -28% .. +6% (mostly faster than asm) |
 | bounds float 256KiB/2MB | -9% .. -34% (faster than asm) |
-| bounds float 4KiB | +36% |
+| bounds float 4KiB | +24% (optimistic NaN-witness path; structural floor, see below) |
 | orderOf* | +109% .. +217% (known gap, see below) |
 | hash tables 32/64 | +12% .. +83% (hash-bound) |
 | hash table 128 | +8% .. +70% |
