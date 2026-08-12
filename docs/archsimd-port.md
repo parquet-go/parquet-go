@@ -347,7 +347,46 @@ with `gcloud compute instances start parquet-archsimd-bench
   tests pass unchanged); gate is AVXAES (VEX encoding needs AVX), and the
   purego+simd build gains a working AES hash where the stub panicked.
 
-Tier 2 complete. Benchmarks on the VM pending.
+Tier 2 benchmarked on Emerald Rapids (GOAMD64=v4, same-boot vs asm, n=8).
+The first run exposed four issues, all diagnosed with pprof + objdump and
+fixed; final standings:
+
+| Kernel group | vs assembly |
+|---|---|
+| bounds int/uint (all sizes) | -28% .. +6% (mostly faster than asm) |
+| bounds float 256KiB/2MB | -9% .. -34% (faster than asm) |
+| bounds float 4KiB | +36% |
+| orderOf* | +109% .. +217% (known gap, see below) |
+| hash tables 32/64 | +12% .. +83% (hash-bound) |
+| hash table 128 | +8% .. +70% |
+| MultiHash64 | +48% |
+
+New lessons (beyond tier 1):
+
+1. **Call ClearAVXUpperBits() before returning from vector code.** The asm
+   ends with VZEROUPPER; without it the CALLER's scalar float code pays the
+   AVX-SSE transition penalty on every call (float bounds 4KiB was +2091%
+   from this + scalar reductions). The compiler does not insert it.
+2. **Never round-trip vector values through stack arrays or [N]byte copies**:
+   two narrow stores followed by a wide load defeat store forwarding and
+   serialize loops (aeshash was 16x slower). Build vectors with SetElem
+   (register-only) or load directly from source memory (UnsafeArray for
+   sparse); note BroadcastUint64x2 is VPBROADCASTQ = AVX2, SetElem from a
+   zero value is plain AVX.
+3. **Scalar float compares (UCOMISS) and vector spills (MOVUPS) are legacy
+   SSE encodings** — more manifestations of golang/go#80835. Float
+   reductions must be in-register shuffle ladders; if the compiler spills a
+   vector held across a loop (multiProbe128), consider not using a vector at
+   all (two GPR compares beat a spilled vector compare).
+4. Min/max overlap-tail trick: reload full vectors overlapping processed
+   elements instead of scalar tails (idempotent ops), eliminating both tail
+   scalar float compares and tail loops.
+
+Known gap: orderOf* at ~2-2.5x — the two overlapping slice loads per
+iteration cost more than the asm's single load + VPERMI2D. A rolling
+single-load + ConcatPermute design would close it (AVX-512 tier only;
+ConcatPermute at 256-bit is EVEX). Deferred: orderOf runs once per column
+index build. MultiHash64 at +48% (aesenc pipelining) also has headroom.
 
 ## Suggested execution order
 
