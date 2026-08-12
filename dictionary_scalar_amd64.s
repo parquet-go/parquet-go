@@ -2,6 +2,8 @@
 
 #include "textflag.h"
 
+#define errnoIndexOutOfBounds 1
+
 TEXT ·dictionaryBoundsBE128(SB), NOSPLIT, $0-72
     MOVQ dict_base+0(FP), AX
     MOVQ dict_len+8(FP), BX
