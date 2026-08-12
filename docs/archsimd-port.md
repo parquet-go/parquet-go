@@ -503,10 +503,12 @@ bytestreamsplit, asm (gather/scatter) -> archsimd (permute transpose):
 
 | Kernel | 4KiB | 256KiB | 2048KiB |
 |---|---|---|---|
-| EncodeFloat | **-82%** | **-80%** | **-48%** |
-| DecodeFloat | **-54%** | **-37%** | ~ |
-| EncodeDouble | **-57%** | **-63%** | **-23%** |
-| DecodeDouble | ~ | +12% | ~ |
+| EncodeFloat | **-82%** | **-79%** | **-45%** |
+| DecodeFloat | **-53%** | **-46%** | ~ |
+| EncodeDouble | **-56%** | **-62%** | **-21%** |
+| DecodeDouble | ~ | +10% | +5% |
+
+(final-HEAD interleaved run; geomean +81% throughput across the twelve points)
 
 The gathers/scatters the assembly relied on are simply slow; the shuffle
 transpose is up to 5.6x faster and the only residual regression is
