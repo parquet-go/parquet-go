@@ -15,7 +15,20 @@ import (
 
 func encodeByteArrayLengths(lengths []int32, offsets []uint32) {
 	i := 0
-	if archsimd.X86.AVX2() && len(lengths) >= 8 && len(offsets) > len(lengths) {
+	switch {
+	case archsimd.X86.AVX512() && len(lengths) >= 16 && len(offsets) > len(lengths):
+		n := len(lengths) / 16
+		ca := unsafecast.Slice[[16]uint32](offsets)[:n]
+		cb := unsafecast.Slice[[16]uint32](offsets[1:])[:n]
+		cl := unsafecast.Slice[[16]int32](lengths)[:n]
+		for j := range cl {
+			a := archsimd.LoadUint32x16Slice(ca[j][:])
+			b := archsimd.LoadUint32x16Slice(cb[j][:])
+			b.Sub(a).AsInt32x16().StoreSlice(cl[j][:])
+		}
+		i = n * 16
+		archsimd.ClearAVXUpperBits()
+	case archsimd.X86.AVX2() && len(lengths) >= 8 && len(offsets) > len(lengths):
 		// The two loads are offset by one element, which defeats a single
 		// chunk view; two chunk views (one over offsets, one over
 		// offsets[1:]) turn both into constant-length loads that need no
@@ -45,6 +58,11 @@ var (
 	shiftLanes2 = [8]uint32{0, 0, 0, 1, 2, 3, 4, 5}
 	shiftLanes4 = [8]uint32{0, 0, 0, 0, 0, 1, 2, 3}
 	laneIndexes = [8]int32{0, 1, 2, 3, 4, 5, 6, 7}
+
+	shiftLanes1x16 = [16]uint32{0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
+	shiftLanes2x16 = [16]uint32{0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+	shiftLanes4x16 = [16]uint32{0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+	shiftLanes8x16 = [16]uint32{0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7}
 )
 
 // decodeByteArrayLengths computes the exclusive prefix sum of lengths into
@@ -56,7 +74,38 @@ var (
 func decodeByteArrayLengths(offsets []uint32, lengths []int32) (uint32, int32) {
 	lastOffset := uint32(0)
 	i := 0
-	if archsimd.X86.AVX2() && len(lengths) >= 8 {
+	switch {
+	case archsimd.X86.AVX512() && len(lengths) >= 16:
+		// The AVX-512 tier can use the mask-from-bits constructors directly:
+		// KMOVW is part of the feature set the gate guarantees, unlike at
+		// the AVX2 tier below.
+		zero := archsimd.BroadcastInt32x16(0)
+		idx1 := archsimd.LoadUint32x16Slice(shiftLanes1x16[:])
+		idx2 := archsimd.LoadUint32x16Slice(shiftLanes2x16[:])
+		idx4 := archsimd.LoadUint32x16Slice(shiftLanes4x16[:])
+		idx8 := archsimd.LoadUint32x16Slice(shiftLanes8x16[:])
+		m1 := archsimd.Mask32x16FromBits(0xFFFE)
+		m2 := archsimd.Mask32x16FromBits(0xFFFC)
+		m4 := archsimd.Mask32x16FromBits(0xFFF0)
+		m8 := archsimd.Mask32x16FromBits(0xFF00)
+		cl := unsafecast.Slice[[16]int32](lengths)
+		co := unsafecast.Slice[[16]uint32](offsets)
+		for j := 0; j < len(cl) && j < len(co); j, i = j+1, i+16 {
+			v := archsimd.LoadInt32x16Slice(cl[j][:])
+			if v.Less(zero).ToBits() != 0 {
+				// A negative length: let the scalar loop locate it.
+				break
+			}
+			s := v.Add(v.Permute(idx1).Merge(zero, m1))
+			s = s.Add(s.Permute(idx2).Merge(zero, m2))
+			s = s.Add(s.Permute(idx4).Merge(zero, m4))
+			s = s.Add(s.Permute(idx8).Merge(zero, m8))
+			ex := s.Permute(idx1).Merge(zero, m1).Add(archsimd.BroadcastInt32x16(int32(lastOffset)))
+			ex.AsUint32x16().StoreSlice(co[j][:])
+			lastOffset += uint32(s.GetHi().GetHi().GetElem(3))
+		}
+		archsimd.ClearAVXUpperBits()
+	case archsimd.X86.AVX2() && len(lengths) >= 8:
 		zero := archsimd.BroadcastInt32x8(0)
 		idx1 := archsimd.LoadUint32x8Slice(shiftLanes1[:])
 		idx2 := archsimd.LoadUint32x8Slice(shiftLanes2[:])
