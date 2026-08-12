@@ -123,9 +123,9 @@ code.
 | `nullIndex32` / `nullIndex64` | null_amd64.s | VPGATHERDD/QQ (strided sparse.Array) | same as above; when stride == elem size a contiguous compare+`ToBits` version is portable and covers the common dense case |
 | `dictionaryBounds{Int32,Int64,Uint32,Uint64,Float32,Float64}` | dictionary_amd64.s | AVX-512 k-masked gathers | none without gather |
 | `dictionaryLookup32` / `dictionaryLookup64` | dictionary_amd64.s | gather **and** the tree's only scatters (VPSCATTERDD/DQ) | none without gather+scatter |
-| `encodeFloat/encodeDouble/decodeFloat/decodeDouble` | encoding/bytestreamsplit | gather+scatter used to transpose | redesignable: BYTE_STREAM_SPLIT is an N×4/N×8 byte transpose, expressible as load + `Permute`/`Interleave` network with no memory gather. Blocked as-written, portable with redesign |
+| `encodeFloat/encodeDouble/decodeFloat/decodeDouble` | encoding/bytestreamsplit | gather+scatter used to transpose | **PORTED via redesign** (branch archsimd-tier4): in-register byte transpose — `VPERMB` groups plane bytes within each 64-byte vector, then two-source permute trees assemble whole plane vectors (4×4 block transpose of 16-byte blocks at dword granularity for float; 3-round qword butterfly for double). No gather/scatter at all. Gated on AVX512VBMI for VPERMB. ~20 vector ops per 256 B (float), ~48 per 512 B (double) |
 | `encodeBytesBitpackBMI2` / `decodeBytesBitpackBMI2` | encoding/rle/rle_amd64.s | scalar PDEP/PEXT (no Go intrinsic) | bitWidth ≤ 8: plain Go shift loop is decent; SIMD alternative would want VPMULTISHIFTQB/GFNI, not exposed |
-| `encodeMiniBlockInt32x2bitsAVX2` / `Int64x2bitsAVX2` | encoding/delta/binary_packed_amd64.s | PDEPQ bit-plane interleave | two `ToBits` planes + scalar interleave, or fold into the general 3-16-bit path |
+| `encodeMiniBlockInt32x2bitsAVX2` / `Int64x2bitsAVX2` | encoding/delta/binary_packed_amd64.s | PDEPQ bit-plane interleave | **PORTED**: folded into the general packed path. Int32 2-bit was already covered by `encodeMiniBlockInt32Packed` (tier 3); tier 4 adds `encodeMiniBlockInt64Packed` covering widths 2-16 with the same fold reduction on native 64-bit lanes — wider coverage than the asm, which only had the PDEP path for 2 bits |
 
 ## Tier 5 — scalar assembly: replace with plain Go, not archsimd
 

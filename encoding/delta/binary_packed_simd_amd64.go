@@ -457,10 +457,63 @@ func encodeMiniBlockInt32Packed(dst []byte, src *[miniBlockSize]int32, bitWidth 
 	archsimd.ClearAVXUpperBits()
 }
 
+var (
+	packLowBytes64 = [64]uint8{0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	packLowBytes32 = [64]uint8{0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	packHalves     = [64]uint8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	packDwordLow   = [64]uint8{0, 4, 8, 12, 16, 20, 24, 28, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	packMadd1      = [64]int8{1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4}
+	packMadd2      = [64]int16{1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16}
+)
+
+// encodeMiniBlockInt32x2bits packs 32 2 bit values using two multiply add
+// pairs steps instead of the PDEP instructions the assembly used: the low
+// bytes of the values are gathered with byte permutes, VPMADDUBSW packs
+// byte pairs into 4 bit nibbles and VPMADDWD packs nibble pairs into bytes.
+func encodeMiniBlockInt32x2bits(dst []byte, src *[miniBlockSize]int32) {
+	lo := archsimd.LoadUint8x64Slice(packLowBytes32[:])
+	dl := archsimd.LoadUint8x64Slice(packDwordLow[:])
+	m1 := archsimd.LoadInt8x64Slice(packMadd1[:])
+	m2 := archsimd.LoadInt16x32Slice(packMadd2[:])
+	u := unsafecast.Slice[uint8](src[:])
+	z0 := archsimd.LoadUint8x64Slice(u[0:64])
+	z1 := archsimd.LoadUint8x64Slice(u[64:128])
+	b := z0.ConcatPermute(z1, lo)
+	w := b.DotProductPairsSaturated(m1)
+	d := w.DotProductPairs(m2)
+	q := d.AsUint8x64().Permute(dl).AsUint64x8().GetLo().GetLo().GetElem(0)
+	binary.LittleEndian.PutUint64(dst, q)
+	archsimd.ClearAVXUpperBits()
+}
+
+// encodeMiniBlockInt64x2bits is the 64 bit variant of the multiply add
+// pairs packer: the same reduction after gathering the low bytes of the 32
+// values from 4 vectors instead of 2.
+func encodeMiniBlockInt64x2bits(dst []byte, src *[miniBlockSize]int64) {
+	lo := archsimd.LoadUint8x64Slice(packLowBytes64[:])
+	hv := archsimd.LoadUint8x64Slice(packHalves[:])
+	dl := archsimd.LoadUint8x64Slice(packDwordLow[:])
+	m1 := archsimd.LoadInt8x64Slice(packMadd1[:])
+	m2 := archsimd.LoadInt16x32Slice(packMadd2[:])
+	u := unsafecast.Slice[uint8](src[:])
+	z0 := archsimd.LoadUint8x64Slice(u[0:64])
+	z1 := archsimd.LoadUint8x64Slice(u[64:128])
+	z2 := archsimd.LoadUint8x64Slice(u[128:192])
+	z3 := archsimd.LoadUint8x64Slice(u[192:256])
+	b := z0.ConcatPermute(z1, lo).ConcatPermute(z2.ConcatPermute(z3, lo), hv)
+	w := b.DotProductPairsSaturated(m1)
+	d := w.DotProductPairs(m2)
+	q := d.AsUint8x64().Permute(dl).AsUint64x8().GetLo().GetLo().GetElem(0)
+	binary.LittleEndian.PutUint64(dst, q)
+	archsimd.ClearAVXUpperBits()
+}
+
 func encodeMiniBlockInt32SIMD(dst []byte, src *[miniBlockSize]int32, bitWidth uint) {
 	switch {
 	case bitWidth == 1 && archsimd.X86.AVX512():
 		encodeMiniBlockInt32x1bit(dst, src)
+	case bitWidth == 2 && archsimd.X86.AVX512() && archsimd.X86.AVX512VBMI():
+		encodeMiniBlockInt32x2bits(dst, src)
 	case bitWidth >= 2 && bitWidth <= 16 && archsimd.X86.AVX512():
 		encodeMiniBlockInt32Packed(dst, src, bitWidth)
 	case bitWidth == 32:
@@ -513,6 +566,8 @@ func encodeMiniBlockInt64SIMD(dst []byte, src *[miniBlockSize]int64, bitWidth ui
 	switch {
 	case bitWidth == 1 && archsimd.X86.AVX512():
 		encodeMiniBlockInt64x1bit(dst, src)
+	case bitWidth == 2 && archsimd.X86.AVX512() && archsimd.X86.AVX512VBMI():
+		encodeMiniBlockInt64x2bits(dst, src)
 	case bitWidth >= 2 && bitWidth <= 16 && archsimd.X86.AVX512():
 		encodeMiniBlockInt64Packed(dst, src, bitWidth)
 	case bitWidth == 64:
