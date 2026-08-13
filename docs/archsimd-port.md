@@ -174,6 +174,40 @@ copies itself (`*(*[16]byte)(p)` assignments compile to MOVUPS pairs;
 wrapping them in unsafe.Slice + archsimd loads added per-element setup
 worth +40% on its own).
 
+### Tier 6 results (branch archsimd-tier6)
+
+The BMI2 bit packers and the constant-stride gather kernels, previously
+classified as blocked, are ported. Only the dictionary bounds/lookup
+family (data-dependent indexes, true gather/scatter) remains assembly
+under GOEXPERIMENT=simd.
+
+- **rle bytes bitpack** (PDEP/PEXT): encode via in-place lane folds
+  (a|b<<8 -> a|b<<w at 16/32/64-bit granularity) + VPERMB compaction:
+  **+2.5%** vs PDEP (w=8 copy: **-75%**). Decode via VPERMB byte-pair
+  gather + VPSRLVW + mask + VPERMI2B compaction: **-6.5..-13.7%** vs
+  PEXT. Getting decode from +1550% to a win took four diagnosed fixes:
+  (1) permute tables must be package-level, built in init — per-call
+  construction dominated; (2) a full-width vector loop over an input it
+  consumes only partially (loads 64B, consumes 8w) must not abandon the
+  input tail to scalar code — at w=1 that was half the values; (3) the
+  tail fix must not put copy() inside the loop — **a call in a vector
+  loop body spills every live table vector per iteration** (+1667%);
+  (4) nor may it be a second inline loop — **two loops sharing table
+  vectors make regalloc spill them in both** (3.5x on the whole
+  kernel). Final shape: one vector loop + one depth-1 recursion on a
+  zero-padded stack buffer for the last <64 input bytes.
+- **nullIndex32/64, gather32/64, gatherBits**: tiered dispatch. Dense
+  strides take vector compare+ToBits / memcpy paths: NullIndex geomean
+  **-45%** (bool -93%, primitives -49%, [16]byte -25%), GatherBits dense
+  **-87%**. Strided input keeps the VPGATHER assembly, shared across
+  builds via renamed symbols (nullIndexGather32/64) — **VPGATHER is
+  fast on cache-resident strided data** (plain-load replacements
+  measured +57..+322%); the one exception is gather64, where a scalar
+  4x walk beats VPGATHERQQ by 13% (only 4 lanes per gather).
+- New asm-split rule: file-scoped symbols (`name<>`) are invisible
+  across .s files — GLOBL data must move with the TEXT that uses it
+  (the opposite of package-scoped data, which must stay with all users).
+
 ## Dead code found during the audit (delete regardless)
 
 - `dictionaryLookupByteArrayString` / `dictionaryLookupFixedLenByteArray{String,Pointer}`
