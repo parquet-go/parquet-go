@@ -185,11 +185,7 @@ func encodeBytesBitpackSIMD(dst []byte, src []uint64, bitWidth uint) int {
 	}
 	w := bitWidth
 	bitMask := uint64(1<<w) - 1
-	var compact [64]uint8
-	for m := range 8 * w {
-		compact[m] = uint8((m/w)*8 + m%w)
-	}
-	cp := archsimd.LoadUint8x64Slice(compact[:])
+	cp := archsimd.LoadUint8x64Slice(bitpackCompact[w][:])
 	vmask := archsimd.BroadcastUint8x64(uint8(bitMask))
 	m16 := archsimd.BroadcastUint16x32(0x00FF)
 	s16r := archsimd.BroadcastUint16x32(8)
@@ -245,32 +241,12 @@ func decodeBytesBitpackSIMD(dst, src []byte, count, bitWidth uint) {
 		return
 	}
 	bitMask := uint64(1<<w) - 1
-	var idxA, idxB, comp [64]uint8
-	var shA, shB [32]uint16
-	for m := range 64 {
-		q, e := m/8, m%8
-		bit := uint(e) * w
-		b := uint(q)*w + bit/8
-		if m < 32 {
-			idxA[2*(m%32)] = uint8(b)
-			idxA[2*(m%32)+1] = uint8(b + 1)
-			shA[m%32] = uint16(bit % 8)
-		} else {
-			idxB[2*(m%32)] = uint8(b)
-			idxB[2*(m%32)+1] = uint8(b + 1)
-			shB[m%32] = uint16(bit % 8)
-		}
-		if m < 32 {
-			comp[m] = uint8(2 * m)
-		} else {
-			comp[m] = uint8(64 + 2*(m-32))
-		}
-	}
-	ia := archsimd.LoadUint8x64Slice(idxA[:])
-	ib := archsimd.LoadUint8x64Slice(idxB[:])
-	cm := archsimd.LoadUint8x64Slice(comp[:])
-	sa := archsimd.LoadUint16x32Slice(shA[:])
-	sb := archsimd.LoadUint16x32Slice(shB[:])
+	t := &bitpackUnpack[w]
+	ia := archsimd.LoadUint8x64Slice(t.idxA[:])
+	ib := archsimd.LoadUint8x64Slice(t.idxB[:])
+	cm := archsimd.LoadUint8x64Slice(bitpackInterleave[:])
+	sa := archsimd.LoadUint16x32Slice(t.shA[:])
+	sb := archsimd.LoadUint16x32Slice(t.shB[:])
 	vmask := archsimd.BroadcastUint16x32(uint16(bitMask))
 	i := 0
 	o := 0
@@ -292,5 +268,50 @@ func decodeBytesBitpackSIMD(dst, src []byte, count, bitWidth uint) {
 			o++
 		}
 		i += int(w)
+	}
+}
+
+// Permute and shift tables for the byte bit-packers, precomputed per bit
+// width: building them per call dominated the runtime for small inputs
+// (the first benchmark round measured up to +1550% on decode from the per
+// call setup alone).
+var (
+	bitpackCompact    [8][64]uint8
+	bitpackUnpack     [8]bitpackUnpackTables
+	bitpackInterleave [64]uint8
+)
+
+type bitpackUnpackTables struct {
+	idxA, idxB [64]uint8
+	shA, shB   [32]uint16
+}
+
+func init() {
+	for w := uint(1); w < 8; w++ {
+		for m := range 8 * w {
+			bitpackCompact[w][m] = uint8((m/w)*8 + m%w)
+		}
+		t := &bitpackUnpack[w]
+		for m := range 64 {
+			q, e := m/8, m%8
+			bit := uint(e) * w
+			b := uint(q)*w + bit/8
+			if m < 32 {
+				t.idxA[2*m] = uint8(b)
+				t.idxA[2*m+1] = uint8(b + 1)
+				t.shA[m] = uint16(bit % 8)
+			} else {
+				t.idxB[2*(m-32)] = uint8(b)
+				t.idxB[2*(m-32)+1] = uint8(b + 1)
+				t.shB[m-32] = uint16(bit % 8)
+			}
+		}
+	}
+	for m := range 64 {
+		if m < 32 {
+			bitpackInterleave[m] = uint8(2 * m)
+		} else {
+			bitpackInterleave[m] = uint8(64 + 2*(m-32))
+		}
 	}
 }

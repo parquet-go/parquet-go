@@ -76,6 +76,10 @@ func gatherBits(dst []byte, src Uint8Array) int {
 		}
 		archsimd.ClearAVXUpperBits()
 	}
+	if k := (n / 8) * 8; i < k && src.off >= 4 && archsimd.X86.AVX2() {
+		gatherBitsAVX2(dst[i/8:], src.Slice(i, k))
+		i = k
+	}
 	if k := (n / 8) * 8; i < k {
 		p := src.index(i)
 		off := src.off
@@ -112,16 +116,13 @@ func gather32(dst []uint32, src Uint32Array) int {
 		copy(dst[:n], unsafe.Slice((*uint32)(p), n))
 		return n
 	}
-	c := unsafecast.Slice[[4]uint32](dst[:n])
-	for j := range c {
-		d := &c[j]
-		d[0] = *(*uint32)(p)
-		d[1] = *(*uint32)(unsafe.Add(p, off))
-		d[2] = *(*uint32)(unsafe.Add(p, 2*off))
-		d[3] = *(*uint32)(unsafe.Add(p, 3*off))
-		p = unsafe.Add(p, 4*off)
+	i := 0
+	if n >= 16 && archsimd.X86.AVX2() {
+		i = (n / 8) * 8
+		gather32AVX2(dst[:i:i], src)
+		p = unsafe.Add(p, uintptr(i)*off)
 	}
-	for i := len(c) * 4; i < n; i++ {
+	for ; i < n; i++ {
 		dst[i] = *(*uint32)(p)
 		p = unsafe.Add(p, off)
 	}

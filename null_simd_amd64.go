@@ -10,19 +10,77 @@ import (
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
-// The assembly versions of nullIndex8/128 are scalar loops (nullIndex128
-// also used ungated SSE4.1 PCMPEQQ); the generic Go implementation compiles
-// to comparable code. nullIndex32/64 used VPGATHER in the assembly and are
-// tiered instead: densely packed values take a vector compare + ToBits path
-// building whole 64 bit words, and other strides walk the pointer
-// additively, assembling each word in a register before a single store.
+// The null index kernels are tiered: densely packed values take a vector
+// compare + ToBits path building whole 64 bit words; strided rows use the
+// VPGATHER assembly for the 32/64 bit kernels (hardware gathers beat plain
+// loads on cache resident data) and the generic nullIndex[T] loop for the
+// 8/128 bit ones, whose assembly was scalar anyway.
 
 func nullIndex8(bits *uint64, rows sparse.Array) {
-	nullIndex[uint8](unsafe.Slice(bits, (rows.Len()+63)/64), rows)
+	n := rows.Len()
+	if n == 0 {
+		return
+	}
+	if n > 1 && archsimd.X86.AVX512() {
+		if off := uintptr(rows.Index(1)) - uintptr(rows.Index(0)); off == 1 {
+			words := unsafe.Slice(bits, (n+63)/64)
+			v := unsafe.Slice((*uint8)(rows.Index(0)), n)
+			zero := archsimd.BroadcastUint8x64(0)
+			i := 0
+			for ; i+64 <= n; i += 64 {
+				words[i/64] = archsimd.LoadUint8x64Slice(v[i : i+64]).NotEqual(zero).ToBits()
+			}
+			archsimd.ClearAVXUpperBits()
+			if i < n {
+				var w uint64
+				for j, b := range v[i:] {
+					if b != 0 {
+						w |= 1 << j
+					}
+				}
+				words[i/64] = w
+			}
+			return
+		}
+	}
+	nullIndex[uint8](unsafe.Slice(bits, (n+63)/64), rows)
 }
 
 func nullIndex128(bits *uint64, rows sparse.Array) {
-	nullIndex[[16]byte](unsafe.Slice(bits, (rows.Len()+63)/64), rows)
+	n := rows.Len()
+	if n == 0 {
+		return
+	}
+	if n > 1 && archsimd.X86.AVX512() {
+		if off := uintptr(rows.Index(1)) - uintptr(rows.Index(0)); off == 16 {
+			words := unsafe.Slice(bits, (n+63)/64)
+			v := unsafe.Slice((*uint64)(rows.Index(0)), 2*n)
+			zero := archsimd.BroadcastUint64x8(0)
+			i := 0
+			for ; i+64 <= n; i += 64 {
+				var w uint64
+				for g := 0; g < 64; g += 4 {
+					m := uint64(archsimd.LoadUint64x8Slice(v[2*(i+g) : 2*(i+g)+8]).NotEqual(zero).ToBits())
+					r := m | m>>1
+					nib := (r & 1) | ((r >> 1) & 2) | ((r >> 2) & 4) | ((r >> 3) & 8)
+					w |= nib << g
+				}
+				words[i/64] = w
+			}
+			archsimd.ClearAVXUpperBits()
+			if i < n {
+				var w uint64
+				for j := i; j < n; j++ {
+					if v[2*j]|v[2*j+1] != 0 {
+						w |= 1 << (j - i)
+					}
+				}
+				words[i/64] = w
+			}
+			return
+		}
+	}
+	nullIndex[[16]byte](unsafe.Slice(bits, (n+63)/64), rows)
 }
 
 func nullIndex32(bits *uint64, rows sparse.Array) {
@@ -36,8 +94,12 @@ func nullIndex32(bits *uint64, rows sparse.Array) {
 	if n > 1 {
 		off = uintptr(rows.Index(1)) - uintptr(rows.Index(0))
 	}
+	if off != 4 || !archsimd.X86.AVX512() {
+		nullIndexGather32(bits, rows)
+		return
+	}
 	i := 0
-	if off == 4 && archsimd.X86.AVX512() {
+	{
 		v := unsafe.Slice((*uint32)(p), n)
 		zero := archsimd.BroadcastUint32x16(0)
 		for ; i+64 <= n; i += 64 {
@@ -77,8 +139,12 @@ func nullIndex64(bits *uint64, rows sparse.Array) {
 	if n > 1 {
 		off = uintptr(rows.Index(1)) - uintptr(rows.Index(0))
 	}
+	if off != 8 || !archsimd.X86.AVX512() {
+		nullIndexGather64(bits, rows)
+		return
+	}
 	i := 0
-	if off == 8 && archsimd.X86.AVX512() {
+	{
 		v := unsafe.Slice((*uint64)(p), n)
 		zero := archsimd.BroadcastUint64x8(0)
 		for ; i+64 <= n; i += 64 {
