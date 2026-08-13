@@ -220,9 +220,26 @@ gains 11% at long prefixes (24.1→21.4 ns at LCP 500); the decode kernels use
 pointer-based `LoadUint8x32(*[32]uint8)`/`Store` helpers instead because
 their offsets are not 32-aligned — decode gained 17–27% across benchmarks
 (prefix-heavy 3.61→4.24 GB/s, random 1.97→2.36, FLBA 3.67→4.67). Even fully
-check-free, the simd decode build remains ~1.6x behind the hand-written asm
-(4.24 vs 6.82 GB/s prefix-heavy) — the residual is archsimd codegen
-overhead, tracked by the archsimd port.
+check-free, the simd decode build remained ~1.4-1.6x behind the hand-written
+asm (4.24 vs 6.82 GB/s prefix-heavy).
+
+That residual was root-caused (GCE c4, Emerald Rapids, hardware counters):
+identical instructions per op but IPC 4.5 vs 2.0, with ~400 stalled cycles
+per miniblock landing on the first instruction of bitpack's
+`unpackInt32x1to16bitsAVX2`. The culprit is `MOVQ R8, X0` in bitpack's
+unpack kernels: Go assembles it to the legacy SSE encoding, and SSE writes
+preserve the destination's upper ymm bits — a false dependency on the last
+AVX producer of that register. The GOEXPERIMENT=simd DELTA_BINARY_PACKED
+block-reconstruct kernel keeps a long serial prefix-sum chain in flight, so
+every unpack call serialized against it (the hand-asm build never exposes
+the window). Changing the one instruction to `VMOVQ` (VEX zeroes the
+uppers, no dependency) recovers isolated decodeInt32 from 16.0 to 6.2 µs
+(hand-asm build: 6.7) and full prefix-heavy decode from 5.8 to 7.8 GB/s
+(hand-asm: 8.3) — fix in parquet-go/bitpack#12. Diagnosis trail:
+`BenchmarkDecodeInt32PrefixLengths` and `BenchmarkBitpackUnpackInt32` in
+`binary_packed_decode_bench_test.go` isolate the effect (the raw unpack
+micro is unaffected — the stall only exists when interleaved with AVX
+chains, which is why per-function benchmarks never caught it).
 - Velox-style in-place decode to eliminate the prefix copy in
   `decodeByteArray`.
 - Skip the copy when `p == 0` / `n == 0` in decoders (arrow#37873's
