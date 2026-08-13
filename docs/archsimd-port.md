@@ -177,9 +177,27 @@ worth +40% on its own).
 ### Tier 6 results (branch archsimd-tier6)
 
 The BMI2 bit packers and the constant-stride gather kernels, previously
-classified as blocked, are ported. Only the dictionary bounds/lookup
-family (data-dependent indexes, true gather/scatter) remains assembly
-under GOEXPERIMENT=simd.
+classified as blocked, are ported — and the build semantics are
+corrected: **GOEXPERIMENT=simd implies purego; the simd build contains
+no assembly at all** (verified by tag audit). The kernels archsimd
+cannot express (data-dependent dictionary gathers, strided hardware
+gathers) fall back to pure Go, with these measured costs vs the
+assembly build (the price of the no-assembly property, not a
+regression within the simd build):
+
+- dictionary Bounds INT32/INT64/DOUBLE: +155..+400% (purego loop vs
+  AVX-512 masked gathers; an unrolled 4-accumulator variant measured
+  WORSE — the branches predict well and the loads are already
+  independent, the asm's edge is 16-lane gather parallelism + vector
+  compares, not scalar tuning)
+- dictionary Bounds BE128: +52..65%; BYTE_ARRAY/FLBA: unchanged
+  (always scalar)
+- NullIndex strided (strings/slices): +68% (4x unrolled scalar walk)
+- Gather32 strided +70%, GatherBits strided +156%; gather64 scalar
+  BEATS VPGATHERQQ
+
+Everything else is a win for the simd build; overall geomeans:
+NullIndex **-46%**, sparse gathers **-15%** despite the strided costs.
 
 - **rle bytes bitpack** (PDEP/PEXT): encode via in-place lane folds
   (a|b<<8 -> a|b<<w at 16/32/64-bit granularity) + VPERMB compaction:
