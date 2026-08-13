@@ -10,11 +10,12 @@ import (
 	"github.com/parquet-go/parquet-go/sparse"
 )
 
-// The null index kernels are tiered: densely packed values take a vector
-// compare + ToBits path building whole 64 bit words; strided rows use the
-// VPGATHER assembly for the 32/64 bit kernels (hardware gathers beat plain
-// loads on cache resident data) and the generic nullIndex[T] loop for the
-// 8/128 bit ones, whose assembly was scalar anyway.
+// GOEXPERIMENT=simd implies purego semantics: no assembly at all. The null
+// index kernels are tiered within pure Go: densely packed values take a
+// vector compare + ToBits path building whole 64 bit words; strided rows
+// use unrolled scalar walks (the assembly used VPGATHER, which archsimd
+// does not expose; hardware gathers do beat these walks on cache resident
+// strided data, which is the documented cost of the no-assembly build).
 
 func nullIndex8(bits *uint64, rows sparse.Array) {
 	n := rows.Len()
@@ -94,12 +95,8 @@ func nullIndex32(bits *uint64, rows sparse.Array) {
 	if n > 1 {
 		off = uintptr(rows.Index(1)) - uintptr(rows.Index(0))
 	}
-	if off != 4 || !archsimd.X86.AVX512() {
-		nullIndexGather32(bits, rows)
-		return
-	}
 	i := 0
-	{
+	if off == 4 && archsimd.X86.AVX512() {
 		v := unsafe.Slice((*uint32)(p), n)
 		zero := archsimd.BroadcastUint32x16(0)
 		for ; i+64 <= n; i += 64 {
@@ -114,7 +111,25 @@ func nullIndex32(bits *uint64, rows sparse.Array) {
 	for i < n {
 		var w uint64
 		k := min(n-i, 64)
-		for j := range k {
+		j := 0
+		for ; j+4 <= k; j += 4 {
+			q := unsafe.Add(p, uintptr(i+j)*off)
+			var b0, b1, b2, b3 uint64
+			if *(*uint32)(q) != 0 {
+				b0 = 1
+			}
+			if *(*uint32)(unsafe.Add(q, off)) != 0 {
+				b1 = 1
+			}
+			if *(*uint32)(unsafe.Add(q, 2*off)) != 0 {
+				b2 = 1
+			}
+			if *(*uint32)(unsafe.Add(q, 3*off)) != 0 {
+				b3 = 1
+			}
+			w |= (b0 | b1<<1 | b2<<2 | b3<<3) << j
+		}
+		for ; j < k; j++ {
 			var b uint64
 			if *(*uint32)(unsafe.Add(p, uintptr(i+j)*off)) != 0 {
 				b = 1
@@ -137,12 +152,8 @@ func nullIndex64(bits *uint64, rows sparse.Array) {
 	if n > 1 {
 		off = uintptr(rows.Index(1)) - uintptr(rows.Index(0))
 	}
-	if off != 8 || !archsimd.X86.AVX512() {
-		nullIndexGather64(bits, rows)
-		return
-	}
 	i := 0
-	{
+	if off == 8 && archsimd.X86.AVX512() {
 		v := unsafe.Slice((*uint64)(p), n)
 		zero := archsimd.BroadcastUint64x8(0)
 		for ; i+64 <= n; i += 64 {
@@ -158,7 +169,25 @@ func nullIndex64(bits *uint64, rows sparse.Array) {
 	for i < n {
 		var w uint64
 		k := min(n-i, 64)
-		for j := range k {
+		j := 0
+		for ; j+4 <= k; j += 4 {
+			q := unsafe.Add(p, uintptr(i+j)*off)
+			var b0, b1, b2, b3 uint64
+			if *(*uint64)(q) != 0 {
+				b0 = 1
+			}
+			if *(*uint64)(unsafe.Add(q, off)) != 0 {
+				b1 = 1
+			}
+			if *(*uint64)(unsafe.Add(q, 2*off)) != 0 {
+				b2 = 1
+			}
+			if *(*uint64)(unsafe.Add(q, 3*off)) != 0 {
+				b3 = 1
+			}
+			w |= (b0 | b1<<1 | b2<<2 | b3<<3) << j
+		}
+		for ; j < k; j++ {
 			var b uint64
 			if *(*uint64)(unsafe.Add(p, uintptr(i+j)*off)) != 0 {
 				b = 1

@@ -11,14 +11,16 @@ import (
 	"github.com/parquet-go/bitpack/unsafecast"
 )
 
-// The GOEXPERIMENT=simd build replaces all the gather kernels with Go: the
-// scalar ones compile to comparable code, and the VPGATHER based ones
-// (gatherBits, gather32, gather64) are tiered instead of gathered — a
-// dense stride is a contiguous copy (or a vector compare for gatherBits),
-// and other strides walk the pointer additively 4 elements per iteration
-// through chunk views (the prove pass cannot derive dst[i+3] from
-// i+4 <= len). VPGATHERDD costs about 2 cycles per element, which plain
-// loads meet or beat without the AVX2 CPUID gate.
+// GOEXPERIMENT=simd implies purego semantics: no assembly at all. The
+// gather kernels are tiered within pure Go — a dense stride is a
+// contiguous copy (or a vector compare + ToBits for gatherBits), and other
+// strides walk chunk pointers derived from the base 4 elements per
+// iteration (the prove pass cannot derive dst[i+3] from i+4 <= len, and
+// checkptr forbids advancing a pointer past the final element). The
+// assembly used VPGATHER, which archsimd does not expose; hardware gathers
+// beat these walks on cache resident strided data, which is the documented
+// cost of the no-assembly build — except gather64, where the scalar walk
+// beats VPGATHERQQ outright.
 
 func gatherBitsDefault(dst []byte, src Uint8Array) {
 	n := src.Len() / 8
@@ -75,10 +77,6 @@ func gatherBits(dst []byte, src Uint8Array) int {
 		}
 		archsimd.ClearAVXUpperBits()
 	}
-	if k := (n / 8) * 8; i < k && src.off >= 4 && archsimd.X86.AVX2() {
-		gatherBitsAVX2(dst[i/8:], src.Slice(i, k))
-		i = k
-	}
 	if k := (n / 8) * 8; i < k {
 		base := src.index(i)
 		off := src.off
@@ -116,12 +114,16 @@ func gather32(dst []uint32, src Uint32Array) int {
 		copy(dst[:n], unsafe.Slice((*uint32)(p), n))
 		return n
 	}
-	i := 0
-	if n >= 16 && archsimd.X86.AVX2() {
-		i = (n / 8) * 8
-		gather32AVX2(dst[:i:i], src)
+	c := unsafecast.Slice[[4]uint32](dst[:n])
+	for j := range c {
+		q := unsafe.Add(p, uintptr(4*j)*off)
+		d := &c[j]
+		d[0] = *(*uint32)(q)
+		d[1] = *(*uint32)(unsafe.Add(q, off))
+		d[2] = *(*uint32)(unsafe.Add(q, 2*off))
+		d[3] = *(*uint32)(unsafe.Add(q, 3*off))
 	}
-	for ; i < n; i++ {
+	for i := len(c) * 4; i < n; i++ {
 		dst[i] = *(*uint32)(unsafe.Add(p, uintptr(i)*off))
 	}
 	return n
