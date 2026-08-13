@@ -250,23 +250,32 @@ func decodeBytesBitpackSIMD(dst, src []byte, count, bitWidth uint) {
 	vmask := archsimd.BroadcastUint16x32(uint16(bitMask))
 	i := 0
 	o := 0
-	for ; count >= 64; count -= 64 {
-		var c archsimd.Uint8x64
-		if i+64 <= len(src) {
-			c = archsimd.LoadUint8x64Slice(src[i : i+64])
-		} else {
-			// The loop consumes 8*bitWidth bytes per iteration but loads 64:
-			// near the end of the input the full load would read past the
-			// slice, so bounce the remaining bytes through a buffer.
-			var buf [64]byte
-			copy(buf[:], src[i:])
-			c = archsimd.LoadUint8x64Slice(buf[:])
-		}
+	for ; count >= 64 && i+64 <= len(src); count -= 64 {
+		c := archsimd.LoadUint8x64Slice(src[i : i+64])
 		va := c.Permute(ia).AsUint16x32().ShiftRight(sa).And(vmask)
 		vb := c.Permute(ib).AsUint16x32().ShiftRight(sb).And(vmask)
 		va.AsUint8x64().ConcatPermute(vb.AsUint8x64(), cm).StoreSlice(dst[o : o+64])
 		i += int(8 * w)
 		o += 64
+	}
+	if count >= 64 {
+		// The loop consumes 8*bitWidth bytes per iteration but loads 64, so
+		// the last iterations would read past the input. Bounce the (at
+		// most 64) remaining bytes through a buffer once and keep
+		// vectoring from it; the copy stays out of the loops because a
+		// call in the body would spill every table vector per iteration.
+		var buf [128]byte
+		copy(buf[:], src[i:])
+		j := 0
+		for ; count >= 64; count -= 64 {
+			c := archsimd.LoadUint8x64Slice(buf[j : j+64])
+			va := c.Permute(ia).AsUint16x32().ShiftRight(sa).And(vmask)
+			vb := c.Permute(ib).AsUint16x32().ShiftRight(sb).And(vmask)
+			va.AsUint8x64().ConcatPermute(vb.AsUint8x64(), cm).StoreSlice(dst[o : o+64])
+			j += int(8 * w)
+			i += int(8 * w)
+			o += 64
+		}
 	}
 	archsimd.ClearAVXUpperBits()
 	for ; count > 0; count -= 8 {
