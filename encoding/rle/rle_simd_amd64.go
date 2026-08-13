@@ -258,26 +258,20 @@ func decodeBytesBitpackSIMD(dst, src []byte, count, bitWidth uint) {
 		i += int(8 * w)
 		o += 64
 	}
+	archsimd.ClearAVXUpperBits()
 	if count >= 64 {
 		// The loop consumes 8*bitWidth bytes per iteration but loads 64, so
-		// the last iterations would read past the input. Bounce the (at
-		// most 64) remaining bytes through a buffer once and keep
-		// vectoring from it; the copy stays out of the loops because a
-		// call in the body would spill every table vector per iteration.
+		// the last iterations would read past the input. Copy the (at most
+		// 64) remaining bytes into a zero padded buffer and recurse once:
+		// the padded length keeps the recursion entirely in the vector
+		// loop above. A second inline loop would share the table vectors
+		// with the first and make the register allocator spill them on
+		// every iteration of both (measured 3.5x on the whole kernel).
 		var buf [128]byte
 		copy(buf[:], src[i:])
-		j := 0
-		for ; count >= 64; count -= 64 {
-			c := archsimd.LoadUint8x64Slice(buf[j : j+64])
-			va := c.Permute(ia).AsUint16x32().ShiftRight(sa).And(vmask)
-			vb := c.Permute(ib).AsUint16x32().ShiftRight(sb).And(vmask)
-			va.AsUint8x64().ConcatPermute(vb.AsUint8x64(), cm).StoreSlice(dst[o : o+64])
-			j += int(8 * w)
-			i += int(8 * w)
-			o += 64
-		}
+		decodeBytesBitpackSIMD(dst[o:], buf[:], count, w)
+		return
 	}
-	archsimd.ClearAVXUpperBits()
 	for ; count > 0; count -= 8 {
 		var bits [8]byte
 		copy(bits[:], src[i:min(i+int(w), len(src))])
