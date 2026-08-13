@@ -250,8 +250,18 @@ func decodeBytesBitpackSIMD(dst, src []byte, count, bitWidth uint) {
 	vmask := archsimd.BroadcastUint16x32(uint16(bitMask))
 	i := 0
 	o := 0
-	for ; count >= 64 && i+64 <= len(src); count -= 64 {
-		c := archsimd.LoadUint8x64Slice(src[i : i+64])
+	for ; count >= 64; count -= 64 {
+		var c archsimd.Uint8x64
+		if i+64 <= len(src) {
+			c = archsimd.LoadUint8x64Slice(src[i : i+64])
+		} else {
+			// The loop consumes 8*bitWidth bytes per iteration but loads 64:
+			// near the end of the input the full load would read past the
+			// slice, so bounce the remaining bytes through a buffer.
+			var buf [64]byte
+			copy(buf[:], src[i:])
+			c = archsimd.LoadUint8x64Slice(buf[:])
+		}
 		va := c.Permute(ia).AsUint16x32().ShiftRight(sa).And(vmask)
 		vb := c.Permute(ib).AsUint16x32().ShiftRight(sb).And(vmask)
 		va.AsUint8x64().ConcatPermute(vb.AsUint8x64(), cm).StoreSlice(dst[o : o+64])
