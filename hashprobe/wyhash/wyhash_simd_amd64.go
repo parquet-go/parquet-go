@@ -27,21 +27,20 @@ func MultiHashUint32Array(hashes []uintptr, values sparse.Uint32Array, seed uint
 	off := arrayStride(a, n)
 	c := unsafecast.Slice[[4]uintptr](hashes)
 	for j := range c {
-		v0 := uint64(*(*uint32)(p))
-		v1 := uint64(*(*uint32)(unsafe.Add(p, off)))
-		v2 := uint64(*(*uint32)(unsafe.Add(p, 2*off)))
-		v3 := uint64(*(*uint32)(unsafe.Add(p, 3*off)))
+		q := unsafe.Add(p, uintptr(4*j)*off)
+		v0 := uint64(*(*uint32)(q))
+		v1 := uint64(*(*uint32)(unsafe.Add(q, off)))
+		v2 := uint64(*(*uint32)(unsafe.Add(q, 2*off)))
+		v3 := uint64(*(*uint32)(unsafe.Add(q, 3*off)))
 		h := &c[j]
 		h[0] = uintptr(mix(m5^4, mix(v0^m2, v0^m1s)))
 		h[1] = uintptr(mix(m5^4, mix(v1^m2, v1^m1s)))
 		h[2] = uintptr(mix(m5^4, mix(v2^m2, v2^m1s)))
 		h[3] = uintptr(mix(m5^4, mix(v3^m2, v3^m1s)))
-		p = unsafe.Add(p, 4*off)
 	}
 	for i := len(c) * 4; i < n; i++ {
-		v := uint64(*(*uint32)(p))
+		v := uint64(*(*uint32)(unsafe.Add(p, uintptr(i)*off)))
 		hashes[i] = uintptr(mix(m5^4, mix(v^m2, v^m1s)))
-		p = unsafe.Add(p, off)
 	}
 }
 
@@ -56,21 +55,20 @@ func MultiHashUint64Array(hashes []uintptr, values sparse.Uint64Array, seed uint
 	off := arrayStride(a, n)
 	c := unsafecast.Slice[[4]uintptr](hashes)
 	for j := range c {
-		v0 := *(*uint64)(p)
-		v1 := *(*uint64)(unsafe.Add(p, off))
-		v2 := *(*uint64)(unsafe.Add(p, 2*off))
-		v3 := *(*uint64)(unsafe.Add(p, 3*off))
+		q := unsafe.Add(p, uintptr(4*j)*off)
+		v0 := *(*uint64)(q)
+		v1 := *(*uint64)(unsafe.Add(q, off))
+		v2 := *(*uint64)(unsafe.Add(q, 2*off))
+		v3 := *(*uint64)(unsafe.Add(q, 3*off))
 		h := &c[j]
 		h[0] = uintptr(mix(m5^8, mix(v0^m2, v0^m1s)))
 		h[1] = uintptr(mix(m5^8, mix(v1^m2, v1^m1s)))
 		h[2] = uintptr(mix(m5^8, mix(v2^m2, v2^m1s)))
 		h[3] = uintptr(mix(m5^8, mix(v3^m2, v3^m1s)))
-		p = unsafe.Add(p, 4*off)
 	}
 	for i := len(c) * 4; i < n; i++ {
-		v := *(*uint64)(p)
+		v := *(*uint64)(unsafe.Add(p, uintptr(i)*off))
 		hashes[i] = uintptr(mix(m5^8, mix(v^m2, v^m1s)))
-		p = unsafe.Add(p, off)
 	}
 }
 
@@ -85,18 +83,18 @@ func MultiHashUint128Array(hashes []uintptr, values sparse.Uint128Array, seed ui
 	off := arrayStride(a, n)
 	c := unsafecast.Slice[[4]uintptr](hashes)
 	for j := range c {
-		p0, p1, p2, p3 := p, unsafe.Add(p, off), unsafe.Add(p, 2*off), unsafe.Add(p, 3*off)
+		q := unsafe.Add(p, uintptr(4*j)*off)
+		p0, p1, p2, p3 := q, unsafe.Add(q, off), unsafe.Add(q, 2*off), unsafe.Add(q, 3*off)
 		h := &c[j]
 		h[0] = uintptr(mix(m5^16, mix(*(*uint64)(p0)^m2, *(*uint64)(unsafe.Add(p0, 8))^m1s)))
 		h[1] = uintptr(mix(m5^16, mix(*(*uint64)(p1)^m2, *(*uint64)(unsafe.Add(p1, 8))^m1s)))
 		h[2] = uintptr(mix(m5^16, mix(*(*uint64)(p2)^m2, *(*uint64)(unsafe.Add(p2, 8))^m1s)))
 		h[3] = uintptr(mix(m5^16, mix(*(*uint64)(p3)^m2, *(*uint64)(unsafe.Add(p3, 8))^m1s)))
-		p = unsafe.Add(p, 4*off)
 	}
 	for i := len(c) * 4; i < n; i++ {
-		h := mix(m5^16, mix(*(*uint64)(p)^m2, *(*uint64)(unsafe.Add(p, 8))^m1s))
+		q := unsafe.Add(p, uintptr(i)*off)
+		h := mix(m5^16, mix(*(*uint64)(q)^m2, *(*uint64)(unsafe.Add(q, 8))^m1s))
 		hashes[i] = uintptr(h)
-		p = unsafe.Add(p, off)
 	}
 }
 

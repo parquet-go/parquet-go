@@ -50,16 +50,15 @@ func gather128(dst [][16]byte, src Uint128Array) int {
 	}
 	c := unsafecast.Slice[[4][16]byte](dst[:n])
 	for j := range c {
+		q := unsafe.Add(p, uintptr(4*j)*off)
 		d := &c[j]
-		d[0] = *(*[16]byte)(p)
-		d[1] = *(*[16]byte)(unsafe.Add(p, off))
-		d[2] = *(*[16]byte)(unsafe.Add(p, 2*off))
-		d[3] = *(*[16]byte)(unsafe.Add(p, 3*off))
-		p = unsafe.Add(p, 4*off)
+		d[0] = *(*[16]byte)(q)
+		d[1] = *(*[16]byte)(unsafe.Add(q, off))
+		d[2] = *(*[16]byte)(unsafe.Add(q, 2*off))
+		d[3] = *(*[16]byte)(unsafe.Add(q, 3*off))
 	}
 	for i := len(c) * 4; i < n; i++ {
-		dst[i] = *(*[16]byte)(p)
-		p = unsafe.Add(p, off)
+		dst[i] = *(*[16]byte)(unsafe.Add(p, uintptr(i)*off))
 	}
 	return n
 }
@@ -81,9 +80,10 @@ func gatherBits(dst []byte, src Uint8Array) int {
 		i = k
 	}
 	if k := (n / 8) * 8; i < k {
-		p := src.index(i)
+		base := src.index(i)
 		off := src.off
-		for ; i+8 <= k; i += 8 {
+		for j := 0; i+8 <= k; i += 8 {
+			p := unsafe.Add(base, uintptr(j)*off)
 			dst[i/8] = (*(*byte)(p) & 1) |
 				((*(*byte)(unsafe.Add(p, off)) & 1) << 1) |
 				((*(*byte)(unsafe.Add(p, 2*off)) & 1) << 2) |
@@ -92,7 +92,7 @@ func gatherBits(dst []byte, src Uint8Array) int {
 				((*(*byte)(unsafe.Add(p, 5*off)) & 1) << 5) |
 				((*(*byte)(unsafe.Add(p, 6*off)) & 1) << 6) |
 				((*(*byte)(unsafe.Add(p, 7*off)) & 1) << 7)
-			p = unsafe.Add(p, 8*off)
+			j += 8
 		}
 	}
 	for i < n {
@@ -120,11 +120,9 @@ func gather32(dst []uint32, src Uint32Array) int {
 	if n >= 16 && archsimd.X86.AVX2() {
 		i = (n / 8) * 8
 		gather32AVX2(dst[:i:i], src)
-		p = unsafe.Add(p, uintptr(i)*off)
 	}
 	for ; i < n; i++ {
-		dst[i] = *(*uint32)(p)
-		p = unsafe.Add(p, off)
+		dst[i] = *(*uint32)(unsafe.Add(p, uintptr(i)*off))
 	}
 	return n
 }
@@ -142,16 +140,15 @@ func gather64(dst []uint64, src Uint64Array) int {
 	}
 	c := unsafecast.Slice[[4]uint64](dst[:n])
 	for j := range c {
+		q := unsafe.Add(p, uintptr(4*j)*off)
 		d := &c[j]
-		d[0] = *(*uint64)(p)
-		d[1] = *(*uint64)(unsafe.Add(p, off))
-		d[2] = *(*uint64)(unsafe.Add(p, 2*off))
-		d[3] = *(*uint64)(unsafe.Add(p, 3*off))
-		p = unsafe.Add(p, 4*off)
+		d[0] = *(*uint64)(q)
+		d[1] = *(*uint64)(unsafe.Add(q, off))
+		d[2] = *(*uint64)(unsafe.Add(q, 2*off))
+		d[3] = *(*uint64)(unsafe.Add(q, 3*off))
 	}
 	for i := len(c) * 4; i < n; i++ {
-		dst[i] = *(*uint64)(p)
-		p = unsafe.Add(p, off)
+		dst[i] = *(*uint64)(unsafe.Add(p, uintptr(i)*off))
 	}
 	return n
 }

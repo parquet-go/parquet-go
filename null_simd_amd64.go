@@ -110,18 +110,16 @@ func nullIndex32(bits *uint64, rows sparse.Array) {
 			words[i/64] = uint64(m0) | uint64(m1)<<16 | uint64(m2)<<32 | uint64(m3)<<48
 		}
 		archsimd.ClearAVXUpperBits()
-		p = unsafe.Add(p, uintptr(i)*off)
 	}
 	for i < n {
 		var w uint64
 		k := min(n-i, 64)
 		for j := range k {
 			var b uint64
-			if *(*uint32)(p) != 0 {
+			if *(*uint32)(unsafe.Add(p, uintptr(i+j)*off)) != 0 {
 				b = 1
 			}
 			w |= b << j
-			p = unsafe.Add(p, off)
 		}
 		words[i/64] = w
 		i += k
@@ -156,18 +154,16 @@ func nullIndex64(bits *uint64, rows sparse.Array) {
 			words[i/64] = w
 		}
 		archsimd.ClearAVXUpperBits()
-		p = unsafe.Add(p, uintptr(i)*off)
 	}
 	for i < n {
 		var w uint64
 		k := min(n-i, 64)
 		for j := range k {
 			var b uint64
-			if *(*uint64)(p) != 0 {
+			if *(*uint64)(unsafe.Add(p, uintptr(i+j)*off)) != 0 {
 				b = 1
 			}
 			w |= b << j
-			p = unsafe.Add(p, off)
 		}
 		words[i/64] = w
 		i += k

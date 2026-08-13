@@ -207,6 +207,13 @@ under GOEXPERIMENT=simd.
 - New asm-split rule: file-scoped symbols (`name<>`) are invisible
   across .s files — GLOBL data must move with the TEXT that uses it
   (the opposite of package-scoped data, which must stay with all users).
+- **checkptr rule for strided pointer walks** (CI runs the simd tests
+  with -race, which enables checkptr): `p = unsafe.Add(p, off)` after
+  the final element creates a pointer past the allocation and is
+  illegal even when never dereferenced. Compute each chunk pointer from
+  the base with an in-bounds offset (`q := unsafe.Add(base,
+  uintptr(4*j)*off)`) instead of walking the pointer — one IMUL per
+  chunk, amortized over the unroll.
 
 ## Dead code found during the audit (delete regardless)
 
