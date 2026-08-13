@@ -5,6 +5,7 @@ package delta
 import (
 	"math/bits"
 	"simd/archsimd"
+	"unsafe"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 )
@@ -88,15 +89,20 @@ var (
 // recovered from the movemask of the byte equality.
 func searchPrefixLengthSIMD(base, data []byte) int {
 	n := min(len(base), len(data))
-	i := 0
-	for ; i+32 <= n; i += 32 {
-		b := archsimd.LoadUint8x32Slice(base[i : i+32])
-		d := archsimd.LoadUint8x32Slice(data[i : i+32])
+	m := n / 32
+	bc := unsafecast.Slice[[32]byte](base)[:m]
+	dc := unsafecast.Slice[[32]byte](data)[:m]
+
+	for k := range bc {
+		b := archsimd.LoadUint8x32(&bc[k])
+		d := archsimd.LoadUint8x32(&dc[k])
 		if eq := b.Equal(d).ToBits(); eq != 0xFFFFFFFF {
 			archsimd.ClearAVXUpperBits()
-			return i + bits.TrailingZeros32(^eq)
+			return k*32 + bits.TrailingZeros32(^eq)
 		}
 	}
+
+	i := m * 32
 	archsimd.ClearAVXUpperBits()
 	return i + wordSearchPrefixLength(base[i:], data[i:])
 }
@@ -164,12 +170,32 @@ func decodeByteArrayOffsets(offsets []uint32, prefix, suffix []int32) {
 	offsets[len(suffix)] = lastOffset
 }
 
-// decodeByteArraySIMD reconstructs values by copying 32 bytes of prefix and
-// suffix unconditionally (over-copying into the padding the callers
-// reserve), with plain copies when a length exceeds 32 bytes. The caller
-// guarantees at least padding bytes of suffix data remain in src past the
-// region processed here, making the 32 bytes source loads safe.
+// loadUint8x32 and storeUint8x32 access 32 bytes at arbitrary byte offsets
+// of a slice without bounds checks; the callers guarantee that i+32 stays
+// within the padding their buffers reserve.
+func loadUint8x32(b []byte, i int) archsimd.Uint8x32 {
+	return archsimd.LoadUint8x32((*[32]uint8)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(b)), i)))
+}
+
+func storeUint8x32(v archsimd.Uint8x32, b []byte, i int) {
+	v.Store((*[32]uint8)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(b)), i)))
+}
+
+func loadUint8x16(b []byte, i int) archsimd.Uint8x16 {
+	return archsimd.LoadUint8x16((*[16]uint8)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(b)), i)))
+}
+
+func storeUint8x16(v archsimd.Uint8x16, b []byte, i int) {
+	v.Store((*[16]uint8)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(b)), i)))
+}
+
+// decodeByteArraySIMD reconstructs values by copying prefixes and suffixes
+// in unconditional 32 bytes chunks (over-copying into the padding the
+// callers reserve). The caller guarantees at least padding bytes of suffix
+// data remain in src past the region processed here, making the 32 bytes
+// source loads safe.
 func decodeByteArraySIMD(dst, src []byte, prefix, suffix []int32) int {
+	suffix = suffix[:len(prefix)]
 	i := 0
 	j := 0
 	lastValue := 0
@@ -177,14 +203,14 @@ func decodeByteArraySIMD(dst, src []byte, prefix, suffix []int32) int {
 		p := int(prefix[k])
 		n := int(suffix[k])
 		valueOffset := i
-		archsimd.LoadUint8x32Slice(dst[lastValue : lastValue+32]).StoreSlice(dst[i : i+32])
+		storeUint8x32(loadUint8x32(dst, lastValue), dst, i)
 		for m := 32; m < p; m += 32 {
-			archsimd.LoadUint8x32Slice(dst[lastValue+m : lastValue+m+32]).StoreSlice(dst[i+m : i+m+32])
+			storeUint8x32(loadUint8x32(dst, lastValue+m), dst, i+m)
 		}
 		i += p
-		archsimd.LoadUint8x32Slice(src[j : j+32]).StoreSlice(dst[i : i+32])
+		storeUint8x32(loadUint8x32(src, j), dst, i)
 		for m := 32; m < n; m += 32 {
-			archsimd.LoadUint8x32Slice(src[j+m : j+m+32]).StoreSlice(dst[i+m : i+m+32])
+			storeUint8x32(loadUint8x32(src, j+m), dst, i+m)
 		}
 		i += n
 		j += n
@@ -197,15 +223,16 @@ func decodeByteArraySIMD(dst, src []byte, prefix, suffix []int32) int {
 // decodeByteArray128SIMD is the specialization for fixed length 16 bytes
 // values: the previous value stays in a vector register across iterations.
 func decodeByteArray128SIMD(dst, src []byte, prefix, suffix []int32) int {
+	suffix = suffix[:len(prefix)]
 	i := 0
 	j := 0
-	last := archsimd.LoadUint8x16Slice(dst[0:16])
+	last := loadUint8x16(dst, 0)
 	for k := range prefix {
 		p := int(prefix[k])
 		n := int(suffix[k])
-		last.StoreSlice(dst[i : i+16])
-		archsimd.LoadUint8x16Slice(src[j : j+16]).StoreSlice(dst[i+p : i+p+16])
-		last = archsimd.LoadUint8x16Slice(dst[i : i+16])
+		storeUint8x16(last, dst, i)
+		storeUint8x16(loadUint8x16(src, j), dst, i+p)
+		last = loadUint8x16(dst, i)
 		i += p + n
 		j += n
 	}

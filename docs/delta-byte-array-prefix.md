@@ -209,10 +209,20 @@ the common case on prefix-heavy pages, where LCPs run 24–53B — it fell back
 to `copy(dst[i:i+p], ...)`, an overlapping memmove per value re-copying from
 byte 0 (43% of decode CPU). Replacing the fallback with 32B vector-chunk
 extension (mirroring the asm's `copyPrefix`/`copySuffix`) took prefix-heavy
-decode from 0.50 to 3.61 GB/s on the c3. A general ~2x gap vs the
-hand-written asm remains in the simd decode build (`Uint8x32.StoreSlice` is
-44% flat in the profile, random-data decode 1.97 vs 4.03 GB/s) — that is
-archsimd codegen overhead, tracked separately by the archsimd port.
+decode from 0.50 to 3.61 GB/s on the c3.
+
+Bounds checks in the simd kernels were the next measurable slice: the
+`LoadUint8x32Slice(b[i:i+32])` pattern carries an `IsSliceInBounds` per
+operation (~8 per decoded value). Casting to `[32]byte` chunks with
+`unsafecast.Slice` (the pattern `validatePrefixAndSuffixLengthValuesSIMD`
+already uses for `[8]int32`) makes the prefix-search loop check-free and
+gains 11% at long prefixes (24.1→21.4 ns at LCP 500); the decode kernels use
+pointer-based `LoadUint8x32(*[32]uint8)`/`Store` helpers instead because
+their offsets are not 32-aligned — decode gained 17–27% across benchmarks
+(prefix-heavy 3.61→4.24 GB/s, random 1.97→2.36, FLBA 3.67→4.67). Even fully
+check-free, the simd decode build remains ~1.6x behind the hand-written asm
+(4.24 vs 6.82 GB/s prefix-heavy) — the residual is archsimd codegen
+overhead, tracked by the archsimd port.
 - Velox-style in-place decode to eliminate the prefix copy in
   `decodeByteArray`.
 - Skip the copy when `p == 0` / `n == 0` in decoders (arrow#37873's
