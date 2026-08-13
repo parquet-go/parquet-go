@@ -194,30 +194,39 @@ func storeUint8x16(v archsimd.Uint8x16, b []byte, i int) {
 // callers reserve). The caller guarantees at least padding bytes of suffix
 // data remain in src past the region processed here, making the 32 bytes
 // source loads safe.
+//
+// The loop advances raw pointer cursors instead of byte indexes: deriving
+// each access from base+index costs an extra LEA per operation, which made
+// the generated loop ~1.7x the instruction count of the equivalent
+// hand-written assembly.
 func decodeByteArraySIMD(dst, src []byte, prefix, suffix []int32) int {
 	suffix = suffix[:len(prefix)]
-	i := 0
-	j := 0
-	lastValue := 0
+	pd := unsafe.Pointer(unsafe.SliceData(dst))
+	ps := unsafe.Pointer(unsafe.SliceData(src))
+	pl := pd
 	for k := range prefix {
-		p := int(prefix[k])
-		n := int(suffix[k])
-		valueOffset := i
-		storeUint8x32(loadUint8x32(dst, lastValue), dst, i)
-		for m := 32; m < p; m += 32 {
-			storeUint8x32(loadUint8x32(dst, lastValue+m), dst, i+m)
+		p := uintptr(uint32(prefix[k]))
+		n := uintptr(uint32(suffix[k]))
+		valueOffset := pd
+		archsimd.LoadUint8x32((*[32]uint8)(pl)).Store((*[32]uint8)(pd))
+		if p > 32 {
+			for m := uintptr(32); m < p; m += 32 {
+				archsimd.LoadUint8x32((*[32]uint8)(unsafe.Add(pl, m))).Store((*[32]uint8)(unsafe.Add(pd, m)))
+			}
 		}
-		i += p
-		storeUint8x32(loadUint8x32(src, j), dst, i)
-		for m := 32; m < n; m += 32 {
-			storeUint8x32(loadUint8x32(src, j+m), dst, i+m)
+		pd = unsafe.Add(pd, p)
+		archsimd.LoadUint8x32((*[32]uint8)(ps)).Store((*[32]uint8)(pd))
+		if n > 32 {
+			for m := uintptr(32); m < n; m += 32 {
+				archsimd.LoadUint8x32((*[32]uint8)(unsafe.Add(ps, m))).Store((*[32]uint8)(unsafe.Add(pd, m)))
+			}
 		}
-		i += n
-		j += n
-		lastValue = valueOffset
+		pd = unsafe.Add(pd, n)
+		ps = unsafe.Add(ps, n)
+		pl = valueOffset
 	}
 	archsimd.ClearAVXUpperBits()
-	return i
+	return int(uintptr(pd) - uintptr(unsafe.Pointer(unsafe.SliceData(dst))))
 }
 
 // decodeByteArray128SIMD is the specialization for fixed length 16 bytes
