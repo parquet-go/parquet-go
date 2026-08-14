@@ -2552,3 +2552,60 @@ func TestIssue417MapStructOptionalField(t *testing.T) {
 		t.Errorf("expected key2.NestedInt32 = 0 (nil value), got %v", key2.NestedInt32)
 	}
 }
+
+// TestUnaddressableByteArray tests that [N]byte values written through
+// GenericWriter[any] with map[string]any rows do not panic. Values extracted
+// from an interface or a map are unaddressable, and reflect.Value.Bytes
+// panics on unaddressable arrays.
+//
+// https://github.com/parquet-go/parquet-go/issues/593
+func TestUnaddressableByteArray(t *testing.T) {
+	tests := []struct {
+		name   string
+		node   Node
+		value  any
+		expect []byte
+	}{
+		{
+			name:   "uuid",
+			node:   UUID(),
+			value:  [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+			expect: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		},
+		{
+			name:   "fixed length byte array",
+			node:   Leaf(FixedLenByteArrayType(4)),
+			value:  [4]byte{1, 2, 3, 4},
+			expect: []byte{1, 2, 3, 4},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := NewSchema("t", Group{"v": Optional(tt.node)})
+
+			buf := new(bytes.Buffer)
+			writer := NewGenericWriter[any](buf, schema)
+			if _, err := writer.Write([]any{map[string]any{"v": tt.value}}); err != nil {
+				t.Fatalf("failed to write: %v", err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("failed to close writer: %v", err)
+			}
+
+			type Row struct {
+				V []byte `parquet:"v,optional"`
+			}
+			rows, err := Read[Row](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatalf("failed to read: %v", err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("expected 1 row, got %d", len(rows))
+			}
+			if !bytes.Equal(rows[0].V, tt.expect) {
+				t.Errorf("expected %v, got %v", tt.expect, rows[0].V)
+			}
+		})
+	}
+}
