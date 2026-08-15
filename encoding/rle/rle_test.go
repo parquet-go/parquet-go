@@ -112,3 +112,38 @@ func BenchmarkEncodeInt32Bitpack(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkEncodeBytesBitpack(b *testing.B) {
+	src := make([]uint64, 128)
+	for i := range src {
+		src[i] = uint64(i) * 0x0101010101010101
+	}
+	dst := make([]byte, len(src)*8+8)
+	for _, bitWidth := range []uint{1, 2, 3, 5, 8} {
+		b.Run(fmt.Sprintf("bitWidth=%d", bitWidth), func(b *testing.B) {
+			b.SetBytes(int64(len(src) * 8))
+			for b.Loop() {
+				encodeBytesBitpack(dst, src, bitWidth)
+			}
+		})
+	}
+}
+
+func BenchmarkDecodeBytesBitpack(b *testing.B) {
+	words := 128
+	src := make([]uint64, words)
+	for i := range src {
+		src[i] = uint64(i) * 0x0101010101010101
+	}
+	buf := make([]byte, words*8+8)
+	dst := make([]byte, words*8)
+	for _, bitWidth := range []uint{1, 2, 3, 5, 8} {
+		n := encodeBytesBitpack(buf, src, bitWidth)
+		b.Run(fmt.Sprintf("bitWidth=%d", bitWidth), func(b *testing.B) {
+			b.SetBytes(int64(words * 8))
+			for b.Loop() {
+				decodeBytesBitpack(dst, buf[:n], uint(words*8), bitWidth)
+			}
+		})
+	}
+}

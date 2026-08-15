@@ -1,9 +1,15 @@
-//go:build !purego
+//go:build !purego && !goexperiment.simd
 
 #include "textflag.h"
 
+GLOBL scale4x8<>(SB), RODATA|NOPTR, $32
+DATA scale4x8<>+0(SB)/8,  $0
+DATA scale4x8<>+8(SB)/8,  $1
+DATA scale4x8<>+16(SB)/8, $2
+DATA scale4x8<>+24(SB)/8, $3
+
 // func nullIndex8(bits *uint64, rows sparse.Array)
-TEXT ·nullIndex32(SB), NOSPLIT, $0-32
+TEXT ·nullIndexGather32(SB), NOSPLIT, $0-32
     MOVQ bits+0(FP), AX
     MOVQ rows_array_ptr+8(FP), BX
     MOVQ rows_array_len+16(FP), DI
@@ -80,8 +86,14 @@ next1x4:
 done:
     RET
 
-// func nullIndex64(bits *uint64, rows sparse.Array)
-TEXT ·nullIndex64(SB), NOSPLIT, $0-32
+// func nullIndexGather64(bits *uint64, rows sparse.Array)
+
+// func nullIndexGather64(bits *uint64, rows sparse.Array)
+
+// func nullIndexGather64(bits *uint64, rows sparse.Array)
+
+// func nullIndexGather64(bits *uint64, rows sparse.Array)
+TEXT ·nullIndexGather64(SB), NOSPLIT, $0-32
     MOVQ bits+0(FP), AX
     MOVQ rows_array_ptr+8(FP), BX
     MOVQ rows_array_len+16(FP), DI
@@ -158,10 +170,6 @@ next1x8:
 done:
     RET
 
-GLOBL scale4x8<>(SB), RODATA|NOPTR, $32
-DATA scale4x8<>+0(SB)/8,  $0
-DATA scale4x8<>+8(SB)/8,  $1
-DATA scale4x8<>+16(SB)/8, $2
-DATA scale4x8<>+24(SB)/8, $3
 
 // func nullIndex128(bits *uint64, rows sparse.Array)
+
