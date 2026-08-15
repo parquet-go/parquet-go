@@ -174,6 +174,43 @@ copies itself (`*(*[16]byte)(p)` assignments compile to MOVUPS pairs;
 wrapping them in unsafe.Slice + archsimd loads added per-element setup
 worth +40% on its own).
 
+## SIMD library survey (kelindar/simd, viterin/vek, pehringer/simd, axiomhq/simd-go)
+
+Studied 2026-08-15 for transplantable techniques. Most of their surface
+(sums, dots, transcendentals) has no parquet use, and their best tricks
+(VPSADBW byte sums, sign-bias unsigned compares, CMGT+BIT lane select)
+were already in our kernels — often in stronger form (they lack AVX-512,
+NaN correctness, masked/overlap tails; vek's CumSum is scalar where our
+prefix sums are vector-resident). Three experiments came out of it:
+
+- **4-accumulator float bounds (shipped)**: vek and kelindar both run 4
+  accumulator sets (clang's default). Small compute-bound pages measured
+  -9.7%/-9.2% at 4KiB; cache-resident sizes measured up to +33% WORSE
+  with the wide unroll, so it is fenced to pages <= 32KiB and the 2-set
+  loop keeps larger inputs. Lesson: unroll width is size-dependent —
+  wider is not free once the working set leaves L1.
+- **AVX2 xxhash tier (uint32 shipped, uint64 rejected)**: the 3x
+  VPMULUDQ 64-bit multiply decomposition (kelindar's clang recipe) wins
+  -12.5% for uint32 hashes (first multiply needs only 2 products) and
+  ties scalar MULQ for uint64 (+2.5%) — five full 3-product multiplies
+  per hash have no headroom over superscalar IMUL. The first version of
+  these kernels used ShiftAll* with constant counts and measured **37x
+  slower than scalar** — the tier-1 legacy-MOVQ rule (golang/go#80835)
+  applies to constant counts too; per-lane shifts with broadcast count
+  vectors fixed it.
+- **Two-pass BE128 min/max (rejected)**: vek computes ArgMax as a lean
+  value pass plus a bitwise-equality find pass. For 16-byte
+  lexicographic values this measured +30..+73% (worst at DRAM-bound
+  sizes): the value pass only sheds 3 of ~11 ops while the second pass
+  re-reads up to the whole input. The two-pass trick needs a cheap
+  rescan to amortize; wide keys make the rescan the cost.
+
+Not pursued: vek Find (no parquet op searches unsorted values),
+kelindar vphminposuw funnels (no 8/16-bit physical types), NEON/SVE
+(archsimd is amd64-only; axiomhq/simd-go is the reference if that
+changes — including their per-microarchitecture measured dispatch
+thresholds, a methodology worth adopting wholesale).
+
 ## Dead code found during the audit (delete regardless)
 
 - `dictionaryLookupByteArrayString` / `dictionaryLookupFixedLenByteArray{String,Pointer}`
