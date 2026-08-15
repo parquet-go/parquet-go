@@ -185,46 +185,6 @@ func MultiSum64Uint32(h []uint64, v []uint32) int {
 	return n
 }
 
-// multiSum64Uint64AVX2 is the AVX2 tier of MultiSum64Uint64: two streams of
-// 4 hashes with the three-VPMULUDQ multiply decomposition.
-func multiSum64Uint64AVX2(h, v []uint64, n int) int {
-	p1Lo := archsimd.BroadcastUint64x4(prime1 & 0xFFFFFFFF)
-	p1Hi := archsimd.BroadcastUint64x4(prime1 >> 32)
-	p2Lo := archsimd.BroadcastUint64x4(prime2 & 0xFFFFFFFF)
-	p2Hi := archsimd.BroadcastUint64x4(prime2 >> 32)
-	p3Lo := archsimd.BroadcastUint64x4(prime3 & 0xFFFFFFFF)
-	p3Hi := archsimd.BroadcastUint64x4(prime3 >> 32)
-	p4 := archsimd.BroadcastUint64x4(prime4)
-	seed := archsimd.BroadcastUint64x4(prime5 + 8)
-	s27 := archsimd.BroadcastUint64x4(27)
-	s29 := archsimd.BroadcastUint64x4(29)
-	s31 := archsimd.BroadcastUint64x4(31)
-	s32 := archsimd.BroadcastUint64x4(32)
-	s33 := archsimd.BroadcastUint64x4(33)
-	s37 := archsimd.BroadcastUint64x4(37)
-	m := n / 8
-	cv := unsafecast.Slice[[8]uint64](v)[:m]
-	ch := unsafecast.Slice[[8]uint64](h)[:m]
-	for j := range cv {
-		v0 := archsimd.LoadUint64x4Slice(cv[j][0:4])
-		v1 := archsimd.LoadUint64x4Slice(cv[j][4:8])
-		h0 := seed.Xor(mulPrimeAVX2(rotAVX2(mulPrimeAVX2(v0, p2Lo, p2Hi, s32), s31, s33), p1Lo, p1Hi, s32))
-		h1 := seed.Xor(mulPrimeAVX2(rotAVX2(mulPrimeAVX2(v1, p2Lo, p2Hi, s32), s31, s33), p1Lo, p1Hi, s32))
-		h0 = mulPrimeAVX2(rotAVX2(h0, s27, s37), p1Lo, p1Hi, s32).Add(p4)
-		h1 = mulPrimeAVX2(rotAVX2(h1, s27, s37), p1Lo, p1Hi, s32).Add(p4)
-		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftRight(s33)), p2Lo, p2Hi, s32)
-		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftRight(s33)), p2Lo, p2Hi, s32)
-		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftRight(s29)), p3Lo, p3Hi, s32)
-		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftRight(s29)), p3Lo, p3Hi, s32)
-		h0 = h0.Xor(h0.ShiftRight(s32))
-		h1 = h1.Xor(h1.ShiftRight(s32))
-		h0.StoreSlice(ch[j][0:4])
-		h1.StoreSlice(ch[j][4:8])
-	}
-	archsimd.ClearAVXUpperBits()
-	return m * 8
-}
-
 // mulPrime32AVX2 multiplies a value with zero high halves (a widened
 // uint32) by a 64 bit constant: two products suffice.
 func mulPrime32AVX2(a, cLo, cHi, s32 archsimd.Uint64x4) archsimd.Uint64x4 {
@@ -334,8 +294,6 @@ func MultiSum64Uint64(h []uint64, v []uint64) int {
 		}
 		i = m * 32
 		archsimd.ClearAVXUpperBits()
-	} else if archsimd.X86.AVX2() && n >= 16 {
-		i = multiSum64Uint64AVX2(h, v, n)
 	}
 	for ; i < n; i++ {
 		h[i] = Sum64Uint64(v[i])

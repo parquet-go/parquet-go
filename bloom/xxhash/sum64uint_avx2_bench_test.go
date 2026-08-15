@@ -13,21 +13,6 @@ import (
 // explicitly to compare them against the scalar fallback they replace on
 // AVX2-only hosts.
 
-func BenchmarkMultiSum64Uint64AVX2(b *testing.B) {
-	if !archsimd.X86.AVX2() {
-		b.Skip("requires AVX2")
-	}
-	h := make([]uint64, 512)
-	v := make([]uint64, 512)
-	for i := range v {
-		v[i] = uint64(i) * 0x9E3779B97F4A7C15
-	}
-	b.SetBytes(8 * int64(len(v)))
-	for b.Loop() {
-		multiSum64Uint64AVX2(h, v, len(v))
-	}
-}
-
 func BenchmarkMultiSum64Uint32AVX2(b *testing.B) {
 	if !archsimd.X86.AVX2() {
 		b.Skip("requires AVX2")
