@@ -726,7 +726,7 @@ func (w *writerFileView) Root() *Column {
 
 func (w *writerFileView) RowGroups() []RowGroup {
 	columns := makeLeafColumns(w.Root())
-	file := &File{metadata: w.writer.fileMetaData, schema: w.schema}
+	file := &File{metadata: &w.writer.fileMetaData, schema: w.schema}
 	fileRowGroups, err := makeFileRowGroups(file, columns)
 	if err != nil {
 		return nil
