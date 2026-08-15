@@ -196,22 +196,28 @@ func multiSum64Uint64AVX2(h, v []uint64, n int) int {
 	p3Hi := archsimd.BroadcastUint64x4(prime3 >> 32)
 	p4 := archsimd.BroadcastUint64x4(prime4)
 	seed := archsimd.BroadcastUint64x4(prime5 + 8)
+	s27 := archsimd.BroadcastUint64x4(27)
+	s29 := archsimd.BroadcastUint64x4(29)
+	s31 := archsimd.BroadcastUint64x4(31)
+	s32 := archsimd.BroadcastUint64x4(32)
+	s33 := archsimd.BroadcastUint64x4(33)
+	s37 := archsimd.BroadcastUint64x4(37)
 	m := n / 8
 	cv := unsafecast.Slice[[8]uint64](v)[:m]
 	ch := unsafecast.Slice[[8]uint64](h)[:m]
 	for j := range cv {
 		v0 := archsimd.LoadUint64x4Slice(cv[j][0:4])
 		v1 := archsimd.LoadUint64x4Slice(cv[j][4:8])
-		h0 := seed.Xor(mulPrimeAVX2(rot31AVX2(mulPrimeAVX2(v0, p2Lo, p2Hi)), p1Lo, p1Hi))
-		h1 := seed.Xor(mulPrimeAVX2(rot31AVX2(mulPrimeAVX2(v1, p2Lo, p2Hi)), p1Lo, p1Hi))
-		h0 = mulPrimeAVX2(rot27AVX2(h0), p1Lo, p1Hi).Add(p4)
-		h1 = mulPrimeAVX2(rot27AVX2(h1), p1Lo, p1Hi).Add(p4)
-		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftAllRight(33)), p2Lo, p2Hi)
-		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftAllRight(33)), p2Lo, p2Hi)
-		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftAllRight(29)), p3Lo, p3Hi)
-		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftAllRight(29)), p3Lo, p3Hi)
-		h0 = h0.Xor(h0.ShiftAllRight(32))
-		h1 = h1.Xor(h1.ShiftAllRight(32))
+		h0 := seed.Xor(mulPrimeAVX2(rotAVX2(mulPrimeAVX2(v0, p2Lo, p2Hi, s32), s31, s33), p1Lo, p1Hi, s32))
+		h1 := seed.Xor(mulPrimeAVX2(rotAVX2(mulPrimeAVX2(v1, p2Lo, p2Hi, s32), s31, s33), p1Lo, p1Hi, s32))
+		h0 = mulPrimeAVX2(rotAVX2(h0, s27, s37), p1Lo, p1Hi, s32).Add(p4)
+		h1 = mulPrimeAVX2(rotAVX2(h1, s27, s37), p1Lo, p1Hi, s32).Add(p4)
+		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftRight(s33)), p2Lo, p2Hi, s32)
+		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftRight(s33)), p2Lo, p2Hi, s32)
+		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftRight(s29)), p3Lo, p3Hi, s32)
+		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftRight(s29)), p3Lo, p3Hi, s32)
+		h0 = h0.Xor(h0.ShiftRight(s32))
+		h1 = h1.Xor(h1.ShiftRight(s32))
 		h0.StoreSlice(ch[j][0:4])
 		h1.StoreSlice(ch[j][4:8])
 	}
@@ -221,13 +227,9 @@ func multiSum64Uint64AVX2(h, v []uint64, n int) int {
 
 // mulPrime32AVX2 multiplies a value with zero high halves (a widened
 // uint32) by a 64 bit constant: two products suffice.
-func mulPrime32AVX2(a, cLo, cHi archsimd.Uint64x4) archsimd.Uint64x4 {
+func mulPrime32AVX2(a, cLo, cHi, s32 archsimd.Uint64x4) archsimd.Uint64x4 {
 	ae := a.AsUint32x8()
-	return ae.MulEvenWiden(cLo.AsUint32x8()).Add(ae.MulEvenWiden(cHi.AsUint32x8()).ShiftAllLeft(32))
-}
-
-func rot23AVX2(a archsimd.Uint64x4) archsimd.Uint64x4 {
-	return a.ShiftAllLeft(23).Or(a.ShiftAllRight(41))
+	return ae.MulEvenWiden(cLo.AsUint32x8()).Add(ae.MulEvenWiden(cHi.AsUint32x8()).ShiftLeft(s32))
 }
 
 // multiSum64Uint32AVX2 is the AVX2 tier of MultiSum64Uint32.
@@ -240,20 +242,25 @@ func multiSum64Uint32AVX2(h []uint64, v []uint32, n int) int {
 	p3Hi := archsimd.BroadcastUint64x4(prime3 >> 32)
 	p3 := archsimd.BroadcastUint64x4(prime3)
 	seed := archsimd.BroadcastUint64x4(prime5 + 4)
+	s23 := archsimd.BroadcastUint64x4(23)
+	s29 := archsimd.BroadcastUint64x4(29)
+	s32 := archsimd.BroadcastUint64x4(32)
+	s33 := archsimd.BroadcastUint64x4(33)
+	s41 := archsimd.BroadcastUint64x4(41)
 	m := n / 8
 	cv := unsafecast.Slice[[8]uint32](v)[:m]
 	ch := unsafecast.Slice[[8]uint64](h)[:m]
 	for j := range cv {
 		v0 := archsimd.LoadUint32x4Slice(cv[j][0:4]).ExtendToUint64()
 		v1 := archsimd.LoadUint32x4Slice(cv[j][4:8]).ExtendToUint64()
-		h0 := mulPrimeAVX2(rot23AVX2(seed.Xor(mulPrime32AVX2(v0, p1Lo, p1Hi))), p2Lo, p2Hi).Add(p3)
-		h1 := mulPrimeAVX2(rot23AVX2(seed.Xor(mulPrime32AVX2(v1, p1Lo, p1Hi))), p2Lo, p2Hi).Add(p3)
-		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftAllRight(33)), p2Lo, p2Hi)
-		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftAllRight(33)), p2Lo, p2Hi)
-		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftAllRight(29)), p3Lo, p3Hi)
-		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftAllRight(29)), p3Lo, p3Hi)
-		h0 = h0.Xor(h0.ShiftAllRight(32))
-		h1 = h1.Xor(h1.ShiftAllRight(32))
+		h0 := mulPrimeAVX2(rotAVX2(seed.Xor(mulPrime32AVX2(v0, p1Lo, p1Hi, s32)), s23, s41), p2Lo, p2Hi, s32).Add(p3)
+		h1 := mulPrimeAVX2(rotAVX2(seed.Xor(mulPrime32AVX2(v1, p1Lo, p1Hi, s32)), s23, s41), p2Lo, p2Hi, s32).Add(p3)
+		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftRight(s33)), p2Lo, p2Hi, s32)
+		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftRight(s33)), p2Lo, p2Hi, s32)
+		h0 = mulPrimeAVX2(h0.Xor(h0.ShiftRight(s29)), p3Lo, p3Hi, s32)
+		h1 = mulPrimeAVX2(h1.Xor(h1.ShiftRight(s29)), p3Lo, p3Hi, s32)
+		h0 = h0.Xor(h0.ShiftRight(s32))
+		h1 = h1.Xor(h1.ShiftRight(s32))
 		h0.StoreSlice(ch[j][0:4])
 		h1.StoreSlice(ch[j][4:8])
 	}
@@ -265,23 +272,23 @@ func multiSum64Uint32AVX2(h []uint64, v []uint32, n int) int {
 // on AVX2, where VPMULLQ does not exist: three VPMULUDQ cross products
 // (kelindar/simd's clang-generated recipe). cLo and cHi hold the low and
 // high 32 bits of the constant broadcast in every 64 bit lane, so only the
-// variable operand needs a shift.
-func mulPrimeAVX2(a, cLo, cHi archsimd.Uint64x4) archsimd.Uint64x4 {
+// variable operand needs a shift. All shift counts are per lane vectors:
+// the ShiftAll forms move the count through a legacy (non-VEX) MOVQ and
+// pay an AVX-SSE transition penalty on every call (golang/go#80835 — the
+// first version of these kernels measured 37x slower than scalar from
+// exactly that).
+func mulPrimeAVX2(a, cLo, cHi, s32 archsimd.Uint64x4) archsimd.Uint64x4 {
 	ae := a.AsUint32x8()
 	lo := ae.MulEvenWiden(cLo.AsUint32x8())
 	mid := ae.MulEvenWiden(cHi.AsUint32x8())
-	mid = mid.Add(a.ShiftAllRight(32).AsUint32x8().MulEvenWiden(cLo.AsUint32x8()))
-	return lo.Add(mid.ShiftAllLeft(32))
+	mid = mid.Add(a.ShiftRight(s32).AsUint32x8().MulEvenWiden(cLo.AsUint32x8()))
+	return lo.Add(mid.ShiftLeft(s32))
 }
 
-// rot31AVX2 and rot27AVX2 rotate 64 bit lanes with immediate shifts
-// (VPROLQ is AVX-512 only).
-func rot31AVX2(a archsimd.Uint64x4) archsimd.Uint64x4 {
-	return a.ShiftAllLeft(31).Or(a.ShiftAllRight(33))
-}
-
-func rot27AVX2(a archsimd.Uint64x4) archsimd.Uint64x4 {
-	return a.ShiftAllLeft(27).Or(a.ShiftAllRight(37))
+// rotAVX2 rotates 64 bit lanes left by k using per lane shifts (VPROLQ is
+// AVX-512 only); sk and skInv broadcast k and 64-k.
+func rotAVX2(a, sk, skInv archsimd.Uint64x4) archsimd.Uint64x4 {
+	return a.ShiftLeft(sk).Or(a.ShiftRight(skInv))
 }
 
 func MultiSum64Uint64(h []uint64, v []uint64) int {
