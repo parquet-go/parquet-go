@@ -1655,6 +1655,82 @@ func boundsFloat32(data []float32) (min, max float32) {
 	}
 	d := data
 	switch {
+	case archsimd.X86.AVX512() && len(d) >= 64 && len(d) <= 8192:
+		// Small inputs are compute bound and profit from four accumulator
+		// sets (the clang generated kernels of viterin/vek and
+		// kelindar/simd both run four); at cache resident sizes above the
+		// threshold the two set loop below measured up to 33% faster, so
+		// the wider unroll is fenced to small pages.
+		minB0 := archsimd.BroadcastFloat32x16(data[0])
+		minB1 := minB0
+		minB2 := minB0
+		minB3 := minB0
+		maxB0 := minB0
+		maxB1 := minB0
+		maxB2 := minB0
+		maxB3 := minB0
+		sumB0 := archsimd.BroadcastUint32x16(0).AsFloat32x16()
+		sumB1 := sumB0
+		sumB2 := sumB0
+		sumB3 := sumB0
+		bchunks := unsafecast.Slice[[64]float32](d)
+		for i := range bchunks {
+			c := &bchunks[i]
+			v0 := archsimd.LoadFloat32x16Slice(c[0:16])
+			v1 := archsimd.LoadFloat32x16Slice(c[16:32])
+			v2 := archsimd.LoadFloat32x16Slice(c[32:48])
+			v3 := archsimd.LoadFloat32x16Slice(c[48:64])
+			minB0 = minB0.Min(v0)
+			minB1 = minB1.Min(v1)
+			minB2 = minB2.Min(v2)
+			minB3 = minB3.Min(v3)
+			maxB0 = maxB0.Max(v0)
+			maxB1 = maxB1.Max(v1)
+			maxB2 = maxB2.Max(v2)
+			maxB3 = maxB3.Max(v3)
+			sumB0 = sumB0.Add(v0)
+			sumB1 = sumB1.Add(v1)
+			sumB2 = sumB2.Add(v2)
+			sumB3 = sumB3.Add(v3)
+		}
+		if rem := len(d) - len(bchunks)*64; rem > 0 {
+			t0 := archsimd.LoadFloat32x16Slice(d[len(d)-16:])
+			minB0 = minB0.Min(t0)
+			maxB0 = maxB0.Max(t0)
+			sumB0 = sumB0.Add(t0)
+			if rem > 16 {
+				t1 := archsimd.LoadFloat32x16Slice(d[len(d)-32:])
+				minB1 = minB1.Min(t1)
+				maxB1 = maxB1.Max(t1)
+				sumB1 = sumB1.Add(t1)
+			}
+			if rem > 32 {
+				t2 := archsimd.LoadFloat32x16Slice(d[len(d)-48:])
+				minB2 = minB2.Min(t2)
+				maxB2 = maxB2.Max(t2)
+				sumB2 = sumB2.Add(t2)
+			}
+			if rem > 48 {
+				t3 := archsimd.LoadFloat32x16Slice(d[len(d)-64:])
+				minB3 = minB3.Min(t3)
+				maxB3 = maxB3.Max(t3)
+				sumB3 = sumB3.Add(t3)
+			}
+		}
+		if sumB0.Add(sumB1).Add(sumB2.Add(sumB3)).IsNaN().ToBits() != 0 {
+			archsimd.ClearAVXUpperBits()
+			return boundsFloat32Merge(data)
+		}
+		minB0 = minB0.Min(minB1).Min(minB2.Min(minB3))
+		maxB0 = maxB0.Max(maxB1).Max(maxB2.Max(maxB3))
+		minH := minB0.GetLo().Min(minB0.GetHi())
+		maxH := maxB0.GetLo().Max(maxB0.GetHi())
+		minQ := minH.GetLo().Min(minH.GetHi())
+		maxQ := maxH.GetLo().Max(maxH.GetHi())
+		min = reduceMinFloat32x4(minQ)
+		max = reduceMaxFloat32x4(maxQ)
+		archsimd.ClearAVXUpperBits()
+		return min, max
 	case archsimd.X86.AVX512() && len(d) >= 32:
 		minA0 := archsimd.BroadcastFloat32x16(data[0])
 		minA1 := minA0
@@ -1756,6 +1832,82 @@ func boundsFloat64(data []float64) (min, max float64) {
 	}
 	d := data
 	switch {
+	case archsimd.X86.AVX512() && len(d) >= 32 && len(d) <= 4096:
+		// Small inputs are compute bound and profit from four accumulator
+		// sets (the clang generated kernels of viterin/vek and
+		// kelindar/simd both run four); at cache resident sizes above the
+		// threshold the two set loop below measured up to 33% faster, so
+		// the wider unroll is fenced to small pages.
+		minB0 := archsimd.BroadcastFloat64x8(data[0])
+		minB1 := minB0
+		minB2 := minB0
+		minB3 := minB0
+		maxB0 := minB0
+		maxB1 := minB0
+		maxB2 := minB0
+		maxB3 := minB0
+		sumB0 := archsimd.BroadcastUint64x8(0).AsFloat64x8()
+		sumB1 := sumB0
+		sumB2 := sumB0
+		sumB3 := sumB0
+		bchunks := unsafecast.Slice[[32]float64](d)
+		for i := range bchunks {
+			c := &bchunks[i]
+			v0 := archsimd.LoadFloat64x8Slice(c[0:8])
+			v1 := archsimd.LoadFloat64x8Slice(c[8:16])
+			v2 := archsimd.LoadFloat64x8Slice(c[16:24])
+			v3 := archsimd.LoadFloat64x8Slice(c[24:32])
+			minB0 = minB0.Min(v0)
+			minB1 = minB1.Min(v1)
+			minB2 = minB2.Min(v2)
+			minB3 = minB3.Min(v3)
+			maxB0 = maxB0.Max(v0)
+			maxB1 = maxB1.Max(v1)
+			maxB2 = maxB2.Max(v2)
+			maxB3 = maxB3.Max(v3)
+			sumB0 = sumB0.Add(v0)
+			sumB1 = sumB1.Add(v1)
+			sumB2 = sumB2.Add(v2)
+			sumB3 = sumB3.Add(v3)
+		}
+		if rem := len(d) - len(bchunks)*32; rem > 0 {
+			t0 := archsimd.LoadFloat64x8Slice(d[len(d)-8:])
+			minB0 = minB0.Min(t0)
+			maxB0 = maxB0.Max(t0)
+			sumB0 = sumB0.Add(t0)
+			if rem > 8 {
+				t1 := archsimd.LoadFloat64x8Slice(d[len(d)-16:])
+				minB1 = minB1.Min(t1)
+				maxB1 = maxB1.Max(t1)
+				sumB1 = sumB1.Add(t1)
+			}
+			if rem > 16 {
+				t2 := archsimd.LoadFloat64x8Slice(d[len(d)-24:])
+				minB2 = minB2.Min(t2)
+				maxB2 = maxB2.Max(t2)
+				sumB2 = sumB2.Add(t2)
+			}
+			if rem > 24 {
+				t3 := archsimd.LoadFloat64x8Slice(d[len(d)-32:])
+				minB3 = minB3.Min(t3)
+				maxB3 = maxB3.Max(t3)
+				sumB3 = sumB3.Add(t3)
+			}
+		}
+		if sumB0.Add(sumB1).Add(sumB2.Add(sumB3)).IsNaN().ToBits() != 0 {
+			archsimd.ClearAVXUpperBits()
+			return boundsFloat64Merge(data)
+		}
+		minB0 = minB0.Min(minB1).Min(minB2.Min(minB3))
+		maxB0 = maxB0.Max(maxB1).Max(maxB2.Max(maxB3))
+		minH := minB0.GetLo().Min(minB0.GetHi())
+		maxH := maxB0.GetLo().Max(maxB0.GetHi())
+		minQ := minH.GetLo().Min(minH.GetHi())
+		maxQ := maxH.GetLo().Max(maxH.GetHi())
+		min = reduceMinFloat64x2(minQ)
+		max = reduceMaxFloat64x2(maxQ)
+		archsimd.ClearAVXUpperBits()
+		return min, max
 	case archsimd.X86.AVX512() && len(d) >= 16:
 		minA0 := archsimd.BroadcastFloat64x8(data[0])
 		minA1 := minA0
