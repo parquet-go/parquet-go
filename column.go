@@ -442,15 +442,17 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 			// the page headers to determine which compression and encodings are
 			// applied.
 			for _, encoding := range c.chunks[0].MetaData.Encoding {
-				// BIT_PACKED appears in the encodings list when the
-				// deprecated bit-packed encoding was used for repetition
-				// or definition levels. Encodings.md: "Note that the
-				// BIT_PACKED encoding method is only supported for
-				// encoding repetition and definition levels." It is never
-				// a data page encoding, so it must not be reported as the
-				// column encoding (it would make schemas derived from
-				// this file unwritable).
-				if encoding == format.BitPacked {
+				// The metadata lists every encoding used by the column chunk,
+				// including the RLE (or legacy BIT_PACKED) encoding of the
+				// repetition and definition levels. Level encodings are not
+				// data page encodings and must not be reported as the column
+				// encoding: doing so makes schemas derived from this file
+				// unwritable ("encoding not supported for type ..."), e.g. RLE
+				// cannot encode INT64. RLE is however also a valid data page
+				// encoding for BOOLEAN columns, so it cannot be skipped
+				// unconditionally; skip any encoding that cannot encode this
+				// column's physical type instead.
+				if !canEncode(LookupEncoding(encoding), c.typ.Kind()) {
 					continue
 				}
 				if c.encoding == nil {
