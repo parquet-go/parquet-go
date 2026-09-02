@@ -652,3 +652,55 @@ func TestOpenFileColumnEncodingSkipsBitPacked(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestOpenFileColumnEncodingSkipsRLE verifies that RLE is never reported as
+// the encoding of a non-BOOLEAN column. RLE is used for repetition and
+// definition levels, and as a data page encoding for BOOLEAN columns; for any
+// other type it cannot encode values, so reporting it as the column encoding
+// makes schemas derived from the file unwritable
+// ("encoding not supported for type ...").
+func TestOpenFileColumnEncodingSkipsRLE(t *testing.T) {
+	f, err := os.Open("testdata/binary.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf, err := parquet.OpenFile(f, st.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The test file must actually list RLE alongside a data page encoding for
+	// a non-boolean column, otherwise this test asserts nothing.
+	hasRLE := false
+	for _, chunk := range pf.Metadata().RowGroups[0].Columns {
+		if chunk.MetaData.Type == format.Boolean {
+			continue
+		}
+		for _, enc := range chunk.MetaData.Encoding {
+			hasRLE = hasRLE || enc == format.RLE
+		}
+	}
+	if !hasRLE {
+		t.Fatal("test file does not use RLE level encoding for a non-boolean column")
+	}
+
+	err = forEachLeafColumn(pf.Root(), func(leaf *parquet.Column) error {
+		// RLE is a valid data page encoding for BOOLEAN, so boolean columns
+		// may legitimately report it.
+		if leaf.Type().Kind() == parquet.Boolean {
+			return nil
+		}
+		if enc := leaf.Encoding(); enc != nil && enc.Encoding() == format.RLE {
+			t.Errorf("column %q reports RLE as its encoding", leaf.Name())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
