@@ -188,6 +188,10 @@ type rowGroupRows struct {
 	columns  []columnChunkRows
 	closed   bool
 	rowIndex int64
+	// detached flags columns which are read by an external columnar reader
+	// (see listColumnReader): those columns are skipped entirely when
+	// reading rows, and contribute no values to the returned Row slices.
+	detached []bool
 }
 
 type columnChunkRows struct {
@@ -208,14 +212,26 @@ func NewRowGroupRowReader(rowGroup RowGroup) Rows {
 }
 
 func newRowGroupRows(schema *Schema, columns []ColumnChunk, bufferSize int) *rowGroupRows {
+	return newRowGroupRowsDetached(schema, columns, bufferSize, nil)
+}
+
+// newRowGroupRowsDetached is like newRowGroupRows, but marks the columns
+// flagged in detached as being read by an external columnar reader: those
+// columns are not read (their pages are not even opened) and contribute no
+// values to the rows returned by ReadRows.
+func newRowGroupRowsDetached(schema *Schema, columns []ColumnChunk, bufferSize int, detached []bool) *rowGroupRows {
 	r := &rowGroupRows{
 		schema:   schema,
 		bufsize:  bufferSize,
 		buffers:  make([]Value, len(columns)*bufferSize),
 		columns:  make([]columnChunkRows, len(columns)),
 		rowIndex: -1,
+		detached: detached,
 	}
 	for i, column := range columns {
+		if detached != nil && detached[i] {
+			continue
+		}
 		switch column.Type().Kind() {
 		case ByteArray, FixedLenByteArray:
 			// (@mdisibio) - If the column can contain pointers, then we must not repool
@@ -242,6 +258,9 @@ func (r *rowGroupRows) clear() {
 
 func (r *rowGroupRows) Reset() {
 	for i := range r.columns {
+		if r.detached != nil && r.detached[i] {
+			continue
+		}
 		r.columns[i].reader.Reset()
 	}
 	r.clear()
@@ -268,6 +287,9 @@ func (r *rowGroupRows) SeekToRow(rowIndex int64) error {
 	}
 	if rowIndex != r.rowIndex {
 		for i := range r.columns {
+			if r.detached != nil && r.detached[i] {
+				continue
+			}
 			if err := r.columns[i].reader.SeekToRow(rowIndex); err != nil {
 				return err
 			}
@@ -297,18 +319,21 @@ func (r *rowGroupRows) ReadRows(rows []Row) (int, error) {
 	eofCount := 0
 	rowCount := 0
 
+	for rowIndex := range rows {
+		rows[rowIndex] = rows[rowIndex][:0]
+	}
+
 readColumnValues:
 	for columnIndex := range r.columns {
+		if r.detached != nil && r.detached[columnIndex] {
+			continue
+		}
 		c := &r.columns[columnIndex]
 		b := r.buffer(columnIndex)
 		eof := false
 
 		for rowIndex := range rows {
 			numValuesInRow := 1
-
-			if columnIndex == 0 {
-				rows[rowIndex] = rows[rowIndex][:0]
-			}
 
 			for {
 				if c.offset == c.length {

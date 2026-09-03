@@ -94,11 +94,22 @@ func (row Row) Equal(other Row) bool {
 }
 
 // Range calls f for each column of row.
+//
+// Columns are numbered sequentially, but jump ahead to the column index
+// carried by the values themselves when it is greater: rows which do not
+// hold values for all columns (for example rows produced by readers which
+// read some columns outside of the row pipeline) only invoke f for the
+// columns present in the row. Values without a column index (e.g. rows
+// assembled by hand) keep being attributed to sequential column numbers.
 func (row Row) Range(f func(columnIndex int, columnValues []Value) bool) {
 	columnIndex := 0
 
 	for i := 0; i < len(row); {
 		j := i + 1
+
+		if k := int(^row[i].columnIndex); k > columnIndex && k < int(^uint16(0)) {
+			columnIndex = k
+		}
 
 		for j < len(row) && row[j].columnIndex == ^uint16(columnIndex) {
 			j++
