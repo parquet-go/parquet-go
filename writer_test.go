@@ -26,6 +26,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/bloom"
 	"github.com/parquet-go/parquet-go/compress"
+	"github.com/parquet-go/parquet-go/compress/lz4"
 	"github.com/parquet-go/parquet-go/compress/zstd"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
@@ -36,6 +37,36 @@ const (
 	v1 = 1
 	v2 = 2
 )
+
+func TestLZ4RoundTrip(t *testing.T) {
+	type row struct {
+		Value []byte
+	}
+	// Modest compression makes LZ4's output size estimate exceed the page buffer.
+	value := make([]byte, 64<<10)
+	rand.New(rand.NewSource(0)).Read(value[:48<<10])
+	copy(value[48<<10:], value[:16<<10])
+	rows := []row{{Value: value}}
+
+	for _, version := range []int{v1, v2} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := parquet.Write(&buf, rows,
+				parquet.Compression(&lz4.Codec{Level: lz4.Level1}),
+				parquet.DataPageVersion(version),
+			); err != nil {
+				t.Fatal(err)
+			}
+			got, err := parquet.Read[row](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || !bytes.Equal(got[0].Value, value) {
+				t.Fatal("rows differ after LZ4 round trip")
+			}
+		})
+	}
+}
 
 func BenchmarkGenericWriter(b *testing.B) {
 	benchmarkGenericWriter[benchmarkRowType](b)
