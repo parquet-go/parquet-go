@@ -527,6 +527,92 @@ func TestWriteRowGroupReencodeMatchesRowPath(t *testing.T) {
 	}
 }
 
+type copyTestRepeatedRow struct {
+	Tags []string `parquet:"tags,plain"`
+	ID   int64    `parquet:"id"`
+}
+
+func makeCopyTestRepeatedRows(n int) []copyTestRepeatedRow {
+	rows := make([]copyTestRepeatedRow, n)
+	for i := range rows {
+		// Varying list length forces rows to straddle both the read buffer and page boundaries.
+		tags := make([]string, 1+i%7)
+
+		for j := range tags {
+			tags[j] = fmt.Sprintf("tag-%d-%d", i, j)
+		}
+
+		rows[i] = copyTestRepeatedRow{ID: int64(i), Tags: tags}
+	}
+
+	return rows
+}
+
+// TestWriteRowGroupReencodeRepeatedColumnValues checks that pending byte-array
+// values from a repeated column aren't corrupted when they straddle page boundaries.
+func TestWriteRowGroupReencodeRepeatedColumnValues(t *testing.T) {
+	rows := makeCopyTestRepeatedRows(5000)
+
+	var srcBuf bytes.Buffer
+
+	sw := NewGenericWriter[copyTestRepeatedRow](&srcBuf, Compression(&Snappy), PageBufferSize(512))
+	if _, err := sw.Write(rows); err != nil {
+		t.Fatalf("writing source rows: %v", err)
+	}
+
+	if err := sw.Close(); err != nil {
+		t.Fatalf("closing source writer: %v", err)
+	}
+
+	src, err := OpenFile(bytes.NewReader(srcBuf.Bytes()), int64(srcBuf.Len()))
+	if err != nil {
+		t.Fatalf("opening source file: %v", err)
+	}
+
+	defer func(prev bool) { disableWriteReencode = prev }(disableWriteReencode)
+	disableWriteReencode = false
+
+	var dst bytes.Buffer
+
+	// Codec differs from source (Snappy -> Zstd) so L0 cannot fire.
+	w := NewGenericWriter[copyTestRepeatedRow](&dst, Compression(&Zstd), PageBufferSize(512))
+
+	before := reencodePathCounter.Load()
+	for _, rg := range src.RowGroups() {
+		if _, writeErr := w.WriteRowGroup(rg); writeErr != nil {
+			t.Fatalf("WriteRowGroup: %v", writeErr)
+		}
+	}
+
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	if reencodePathCounter.Load() == before {
+		t.Fatal("expected the L3 re-encode path to fire")
+	}
+
+	r := NewGenericReader[copyTestRepeatedRow](bytes.NewReader(dst.Bytes()))
+	defer func() { _ = r.Close() }()
+
+	got := make([]copyTestRepeatedRow, len(rows))
+	read := 0
+
+	for read < len(got) {
+		n, readErr := r.Read(got[read:])
+		read += n
+		if readErr != nil {
+			break
+		}
+	}
+
+	got = got[:read]
+
+	if !reflect.DeepEqual(got, rows) {
+		t.Fatal("L3 re-encoded repeated-column output differs from source data")
+	}
+}
+
 // BenchmarkWriteRowGroupReencodePaths compares the L3 column-oriented re-encode
 // against the row-oriented fallback. The codec differs from the source (Snappy)
 // so L0 cannot fire. The "uncompressed" dest isolates the row round-trip cost
