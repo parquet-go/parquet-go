@@ -711,20 +711,15 @@ func schemaRepetitionTypeOf(s *format.SchemaElement) format.FieldRepetitionType 
 
 func (c *Column) decompress(compressedPageData []byte, uncompressedPageSize int32) (page *buffer[byte], err error) {
 	page = buffers.get(int(uncompressedPageSize))
-	pageData := page.data.Slice()
-	decoded, err := c.compression.Decode(pageData, compressedPageData)
+	decoded, err := c.compression.Decode(page.data.Slice(), compressedPageData)
 	switch {
 	case err != nil:
 		page.unref()
 		page = nil
-	case len(decoded) == 0:
-		page.data.Resize(0)
-	case len(pageData) == 0 || &decoded[0] != &pageData[0]:
-		// Decode may reallocate even when the output length matches the page size.
-		page.data.Reset()
-		page.data = memory.SliceBufferFrom(decoded)
-	default:
+	case len(decoded) < int(uncompressedPageSize):
 		page.data.Resize(len(decoded))
+	case len(decoded) > int(uncompressedPageSize):
+		page.data = memory.SliceBufferFrom(decoded)
 	}
 	return page, err
 }
