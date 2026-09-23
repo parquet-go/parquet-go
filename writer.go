@@ -73,8 +73,6 @@ type GenericWriter[T any] struct {
 	// the NewGenericWriter function based on the type T and the underlying
 	// schema of the parquet file.
 	write writeFunc[T]
-	// This field is used to leverage the optimized writeRowsFunc algorithms.
-	columns []ColumnBuffer
 }
 
 // NewGenericWriter is like NewWriter but returns a GenericWriter[T] suited to
@@ -127,7 +125,7 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 	var writeFn writeFunc[T]
 	switch {
 	case genWriteErr != nil:
-		writeFn = func(*GenericWriter[T], []T) (int, error) { return 0, genWriteErr }
+		writeFn = func(*ConcurrentRowGroupWriter, []T) (int, error) { return 0, genWriteErr }
 	case schemaFromType == config.Schema || (schemaFromType != nil && EqualNodes(config.Schema, schemaFromType)):
 		// The schema matches the type T, we can use the optimized
 		// writeRowsFunc algorithms mapping Go values directly to
@@ -196,13 +194,13 @@ func validateColumns(t reflect.Type) (string, bool) {
 	return "", true
 }
 
-type writeFunc[T any] func(*GenericWriter[T], []T) (int, error)
+type writeFunc[T any] func(*ConcurrentRowGroupWriter, []T) (int, error)
 
 func makeWriteFunc[T any](t reflect.Type, writeRows writeRowsFunc) writeFunc[T] {
-	return func(w *GenericWriter[T], rows []T) (n int, err error) {
-		if w.columns == nil {
-			w.columns = make([]ColumnBuffer, len(w.base.writer.currentRowGroup.columns))
-			for i, c := range w.base.writer.currentRowGroup.columns {
+	return func(rg *ConcurrentRowGroupWriter, rows []T) (n int, err error) {
+		if rg.columnBuffers == nil {
+			rg.columnBuffers = make([]ColumnBuffer, len(rg.columns))
+			for i, c := range rg.columns {
 				// These fields are usually lazily initialized when writing rows,
 				// we need them to exist now tho.
 				c.columnBuffer = c.newColumnBuffer()
@@ -210,7 +208,7 @@ func makeWriteFunc[T any](t reflect.Type, writeRows writeRowsFunc) writeFunc[T] 
 				// restored when the row group is flushed after a fallback to PLAIN
 				// switched the column to a different buffer.
 				c.originalColumnBuffer = c.columnBuffer
-				w.columns[i] = c.columnBuffer
+				rg.columnBuffers[i] = c.columnBuffer
 			}
 		} else {
 			// The column buffers may have been replaced since the previous call:
@@ -218,11 +216,11 @@ func makeWriteFunc[T any](t reflect.Type, writeRows writeRowsFunc) writeFunc[T] 
 			// swapped for a PLAIN-encoded one (fallbackDictionaryToPlain), and
 			// flushing a row group restores the original buffer. Re-resolve the
 			// cached references so rows are not written into abandoned buffers.
-			for i, c := range w.base.writer.currentRowGroup.columns {
-				w.columns[i] = c.columnBuffer
+			for i, c := range rg.columns {
+				rg.columnBuffers[i] = c.columnBuffer
 			}
 		}
-		writeRows(w.columns, columnLevels{}, makeArrayFromSlice(rows))
+		writeRows(rg.columnBuffers, columnLevels{}, makeArrayFromSlice(rows))
 		return len(rows), nil
 	}
 }
@@ -253,16 +251,14 @@ func (w *GenericWriter[T]) Write(rows []T) (written int, err error) {
 	currentRowGroup := w.base.writer.currentRowGroup
 	for len(rows) > 0 {
 		n, err = currentRowGroup.writeRows(len(rows), func(i, j int) (int, error) {
-			n, err := w.write(w, rows[i:j:j])
+			n, err := w.write(currentRowGroup, rows[i:j:j])
 			if err != nil {
 				return n, err
 			}
 
 			for _, c := range currentRowGroup.columns {
-				if c.columnBuffer != nil && c.columnBuffer.Size() >= int64(c.bufferSize) {
-					if err := c.Flush(); err != nil {
-						return n, err
-					}
+				if err := c.flushIfFull(); err != nil {
+					return n, err
 				}
 			}
 
@@ -343,6 +339,11 @@ type ConcurrentRowGroupWriter struct {
 	columnChunk []format.ColumnChunk
 	columnIndex []format.ColumnIndex
 	offsetIndex []format.OffsetIndex
+
+	// Holds the column buffers that the typed write path writes into. It belongs
+	// to the row group rather than the writer so that two goroutines writing two
+	// row groups never share it.
+	columnBuffers []ColumnBuffer
 }
 
 // BeginRowGroup returns a new ConcurrentRowGroupWriter that can be written to in parallel with
@@ -372,6 +373,49 @@ type ConcurrentRowGroupWriter struct {
 //	return writer.Close()
 func (w *GenericWriter[T]) BeginRowGroup() *ConcurrentRowGroupWriter {
 	return newConcurrentRowGroupWriter(w.base.writer, w.base.config)
+}
+
+// GenericConcurrentRowGroupWriter is a ConcurrentRowGroupWriter that also
+// accepts rows of type T, mapping their fields directly to parquet columns the
+// way GenericWriter[T].Write does. The embedded ConcurrentRowGroupWriter
+// supplies the rest of the row group API, including Commit.
+type GenericConcurrentRowGroupWriter[T any] struct {
+	*ConcurrentRowGroupWriter
+	base *GenericWriter[T]
+}
+
+// BeginGenericRowGroup returns a new GenericConcurrentRowGroupWriter that can
+// be written to in parallel with other row groups. It behaves like
+// BeginRowGroup, except that the row group it returns also accepts rows of
+// type T.
+func (w *GenericWriter[T]) BeginGenericRowGroup() *GenericConcurrentRowGroupWriter[T] {
+	return &GenericConcurrentRowGroupWriter[T]{
+		ConcurrentRowGroupWriter: w.BeginRowGroup(),
+		base:                     w,
+	}
+}
+
+// Write writes rows of type T to the row group, returning the number of rows
+// written.
+//
+// The row group belongs to the caller, so unlike GenericWriter.Write this does
+// not flush the writer and open a new row group when the row limit is reached;
+// it returns ErrTooManyRowGroups, as ConcurrentRowGroupWriter.WriteRows does.
+func (rg *GenericConcurrentRowGroupWriter[T]) Write(rows []T) (int, error) {
+	return rg.writeRows(len(rows), func(i, j int) (int, error) {
+		n, err := rg.base.write(rg.ConcurrentRowGroupWriter, rows[i:j:j])
+		if err != nil {
+			return n, err
+		}
+
+		for _, c := range rg.columns {
+			if err := c.flushIfFull(); err != nil {
+				return n, err
+			}
+		}
+
+		return n, nil
+	})
 }
 
 var (
@@ -2121,6 +2165,16 @@ func (c *ColumnWriter) Flush() (err error) {
 	return err
 }
 
+// flushIfFull writes the buffered page out once it reaches the configured page
+// buffer size. The typed write paths fill the column buffer directly, so they
+// have to make this check themselves.
+func (c *ColumnWriter) flushIfFull() error {
+	if c.columnBuffer == nil || c.columnBuffer.Size() < int64(c.bufferSize) {
+		return nil
+	}
+	return c.Flush()
+}
+
 func (c *ColumnWriter) flushFilterPages() (err error) {
 	if c.columnFilter == nil {
 		return nil
@@ -2321,10 +2375,7 @@ func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
 		return 0, err
 	}
 	numRows := int(int64(c.columnBuffer.Len()) - startingRows)
-	if c.columnBuffer.Size() >= int64(c.bufferSize) {
-		return numRows, c.Flush()
-	}
-	return numRows, nil
+	return numRows, c.flushIfFull()
 }
 
 // Close closes the column writer and resets all dependent resources.

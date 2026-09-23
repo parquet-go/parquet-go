@@ -2939,6 +2939,123 @@ func TestConcurrentRowGroupWriterWithColumnWriters(t *testing.T) {
 	})
 }
 
+func TestGenericConcurrentRowGroupWriterWrite(t *testing.T) {
+	type Row struct {
+		ID   int    `parquet:"id"`
+		Name string `parquet:"name"`
+	}
+
+	readRows := func(t *testing.T, buf *bytes.Buffer, count int) []Row {
+		t.Helper()
+		reader := parquet.NewGenericReader[Row](bytes.NewReader(buf.Bytes()))
+		defer reader.Close()
+
+		rows := make([]Row, count)
+		n, err := reader.Read(rows)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n != count {
+			t.Fatalf("expected to read %d rows, got %d", count, n)
+		}
+		return rows
+	}
+
+	t.Run("parallel row groups", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf)
+
+		const numGroups = 3
+		rgs := make([]*parquet.GenericConcurrentRowGroupWriter[Row], numGroups)
+		for i := range rgs {
+			rgs[i] = writer.BeginGenericRowGroup()
+		}
+
+		// Write to them in parallel
+		var wg sync.WaitGroup
+		for i := range rgs {
+			wg.Add(1)
+			go func(index int, rg *parquet.GenericConcurrentRowGroupWriter[Row]) {
+				defer wg.Done()
+
+				startID := index * 2
+				rows := []Row{
+					{ID: startID, Name: fmt.Sprintf("Name%d", startID)},
+					{ID: startID + 1, Name: fmt.Sprintf("Name%d", startID+1)},
+				}
+				if n, err := rg.Write(rows); err != nil {
+					t.Errorf("error writing rows: %v", err)
+				} else if n != len(rows) {
+					t.Errorf("expected to write %d rows, got %d", len(rows), n)
+				}
+			}(i, rgs[i])
+		}
+		wg.Wait()
+
+		// Commit in order
+		for _, rg := range rgs {
+			if _, err := rg.Commit(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Row groups land in commit order.
+		expected := []Row{
+			{ID: 0, Name: "Name0"},
+			{ID: 1, Name: "Name1"},
+			{ID: 2, Name: "Name2"},
+			{ID: 3, Name: "Name3"},
+			{ID: 4, Name: "Name4"},
+			{ID: 5, Name: "Name5"},
+		}
+		if got := readRows(t, buf, len(expected)); !reflect.DeepEqual(got, expected) {
+			t.Fatalf("expected %+v, got %+v", expected, got)
+		}
+	})
+
+	t.Run("interleaved row groups", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf)
+
+		first, second := writer.BeginGenericRowGroup(), writer.BeginGenericRowGroup()
+
+		// Alternate between the two row groups so that rows written to one would
+		// show up in the other if they shared their column buffers.
+		var firstRows, secondRows []Row
+		for i := range 8 {
+			row := Row{ID: i, Name: fmt.Sprintf("Name%d", i)}
+			rg, written := first, &firstRows
+			if i%2 == 1 {
+				rg, written = second, &secondRows
+			}
+			if _, err := rg.Write([]Row{row}); err != nil {
+				t.Fatal(err)
+			}
+			*written = append(*written, row)
+		}
+
+		// The file holds whole row groups in commit order, so every row of the
+		// first row group precedes every row of the second.
+		expected := append(firstRows, secondRows...)
+
+		for _, rg := range []*parquet.GenericConcurrentRowGroupWriter[Row]{first, second} {
+			if _, err := rg.Commit(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := readRows(t, buf, len(expected)); !reflect.DeepEqual(got, expected) {
+			t.Fatalf("expected %+v, got %+v", expected, got)
+		}
+	})
+}
+
 func TestDictionaryMaxBytes(t *testing.T) {
 	// Test that dictionary encoding switches to PLAIN when size limit is exceeded
 	type Record struct {

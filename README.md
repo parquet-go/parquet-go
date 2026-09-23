@@ -663,6 +663,41 @@ wg.Wait()
 
 This approach can significantly reduce the time required to write wide tables or large datasets, especially on multi-core systems. However, you should ensure proper error handling and synchronization, as shown above.
 
+#### E. Parallel Row Group Writes
+
+Where parallel column writes split a single row group across goroutines by column, a writer can instead hand out a row group per goroutine, each taking whole rows. Because the row groups share no column state, no coordination is needed between the goroutines while they write; they only have to be committed serially afterwards, which is what fixes their order in the file.
+
+`BeginGenericRowGroup` returns a row group that accepts values of the writer's row type, converted the same way `GenericWriter.Write` converts them, so the application does not have to build `parquet.Value` itself or keep row counts aligned across columns.
+
+Example:
+
+```go
+writer := parquet.NewGenericWriter[RowType](output)
+
+var wg sync.WaitGroup
+rgs := make([]*parquet.GenericConcurrentRowGroupWriter[RowType], runtime.GOMAXPROCS(0))
+errs := make([]error, len(rgs))
+for i := range rgs {
+    rgs[i] = writer.BeginGenericRowGroup()
+    wg.Add(1)
+    go func(i int, rg *parquet.GenericConcurrentRowGroupWriter[RowType]) {
+        defer wg.Done()
+        _, errs[i] = rg.Write(rowsFor(i)) // rowsFor(i) is []RowType
+    }(i, rgs[i])
+}
+wg.Wait()
+// Check errs before committing.
+
+for _, rg := range rgs {
+    if _, err := rg.Commit(); err != nil {
+        return err
+    }
+}
+return writer.Close()
+```
+
+Row groups that are handed out but never written to produce no output, so a writer can begin one per goroutine without knowing in advance which of them will receive rows.
+
 ### SIMD Acceleration with GOAMD64 and GOEXPERIMENT=simd
 
 On amd64, performance-critical kernels of this library (bloom filters, byte
