@@ -1349,7 +1349,6 @@ func (f *FilePages) readDictionary() error {
 		}
 		page = buffers.get(len(bodyPlain))
 		copy(page.data.Slice(), bodyPlain)
-		page.ref()
 	} else {
 		decoder := thrift.NewDecoder(f.protocol.NewReader(rbuf))
 		if err := decoder.Decode(header); err != nil {
@@ -1359,7 +1358,6 @@ func (f *FilePages) readDictionary() error {
 			return err
 		}
 		page = buffers.get(int(header.CompressedPageSize))
-		page.ref()
 		if _, err := io.ReadFull(rbuf, page.data.Slice()); err != nil {
 			page.unref()
 			return err
@@ -1536,7 +1534,6 @@ func (f *FilePages) readEncryptedPage() (*format.PageHeader, *buffer[byte], erro
 
 	page := buffers.get(len(bodyPlain))
 	copy(page.data.Slice(), bodyPlain)
-	page.ref()
 
 	if isDictPage {
 		d.dictPagePending = false
