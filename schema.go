@@ -93,6 +93,11 @@ func (v *onceValue[T]) load(f func() *T) *T {
 // values describe the options, with the first one defining the name of the
 // parquet column.
 //
+// UUID values from github.com/google/uuid are mapped to the UUID logical type.
+// With Go 1.27 or later, standard library uuid.UUID values are also mapped to
+// UUID. Pointers to either type produce optional UUID columns. No uuid tag is
+// needed for these types.
+//
 // The following options are also supported in the "parquet" struct tag:
 //
 //	optional     | make the parquet column optional (any type)
@@ -687,6 +692,10 @@ func nodeOf(path []string, t reflect.Type, tags parquetTags, tagReplacements []S
 		return UUID()
 	case reflect.TypeFor[time.Time]():
 		return Timestamp(Nanosecond)
+	default:
+		if isStdlibUUID(t) {
+			return UUID()
+		}
 	}
 
 	var n Node
