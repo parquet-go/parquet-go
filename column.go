@@ -450,7 +450,9 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 				// a data page encoding, so it must not be reported as the
 				// column encoding (it would make schemas derived from
 				// this file unwritable).
-				if encoding == format.BitPacked {
+				// RLE is likewise only valid for levels or as part of
+				// RLE_DICTIONARY, never as a column's value encoding.
+				if encoding == format.BitPacked || encoding == format.RLE {
 					continue
 				}
 				if c.encoding == nil {
