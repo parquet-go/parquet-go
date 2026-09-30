@@ -344,7 +344,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 // this case the page index is not cached within the file, programs are expected
 // to make use of independently from the parquet package.
 func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, error) {
-	if len(f.metadata.RowGroups) == 0 {
+	if len(f.metadata.RowGroups) == 0 || len(f.metadata.RowGroups[0].Columns) == 0 {
 		return nil, nil, nil
 	}
 
