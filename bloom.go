@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 	"sync"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -193,8 +194,40 @@ func SplitBlockFilter(bitsPerValue uint, path ...string) BloomFilterColumn {
 	}
 }
 
+// FoldingSplitBlockFilter constructs a split block bloom filter object for the
+// column at the given path which is shrunk to fit the values it contains when
+// the row group is flushed.
+//
+// The filter is first allocated like SplitBlockFilter, with enough bits per
+// value to reach targetFPP if every value is distinct and rounded up to a power
+// of two number of blocks. Once all values of the row group have been inserted,
+// the filter is folded in half for as long as its false positive rate remains
+// at or below targetFPP. This produces small filters for columns with few
+// distinct values without requiring an estimate of their number ahead of time.
+//
+// Dictionary-encoded columns know their exact number of distinct values, so
+// their filter is sized like SplitBlockFilter without rounding, and is only
+// folded while its number of blocks is even.
+//
+// Folded filters are standard split block bloom filters, readers do not need
+// any special support to use them.
+//
+// If you are unsure which targetFPP to use, 0.01 is a reasonable default. The
+// function panics if targetFPP is not between zero and one, exclusive.
+func FoldingSplitBlockFilter(targetFPP float64, path ...string) BloomFilterColumn {
+	if !(targetFPP > 0 && targetFPP < 1) {
+		panic(fmt.Sprintf("bloom filter target false positive rate must be between 0 and 1, got %g", targetFPP))
+	}
+	return splitBlockFilter{
+		bitsPerValue: bloom.BitsPerValueOf(targetFPP),
+		targetFPP:    targetFPP,
+		path:         path,
+	}
+}
+
 type splitBlockFilter struct {
 	bitsPerValue uint
+	targetFPP    float64
 	path         []string
 }
 
@@ -203,7 +236,54 @@ func (f splitBlockFilter) Hash() bloom.Hash            { return bloom.XXH64{} }
 func (f splitBlockFilter) Encoding() encoding.Encoding { return splitBlockEncoding{} }
 
 func (f splitBlockFilter) Size(numValues int64) int {
+	size := f.distinctSize(numValues)
+	if f.folding() && size > bloom.BlockSize {
+		// Folding stops at the first odd number of blocks.
+		size = bloom.BlockSize << bits.Len(uint(size/bloom.BlockSize-1))
+	}
+	return size
+}
+
+// distinctSize is like Size but for a count of distinct values, such as the
+// length of a dictionary. The filter is then already sized for its contents,
+// so rounding it up to give folding more room would only make it larger.
+func (f splitBlockFilter) distinctSize(numValues int64) int {
 	return bloom.BlockSize * bloom.NumSplitBlocksOf(numValues, f.bitsPerValue)
+}
+
+func (f splitBlockFilter) folding() bool { return f.targetFPP > 0 }
+
+// foldingFilter returns f as a splitBlockFilter if it was configured to fold.
+func foldingFilter(f BloomFilterColumn) (splitBlockFilter, bool) {
+	s, ok := f.(splitBlockFilter)
+	return s, ok && s.folding()
+}
+
+// fold shrinks the filter to the smallest size which keeps its false positive
+// rate within the target, returning a slice that shares the memory of filter.
+func (f splitBlockFilter) fold(filter []byte) []byte {
+	folded := bloom.MakeSplitBlockFilter(filter).FoldTo(f.targetFPP)
+	// Re-slice rather than using folded.Bytes() to retain the capacity of the
+	// buffer, which the column writer reuses for the next row group.
+	return filter[:len(folded)*bloom.BlockSize]
+}
+
+// isFoldOf reports whether filter is what fold produces from a filter of size
+// bytes holding the same values, which allows copying it verbatim. The content
+// of filter is modified.
+//
+// A filter folded down to n bytes is identical to a filter built with n bytes,
+// so filter is one of the sizes that fold passes through when size/n is a power
+// of two. Folding never decreases the false positive rate, so fold reaches n if
+// it was within the target, and stops there if it cannot fold any further.
+func (f splitBlockFilter) isFoldOf(size int, filter []byte) bool {
+	n := len(filter)
+	if n == 0 || n%bloom.BlockSize != 0 || size%n != 0 || bits.OnesCount(uint(size/n)) != 1 {
+		return false
+	}
+	b := bloom.MakeSplitBlockFilter(filter)
+	reached := n == size || b.FalsePositiveRate() <= f.targetFPP
+	return reached && len(b.FoldTo(f.targetFPP)) == len(b)
 }
 
 // Creates a header from the given bloom filter and compression codec.

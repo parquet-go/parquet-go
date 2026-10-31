@@ -446,6 +446,101 @@ func TestBloomFilterMatchesWhenLoadedOnOpenOrLazyLoad(t *testing.T) {
 	}
 }
 
+func TestFoldingSplitBlockFilter(t *testing.T) {
+	type Row struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name,dict"`
+	}
+
+	const numRows = 20_000
+	const numDistinct = 100
+	const numRowsPerRowGroup = 5_000
+
+	rows := make([]Row, numRows)
+	for i := range rows {
+		rows[i] = Row{ID: int64(i % numDistinct), Name: fmt.Sprintf("name-%d", i%numDistinct)}
+	}
+
+	write := func(filters ...parquet.BloomFilterColumn) *parquet.File {
+		t.Helper()
+		buf := new(bytes.Buffer)
+		w := parquet.NewGenericWriter[Row](buf,
+			parquet.BloomFilters(filters...),
+			parquet.MaxRowsPerRowGroup(numRowsPerRowGroup),
+		)
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	unfolded := write(
+		parquet.SplitBlockFilter(16, "id"),
+		parquet.SplitBlockFilter(16, "name"),
+	)
+	folded := write(
+		parquet.FoldingSplitBlockFilter(0.01, "id"),
+		parquet.FoldingSplitBlockFilter(0.01, "name"),
+	)
+
+	if n := len(folded.RowGroups()); n != numRows/numRowsPerRowGroup {
+		t.Fatalf("wrong number of row groups: want=%d got=%d", numRows/numRowsPerRowGroup, n)
+	}
+
+	for i, rowGroup := range folded.RowGroups() {
+		for j, chunk := range rowGroup.ColumnChunks() {
+			bf := chunk.BloomFilter()
+			if bf == nil {
+				t.Fatalf("row group %d column %d: missing bloom filter", i, j)
+			}
+			unfoldedSize := unfolded.RowGroups()[i].ColumnChunks()[j].BloomFilter().Size()
+			if j == 0 && bf.Size() >= unfoldedSize {
+				// The plain column is sized by its number of values rather than
+				// its number of distinct values, folding must shrink it.
+				t.Errorf("row group %d column %d: folded filter is not smaller: %d >= %d", i, j, bf.Size(), unfoldedSize)
+			}
+			if j == 1 && bf.Size() > unfoldedSize {
+				// The dictionary column is sized by its number of distinct
+				// values, which must not be rounded up.
+				t.Errorf("row group %d column %d: folded filter is larger: %d > %d", i, j, bf.Size(), unfoldedSize)
+			}
+
+			for k := range numDistinct {
+				v := parquet.ValueOf(int64(k))
+				if j == 1 {
+					v = parquet.ValueOf(fmt.Sprintf("name-%d", k))
+				}
+				if ok, err := bf.Check(v); err != nil {
+					t.Fatal(err)
+				} else if !ok {
+					t.Fatalf("row group %d column %d: folded filter does not contain %v", i, j, v)
+				}
+			}
+
+			falsePositives := 0
+			for k := range 10_000 {
+				v := parquet.ValueOf(int64(numDistinct + k))
+				if j == 1 {
+					v = parquet.ValueOf(fmt.Sprintf("other-%d", k))
+				}
+				if ok, _ := bf.Check(v); ok {
+					falsePositives++
+				}
+			}
+			if r := float64(falsePositives) / 10_000; r > 0.02 {
+				t.Errorf("row group %d column %d: folded filter triggered too many false positives: %g%%", i, j, r*100)
+			}
+		}
+	}
+}
+
 func TestIssue229(t *testing.T) {
 	// https://github.com/grafana/tempo/blob/5cae77c9cf8da51e0db7c5556b19d305130ea9c4/tempodb/encoding/vparquet2/schema.go
 	type Attribute struct {
