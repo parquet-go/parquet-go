@@ -3,6 +3,7 @@ package bloom_test
 import (
 	"bytes"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/bloom"
@@ -90,6 +91,124 @@ func TestSplitBlockFilterBug1(t *testing.T) {
 	f.InsertBulk(h[:])
 	if !f.Check(h[0]) {
 		t.Error("value inserted in the filter was not found")
+	}
+}
+
+func TestSplitBlockFilterFold(t *testing.T) {
+	const N = 1000
+	p := rand.New(rand.NewSource(1))
+	x := make([]uint64, N)
+	for i := range x {
+		x[i] = p.Uint64()
+	}
+
+	// Folding must produce exactly the filter that inserting the same values
+	// into a filter of the folded size would have.
+	f := make(bloom.SplitBlockFilter, 256)
+	f.InsertBulk(x)
+	for numBlocks := 128; numBlocks >= 1; numBlocks /= 2 {
+		f = f.Fold()
+		want := make(bloom.SplitBlockFilter, numBlocks)
+		want.InsertBulk(x)
+		if !bytes.Equal(f.Bytes(), want.Bytes()) {
+			t.Fatalf("filter folded to %d blocks differs from a filter of %d blocks", len(f), numBlocks)
+		}
+		for i, v := range x {
+			if !f.Check(v) {
+				t.Fatalf("filter folded to %d blocks does not contain the value #%d that was inserted: %d", len(f), i, v)
+			}
+		}
+	}
+
+	t.Run("odd", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("folding a filter with an odd number of blocks did not panic")
+			}
+		}()
+		make(bloom.SplitBlockFilter, 3).Fold()
+	})
+}
+
+func TestSplitBlockFilterFoldTo(t *testing.T) {
+	const N = 1000
+	const maxFalsePositiveRate = 0.01
+	p := rand.New(rand.NewSource(2))
+	x := make([]uint64, N)
+	for i := range x {
+		x[i] = p.Uint64()
+	}
+
+	f := make(bloom.SplitBlockFilter, 4096)
+	f.InsertBulk(x)
+	f = f.FoldTo(maxFalsePositiveRate)
+
+	if r := f.FalsePositiveRate(); r > maxFalsePositiveRate {
+		t.Fatalf("folded filter false positive rate is above the target: %g > %g", r, maxFalsePositiveRate)
+	}
+	if len(f) > 1 {
+		if r := slices.Clone(f).Fold().FalsePositiveRate(); r <= maxFalsePositiveRate {
+			t.Fatalf("filter of %d blocks could have been folded further: %g <= %g", len(f), r, maxFalsePositiveRate)
+		}
+	}
+	if len(f) >= 4096 {
+		t.Fatalf("filter was not folded")
+	}
+	for i, v := range x {
+		if !f.Check(v) {
+			t.Fatalf("folded filter does not contain the value #%d that was inserted: %d", i, v)
+		}
+	}
+
+	// The estimated false positive rate should match the observed one.
+	falsePositives := 0
+	for range 100_000 {
+		if f.Check(p.Uint64()) {
+			falsePositives++
+		}
+	}
+	if r := float64(falsePositives) / 100_000; r > 2*maxFalsePositiveRate {
+		t.Fatalf("folded filter triggered too many false positives: %g%%", r*100)
+	}
+
+	t.Run("empty", func(t *testing.T) {
+		if f := make(bloom.SplitBlockFilter, 64).FoldTo(maxFalsePositiveRate); len(f) != 1 {
+			t.Fatalf("empty filter folded to %d blocks instead of 1", len(f))
+		}
+	})
+}
+
+func TestBitsPerValueOf(t *testing.T) {
+	const N = 20_000
+	const M = 200_000
+	p := rand.New(rand.NewSource(3))
+
+	for _, falsePositiveRate := range []float64{0.1, 0.01, 0.001} {
+		bitsPerValue := bloom.BitsPerValueOf(falsePositiveRate)
+		f := make(bloom.SplitBlockFilter, bloom.NumSplitBlocksOf(N, bitsPerValue))
+		for range N {
+			f.Insert(p.Uint64())
+		}
+		falsePositives := 0
+		for range M {
+			if f.Check(p.Uint64()) {
+				falsePositives++
+			}
+		}
+		// Allow for sampling noise around the target.
+		if r := float64(falsePositives) / M; r > 1.25*falsePositiveRate {
+			t.Errorf("%d bits per value for a target of %g: false positive rate is %g", bitsPerValue, falsePositiveRate, r)
+		}
+		if r := f.FalsePositiveRate(); r > 1.25*falsePositiveRate {
+			t.Errorf("%d bits per value for a target of %g: estimated false positive rate is %g", bitsPerValue, falsePositiveRate, r)
+		}
+	}
+
+	if b := bloom.BitsPerValueOf(0); b != 64 {
+		t.Errorf("bits per value for a target of zero is not capped: %d", b)
+	}
+	if b := bloom.BitsPerValueOf(0.01); b <= bloom.BitsPerValueOf(0.1) || b >= bloom.BitsPerValueOf(0.001) {
+		t.Errorf("bits per value does not increase as the target decreases")
 	}
 }
 

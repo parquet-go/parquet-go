@@ -1251,6 +1251,64 @@ func TestWriteRowGroupCopyBloomFilter(t *testing.T) {
 		}
 		checkFilter(t, out)
 	})
+
+	// Few distinct ids, so that folding shrinks the source filter.
+	foldedRows := makeCopyTestRows(1000)
+	for i := range foldedRows {
+		foldedRows[i].ID = int64(i % 10)
+	}
+	checkFoldedFilter := func(t *testing.T, out *File, wantSize int64) {
+		t.Helper()
+		bf := out.RowGroups()[0].ColumnChunks()[0].BloomFilter()
+		if bf == nil {
+			t.Fatal("output column has no bloom filter")
+		}
+		if bf.Size() != wantSize {
+			t.Fatalf("output bloom filter has the wrong size: want=%d got=%d", wantSize, bf.Size())
+		}
+		for id := range int64(10) {
+			if ok, err := bf.Check(ValueOf(id)); err != nil {
+				t.Fatal(err)
+			} else if !ok {
+				t.Fatalf("bloom filter misses present value %d", id)
+			}
+		}
+	}
+
+	t.Run("folded_filter_copies", func(t *testing.T) {
+		filter := FoldingSplitBlockFilter(0.01, "id")
+		src := writeCopyTestFile(t, foldedRows, BloomFilters(filter))
+		srcSize := src.RowGroups()[0].ColumnChunks()[0].BloomFilter().Size()
+		if srcSize >= int64(filter.Size(int64(len(foldedRows)))) {
+			t.Fatalf("source bloom filter was not folded: %d bytes", srcSize)
+		}
+		out, copied, _ := rewrite(src, BloomFilters(filter))
+		if copied == 0 {
+			t.Fatal("expected verbatim copy with matching folded source bloom filter")
+		}
+		checkFoldedFilter(t, out, srcSize)
+	})
+
+	t.Run("different_target_demotes", func(t *testing.T) {
+		// With only a few distinct values, both targets fold down to the same
+		// single block, so use enough of them for the folded sizes to differ.
+		rows := makeCopyTestRows(1000)
+		for i := range rows {
+			rows[i].ID = int64(i % 200)
+		}
+		src := writeCopyTestFile(t, rows, BloomFilters(FoldingSplitBlockFilter(0.1, "id")))
+		filter := FoldingSplitBlockFilter(0.0001, "id")
+		out, copied, l3 := rewrite(src, BloomFilters(filter))
+		if copied != 0 {
+			t.Fatalf("expected demotion on false positive rate mismatch, %d chunks copied", copied)
+		}
+		if l3 == 0 {
+			t.Fatal("expected L3 rebuild on false positive rate mismatch")
+		}
+		// The rebuilt filter must be the one the writer folds on its own.
+		rebuilt := writeCopyTestFile(t, rows, BloomFilters(filter))
+		checkFoldedFilter(t, out, rebuilt.RowGroups()[0].ColumnChunks()[0].BloomFilter().Size())
+	})
 }
 
 // TestWriteRowGroupBufferUsesL3 verifies that writing an in-memory
