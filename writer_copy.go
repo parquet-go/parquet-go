@@ -289,7 +289,9 @@ func encodingStatsMatch(stats []format.PageEncodingStats, dst *ColumnWriter) boo
 //   - the source header describes the same algorithm and hash the writer would
 //     use (split-block, xxhash — the only ones supported); and
 //   - the source bitset has exactly the size the destination filter would
-//     allocate for this chunk's value count, i.e. the same bits-per-value.
+//     allocate for this chunk's value count, i.e. the same bits-per-value; or,
+//     when the destination filter implements BloomFilterReuser, it reports the
+//     source bitset as identical to the one it would build.
 func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	meta := &src.chunk.MetaData
 	if meta.BloomFilterOffset == 0 || meta.BloomFilterLength <= 0 {
@@ -313,6 +315,15 @@ func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	}
 	if _, ok := header.Compression.Value.(*format.BloomFilterUncompressed); !ok {
 		return false
+	}
+	if reuser, ok := dst.columnFilter.(BloomFilterReuser); ok {
+		if header.NumBytes < 0 || header.NumBytes > meta.BloomFilterLength {
+			return false
+		}
+		// The section holds the header followed by the bitset.
+		bitsetOffset := meta.BloomFilterOffset + int64(meta.BloomFilterLength-header.NumBytes)
+		bitset := io.NewSectionReader(src.file.reader, bitsetOffset, int64(header.NumBytes))
+		return reuser.ReuseBloomFilter(meta.NumValues, bitset)
 	}
 	return int(header.NumBytes) == dst.columnFilter.Size(meta.NumValues)
 }

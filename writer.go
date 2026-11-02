@@ -2125,6 +2125,13 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 	if c.columnFilter == nil {
 		return nil
 	}
+	if f, ok := c.columnFilter.(BloomFilterFinalizer); ok {
+		defer func() {
+			if err == nil && len(c.filter) > 0 {
+				c.filter = f.FinalizeBloomFilter(c.filter)
+			}
+		}()
+	}
 
 	// If there is a dictionary, it contains all the values that we need to
 	// write to the filter.

@@ -178,6 +178,31 @@ type BloomFilterColumn interface {
 	Size(numValues int64) int
 }
 
+// BloomFilterFinalizer is implemented by BloomFilterColumn values which
+// post-process the filter once it holds every value of a column chunk, before
+// it is written.
+//
+// Implementations should usually also implement BloomFilterReuser, since the
+// default check for copying column chunks verbatim only compares filter sizes.
+type BloomFilterFinalizer interface {
+	// Returns the filter to write, which may share the memory of filter.
+	FinalizeBloomFilter(filter []byte) []byte
+}
+
+// BloomFilterReuser is implemented by BloomFilterColumn values which can tell
+// whether the bloom filter of an existing column chunk is identical to the one
+// they would build from the same values, allowing writers to copy the column
+// chunk verbatim instead of decoding it.
+//
+// When a BloomFilterColumn does not implement this interface, the bloom filter
+// of an existing column chunk is reused if its size is the one returned by
+// Size for the number of values in the column chunk.
+type BloomFilterReuser interface {
+	// Reports whether bitset, the filter of a column chunk holding numValues
+	// values, is identical to the filter that would be built for it.
+	ReuseBloomFilter(numValues int64, bitset *io.SectionReader) bool
+}
+
 // SplitBlockFilter constructs a split block bloom filter object for the column
 // at the given path, with the given bitsPerValue.
 //
@@ -208,14 +233,10 @@ func (f splitBlockFilter) Size(numValues int64) int {
 
 // Creates a header from the given bloom filter and compression codec.
 //
-// For now there is only one type of filter supported, but we provide this
-// function to suggest a model for extending the implementation if new filters
-// are added to the parquet specs.
+// The split block algorithm is the only one defined by the parquet specs, so
+// every filter is written as one.
 func bloomFilterHeader(filter BloomFilterColumn, codec compress.Codec) (header format.BloomFilterHeader) {
-	switch filter.(type) {
-	case splitBlockFilter:
-		header.Algorithm.Value = &format.SplitBlockAlgorithm{}
-	}
+	header.Algorithm.Value = &format.SplitBlockAlgorithm{}
 	switch filter.Hash().(type) {
 	case bloom.XXH64:
 		header.Hash.Value = &format.XxHash{}
