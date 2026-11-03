@@ -6,7 +6,7 @@ require (
 	github.com/andybalholm/brotli v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/hexops/gotextdiff v1.0.3
-	github.com/klauspost/compress v1.17.9
+	github.com/klauspost/compress v1.18.7
 	github.com/parquet-go/bitpack v1.0.3
 	github.com/parquet-go/jsonlite v1.5.5
 	github.com/pierrec/lz4/v4 v4.1.21
