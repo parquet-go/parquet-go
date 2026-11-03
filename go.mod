@@ -3,7 +3,7 @@ module github.com/parquet-go/parquet-go
 go 1.24.9
 
 require (
-	github.com/andybalholm/brotli v1.1.1
+	github.com/andybalholm/brotli v1.2.7
 	github.com/google/uuid v1.6.0
 	github.com/hexops/gotextdiff v1.0.3
 	github.com/klauspost/compress v1.18.7
