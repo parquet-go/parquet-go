@@ -212,10 +212,13 @@ func (f splitBlockFilter) Size(numValues int64) int {
 // function to suggest a model for extending the implementation if new filters
 // are added to the parquet specs.
 func bloomFilterHeader(filter BloomFilterColumn, codec compress.Codec) (header format.BloomFilterHeader) {
-	switch filter.(type) {
-	case splitBlockFilter:
-		header.Algorithm.Value = &format.SplitBlockAlgorithm{}
-	}
+	// The split block algorithm is the only one the Parquet specification
+	// defines and the BloomFilterColumn interface cannot name another one, so
+	// every implementation writes it. Dispatching on the concrete type left the
+	// algorithm unset for user-defined BloomFilterColumn values (for example a
+	// filter whose size is rounded to a power of two), which produced files that
+	// readers, including this package, reject.
+	header.Algorithm.Value = &format.SplitBlockAlgorithm{}
 	switch filter.Hash().(type) {
 	case bloom.XXH64:
 		header.Hash.Value = &format.XxHash{}

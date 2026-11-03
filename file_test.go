@@ -1371,3 +1371,67 @@ func TestIssue406(t *testing.T) {
 		}
 	}
 }
+
+// pow2BloomFilter is a user-defined BloomFilterColumn: a split block filter
+// whose size is rounded up to a power of two (some readers built on Arrow C++
+// only accept power-of-two sizes). BloomFilterColumn is an exported interface,
+// so implementations other than SplitBlockFilter are expected to work.
+type pow2BloomFilter struct {
+	parquet.BloomFilterColumn
+}
+
+func (f pow2BloomFilter) Size(numValues int64) int {
+	size := f.BloomFilterColumn.Size(numValues)
+	pow2 := 32
+	for pow2 < size {
+		pow2 *= 2
+	}
+	return pow2
+}
+
+// A BloomFilterColumn that is not the type returned by SplitBlockFilter must
+// still produce a bloom filter header that names the split block algorithm:
+// the header is what every reader (including this package) uses to decide
+// whether it understands the filter.
+func TestBloomFilterCustomColumnWritesAlgorithm(t *testing.T) {
+	type Row struct {
+		Name string `parquet:"name"`
+	}
+
+	rows := make([]Row, 0, 6554)
+	for i := range 6554 { // 6554 rows x 10 bits is 257 blocks, rounded up to 512
+		rows = append(rows, Row{Name: fmt.Sprintf("name-%d", i)})
+	}
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[Row](buf,
+		parquet.BloomFilters(pow2BloomFilter{parquet.SplitBlockFilter(10, "name")}),
+	)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("a file written with a custom bloom filter column must open: %v", err)
+	}
+	bf := pf.RowGroups()[0].ColumnChunks()[0].BloomFilter()
+	if bf == nil {
+		t.Fatal("expected a bloom filter on the 'name' column")
+	}
+	if got, want := bf.Size(), int64(512*32); got != want {
+		t.Errorf("bloom filter size: got %d, want %d (power of two)", got, want)
+	}
+	for _, name := range []string{"name-0", "name-3277", "name-6553"} {
+		ok, err := bf.Check(parquet.ValueOf(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Errorf("bloom filter should have matched %q", name)
+		}
+	}
+}
