@@ -1535,6 +1535,7 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		if err := c.flushFilterPages(); err != nil {
 			return 0, err
 		}
+		c.foldBloomFilter()
 	}
 
 	if err := w.writeFileHeader(); err != nil {
@@ -2132,7 +2133,7 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 		// Need to always attempt to resize the filter, as the writer might
 		// be reused after resetting which would have reset the length of
 		// the filter to 0.
-		c.resizeBloomFilter(int64(dict.Len()))
+		c.resizeDictionaryBloomFilter(int64(dict.Len()))
 		return c.writePageToFilter(dict.Page())
 	}
 
@@ -2273,7 +2274,28 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 }
 
 func (c *ColumnWriter) resizeBloomFilter(numValues int64) {
-	filterSize := c.columnFilter.Size(numValues)
+	c.resizeBloomFilterTo(c.columnFilter.Size(numValues))
+}
+
+// resizeDictionaryBloomFilter sizes the filter for the values of a dictionary,
+// which are all distinct.
+func (c *ColumnWriter) resizeDictionaryBloomFilter(numValues int64) {
+	if f, ok := foldingFilter(c.columnFilter); ok {
+		c.resizeBloomFilterTo(f.distinctSize(numValues))
+	} else {
+		c.resizeBloomFilter(numValues)
+	}
+}
+
+// foldBloomFilter shrinks the filter to fit its values, which must all have
+// been written to it.
+func (c *ColumnWriter) foldBloomFilter() {
+	if f, ok := foldingFilter(c.columnFilter); ok {
+		c.filter = f.fold(c.filter)
+	}
+}
+
+func (c *ColumnWriter) resizeBloomFilterTo(filterSize int) {
 	if cap(c.filter) < filterSize {
 		c.filter = make([]byte, filterSize)
 	} else {
