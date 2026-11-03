@@ -883,7 +883,14 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 		return nil, err
 	}
 
-	if !isDictionaryEncoding(pageEncoding) {
+	if isDictionaryEncoding(pageEncoding) {
+		if dict == nil {
+			return nil, fmt.Errorf("decoding dictionary-encoded data page: no dictionary found")
+		}
+		if err := checkDictionaryIndexBounds(values.Int32(), dict.Len()); err != nil {
+			return nil, fmt.Errorf("decoding indexes of dictionary-encoded data page: %w", err)
+		}
+	} else {
 		if err := checkPageDataCapacity(pageKind, c.Type().Length(), numValues, values); err != nil {
 			return nil, err
 		}
@@ -908,6 +915,20 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 	}
 
 	return newBufferedPage(newPage, obuf, vbuf, definitionLevels, repetitionLevels), nil
+}
+
+// checkDictionaryIndexBounds verifies that every index decoded from a data
+// page is in [0, dictLen). Dictionary implementations are documented to panic
+// on out-of-range indexes, so a corrupted page must be rejected here, before
+// its indexes reach Dictionary.Lookup.
+func checkDictionaryIndexBounds(indexes []int32, dictLen int) error {
+	for _, index := range indexes {
+		if index < 0 || int(index) >= dictLen {
+			return fmt.Errorf("dictionary index %d is out of bounds [0,%d)", index, dictLen)
+		}
+	}
+
+	return nil
 }
 
 func decodeLevelsV1(enc encoding.Encoding, numValues int, data []byte) (*buffer[byte], []byte, error) {
