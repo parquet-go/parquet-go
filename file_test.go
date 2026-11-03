@@ -129,6 +129,23 @@ func TestOpenFileWithoutPageIndex(t *testing.T) {
 	}
 }
 
+func TestReadZeroColumns(t *testing.T) {
+	// zero_columns.parquet is pq.write_table(pa.table({}), path) from pyarrow
+	// 25.0.1: one row group with zero rows and zero column chunks.
+	b, err := os.ReadFile("testdata/zero_columns.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := parquet.OpenFile(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := parquet.NewReader(f).ReadRows(make([]parquet.Row, 1))
+	if n != 0 || err != io.EOF {
+		t.Errorf("ReadRows = %d, %v, want 0, EOF", n, err)
+	}
+}
+
 // hasLogicalType reports whether lt carries a T annotation, tolerating a nil lt.
 func hasLogicalType[T format.LogicalTypeValue](lt *format.LogicalType) bool {
 	if lt == nil {
