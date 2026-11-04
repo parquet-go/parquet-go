@@ -287,3 +287,27 @@ func TestMarshalNested(t *testing.T) {
 		t.Errorf("nested round-trip: got %v, want %v", got, input)
 	}
 }
+
+func TestMarshalSmallValueAllocations(t *testing.T) {
+	i := int64(7)
+	for name, input := range map[string]any{
+		"int64":        i,
+		"pointer":      &i,
+		"short_string": "hello",
+		"empty_array":  []any{},
+		"empty_object": map[string]any{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			allocs := testing.AllocsPerRun(100, func() {
+				_, _, err := Marshal(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+			})
+			// The returned metadata and value each need one allocation.
+			if allocs != 2 {
+				t.Errorf("Marshal allocated %g times, want 2", allocs)
+			}
+		})
+	}
+}
