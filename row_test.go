@@ -1,6 +1,7 @@
 package parquet_test
 
 import (
+	"fmt"
 	"io"
 	"reflect"
 	"testing"
@@ -713,6 +714,33 @@ func BenchmarkReconstruct(b *testing.B) {
 		buffer = AddressBook{}
 
 		if err := schema.Reconstruct(&buffer, values); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkReconstructWideMap exercises a map with two repeated descendants per entry.
+func BenchmarkReconstructWideMap(b *testing.B) {
+	type mapValue struct {
+		Names  []string `parquet:",list"`
+		Scores []int64  `parquet:",list"`
+	}
+	type record struct {
+		Items map[string]mapValue
+	}
+	input := record{Items: make(map[string]mapValue)}
+	for i := range 32 {
+		input.Items[fmt.Sprintf("key-%02d", i)] = mapValue{
+			Names:  []string{"first", "second", "third"},
+			Scores: []int64{1, 2, 3},
+		}
+	}
+	schema := parquet.SchemaOf(input)
+	row := schema.Deconstruct(nil, input)
+	b.ReportAllocs()
+	for b.Loop() {
+		var output record
+		if err := schema.Reconstruct(&output, row); err != nil {
 			b.Fatal(err)
 		}
 	}
