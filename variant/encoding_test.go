@@ -1,6 +1,8 @@
 package variant
 
 import (
+	"bytes"
+	"fmt"
 	"sort"
 	"testing"
 )
@@ -61,5 +63,30 @@ func TestEncoderLayoutInvariants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Marshal failed: %v", err)
 		}
+	}
+}
+
+func TestEncodeEmptyContainers(t *testing.T) {
+	for _, v := range []Value{MakeArray(nil), MakeObject(nil)} {
+		t.Run(fmt.Sprint(v.Basic()), func(t *testing.T) {
+			var b MetadataBuilder
+			b.Add("existing")
+			metadata := b.AppendTo(nil)
+			want := []byte{byte(v.Basic()), 0, 0}
+			got := Encode(&b, v)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("Encode = %x, want %x", got, want)
+			}
+			got[0] = 0xff
+			if got := Encode(&b, v); !bytes.Equal(got, want) {
+				t.Errorf("Encode after mutating prior output = %x, want %x", got, want)
+			}
+			if got := b.AppendTo(nil); !bytes.Equal(got, metadata) {
+				t.Errorf("Encode changed metadata: got %x, want %x", got, metadata)
+			}
+			if allocs := testing.AllocsPerRun(100, func() { _ = Encode(&b, v) }); allocs != 1 {
+				t.Errorf("Encode allocated %g times, want 1", allocs)
+			}
+		})
 	}
 }
