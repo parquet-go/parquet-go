@@ -2,12 +2,94 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/format"
 )
+
+func TestFixedLenDecimalReadIntoInt64(t *testing.T) {
+	type encodedAmount struct {
+		Amount [8]byte `parquet:"amount,decimal(2:18)"`
+	}
+	type integerAmount struct {
+		Amount int64 `parquet:"amount,decimal(2:18)"`
+	}
+	tests := []struct {
+		name  string
+		cents int64
+	}{
+		{name: "positive", cents: 100000},
+		{name: "negative", cents: -100000},
+		{name: "zero", cents: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var encoded [8]byte
+			binary.BigEndian.PutUint64(encoded[:], uint64(tt.cents))
+
+			var file bytes.Buffer
+			writer := NewGenericWriter[encodedAmount](&file)
+			if _, err := writer.Write([]encodedAmount{{Amount: encoded}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			byteReader := NewReader(bytes.NewReader(file.Bytes()))
+			var raw encodedAmount
+			if err := byteReader.Read(&raw); err != nil {
+				t.Fatal(err)
+			}
+			if err := byteReader.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if raw.Amount != encoded {
+				t.Fatalf("stored bytes = %x, want %x", raw.Amount, encoded)
+			}
+
+			integerReader := NewReader(bytes.NewReader(file.Bytes()))
+			var got integerAmount
+			if err := integerReader.Read(&got); err != nil {
+				t.Fatal(err)
+			}
+			if err := integerReader.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got.Amount != tt.cents {
+				t.Fatalf("unscaled amount = %d, want %d (stored bytes %x)", got.Amount, tt.cents, encoded)
+			}
+		})
+	}
+}
+
+func TestInt64FromDecimalBytes(t *testing.T) {
+	cases := []struct {
+		raw  []byte
+		want int64
+	}{
+		{[]byte{0x80}, -128},
+		{[]byte{0x7f}, 127},
+		{[]byte{0x01, 0x00}, 256},
+		{[]byte{0xff}, -1},
+	}
+	for _, tt := range cases {
+		got, err := int64FromDecimalBytes(tt.raw)
+		if err != nil {
+			t.Fatalf("%x: %v", tt.raw, err)
+		}
+		if got != tt.want {
+			t.Fatalf("%x = %d, want %d", tt.raw, got, tt.want)
+		}
+	}
+	_, err := int64FromDecimalBytes(bytes.Repeat([]byte{0x01}, 9))
+	if err == nil {
+		t.Fatal("expected a value wider than int64 to be rejected")
+	}
+}
 
 func TestDecimalInt64PanicMessage(t *testing.T) {
 	for _, precision := range []int{0, 19} {

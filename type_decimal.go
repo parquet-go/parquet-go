@@ -2,6 +2,8 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/binary"
+	"fmt"
 	"log"
 	"math"
 	"math/big"
@@ -341,6 +343,63 @@ func (t *decimalType) LogicalType() *format.LogicalType {
 
 func (t *decimalType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Decimal]
+}
+
+// ConvertValue decodes a BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY decimal into an
+// integer decimal. Those physical types store a big-endian two's-complement
+// value. The generic byte-array conversion reads little-endian, which turns
+// the unscaled integer 100000 into a different int64.
+func (t *decimalType) ConvertValue(val Value, typ Type) (Value, error) {
+	if val.IsNull() || t.isBinary() {
+		return t.Type.ConvertValue(val, typ)
+	}
+	if typ.Kind() != ByteArray && typ.Kind() != FixedLenByteArray {
+		return t.Type.ConvertValue(val, typ)
+	}
+	n, err := int64FromDecimalBytes(val.byteArray())
+	if err != nil {
+		return val, err
+	}
+	switch t.Kind() {
+	case Int64:
+		return val.convertToInt64(n), nil
+	case Int32:
+		if n > math.MaxInt32 || n < math.MinInt32 {
+			return val, fmt.Errorf("decimal value %d does not fit in int32", n)
+		}
+		return val.convertToInt32(int32(n)), nil
+	default:
+		return t.Type.ConvertValue(val, typ)
+	}
+}
+
+// int64FromDecimalBytes reads a big-endian two's-complement decimal. A value
+// wider than 8 bytes is accepted only when the extra leading bytes are the
+// sign extension of an int64.
+func int64FromDecimalBytes(data []byte) (int64, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	if len(data) > 8 {
+		sign := byte(0)
+		if data[len(data)-8]&0x80 != 0 {
+			sign = 0xFF
+		}
+		for _, b := range data[:len(data)-8] {
+			if b != sign {
+				return 0, fmt.Errorf("decimal value does not fit in int64")
+			}
+		}
+		data = data[len(data)-8:]
+	}
+	var b [8]byte
+	if data[0]&0x80 != 0 {
+		for i := range b {
+			b[i] = 0xFF
+		}
+	}
+	copy(b[8-len(data):], data)
+	return int64(binary.BigEndian.Uint64(b[:])), nil
 }
 
 func (t *decimalType) AssignValue(dst reflect.Value, src Value) error {
