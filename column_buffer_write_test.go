@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/parquet-go/jsonlite"
@@ -940,5 +941,82 @@ func TestEmptyGroupInterface(t *testing.T) {
 
 	if len(readRecords) != len(records) {
 		t.Errorf("expected %d records, got %d", len(records), len(readRecords))
+	}
+}
+
+func TestOptionalByteSliceBatchNulls(t *testing.T) {
+	type Record struct {
+		Data []byte `parquet:"data,optional"`
+	}
+
+	for _, test := range []struct {
+		name    string
+		pattern string
+	}{
+		{"reported", "NVNN"},
+		{"empty", "NENN"},
+		{"two_values", "NNVVNN"},
+		{"all_null", strings.Repeat("N", 129)},
+		{"all_present", strings.Repeat("VE", 65)},
+		{"partial_word", strings.Repeat("N", 31) + strings.Repeat("V", 31) + "NN"},
+		{"word_tail", "N" + strings.Repeat("V", 63) + "NN"},
+		{"across_words", strings.Repeat("N", 63) + "VVNN"},
+		{"second_word", strings.Repeat("V", 64) + "NVNN"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			records := make([]Record, len(test.pattern))
+			for i, kind := range test.pattern {
+				switch kind {
+				case 'V':
+					records[i].Data = []byte{byte(i), 1, 2}
+				case 'E':
+					records[i].Data = []byte{}
+				}
+			}
+			for _, batch := range []struct {
+				name string
+				size int
+			}{
+				{"single", 1},
+				{"batch", len(records)},
+			} {
+				t.Run(batch.name, func(t *testing.T) {
+					var buf bytes.Buffer
+					writer := NewGenericWriter[Record](&buf)
+					for i := 0; i < len(records); i += batch.size {
+						if _, err := writer.Write(records[i:min(i+batch.size, len(records))]); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := writer.Close(); err != nil {
+						t.Fatal(err)
+					}
+
+					reader := NewReader(bytes.NewReader(buf.Bytes()))
+					defer reader.Close()
+					rows := make([]Row, len(records))
+					if n, err := reader.ReadRows(rows); n != len(records) || (err != nil && err != io.EOF) {
+						t.Fatalf("ReadRows: n=%d, err=%v", n, err)
+					}
+					for i, row := range rows {
+						if len(row) != 1 {
+							t.Fatalf("row %d: got %d values, want 1", i, len(row))
+						}
+						wantNull := records[i].Data == nil
+						if row[0].IsNull() != wantNull {
+							t.Errorf("row %d: null=%t, want %t", i, row[0].IsNull(), wantNull)
+						}
+					}
+
+					got, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(got, records) {
+						t.Errorf("round trip: got %#v, want %#v", got, records)
+					}
+				})
+			}
+		})
 	}
 }
