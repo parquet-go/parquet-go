@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -2108,5 +2109,50 @@ func TestProtoStructValueDereferenced(t *testing.T) {
 
 	if !bytes.Equal(readRecords[1].Data, []byte("null")) {
 		t.Errorf("expected nil data for second record, got: %s", string(readRecords[1].Data))
+	}
+}
+
+// A set optional field holding a zero value must not be written as null when
+// the writer cannot use the schema of its Go type.
+func TestProtoOptionalZeroValue(t *testing.T) {
+	type Msg = descriptorpb.FieldDescriptorProto
+	zero, seven, unset := &Msg{Number: proto.Int32(0)}, &Msg{Number: proto.Int32(7)}, &Msg{}
+
+	t.Run("subset schema", func(t *testing.T) {
+		schema := NewSchema("subset", Group{"number": Optional(Int(32))})
+		testProtoOptionalZeroValue(t, schema, []*Msg{zero, seven, unset})
+	})
+	t.Run("interface type", func(t *testing.T) {
+		testProtoOptionalZeroValue(t, SchemaOf(new(Msg)), []any{zero, seven, unset})
+	})
+}
+
+func testProtoOptionalZeroValue[T any](t *testing.T, schema *Schema, rows []T) {
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[T](buf, schema)
+	if _, err := writer.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	read := make([]Row, len(rows))
+	n, err := NewReader(bytes.NewReader(buf.Bytes())).ReadRows(read)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+
+	leaf, _ := schema.Lookup("number")
+	var got []string
+	for _, row := range read[:n] {
+		for _, v := range row {
+			if v.Column() == leaf.ColumnIndex {
+				got = append(got, v.String())
+			}
+		}
+	}
+	if want := []string{"0", "7", "<null>"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
