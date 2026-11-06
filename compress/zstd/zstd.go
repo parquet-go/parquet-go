@@ -41,6 +41,15 @@ type Codec struct {
 	// If Concurrency is 0, it will use DefaultConcurrency.
 	Concurrency uint
 
+	// WindowSize is the maximum back-reference distance, in bytes, used by the
+	// encoder. Larger windows can improve the compression ratio at the cost of
+	// more memory during encoding and decoding.
+	//
+	// The value must be a power of two between zstd.MinWindowSize and
+	// zstd.MaxWindowSize from github.com/klauspost/compress/zstd. If
+	// WindowSize is 0, the encoder picks a default based on the level.
+	WindowSize int
+
 	encoders memory.Pool[zstd.Encoder]
 	decoders memory.Pool[zstd.Decoder]
 }
@@ -56,12 +65,16 @@ func (c *Codec) CompressionCodec() format.CompressionCodec {
 func (c *Codec) Encode(dst, src []byte) ([]byte, error) {
 	e := c.encoders.Get(
 		func() *zstd.Encoder {
-			e, err := zstd.NewWriter(nil,
+			opts := []zstd.EOption{
 				zstd.WithEncoderConcurrency(c.concurrency()),
 				zstd.WithEncoderLevel(c.level()),
 				zstd.WithZeroFrames(true),
 				zstd.WithEncoderCRC(false),
-			)
+			}
+			if c.WindowSize != 0 {
+				opts = append(opts, zstd.WithWindowSize(c.WindowSize))
+			}
+			e, err := zstd.NewWriter(nil, opts...)
 			if err != nil {
 				panic(err)
 			}
