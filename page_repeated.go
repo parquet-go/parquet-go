@@ -8,6 +8,7 @@ import (
 
 type repeatedPage struct {
 	base               Page
+	numRows            int64
 	maxRepetitionLevel byte
 	maxDefinitionLevel byte
 	definitionLevels   []byte
@@ -17,6 +18,7 @@ type repeatedPage struct {
 func newRepeatedPage(base Page, maxRepetitionLevel, maxDefinitionLevel byte, repetitionLevels, definitionLevels []byte) *repeatedPage {
 	return &repeatedPage{
 		base:               base,
+		numRows:            int64(countLevelsEqual(repetitionLevels, 0)),
 		maxRepetitionLevel: maxRepetitionLevel,
 		maxDefinitionLevel: maxDefinitionLevel,
 		definitionLevels:   definitionLevels,
@@ -30,7 +32,7 @@ func (page *repeatedPage) Column() int { return page.base.Column() }
 
 func (page *repeatedPage) Dictionary() Dictionary { return page.base.Dictionary() }
 
-func (page *repeatedPage) NumRows() int64 { return int64(countLevelsEqual(page.repetitionLevels, 0)) }
+func (page *repeatedPage) NumRows() int64 { return page.numRows }
 
 func (page *repeatedPage) NumValues() int64 { return int64(len(page.definitionLevels)) }
 
@@ -101,16 +103,18 @@ func (page *repeatedPage) Slice(i, j int64) Page {
 	numNulls1 := countLevelsNotEqual(definitionLevels[:rowIndex1], maxDefinitionLevel)
 	numNulls2 := countLevelsNotEqual(definitionLevels[rowIndex1:rowIndex2], maxDefinitionLevel)
 
+	slicedNumRows := j - i
 	i = int64(rowIndex1 - numNulls1)
 	j = int64(rowIndex2 - (numNulls1 + numNulls2))
 
-	return newRepeatedPage(
-		page.base.Slice(i, j),
-		maxRepetitionLevel,
-		maxDefinitionLevel,
-		repetitionLevels[rowIndex1:rowIndex2:rowIndex2],
-		definitionLevels[rowIndex1:rowIndex2:rowIndex2],
-	)
+	return &repeatedPage{
+		base:               page.base.Slice(i, j),
+		numRows:            slicedNumRows,
+		maxRepetitionLevel: maxRepetitionLevel,
+		maxDefinitionLevel: maxDefinitionLevel,
+		definitionLevels:   definitionLevels[rowIndex1:rowIndex2:rowIndex2],
+		repetitionLevels:   repetitionLevels[rowIndex1:rowIndex2:rowIndex2],
+	}
 }
 
 type repeatedPageValues struct {
