@@ -382,7 +382,7 @@ func decodeInt64(dst, src []byte) ([]byte, []byte, error) {
 					miniBlockData = src[:miniBlockSize]
 				}
 				src = src[len(miniBlockData):]
-				if len(miniBlockData) < miniBlockSize+bitpack.PaddingInt64 {
+				if cap(miniBlockData) < miniBlockSize+bitpack.PaddingInt64 {
 					miniBlockTemp = resize(miniBlockTemp[:0], miniBlockSize+bitpack.PaddingInt64)
 					miniBlockData = miniBlockTemp[:copy(miniBlockTemp, miniBlockData)]
 				}
