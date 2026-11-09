@@ -10,7 +10,11 @@
 package rle
 
 import (
+	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/encoding/fuzz"
@@ -19,6 +23,124 @@ import (
 
 func FuzzEncodeBoolean(f *testing.F) {
 	fuzz.EncodeBoolean(f, &Encoding{BitWidth: 1})
+}
+
+func TestBooleanRunValueIsZeroOrOne(t *testing.T) {
+	enc := &Encoding{BitWidth: 1}
+	got, err := enc.EncodeBoolean(nil, []byte{0xFF, 0xFF, 0xFF})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[len(got)-1] != 1 {
+		t.Fatalf("run value = %#x, want 1", got[len(got)-1])
+	}
+	back, err := enc.DecodeBoolean(nil, got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(back, []byte{0xFF, 0xFF, 0xFF}) {
+		t.Fatalf("round trip = %x", back)
+	}
+
+	zeros, err := enc.EncodeBoolean(nil, []byte{0x00, 0x00})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zeros[len(zeros)-1] != 0 {
+		t.Fatalf("zero run value = %#x, want 0", zeros[len(zeros)-1])
+	}
+}
+
+func TestDecodeBooleanRefusesARunWithoutItsValue(t *testing.T) {
+	enc := &Encoding{BitWidth: 1}
+	payload := appendUvarint(nil, uint64(8)<<1)
+	_, err := enc.DecodeBoolean(nil, booleanPayload(payload))
+	if err == nil {
+		t.Fatal("a run without its value byte decoded without an error")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestDecodeBooleanSpecRuns(t *testing.T) {
+	enc := &Encoding{BitWidth: 1}
+
+	// 1001 ones, then 7 zeros. The second run starts one bit into the last byte.
+	payload := appendUvarint(nil, uint64(1001)<<1)
+	payload = append(payload, 1)
+	payload = appendUvarint(payload, uint64(7)<<1)
+	payload = append(payload, 0)
+	got, err := enc.DecodeBoolean(nil, booleanPayload(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 126 {
+		t.Fatalf("len = %d, want 126", len(got))
+	}
+	for i := 0; i < 1001; i++ {
+		if !booleanBit(got, i) {
+			t.Fatalf("bit %d clear, want set", i)
+		}
+	}
+	for i := 1001; i < 1008; i++ {
+		if booleanBit(got, i) {
+			t.Fatalf("bit %d set, want clear", i)
+		}
+	}
+
+	// Value 1 is the spec. Value 0xFF is what this encoder used to write.
+	for _, value := range []byte{1, 0xFF} {
+		payload = appendUvarint(nil, uint64(24)<<1)
+		payload = append(payload, value)
+		got, err = enc.DecodeBoolean(nil, booleanPayload(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, []byte{0xFF, 0xFF, 0xFF}) {
+			t.Fatalf("value %#x decoded to %x", value, got)
+		}
+	}
+
+	// One true, then eight packed values whose first is true.
+	payload = appendUvarint(nil, uint64(1)<<1)
+	payload = append(payload, 1)
+	payload = appendUvarint(payload, uint64(1)<<1|1)
+	payload = append(payload, 0x01)
+	got, err = enc.DecodeBoolean(nil, booleanPayload(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, []byte{0x03, 0x00}) {
+		t.Fatalf("shifted pack = %x, want 0300", got)
+	}
+}
+
+func TestBooleanRoundTrip(t *testing.T) {
+	enc := &Encoding{BitWidth: 1}
+	src := []byte{0xFF, 0x00, 0x0F, 0xF0, 0xFF, 0xFF, 0x01, 0x00, 0x00}
+	got, err := enc.EncodeBoolean(nil, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := enc.DecodeBoolean(nil, got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(back, src) {
+		t.Fatalf("got %x want %x", back, src)
+	}
+}
+
+func booleanPayload(payload []byte) []byte {
+	src := make([]byte, 4+len(payload))
+	binary.LittleEndian.PutUint32(src, uint32(len(payload)))
+	copy(src[4:], payload)
+	return src
+}
+
+func booleanBit(buf []byte, i int) bool {
+	return buf[i/8]&(1<<uint(i%8)) != 0
 }
 
 func FuzzEncodeLevels(f *testing.F) {
