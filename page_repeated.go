@@ -88,24 +88,29 @@ func (page *repeatedPage) Slice(i, j int64) Page {
 		}
 	}
 
-	for k, def := range repetitionLevels[rowIndex1:] {
-		if def == 0 {
-			if rowIndex0 == int(j) {
-				rowIndex2 = rowIndex1 + k
-				break
+	numNulls1 := countLevelsNotEqual(definitionLevels[:rowIndex1], maxDefinitionLevel)
+	baseI := int64(rowIndex1 - numNulls1)
+
+	var baseJ int64
+	if j == numRows {
+		baseJ = page.base.NumValues()
+	} else {
+		for k, def := range repetitionLevels[rowIndex1:] {
+			if def == 0 {
+				if rowIndex0 == int(j) {
+					rowIndex2 = rowIndex1 + k
+					break
+				}
+				rowIndex0++
 			}
-			rowIndex0++
 		}
+
+		numNulls2 := countLevelsNotEqual(definitionLevels[rowIndex1:rowIndex2], maxDefinitionLevel)
+		baseJ = int64(rowIndex2 - (numNulls1 + numNulls2))
 	}
 
-	numNulls1 := countLevelsNotEqual(definitionLevels[:rowIndex1], maxDefinitionLevel)
-	numNulls2 := countLevelsNotEqual(definitionLevels[rowIndex1:rowIndex2], maxDefinitionLevel)
-
-	i = int64(rowIndex1 - numNulls1)
-	j = int64(rowIndex2 - (numNulls1 + numNulls2))
-
 	return newRepeatedPage(
-		page.base.Slice(i, j),
+		page.base.Slice(baseI, baseJ),
 		maxRepetitionLevel,
 		maxDefinitionLevel,
 		repetitionLevels[rowIndex1:rowIndex2:rowIndex2],
