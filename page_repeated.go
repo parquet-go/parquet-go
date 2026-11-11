@@ -74,29 +74,8 @@ func (page *repeatedPage) Slice(i, j int64) Page {
 	repetitionLevels := page.repetitionLevels
 	definitionLevels := page.definitionLevels
 
-	rowIndex0 := 0
-	rowIndex1 := len(repetitionLevels)
-	rowIndex2 := len(repetitionLevels)
-
-	for k, def := range repetitionLevels {
-		if def == 0 {
-			if rowIndex0 == int(i) {
-				rowIndex1 = k
-				break
-			}
-			rowIndex0++
-		}
-	}
-
-	for k, def := range repetitionLevels[rowIndex1:] {
-		if def == 0 {
-			if rowIndex0 == int(j) {
-				rowIndex2 = rowIndex1 + k
-				break
-			}
-			rowIndex0++
-		}
-	}
+	rowIndex1 := findRowStart(repetitionLevels, i)
+	rowIndex2 := rowIndex1 + findRowStart(repetitionLevels[rowIndex1:], j-i)
 
 	numNulls1 := countLevelsNotEqual(definitionLevels[:rowIndex1], maxDefinitionLevel)
 	numNulls2 := countLevelsNotEqual(definitionLevels[rowIndex1:rowIndex2], maxDefinitionLevel)
@@ -111,6 +90,35 @@ func (page *repeatedPage) Slice(i, j int64) Page {
 		repetitionLevels[rowIndex1:rowIndex2:rowIndex2],
 		definitionLevels[rowIndex1:rowIndex2:rowIndex2],
 	)
+}
+
+// findRowStart returns the index of the repetition level that starts rowIndex,
+// or len(repetitionLevels) when rowIndex is the number of rows.
+func findRowStart(repetitionLevels []byte, rowIndex int64) int {
+	const blockSize = 256
+
+	offset := 0
+	for len(repetitionLevels) > blockSize {
+		block := repetitionLevels[:blockSize]
+		numRows := int64(countLevelsEqual(block, 0))
+		if numRows > rowIndex {
+			repetitionLevels = block
+			break
+		}
+		rowIndex -= numRows
+		offset += blockSize
+		repetitionLevels = repetitionLevels[blockSize:]
+	}
+
+	for i, level := range repetitionLevels {
+		if level == 0 {
+			if rowIndex == 0 {
+				return offset + i
+			}
+			rowIndex--
+		}
+	}
+	return offset + len(repetitionLevels)
 }
 
 type repeatedPageValues struct {
