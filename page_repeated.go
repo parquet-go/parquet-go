@@ -2,12 +2,14 @@ package parquet
 
 import (
 	"io"
+	"sync/atomic"
 
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
 type repeatedPage struct {
 	base               Page
+	numRows            atomic.Int64 // -1 means the row count has not been computed
 	maxRepetitionLevel byte
 	maxDefinitionLevel byte
 	definitionLevels   []byte
@@ -15,13 +17,15 @@ type repeatedPage struct {
 }
 
 func newRepeatedPage(base Page, maxRepetitionLevel, maxDefinitionLevel byte, repetitionLevels, definitionLevels []byte) *repeatedPage {
-	return &repeatedPage{
+	page := &repeatedPage{
 		base:               base,
 		maxRepetitionLevel: maxRepetitionLevel,
 		maxDefinitionLevel: maxDefinitionLevel,
 		definitionLevels:   definitionLevels,
 		repetitionLevels:   repetitionLevels,
 	}
+	page.numRows.Store(-1)
+	return page
 }
 
 func (page *repeatedPage) Type() Type { return page.base.Type() }
@@ -30,7 +34,15 @@ func (page *repeatedPage) Column() int { return page.base.Column() }
 
 func (page *repeatedPage) Dictionary() Dictionary { return page.base.Dictionary() }
 
-func (page *repeatedPage) NumRows() int64 { return int64(countLevelsEqual(page.repetitionLevels, 0)) }
+func (page *repeatedPage) NumRows() int64 {
+	if n := page.numRows.Load(); n >= 0 {
+		return n
+	}
+
+	n := int64(countLevelsEqual(page.repetitionLevels, 0))
+	page.numRows.Store(n)
+	return n
+}
 
 func (page *repeatedPage) NumValues() int64 { return int64(len(page.definitionLevels)) }
 
@@ -109,13 +121,16 @@ func (page *repeatedPage) Slice(i, j int64) Page {
 		baseJ = int64(rowIndex2 - (numNulls1 + numNulls2))
 	}
 
-	return newRepeatedPage(
-		page.base.Slice(baseI, baseJ),
-		maxRepetitionLevel,
-		maxDefinitionLevel,
-		repetitionLevels[rowIndex1:rowIndex2:rowIndex2],
-		definitionLevels[rowIndex1:rowIndex2:rowIndex2],
-	)
+	slicedNumRows := j - i
+	sliced := &repeatedPage{
+		base:               page.base.Slice(baseI, baseJ),
+		maxRepetitionLevel: maxRepetitionLevel,
+		maxDefinitionLevel: maxDefinitionLevel,
+		definitionLevels:   definitionLevels[rowIndex1:rowIndex2:rowIndex2],
+		repetitionLevels:   repetitionLevels[rowIndex1:rowIndex2:rowIndex2],
+	}
+	sliced.numRows.Store(slicedNumRows)
+	return sliced
 }
 
 type repeatedPageValues struct {

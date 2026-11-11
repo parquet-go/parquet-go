@@ -126,6 +126,18 @@ func TestRepeatedPageSlice(t *testing.T) {
 			},
 		},
 		{
+			name: "prefix",
+			i:    0,
+			j:    2,
+			want: levelPageSliceExpectation{
+				repetitionLevels: []byte{0, 1, 1, 0},
+				definitionLevels: []byte{2, 1, 2, 0},
+				values:           []int64{10, 11},
+				numRows:          2,
+				numNulls:         2,
+			},
+		},
+		{
 			name: "suffix",
 			i:    2,
 			j:    6,
