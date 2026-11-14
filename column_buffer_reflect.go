@@ -37,6 +37,7 @@ import (
 // This handles various types that can represent null including:
 // - Invalid reflect values
 // - Nil pointers/interfaces/slices/maps
+// - Interfaces holding a nil pointer
 // - json.RawMessage containing "null"
 // - *jsonlite.Value with Kind == jsonlite.Null
 // - *structpb.Value with NullValue kind
@@ -49,6 +50,11 @@ func isNullValue(value reflect.Value) bool {
 	case reflect.Pointer, reflect.Interface:
 		if value.IsNil() {
 			return true
+		}
+		if value.Kind() == reflect.Interface {
+			if e := value.Elem(); e.Kind() == reflect.Pointer && e.IsNil() {
+				return true
+			}
 		}
 		switch v := value.Interface().(type) {
 		case *jsonlite.Value:
