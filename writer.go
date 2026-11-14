@@ -2224,7 +2224,6 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 			}
 			pbuf = buffers.get(len(bodyPlain))
 			copy(pbuf.data.Slice(), bodyPlain)
-			pbuf.ref()
 
 			var page Page
 			switch header.Type {
