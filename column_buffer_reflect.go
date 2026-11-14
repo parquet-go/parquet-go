@@ -342,7 +342,10 @@ func writeValueFuncOfOptional(columnIndex uint16, node Node) (uint16, writeValue
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 		if isNullValue(value) {
-			writeValue(columns, levels, value)
+			// An invalid value makes every writer below write a null at this
+			// level, which some of them do not do for the values isNullValue
+			// accepts.
+			writeValue(columns, levels, reflect.Value{})
 		} else {
 			levels.definitionLevel++
 			writeValue(columns, levels, value)

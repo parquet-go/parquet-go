@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"reflect"
 	"testing"
@@ -2288,6 +2289,97 @@ func TestGenericWriterMapStringAnyOptionalZeroValues(t *testing.T) {
 	}
 	if r1.String != nil {
 		t.Errorf("row 1 String: expected nil, got %v", *r1.String)
+	}
+}
+
+func readRawRows(t *testing.T, buf *bytes.Buffer, n int) []Row {
+	t.Helper()
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]Row, n+1)
+	got, err := reader.ReadRows(rows)
+	if err != nil && err != io.EOF {
+		t.Fatalf("read rows: %v", err)
+	}
+	for i := range rows[:got] {
+		rows[i] = rows[i].Clone()
+	}
+	return rows[:got]
+}
+
+func TestGenericWriterNilFieldOptionalShreddedVariant(t *testing.T) {
+	type Record struct {
+		X any `parquet:"x"`
+	}
+	shredded, err := ShreddedVariant(Int(32))
+	if err != nil {
+		t.Fatalf("shredded variant: %v", err)
+	}
+	schema := NewSchema("row", Group{"x": Optional(shredded)})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+		NullValue().Level(0, 0, 1),
+		NullValue().Level(0, 0, 2),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterRawMessageNullOptionalList(t *testing.T) {
+	type Record struct {
+		X json.RawMessage `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(List(Int(32)))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: json.RawMessage("null")}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterRawMessageNullOptionalMap(t *testing.T) {
+	type Record struct {
+		X json.RawMessage `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(Map(String(), Int(32)))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: json.RawMessage("null")}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+		NullValue().Level(0, 0, 1),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
