@@ -1,9 +1,13 @@
 package parquet_test
 
 import (
+	"bytes"
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 func TestBinaryColumnIndexMinMax(t *testing.T) {
@@ -105,5 +109,102 @@ func Test_ColumnIndexReuse(t *testing.T) {
 	}
 	if before.NullPages[0] {
 		t.Fatalf("unexpected null page 0")
+	}
+}
+
+func TestFixedLenByteArrayColumnIndexNullPages(t *testing.T) {
+	tests := []struct {
+		name       string
+		pages      []byte // 0 is a null page, any other value fills a page
+		rowGroups  int
+		skipBounds bool
+		order      format.BoundaryOrder
+	}{
+		{"leading nulls", []byte{0, 0, 1, 2}, 1, false, format.Ascending},
+		{"null between pages", []byte{1, 0, 2}, 1, false, format.Ascending},
+		{"skipped bounds", []byte{1, 0, 2}, 1, true, format.Unordered},
+		{"second row group", []byte{1, 0, 2}, 2, false, format.Ascending},
+	}
+
+	// 16 bytes has its own column type and indexer.
+	for _, size := range []int{2, 16} {
+		for _, test := range tests {
+			t.Run(fmt.Sprintf("size=%d/%s", size, test.name), func(t *testing.T) {
+				schema := parquet.NewSchema("row", parquet.Group{
+					"f": parquet.Optional(parquet.Leaf(parquet.FixedLenByteArrayType(size))),
+				})
+				options := []parquet.WriterOption{schema, parquet.PageBufferSize(1)}
+				if test.skipBounds {
+					options = append(options, parquet.SkipPageBounds("f"))
+				}
+				output := new(bytes.Buffer)
+				w := parquet.NewWriter(output, options...)
+
+				nullPages := make([]bool, len(test.pages))
+				bounds := make([][]byte, len(test.pages))
+				for rowGroup := range test.rowGroups {
+					if rowGroup > 0 {
+						if err := w.Flush(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for i, b := range test.pages {
+						row := parquet.Row{parquet.NullValue()}
+						if b != 0 {
+							value := bytes.Repeat([]byte{b}, size)
+							row = parquet.Row{parquet.FixedLenByteArrayValue(value).Level(0, 1, 0)}
+							if !test.skipBounds {
+								bounds[i] = value
+							}
+						}
+						nullPages[i] = b == 0
+						if _, err := w.WriteRows([]parquet.Row{row}); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+
+				f, err := parquet.OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n := len(f.RowGroups()); n != test.rowGroups {
+					t.Fatalf("%d row groups, want %d", n, test.rowGroups)
+				}
+				for rowGroup, written := range f.ColumnIndexes() {
+					if !slices.Equal(written.NullPages, nullPages) {
+						t.Errorf("row group %d: null pages %v, want %v", rowGroup, written.NullPages, nullPages)
+					}
+					if !slices.EqualFunc(written.MinValues, bounds, bytes.Equal) {
+						t.Errorf("row group %d: min values %x, want %x", rowGroup, written.MinValues, bounds)
+					}
+					if !slices.EqualFunc(written.MaxValues, bounds, bytes.Equal) {
+						t.Errorf("row group %d: max values %x, want %x", rowGroup, written.MaxValues, bounds)
+					}
+					if written.BoundaryOrder != test.order {
+						t.Errorf("row group %d: boundary order %v, want %v", rowGroup, written.BoundaryOrder, test.order)
+					}
+				}
+
+				index, err := f.RowGroups()[0].ColumnChunks()[0].ColumnIndex()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i, want := range bounds {
+					if want == nil {
+						continue
+					}
+					if min := index.MinValue(i).ByteArray(); !bytes.Equal(min, want) {
+						t.Errorf("page %d: min %x, want %x", i, min, want)
+					}
+					if max := index.MaxValue(i).ByteArray(); !bytes.Equal(max, want) {
+						t.Errorf("page %d: max %x, want %x", i, max, want)
+					}
+				}
+			})
+		}
 	}
 }

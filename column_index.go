@@ -294,16 +294,45 @@ type ColumnIndexer interface {
 type baseColumnIndexer struct {
 	nullPages  []bool
 	nullCounts []int64
+	bounded    []bool // only set by the fixed-size byte array indexers
 }
 
 func (i *baseColumnIndexer) reset() {
 	i.nullPages = i.nullPages[:0]
 	i.nullCounts = i.nullCounts[:0]
+	i.bounded = i.bounded[:0]
 }
 
 func (i *baseColumnIndexer) observe(numValues, numNulls int64) {
 	i.nullPages = append(i.nullPages, numValues == numNulls)
 	i.nullCounts = append(i.nullCounts, numNulls)
+}
+
+// observeFixedSize records a page of a fixed-size byte array column and
+// reports whether it has bounds. Null pages and pages written with
+// SkipPageBounds have none, but still take a slot of their own in the
+// indexer so that the bounds of later pages stay aligned.
+func (i *baseColumnIndexer) observeFixedSize(numValues, numNulls int64, min, max Value) bool {
+	i.observe(numValues, numNulls)
+	bounded := numValues != numNulls && !min.IsNull() && !max.IsNull()
+	i.bounded = append(i.bounded, bounded)
+	return bounded
+}
+
+// fixedSizeColumnIndex writes byte[0] as the bounds of pages without bounds,
+// as the format requires for null pages, and orders the other pages only.
+func (i *baseColumnIndexer) fixedSizeColumnIndex(minValues, maxValues [][]byte) format.ColumnIndex {
+	minBounded := make([][]byte, 0, len(minValues))
+	maxBounded := make([][]byte, 0, len(maxValues))
+	for j, bounded := range i.bounded {
+		if bounded {
+			minBounded = append(minBounded, minValues[j])
+			maxBounded = append(maxBounded, maxValues[j])
+		} else {
+			minValues[j], maxValues[j] = []byte{}, []byte{}
+		}
+	}
+	return i.columnIndex(minValues, maxValues, orderOfBytes(minBounded), orderOfBytes(maxBounded))
 }
 
 func (i *baseColumnIndexer) columnIndex(minValues, maxValues [][]byte, minOrder, maxOrder int) format.ColumnIndex {
@@ -570,7 +599,11 @@ func (i *fixedLenByteArrayColumnIndexer) Reset() {
 }
 
 func (i *fixedLenByteArrayColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
-	i.observe(numValues, numNulls)
+	if !i.observeFixedSize(numValues, numNulls, min, max) {
+		i.minValues = append(i.minValues, make([]byte, i.size)...)
+		i.maxValues = append(i.maxValues, make([]byte, i.size)...)
+		return
+	}
 	i.minValues = append(i.minValues, min.byteArray()...)
 	i.maxValues = append(i.maxValues, max.byteArray()...)
 }
@@ -586,12 +619,7 @@ func (i *fixedLenByteArrayColumnIndexer) ColumnIndex() format.ColumnIndex {
 			maxValues[i] = truncateLargeMaxByteArrayValue(v, sizeLimit)
 		}
 	}
-	return i.columnIndex(
-		minValues,
-		maxValues,
-		orderOfBytes(minValues),
-		orderOfBytes(maxValues),
-	)
+	return i.fixedSizeColumnIndex(minValues, maxValues)
 }
 
 type uint32ColumnIndexer struct {
@@ -673,24 +701,19 @@ func (i *be128ColumnIndexer) Reset() {
 }
 
 func (i *be128ColumnIndexer) IndexPage(numValues, numNulls int64, min, max Value) {
-	i.observe(numValues, numNulls)
-	if !min.IsNull() {
-		i.minValues = append(i.minValues, *(*[16]byte)(min.byteArray()))
+	var minValue, maxValue [16]byte
+	if i.observeFixedSize(numValues, numNulls, min, max) {
+		minValue = *(*[16]byte)(min.byteArray())
+		maxValue = *(*[16]byte)(max.byteArray())
 	}
-	if !max.IsNull() {
-		i.maxValues = append(i.maxValues, *(*[16]byte)(max.byteArray()))
-	}
+	i.minValues = append(i.minValues, minValue)
+	i.maxValues = append(i.maxValues, maxValue)
 }
 
 func (i *be128ColumnIndexer) ColumnIndex() format.ColumnIndex {
 	minValues := splitFixedLenByteArrays(unsafecast.Slice[byte](i.minValues), 16)
 	maxValues := splitFixedLenByteArrays(unsafecast.Slice[byte](i.maxValues), 16)
-	return i.columnIndex(
-		minValues,
-		maxValues,
-		orderOfBytes(minValues),
-		orderOfBytes(maxValues),
-	)
+	return i.fixedSizeColumnIndex(minValues, maxValues)
 }
 
 func truncateLargeMinByteArrayValue(value []byte, sizeLimit int) []byte {
