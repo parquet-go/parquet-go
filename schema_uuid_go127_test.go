@@ -10,6 +10,7 @@ import (
 
 	googleuuid "github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 type uuidSchemaRow[T ~[16]byte] struct {
@@ -108,4 +109,61 @@ type stdlibUUIDColumn struct {
 func (row stdlibUUIDColumn) generate(prng *rand.Rand) stdlibUUIDColumn {
 	prng.Read(row.Value[:])
 	return row
+}
+
+func TestStdlibUUIDSlice(t *testing.T) {
+	type stdlibRow struct {
+		List []uuid.UUID `parquet:"list,dict"`
+	}
+	type googleRow struct {
+		List []googleuuid.UUID `parquet:"list,dict"`
+	}
+
+	schema := parquet.SchemaOf(stdlibRow{})
+	want := parquet.SchemaOf(googleRow{})
+	if !parquet.EqualNodes(schema, want) {
+		t.Fatalf("schema mismatch:\nwant:\n%s\ngot:\n%s", want, schema)
+	}
+	leaf, ok := schema.Lookup("list")
+	if !ok {
+		t.Fatalf("list column not found in schema:\n%s", schema)
+	}
+	if lt := leaf.Node.Type().LogicalType(); lt == nil {
+		t.Fatalf("list column has no logical type: %s", leaf.Node)
+	} else if _, ok := lt.Value.(*format.UUIDType); !ok {
+		t.Fatalf("list column is not annotated as UUID: %s", leaf.Node)
+	}
+
+	inputID := uuid.MustParse("123456ab-0000-0000-0000-000000000000")
+	rows := []stdlibRow{
+		{List: []uuid.UUID{inputID, uuid.Nil(), inputID}},
+		{List: []uuid.UUID{}},
+	}
+
+	var buf bytes.Buffer
+	if err := parquet.Write(&buf, rows); err != nil {
+		t.Fatal(err)
+	}
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parquet.EqualNodes(file.Schema(), want) {
+		t.Fatalf("file schema mismatch:\nwant:\n%s\ngot:\n%s", want, file.Schema())
+	}
+
+	got, err := parquet.Read[stdlibRow](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRowsEqual(t, rows, got)
+
+	googleGot, err := parquet.Read[googleRow](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRowsEqual(t, []googleRow{
+		{List: []googleuuid.UUID{googleuuid.UUID(inputID), googleuuid.Nil, googleuuid.UUID(inputID)}},
+		{List: []googleuuid.UUID{}},
+	}, googleGot)
 }
