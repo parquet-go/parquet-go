@@ -190,6 +190,36 @@ func (col *decimalColumnBuffer) Less(i, j int) bool {
 	return compareDecimalByteArrays(u[0].byteArray(), v[0].byteArray()) < 0
 }
 
+// writeInt64 stores value as big-endian two's complement. The physical
+// fixed-length buffer zero-pads, which turns a negative int64 into a wider
+// positive value when the column is longer than 8 bytes. Sign-extend instead
+// so the extra leading bytes are 0xFF.
+func (col *decimalColumnBuffer) writeInt64(levels columnLevels, value int64) {
+	if col.typ.Kind() != FixedLenByteArray {
+		col.ColumnBuffer.writeInt64(levels, value)
+		return
+	}
+	size := col.typ.Length()
+	if size <= 8 {
+		col.ColumnBuffer.writeInt64(levels, value)
+		return
+	}
+	var stack [16]byte
+	var buf []byte
+	if size <= len(stack) {
+		buf = stack[:size]
+	} else {
+		buf = make([]byte, size)
+	}
+	if value < 0 {
+		for i := range size - 8 {
+			buf[i] = 0xFF
+		}
+	}
+	binary.BigEndian.PutUint64(buf[size-8:], uint64(value))
+	col.ColumnBuffer.writeByteArray(levels, buf)
+}
+
 // decimalPage wraps a page of the underlying physical type to compute bounds
 // with the signed decimal sort order.
 type decimalPage struct {

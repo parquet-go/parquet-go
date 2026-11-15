@@ -217,6 +217,53 @@ func TestFixedLenDecimalReadIntoInt64(t *testing.T) {
 	})
 }
 
+// TestFixedLenDecimalWriteInt64 checks that an int64 written into a
+// FIXED_LEN_BYTE_ARRAY(16) decimal is big-endian two's complement. A negative
+// value has to be sign-extended: the bytes above the low 8 are 0xFF.
+func TestFixedLenDecimalWriteInt64(t *testing.T) {
+	schema := NewSchema("row", Group{
+		"amount": Decimal(0, 38, FixedLenByteArrayType(16)),
+	})
+	type intAmount struct {
+		Amount int64 `parquet:"amount"`
+	}
+	type rawAmount struct {
+		Amount [16]byte `parquet:"amount,decimal(0:38)"`
+	}
+	tests := []struct {
+		name  string
+		cents int64
+	}{
+		{name: "positive", cents: 100000},
+		{name: "negative", cents: -100000},
+		{name: "min", cents: math.MinInt64},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var file bytes.Buffer
+			writer := NewGenericWriter[intAmount](&file, schema)
+			if _, err := writer.Write([]intAmount{{Amount: tt.cents}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			reader := NewReader(bytes.NewReader(file.Bytes()))
+			defer reader.Close()
+			var got rawAmount
+			if err := reader.Read(&got); err != nil {
+				t.Fatal(err)
+			}
+			var want [16]byte
+			putBigEndianInt64(want[:], tt.cents)
+			if got.Amount != want {
+				t.Fatalf("stored bytes = %x, want %x", got.Amount, want)
+			}
+		})
+	}
+}
+
 func TestInt64FromDecimalBytes(t *testing.T) {
 	cases := []struct {
 		raw  []byte
