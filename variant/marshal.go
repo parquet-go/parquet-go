@@ -44,7 +44,15 @@ func Marshal(v any) (metadata, value []byte, err error) {
 	var b MetadataBuilder
 	enc := getEncoder(&b)
 
-	start, end, err := enc.encodeReflect(rv)
+	var start, end int
+	switch rv.Kind() {
+	case reflect.Array, reflect.Slice:
+		start, end, err = enc.encodeSliceArray(rv)
+	case reflect.Map:
+		start, end, err = enc.encodeMapObject(rv)
+	case reflect.Struct:
+		start, end, err = enc.encodeStructObject(rv)
+	}
 	if err != nil {
 		releaseEncoder(enc)
 		return nil, nil, err
