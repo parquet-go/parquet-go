@@ -942,3 +942,94 @@ func TestEmptyGroupInterface(t *testing.T) {
 		t.Errorf("expected %d records, got %d", len(records), len(readRecords))
 	}
 }
+
+// roundTripRows writes rows with a GenericWriter and reads them back, failing
+// the test on any error or panic raised while writing or reading.
+func roundTripRows[T any](t *testing.T, rows []T) (out []T) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic: %v", r)
+		}
+	}()
+	buf := new(bytes.Buffer)
+	w := NewGenericWriter[T](buf)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Read[T](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestOptionalJSONDefinitionLevels tests that optional JSON columns backed by
+// string, []byte and json.RawMessage values write a single definition level
+// for present values, rather than incrementing it twice and panicking in Close.
+// See: https://github.com/parquet-go/parquet-go/issues/621
+func TestOptionalJSONDefinitionLevels(t *testing.T) {
+	t.Run("string", func(t *testing.T) {
+		type R struct {
+			S string `parquet:"s,json,optional"`
+		}
+		rows := []R{{S: `{}`}, {}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+	t.Run("bytes", func(t *testing.T) {
+		type R struct {
+			B []byte `parquet:"b,json,optional"`
+		}
+		rows := []R{{B: []byte(`{}`)}, {}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+	t.Run("rawmessage", func(t *testing.T) {
+		type R struct {
+			J json.RawMessage `parquet:"j,json,optional"`
+		}
+		rows := []R{{J: json.RawMessage(`{}`)}, {}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+	t.Run("rawmessage-nojsontag", func(t *testing.T) {
+		type R struct {
+			J json.RawMessage `parquet:"j,optional"`
+		}
+		rows := []R{{J: json.RawMessage(`{}`)}, {}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+	t.Run("map-value", func(t *testing.T) {
+		type R struct {
+			M map[string]string `parquet:"m" parquet-value:",json,optional"`
+		}
+		rows := []R{{M: map[string]string{"a": `{}`, "b": ""}}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+	t.Run("list-element", func(t *testing.T) {
+		t.Skip("optional JSON list elements read back empty; predates issue 621")
+		type R struct {
+			L []string `parquet:"l,list" parquet-element:",json,optional"`
+		}
+		rows := []R{{L: []string{`{}`, ""}}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+	t.Run("ptr-string", func(t *testing.T) {
+		t.Skip("non-nil optional JSON *string reads back as nil; predates issue 621")
+		type R struct {
+			S *string `parquet:"s,json,optional"`
+		}
+		s := `{}`
+		rows := []R{{S: &s}, {}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+}
+
+// assertRowsEqual fails the test if got does not deeply equal want.
+func assertRowsEqual[T any](t *testing.T, want, got []T) {
+	t.Helper()
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("rows mismatch:\nwant: %+v\ngot:  %+v", want, got)
+	}
+}

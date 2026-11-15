@@ -612,7 +612,11 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagR
 				// to the element, not the list.
 			case f.Type == reflect.TypeFor[json.RawMessage]():
 				// json.RawMessage handles its own definition levels through
-				// writeRowsFuncOfJSONRawMessage -> writeValueFuncOf -> writeValueFuncOfOptional
+				// writeRowsFuncFor -> writeValueFuncOf -> writeValueFuncOfOptional,
+				// or through writeRowsFuncOfJSON for JSON columns.
+			case isJSONStringOrBytes(f.Type, node):
+				// Strings and byte slices in JSON columns handle their own
+				// definition levels through writeRowsFuncOfJSON.
 			case f.Type == reflect.TypeFor[time.Time]():
 				// time.Time is a struct but has IsZero() method,
 				// so it needs special handling.
@@ -867,9 +871,19 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath, tagRepl
 	}
 }
 
+// isJSONStringOrBytes reports whether values of type t written to node take the
+// writeRowsFuncOfJSON fast path, which handles optional definition levels itself.
+func isJSONStringOrBytes(t reflect.Type, node Node) bool {
+	return node != nil && node.Leaf() && logicalTypeIs[*format.JsonType](node.Type().LogicalType()) && isStringOrBytes(t)
+}
+
+func isStringOrBytes(t reflect.Type) bool {
+	return t.Kind() == reflect.String || (t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8)
+}
+
 func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
 	// If this is a string or a byte array, write directly.
-	if t.Kind() == reflect.String || (t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8) {
+	if isStringOrBytes(t) {
 		column, _ := schema.Lookup(path...)
 		isOptional := column.Node.Optional()
 
