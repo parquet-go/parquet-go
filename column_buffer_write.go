@@ -463,8 +463,16 @@ func writeRowsFuncOfByteSlice(t reflect.Type, schema *Schema, path columnPath) w
 
 func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tagReplacements []StructTagOption) writeRowsFunc {
 	elemType := t.Elem()
-	elemSize := uintptr(elemType.Size())
 	writeRows := writeRowsFuncOf(elemType, schema, path, tagReplacements)
+	return writeRowsFuncOfPointerValue(elemType, schema, path, writeRows)
+}
+
+// writeRowsFuncOfPointerValue writes values of a pointer type. A nil pointer is
+// a null; a non-nil pointer writes the value writeRows produces. When the
+// schema node is optional, a non-nil pointer increments the definition level.
+// An empty path is a pointer to the row value, which does not change levels.
+func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
+	elemSize := uintptr(elemType.Size())
 
 	if len(path) == 0 {
 		// This code path is taken when generating a writeRowsFunc for a pointer
@@ -882,6 +890,18 @@ func isStringOrBytes(t reflect.Type) bool {
 }
 
 func writeRowsFuncOfJSON(t reflect.Type, schema *Schema, path columnPath) writeRowsFunc {
+	// Optional *string / *[]byte columns are null only when the pointer is nil.
+	// The string fast path below treats a zero string as null and would both
+	// drop a non-nil empty string and apply the definition level twice. A
+	// required *string stays on the encode path: its column has no definition
+	// level, and the JSON text (including "null") is what the reader unmarshals.
+	if t.Kind() == reflect.Pointer && isStringOrBytes(t.Elem()) {
+		if node := findByPath(schema, path); node != nil && node.Optional() {
+			elem := t.Elem()
+			return writeRowsFuncOfPointerValue(elem, schema, path, writeRowsFuncOfRequired(elem, schema, path))
+		}
+	}
+
 	// If this is a string or a byte array, write directly.
 	if isStringOrBytes(t) {
 		column, _ := schema.Lookup(path...)

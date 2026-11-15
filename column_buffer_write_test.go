@@ -1016,12 +1016,32 @@ func TestOptionalJSONDefinitionLevels(t *testing.T) {
 		assertRowsEqual(t, rows, roundTripRows(t, rows))
 	})
 	t.Run("ptr-string", func(t *testing.T) {
-		t.Skip("non-nil optional JSON *string reads back as nil; predates issue 621")
 		type R struct {
 			S *string `parquet:"s,json,optional"`
 		}
 		s := `{}`
-		rows := []R{{S: &s}, {}}
+		empty := ""
+		rows := []R{{S: &s}, {}, {S: &empty}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+	t.Run("ptr-bytes", func(t *testing.T) {
+		type R struct {
+			B *[]byte `parquet:"b,json,optional"`
+		}
+		b := []byte(`{}`)
+		empty := []byte{}
+		rows := []R{{B: &b}, {}, {B: &empty}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+	// A required *string column has no definition level. Nil is the JSON text
+	// "null", not a parquet null, and must keep round-tripping that way.
+	t.Run("ptr-string-required", func(t *testing.T) {
+		type R struct {
+			S *string `parquet:"s,json"`
+		}
+		s := `{}`
+		empty := ""
+		rows := []R{{S: &s}, {}, {S: &empty}}
 		assertRowsEqual(t, rows, roundTripRows(t, rows))
 	})
 }
