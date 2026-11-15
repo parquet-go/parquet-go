@@ -365,7 +365,7 @@ func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, wr
 			}
 
 			if y != 0 {
-				if b := nulls.bits[x] >> uint(y); b == (1<<uint64(y))-1 {
+				if b := nulls.bits[x] >> uint(y); b == ^uint64(0)>>uint(y) {
 					x++
 					y = 0
 				} else {
