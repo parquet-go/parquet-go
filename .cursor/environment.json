@@ -1,0 +1,4 @@
+{
+  "name": "parquet-go",
+  "install": "bash .cursor/install.sh"
+}
