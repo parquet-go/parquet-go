@@ -2553,6 +2553,50 @@ func TestIssue417MapStructOptionalField(t *testing.T) {
 	}
 }
 
+// TestGenericWriterNilInRequiredRepeatedValues tests that nil values written to
+// the required elements of a list or the required values of a map are written
+// as zero values, and that the values of the following rows are not shifted.
+func TestGenericWriterNilInRequiredRepeatedValues(t *testing.T) {
+	type Record struct {
+		List []int64          `parquet:"list,list"`
+		Map  map[string]int64 `parquet:"map"`
+	}
+
+	schema := SchemaOf(Record{})
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[any](buf, schema)
+	_, err := writer.Write([]any{
+		map[string]any{
+			"list": []any{nil},
+			"map":  map[string]any{"a": nil},
+		},
+		map[string]any{
+			"list": []any{int64(1), int64(2)},
+			"map":  map[string]any{"b": int64(3)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	rows, err := Read[Record](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	expected := []Record{
+		{List: []int64{0}, Map: map[string]int64{"a": 0}},
+		{List: []int64{1, 2}, Map: map[string]int64{"b": 3}},
+	}
+	if !reflect.DeepEqual(expected, rows) {
+		t.Errorf("rows mismatch:\nexpected: %+v\ngot: %+v", expected, rows)
+	}
+}
+
 // TestUnaddressableByteArray tests that [N]byte values written through
 // GenericWriter[any] with map[string]any rows do not panic. Values extracted
 // from an interface or a map are unaddressable, and reflect.Value.Bytes

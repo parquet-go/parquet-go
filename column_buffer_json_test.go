@@ -789,6 +789,157 @@ func TestJSONRawMessageNullValues(t *testing.T) {
 	}
 }
 
+// TestJSONRawMessageNullInRequiredList tests that a null element of a list of
+// required values is written as the zero value, and that the values of the
+// following rows are not shifted.
+func TestJSONRawMessageNullInRequiredList(t *testing.T) {
+	type Item struct {
+		X int64 `parquet:"x"`
+	}
+
+	type ReadRecord struct {
+		ID       int64     `parquet:"id"`
+		Features []bool    `parquet:"features,list"`
+		Nums     []int64   `parquet:"nums,list"`
+		Strs     []string  `parquet:"strs,list"`
+		Repeated []int32   `parquet:"repeated"`
+		Matrix   [][]int64 `parquet:"matrix,list"`
+		Items    []Item    `parquet:"items,list"`
+	}
+
+	type WriteRecord struct {
+		ID       int64           `parquet:"id"`
+		Features json.RawMessage `parquet:"features"`
+		Nums     json.RawMessage `parquet:"nums"`
+		Strs     json.RawMessage `parquet:"strs"`
+		Repeated json.RawMessage `parquet:"repeated"`
+		Matrix   json.RawMessage `parquet:"matrix"`
+		Items    json.RawMessage `parquet:"items"`
+	}
+
+	schema := SchemaOf(ReadRecord{})
+
+	records := []WriteRecord{
+		{
+			ID:       1,
+			Features: json.RawMessage(`[null]`),
+			Nums:     json.RawMessage(`[null]`),
+			Strs:     json.RawMessage(`[null]`),
+			Repeated: json.RawMessage(`[1, null, 3]`),
+			Matrix:   json.RawMessage(`[[null, 1], [2]]`),
+			Items:    json.RawMessage(`[{"x": null}, {"x": 1}]`),
+		},
+		{
+			ID:       2,
+			Features: json.RawMessage(`[true, true]`),
+			Nums:     json.RawMessage(`[5, 6]`),
+			Strs:     json.RawMessage(`["a", "b"]`),
+			Repeated: json.RawMessage(`[4]`),
+			Matrix:   json.RawMessage(`[[3]]`),
+			Items:    json.RawMessage(`[{"x": 2}]`),
+		},
+	}
+
+	expectedRecords := []ReadRecord{
+		{
+			ID:       1,
+			Features: []bool{false},
+			Nums:     []int64{0},
+			Strs:     []string{""},
+			Repeated: []int32{1, 0, 3},
+			Matrix:   [][]int64{{0, 1}, {2}},
+			Items:    []Item{{X: 0}, {X: 1}},
+		},
+		{
+			ID:       2,
+			Features: []bool{true, true},
+			Nums:     []int64{5, 6},
+			Strs:     []string{"a", "b"},
+			Repeated: []int32{4},
+			Matrix:   [][]int64{{3}},
+			Items:    []Item{{X: 2}},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[WriteRecord](buf, schema)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewGenericReader[ReadRecord](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]ReadRecord, len(expectedRecords))
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	if !reflect.DeepEqual(expectedRecords, readRecords) {
+		t.Errorf("records mismatch:\nexpected: %+v\ngot: %+v", expectedRecords, readRecords)
+	}
+}
+
+// TestJSONRawMessageNullRequiredFieldInOptionalGroup tests that a null required
+// field of an optional group is written as the zero value, and that the values
+// of the following rows are not shifted.
+func TestJSONRawMessageNullRequiredFieldInOptionalGroup(t *testing.T) {
+	type Group struct {
+		X int64  `parquet:"x"`
+		S string `parquet:"s"`
+	}
+
+	type ReadRecord struct {
+		ID    int64  `parquet:"id"`
+		Group *Group `parquet:"group,optional"`
+	}
+
+	type WriteRecord struct {
+		ID    int64           `parquet:"id"`
+		Group json.RawMessage `parquet:"group,optional"`
+	}
+
+	schema := SchemaOf(ReadRecord{})
+
+	records := []WriteRecord{
+		{ID: 1, Group: json.RawMessage(`{"x": null, "s": null}`)},
+		{ID: 2, Group: json.RawMessage(`null`)},
+		{ID: 3, Group: json.RawMessage(`{"x": 5, "s": "a"}`)},
+	}
+
+	expectedRecords := []ReadRecord{
+		{ID: 1, Group: &Group{}},
+		{ID: 2, Group: nil},
+		{ID: 3, Group: &Group{X: 5, S: "a"}},
+	}
+
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[WriteRecord](buf, schema)
+	if _, err := writer.Write(records); err != nil {
+		t.Fatalf("failed to write records: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	reader := NewGenericReader[ReadRecord](bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+
+	readRecords := make([]ReadRecord, len(expectedRecords))
+	if _, err := reader.Read(readRecords); err != nil && err != io.EOF {
+		t.Fatalf("failed to read records: %v", err)
+	}
+
+	for i, expected := range expectedRecords {
+		if got := readRecords[i]; !reflect.DeepEqual(expected, got) {
+			t.Errorf("record %d mismatch:\nexpected: %d %+v\ngot: %d %+v", i, expected.ID, expected.Group, got.ID, got.Group)
+		}
+	}
+}
+
 // TestJSONRawMessageDeepNesting tests deeply nested structures
 func TestJSONRawMessageDeepNesting(t *testing.T) {
 	type Level3 struct {
