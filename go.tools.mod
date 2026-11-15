@@ -5,7 +5,7 @@ go 1.25.1
 tool golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize
 
 require (
-	github.com/andybalholm/brotli v1.1.1
+	github.com/andybalholm/brotli v1.3.0
 	github.com/google/uuid v1.6.0
 	github.com/hexops/gotextdiff v1.0.3
 	github.com/klauspost/compress v1.18.0
