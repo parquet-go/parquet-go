@@ -127,3 +127,47 @@ func benchmarkLargeObject(n int) map[string]any {
 	}
 	return out
 }
+
+func BenchmarkMarshalSmallValues(b *testing.B) {
+	benchmarks := []struct {
+		name  string
+		input any
+	}{
+		{"Int64", int64(7)},
+		{"ShortString", "hello"},
+		{"EmptyArray", []any{}},
+		{"EmptyObject", map[string]any{}},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_, _, err := Marshal(bm.input)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkEncodeEmptyContainers(b *testing.B) {
+	benchmarks := []struct {
+		name  string
+		input Value
+	}{
+		{"Array", MakeArray(nil)},
+		{"Object", MakeObject(nil)},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			var builder MetadataBuilder
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = Encode(&builder, bm.input)
+			}
+		})
+	}
+}
