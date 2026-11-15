@@ -4,11 +4,29 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/format"
 )
+
+// putBigEndianInt64 writes n as a big-endian two's-complement integer,
+// sign-extending into dst when dst is wider than 8 bytes.
+func putBigEndianInt64(dst []byte, n int64) {
+	if len(dst) < 8 {
+		panic("dst shorter than 8 bytes")
+	}
+	pad := byte(0)
+	if n < 0 {
+		pad = 0xFF
+	}
+	for i := range len(dst) - 8 {
+		dst[i] = pad
+	}
+	binary.BigEndian.PutUint64(dst[len(dst)-8:], uint64(n))
+}
 
 func TestFixedLenDecimalReadIntoInt64(t *testing.T) {
 	type encodedAmount struct {
@@ -64,6 +82,139 @@ func TestFixedLenDecimalReadIntoInt64(t *testing.T) {
 			}
 		})
 	}
+
+	// Precision above 18 is stored as FIXED_LEN_BYTE_ARRAY(16). Values that
+	// still fit in int64 are sign-extended across the extra bytes.
+	t.Run("16-byte", func(t *testing.T) {
+		type encodedAmount struct {
+			Amount [16]byte `parquet:"amount,decimal(0:38)"`
+		}
+		type integerAmount struct {
+			Amount int64 `parquet:"amount,decimal(0:18)"`
+		}
+		tests := []struct {
+			name  string
+			cents int64
+		}{
+			{name: "positive", cents: 100000},
+			{name: "negative", cents: -100000},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				var encoded encodedAmount
+				putBigEndianInt64(encoded.Amount[:], tt.cents)
+
+				var file bytes.Buffer
+				writer := NewGenericWriter[encodedAmount](&file)
+				if _, err := writer.Write([]encodedAmount{encoded}); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+
+				integerReader := NewReader(bytes.NewReader(file.Bytes()))
+				var got integerAmount
+				if err := integerReader.Read(&got); err != nil {
+					t.Fatal(err)
+				}
+				if err := integerReader.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if got.Amount != tt.cents {
+					t.Fatalf("unscaled amount = %d, want %d (stored bytes %x)", got.Amount, tt.cents, encoded.Amount)
+				}
+			})
+		}
+	})
+
+	t.Run("int32", func(t *testing.T) {
+		type encodedAmount struct {
+			Amount [8]byte `parquet:"amount,decimal(0:18)"`
+		}
+		type int32Amount struct {
+			Amount int32 `parquet:"amount,decimal(0:9)"`
+		}
+		write := func(t *testing.T, n int64) *bytes.Reader {
+			t.Helper()
+			var encoded encodedAmount
+			putBigEndianInt64(encoded.Amount[:], n)
+			var file bytes.Buffer
+			writer := NewGenericWriter[encodedAmount](&file)
+			if _, err := writer.Write([]encodedAmount{encoded}); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return bytes.NewReader(file.Bytes())
+		}
+		for _, n := range []int64{100000, -100000} {
+			t.Run(fmt.Sprintf("fits/%d", n), func(t *testing.T) {
+				reader := NewReader(write(t, n))
+				defer reader.Close()
+				var got int32Amount
+				if err := reader.Read(&got); err != nil {
+					t.Fatal(err)
+				}
+				if int64(got.Amount) != n {
+					t.Fatalf("amount = %d, want %d", got.Amount, n)
+				}
+			})
+		}
+		for _, n := range []int64{int64(math.MaxInt32) + 1, int64(math.MinInt32) - 1} {
+			t.Run(fmt.Sprintf("overflow/%d", n), func(t *testing.T) {
+				reader := NewReader(write(t, n))
+				defer reader.Close()
+				var got int32Amount
+				err := reader.Read(&got)
+				if err == nil {
+					t.Fatalf("read amount %d, want an error that the value does not fit in int32", got.Amount)
+				}
+				if !strings.Contains(err.Error(), "does not fit in int32") {
+					t.Fatalf("read error = %v, want an int32 overflow", err)
+				}
+			})
+		}
+	})
+
+	t.Run("null", func(t *testing.T) {
+		type encodedAmount struct {
+			Amount *[16]byte `parquet:"amount,decimal(0:38)"`
+		}
+		type integerAmount struct {
+			Amount *int64 `parquet:"amount,decimal(0:18)"`
+		}
+		const present int64 = -100000
+		var raw [16]byte
+		putBigEndianInt64(raw[:], present)
+
+		var file bytes.Buffer
+		writer := NewGenericWriter[encodedAmount](&file)
+		if _, err := writer.Write([]encodedAmount{{}, {Amount: &raw}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		reader := NewReader(bytes.NewReader(file.Bytes()))
+		defer reader.Close()
+
+		var got integerAmount
+		if err := reader.Read(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Amount != nil {
+			t.Fatalf("amount = %d, want null", *got.Amount)
+		}
+		if err := reader.Read(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Amount == nil || *got.Amount != present {
+			t.Fatalf("amount = %v, want %d", got.Amount, present)
+		}
+	})
 }
 
 func TestInt64FromDecimalBytes(t *testing.T) {
