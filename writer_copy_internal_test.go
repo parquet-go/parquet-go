@@ -1276,7 +1276,7 @@ func TestWriteRowGroupCopyBloomFilter(t *testing.T) {
 	}
 
 	t.Run("folded_filter_copies", func(t *testing.T) {
-		filter := FoldingSplitBlockFilter(0.01, "id")
+		filter := FoldingSplitBlockFilter(10, "id")
 		src := writeCopyTestFile(t, foldedRows, BloomFilters(filter))
 		srcSize := src.RowGroups()[0].ColumnChunks()[0].BloomFilter().Size()
 		if srcSize >= int64(filter.Size(int64(len(foldedRows)))) {
@@ -1289,21 +1289,21 @@ func TestWriteRowGroupCopyBloomFilter(t *testing.T) {
 		checkFoldedFilter(t, out, srcSize)
 	})
 
-	t.Run("different_target_demotes", func(t *testing.T) {
-		// With only a few distinct values, both targets fold down to the same
+	t.Run("folded_different_bits_per_value_demotes", func(t *testing.T) {
+		// With only a few distinct values, both filters fold down to the same
 		// single block, so use enough of them for the folded sizes to differ.
 		rows := makeCopyTestRows(1000)
 		for i := range rows {
 			rows[i].ID = int64(i % 200)
 		}
-		src := writeCopyTestFile(t, rows, BloomFilters(FoldingSplitBlockFilter(0.1, "id")))
-		filter := FoldingSplitBlockFilter(0.0001, "id")
+		src := writeCopyTestFile(t, rows, BloomFilters(FoldingSplitBlockFilter(4, "id")))
+		filter := FoldingSplitBlockFilter(20, "id")
 		out, copied, l3 := rewrite(src, BloomFilters(filter))
 		if copied != 0 {
-			t.Fatalf("expected demotion on false positive rate mismatch, %d chunks copied", copied)
+			t.Fatalf("expected demotion on bits per value mismatch, %d chunks copied", copied)
 		}
 		if l3 == 0 {
-			t.Fatal("expected L3 rebuild on false positive rate mismatch")
+			t.Fatal("expected L3 rebuild on bits per value mismatch")
 		}
 		// The rebuilt filter must be the one the writer folds on its own.
 		rebuilt := writeCopyTestFile(t, rows, BloomFilters(filter))

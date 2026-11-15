@@ -200,18 +200,19 @@ func SplitBlockFilter(bitsPerValue uint, path ...string) BloomFilterColumn {
 }
 
 // FoldingSplitBlockFilter constructs a split block bloom filter object for the
-// column at the given path which is shrunk to fit the values it contains when
-// the row group is flushed.
+// column at the given path, with the given bitsPerValue, which is shrunk to fit
+// the values it contains when the row group is flushed.
 //
-// The filter is first allocated like SplitBlockFilter, with enough bits per
-// value to reach targetFPP if every value is distinct. Its number of blocks is
-// rounded up by at most 1/8 so that it can be halved repeatedly. Once all values
-// of the row group have been inserted, the filter is folded in half for as long
-// as its false positive rate remains at or below targetFPP, which can bring
-// large filters down to 15 blocks (480 bytes) or less. This produces small
-// filters for columns with few distinct values without requiring an estimate
-// of their number ahead of time, while keeping filters of columns with many
-// distinct values close to the size SplitBlockFilter would use.
+// The filter is first allocated like SplitBlockFilter, with its number of
+// blocks rounded up by at most 1/8 so that it can be halved repeatedly. Once
+// all values of the row group have been inserted, the filter is folded in half
+// for as long as its false positive rate remains at or below the rate that a
+// SplitBlockFilter with the same bitsPerValue is expected to have when every
+// value is distinct (see bloom.FalsePositiveRateOf). Folding can bring large
+// filters down to 15 blocks (480 bytes) or less. This produces small filters
+// for columns with few distinct values without requiring an estimate of their
+// number ahead of time, while keeping filters of columns with many distinct
+// values close to the size SplitBlockFilter would use.
 //
 // Dictionary-encoded columns know their exact number of distinct values, so
 // their filter is sized like SplitBlockFilter without rounding, and is only
@@ -220,23 +221,26 @@ func SplitBlockFilter(bitsPerValue uint, path ...string) BloomFilterColumn {
 // Folded filters are standard split block bloom filters, readers do not need
 // any special support to use them.
 //
-// If you are unsure which targetFPP to use, 0.01 is a reasonable default. The
-// function panics if targetFPP is not between zero and one, exclusive.
-func FoldingSplitBlockFilter(targetFPP float64, path ...string) BloomFilterColumn {
-	if !(targetFPP > 0 && targetFPP < 1) {
-		panic(fmt.Sprintf("bloom filter target false positive rate must be between 0 and 1, got %g", targetFPP))
+// As with SplitBlockFilter, 10 bitsPerValue is a reasonable default, which
+// keeps the false positive rate at about 1.3%. The function panics if
+// bitsPerValue is zero.
+func FoldingSplitBlockFilter(bitsPerValue uint, path ...string) BloomFilterColumn {
+	if bitsPerValue == 0 {
+		panic("bloom filter bits per value must be greater than zero")
 	}
 	return splitBlockFilter{
-		bitsPerValue: bloom.BitsPerValueOf(targetFPP),
-		targetFPP:    targetFPP,
+		bitsPerValue: bitsPerValue,
+		targetFPP:    bloom.FalsePositiveRateOf(bitsPerValue),
 		path:         path,
 	}
 }
 
 type splitBlockFilter struct {
 	bitsPerValue uint
-	targetFPP    float64
-	path         []string
+	// targetFPP is the false positive rate up to which the filter is folded,
+	// or zero if it is not folded.
+	targetFPP float64
+	path      []string
 }
 
 func (f splitBlockFilter) Path() []string              { return f.path }

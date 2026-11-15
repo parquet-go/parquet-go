@@ -178,13 +178,13 @@ func TestSplitBlockFilterFoldTo(t *testing.T) {
 	})
 }
 
-func TestBitsPerValueOf(t *testing.T) {
+func TestFalsePositiveRateOf(t *testing.T) {
 	const N = 20_000
 	const M = 200_000
 	p := rand.New(rand.NewSource(3))
 
-	for _, falsePositiveRate := range []float64{0.1, 0.01, 0.001} {
-		bitsPerValue := bloom.BitsPerValueOf(falsePositiveRate)
+	for _, bitsPerValue := range []uint{4, 10, 16} {
+		want := bloom.FalsePositiveRateOf(bitsPerValue)
 		f := make(bloom.SplitBlockFilter, bloom.NumSplitBlocksOf(N, bitsPerValue))
 		for range N {
 			f.Insert(p.Uint64())
@@ -195,20 +195,22 @@ func TestBitsPerValueOf(t *testing.T) {
 				falsePositives++
 			}
 		}
-		// Allow for sampling noise around the target.
-		if r := float64(falsePositives) / M; r > 1.25*falsePositiveRate {
-			t.Errorf("%d bits per value for a target of %g: false positive rate is %g", bitsPerValue, falsePositiveRate, r)
+		// Allow for sampling noise around the expected rate.
+		if r := float64(falsePositives) / M; r < 0.75*want || r > 1.25*want {
+			t.Errorf("%d bits per value: expected a false positive rate of %g, got %g", bitsPerValue, want, r)
 		}
-		if r := f.FalsePositiveRate(); r > 1.25*falsePositiveRate {
-			t.Errorf("%d bits per value for a target of %g: estimated false positive rate is %g", bitsPerValue, falsePositiveRate, r)
+		if r := f.FalsePositiveRate(); r < 0.75*want || r > 1.25*want {
+			t.Errorf("%d bits per value: expected a false positive rate of %g, estimated %g", bitsPerValue, want, r)
 		}
 	}
 
-	if b := bloom.BitsPerValueOf(0); b != 64 {
-		t.Errorf("bits per value for a target of zero is not capped: %d", b)
+	if r := bloom.FalsePositiveRateOf(0); r != 1 {
+		t.Errorf("false positive rate for zero bits per value is not 1: %g", r)
 	}
-	if b := bloom.BitsPerValueOf(0.01); b <= bloom.BitsPerValueOf(0.1) || b >= bloom.BitsPerValueOf(0.001) {
-		t.Errorf("bits per value does not increase as the target decreases")
+	for bitsPerValue := uint(1); bitsPerValue < 64; bitsPerValue++ {
+		if bloom.FalsePositiveRateOf(bitsPerValue+1) >= bloom.FalsePositiveRateOf(bitsPerValue) {
+			t.Errorf("false positive rate does not decrease from %d bits per value", bitsPerValue)
+		}
 	}
 }
 

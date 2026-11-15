@@ -40,22 +40,16 @@ func NumSplitBlocksOf(numValues int64, bitsPerValue uint) int {
 	return int(numBlocks)
 }
 
-// BitsPerValueOf returns the smallest number of bits of filter per value for
-// which a split block filter holding distinct values is expected to have a
-// false positive rate at or below falsePositiveRate, up to 64.
-func BitsPerValueOf(falsePositiveRate float64) uint {
-	const maxBitsPerValue = 64
-	for bitsPerValue := uint(1); bitsPerValue < maxBitsPerValue; bitsPerValue++ {
-		if expectedFalsePositiveRate(bitsPerValue) <= falsePositiveRate {
-			return bitsPerValue
-		}
-	}
-	return maxBitsPerValue
-}
-
+// FalsePositiveRateOf returns the false positive rate that a split block filter
+// sized with NumSplitBlocksOf for the given bits of filter per value is
+// expected to have once it holds that number of distinct values.
+//
 // The number of values hashed to a block follows a Poisson distribution, and
 // each value sets one bit in each of the 8 words of 32 bits of its block.
-func expectedFalsePositiveRate(bitsPerValue uint) float64 {
+func FalsePositiveRateOf(bitsPerValue uint) float64 {
+	if bitsPerValue == 0 {
+		return 1
+	}
 	lambda := float64(8*BlockSize) / float64(bitsPerValue)
 	limit := int(lambda+12*math.Sqrt(lambda)) + 16
 	p := math.Exp(-lambda) // probability that a block holds i values

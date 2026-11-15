@@ -523,13 +523,15 @@ func TestFoldingSplitBlockFilter(t *testing.T) {
 		return f
 	}
 
+	// Compare against filters with the same bits per value, which is what the
+	// folding filters start from.
 	unfolded := write(
-		parquet.SplitBlockFilter(16, "id"),
-		parquet.SplitBlockFilter(16, "name"),
+		parquet.SplitBlockFilter(10, "id"),
+		parquet.SplitBlockFilter(10, "name"),
 	)
 	folded := write(
-		parquet.FoldingSplitBlockFilter(0.01, "id"),
-		parquet.FoldingSplitBlockFilter(0.01, "name"),
+		parquet.FoldingSplitBlockFilter(10, "id"),
+		parquet.FoldingSplitBlockFilter(10, "name"),
 	)
 
 	if n := len(folded.RowGroups()); n != numRows/numRowsPerRowGroup {

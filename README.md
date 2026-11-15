@@ -432,16 +432,17 @@ holds all the values in memory.
 
 Filters are sized from the number of values in a column chunk, which
 over-sizes them for columns that repeat the same values. Applications can
-instead configure a target false positive rate with
-`parquet.FoldingSplitBlockFilter`: the filter is sized for every value being
-distinct, then folded down to the smallest size that still meets the target
-once the row group is flushed. Folded filters are standard split-block bloom
-filters, so readers need no special support for them.
+instead use `parquet.FoldingSplitBlockFilter`, which takes the same bits per
+value as `parquet.SplitBlockFilter`: the filter is sized for every value being
+distinct, then folded down to the smallest size that keeps the false positive
+rate expected with every value distinct once the row group is flushed. Folded
+filters are standard split-block bloom filters, so readers need no special
+support for them.
 
 ```go
 writer := parquet.NewGenericWriter[RowType](output,
     parquet.BloomFilters(
-        parquet.FoldingSplitBlockFilter(0.01, "first_name"),
+        parquet.FoldingSplitBlockFilter(10, "first_name"),
     ),
 )
 ```
