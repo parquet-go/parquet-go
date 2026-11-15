@@ -54,6 +54,12 @@ func writeProtoMessageToGroup(msg proto.Message, columns []ColumnBuffer, levels 
 			fieldValue = reflect.ValueOf(protoValue.Message().Interface())
 		} else {
 			fieldValue = reflect.ValueOf(protoValue.Interface())
+			if protoField.HasPresence() {
+				// Pass a pointer so that a zero value is not coerced to null.
+				ptr := reflect.New(fieldValue.Type())
+				ptr.Elem().Set(fieldValue)
+				fieldValue = ptr
+			}
 		}
 		w.writeValue(columns, levels, fieldValue)
 	}
