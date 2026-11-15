@@ -128,6 +128,63 @@ func TestFixedLenDecimalReadIntoInt64(t *testing.T) {
 		}
 	})
 
+	// A one-byte FIXED_LEN_BYTE_ARRAY is sign-extended: 0x80 is -128 and 0x7f is 127.
+	t.Run("1-byte", func(t *testing.T) {
+		type encodedAmount struct {
+			Amount [1]byte `parquet:"amount,decimal(0:2)"`
+		}
+		type int64Amount struct {
+			Amount int64 `parquet:"amount,decimal(0:18)"`
+		}
+		type int32Amount struct {
+			Amount int32 `parquet:"amount,decimal(0:9)"`
+		}
+		tests := []struct {
+			name string
+			raw  byte
+			want int64
+		}{
+			{name: "negative", raw: 0x80, want: -128},
+			{name: "positive", raw: 0x7f, want: 127},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				var file bytes.Buffer
+				writer := NewGenericWriter[encodedAmount](&file)
+				if _, err := writer.Write([]encodedAmount{{Amount: [1]byte{tt.raw}}}); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+
+				int64Reader := NewReader(bytes.NewReader(file.Bytes()))
+				var got64 int64Amount
+				if err := int64Reader.Read(&got64); err != nil {
+					t.Fatal(err)
+				}
+				if err := int64Reader.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if got64.Amount != tt.want {
+					t.Fatalf("int64 amount = %d, want %d", got64.Amount, tt.want)
+				}
+
+				int32Reader := NewReader(bytes.NewReader(file.Bytes()))
+				var got32 int32Amount
+				if err := int32Reader.Read(&got32); err != nil {
+					t.Fatal(err)
+				}
+				if err := int32Reader.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if int64(got32.Amount) != tt.want {
+					t.Fatalf("int32 amount = %d, want %d", got32.Amount, tt.want)
+				}
+			})
+		}
+	})
+
 	t.Run("int32", func(t *testing.T) {
 		type encodedAmount struct {
 			Amount [8]byte `parquet:"amount,decimal(0:18)"`
