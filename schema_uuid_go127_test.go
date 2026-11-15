@@ -167,3 +167,8 @@ func TestStdlibUUIDSlice(t *testing.T) {
 		{List: []googleuuid.UUID{}},
 	}, googleGot)
 }
+
+func TestStdlibUUIDPointerSlice(t *testing.T) {
+	id := uuid.MustParse("123456ab-0000-0000-0000-000000000000")
+	testUUIDPointerSlice(t, id, uuid.Nil())
+}
