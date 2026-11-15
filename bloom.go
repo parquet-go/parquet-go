@@ -204,11 +204,14 @@ func SplitBlockFilter(bitsPerValue uint, path ...string) BloomFilterColumn {
 // the row group is flushed.
 //
 // The filter is first allocated like SplitBlockFilter, with enough bits per
-// value to reach targetFPP if every value is distinct and rounded up to a power
-// of two number of blocks. Once all values of the row group have been inserted,
-// the filter is folded in half for as long as its false positive rate remains
-// at or below targetFPP. This produces small filters for columns with few
-// distinct values without requiring an estimate of their number ahead of time.
+// value to reach targetFPP if every value is distinct. Its number of blocks is
+// rounded up by at most 1/8 so that it can be halved repeatedly. Once all values
+// of the row group have been inserted, the filter is folded in half for as long
+// as its false positive rate remains at or below targetFPP, which can bring
+// large filters down to 15 blocks (480 bytes) or less. This produces small
+// filters for columns with few distinct values without requiring an estimate
+// of their number ahead of time, while keeping filters of columns with many
+// distinct values close to the size SplitBlockFilter would use.
 //
 // Dictionary-encoded columns know their exact number of distinct values, so
 // their filter is sized like SplitBlockFilter without rounding, and is only
@@ -242,11 +245,33 @@ func (f splitBlockFilter) Encoding() encoding.Encoding { return splitBlockEncodi
 
 func (f splitBlockFilter) Size(numValues int64) int {
 	size := f.distinctSize(numValues)
-	if f.folding() && size > bloom.BlockSize {
-		// Folding stops at the first odd number of blocks.
-		size = bloom.BlockSize << bits.Len(uint(size/bloom.BlockSize-1))
+	if f.folding() {
+		size = bloom.BlockSize * foldableNumBlocks(size/bloom.BlockSize)
 	}
 	return size
+}
+
+// foldSignificantBits is the number of significant bits kept when rounding up
+// the number of blocks of a folding filter, see foldableNumBlocks.
+const foldSignificantBits = 4
+
+// foldableNumBlocks rounds numBlocks up to the smallest m * 2^k with m at most
+// 2^foldSignificantBits.
+//
+// Folding halves the number of blocks and stops at the first odd count, so a
+// filter of m * 2^k blocks can fold k times, down to m blocks. Rounding up to a
+// power of two would let filters fold down to a single block, but could double
+// their size when there are too many distinct values to fold at all. Keeping
+// a few significant bits instead bounds the extra size to less than
+// 1/2^(foldSignificantBits-1) of numBlocks, at the cost of folding stopping at
+// up to 2^foldSignificantBits-1 blocks.
+func foldableNumBlocks(numBlocks int) int {
+	if numBlocks <= 1 {
+		return numBlocks
+	}
+	shift := max(bits.Len(uint(numBlocks-1))-foldSignificantBits, 0)
+	unit := 1 << shift
+	return (numBlocks + unit - 1) &^ (unit - 1)
 }
 
 // distinctSize is like Size but for a count of distinct values, such as the

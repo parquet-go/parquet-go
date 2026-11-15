@@ -115,7 +115,8 @@ func (f SplitBlockFilter) Fold() SplitBlockFilter {
 // shares the memory of f.
 //
 // Folding stops early when the number of blocks becomes odd, so filters are
-// best allocated with a power of two number of blocks.
+// best allocated with a number of blocks that is a small odd number times a
+// power of two.
 func (f SplitBlockFilter) FoldTo(maxFalsePositiveRate float64) SplitBlockFilter {
 	for len(f) > 1 && len(f)%2 == 0 && f.foldedFalsePositiveRate() <= maxFalsePositiveRate {
 		f = f.Fold()
