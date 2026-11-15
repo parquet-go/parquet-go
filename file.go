@@ -121,6 +121,13 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	if footerSize <= optimisticFooterSize {
 		footerData = optimisticFooterData[optimisticFooterSize-footerSize : optimisticFooterSize]
 	} else {
+		// The footer and its eight byte trailer have to fit in the file. The
+		// length comes from the file, so a small file can claim a footer of
+		// up to 4 GB; checking it here keeps a damaged file from making the
+		// process allocate that much memory before the read fails.
+		if footerSize > size-8 {
+			return nil, fmt.Errorf("parquet file footer of %d bytes does not fit in a file of %d bytes", footerSize, size)
+		}
 		footerData = make([]byte, footerSize)
 		if cast, ok := f.reader.(interface{ SetFooterSection(offset, length int64) }); ok {
 			cast.SetFooterSection(size-(footerSize+8), footerSize)

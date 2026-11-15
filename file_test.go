@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +60,30 @@ func TestOpenFile(t *testing.T) {
 
 			printColumns(t, p.Root(), "")
 		})
+	}
+}
+
+// TestOpenFileFooterLargerThanFile verifies that a file whose trailer claims a
+// footer larger than the file is rejected before the footer buffer is
+// allocated. The claimed length comes from the file, so a small file could
+// otherwise make the process allocate gigabytes.
+func TestOpenFileFooterLargerThanFile(t *testing.T) {
+	// The magic header, a footer of a few bytes, and the trailer: four bytes
+	// of length and the magic footer.
+	data := make([]byte, 0, 32)
+	data = append(data, "PAR1"...)
+	data = append(data, 0, 0, 0, 0)
+	trailer := make([]byte, 8)
+	binary.LittleEndian.PutUint32(trailer[:4], 1<<20)
+	copy(trailer[4:], "PAR1")
+	data = append(data, trailer...)
+
+	_, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err == nil {
+		t.Fatal("OpenFile: expected an error for a footer larger than the file, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not fit") {
+		t.Fatalf("OpenFile: expected a footer size error, got %v", err)
 	}
 }
 
