@@ -29,12 +29,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Maven Action
-        uses: s4u/setup-maven-action@v1.18.0
+      # Maven exists only to build parquet-cli for TestWriter (PARQUET_GO_TEST_CLI).
+      # s4u/setup-maven-action calls stCarolas/setup-maven, which downloads
+      # apache-maven-<version>-bin.tar.gz from repo.maven.apache.org. Apache
+      # removes old binaries from that mirror (3.9.2 is HTTP 404), so the job
+      # died before go test. archive.apache.org keeps the release.
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
+          distribution: zulu
           java-version: 17
-          maven-version: 3.9.2
 
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          # Prefix match restores the repository cached by the old setup-maven-action.
+          key: ${{ runner.os }}-m2-parquet-cli-1.13.1
+          restore-keys: |
+            ${{ runner.os }}-m2-parquet-cli-
+            ${{ runner.os }}-jdk17-zulu-maven3.9.2-
+
+      - name: Setup Maven
+        run: |
+          set -euo pipefail
+          version=3.9.2
+          tarball="$RUNNER_TEMP/apache-maven-${version}-bin.tar.gz"
+          url="https://archive.apache.org/dist/maven/maven-3/${version}/binaries/apache-maven-${version}-bin.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "$url" -o "$tarball"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "${url}.sha512" -o "${tarball}.sha512"
+          hash=$(tr -d '[:space:]' < "${tarball}.sha512")
+          echo "${hash}  ${tarball}" | sha512sum -c -
+          tar -xzf "$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/apache-maven-${version}/bin" >> "$GITHUB_PATH"
 
       - name: Setup Parquet CLI
         run: |
