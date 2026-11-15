@@ -3,6 +3,7 @@ package variant
 import (
 	"bytes"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -11,14 +12,15 @@ import (
 
 // TestMarshalMatchesValueOf pins the Go-to-variant type mapping and the
 // invariant that the package's two conversion paths implement it
-// identically: Marshal encodes through the streaming encoder
-// (encodeReflect), while ValueOf builds a Value tree (goToVariantReflect)
+// identically: Marshal uses the streaming encoder (encodeReflect) for
+// nonempty composites, while ValueOf builds a Value tree (goToVariantReflect)
 // that callers such as the shredded variant writer encode later. If the two
 // ever map a Go type differently, the same Go value would produce different
 // variant data depending on whether the column is shredded.
 //
 // Each case declares the expected Value; ValueOf must produce it, and
-// Marshal must produce byte-identical output to encoding it. Multi-key maps
+// Marshal must produce byte-identical output to encoding it. We also call
+// encodeReflect directly to compare it with Marshal's fast paths. Multi-key maps
 // are exercised separately in TestMarshalMatchesValueOfMaps: Go map
 // iteration order makes dictionary ids nondeterministic on both paths, so
 // byte equality does not hold for them.
@@ -69,11 +71,15 @@ func TestMarshalMatchesValueOf(t *testing.T) {
 		"float64":      {2.5, Double(2.5)},
 		"string_short": {"hello", String("hello")},
 		"string_long":  {longString, String(longString)},
-		"bytes":        {[]byte{1, 2, 3}, Binary([]byte{1, 2, 3})},
+		"bytes":            {[]byte{1, 2, 3}, Binary([]byte{1, 2, 3})},
+		"bytes_nil":        {[]byte(nil), Binary(nil)},
+		"bytes_empty":      {[]byte{}, Binary(nil)},
+		"byte_array_empty": {[0]byte{}, Binary(nil)},
 		// uuid.UUID maps to the UUID primitive; plain [16]byte (and types
 		// derived from it) map to Binary, matching []byte. Other arrays
 		// stay arrays.
 		"uuid":           {u, UUID(u)},
+		"uuid_pointer":   {&u, UUID(u)},
 		"byte_array_16":  {[16]byte(u), Binary(u[:])},
 		"derived_16":     {derived16(u), Binary(u[:])},
 		"named_elem_16":  {namedElem16{0x55, 0x0e, 0x84}, Binary([]byte{0x55, 0x0e, 0x84, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})},
@@ -82,6 +88,7 @@ func TestMarshalMatchesValueOf(t *testing.T) {
 		// only when the value has sub-microsecond components and fits the
 		// nanosecond range, microsecond precision otherwise.
 		"time_sub_micro":    {subMicro, TimestampNanos(subMicro.UnixNano())},
+		"time_pointer":      {&subMicro, TimestampNanos(subMicro.UnixNano())},
 		"time_whole_micro":  {wholeMicro, Timestamp(wholeMicro.UnixMicro())},
 		"time_before_range": {beforeNanoRange, Timestamp(beforeNanoRange.UnixMicro())},
 		"time_after_range":  {afterNanoRange, Timestamp(afterNanoRange.UnixMicro())},
@@ -90,7 +97,9 @@ func TestMarshalMatchesValueOf(t *testing.T) {
 		"slice": {[]any{int32(1), "two", nil}, MakeArray([]Value{
 			Int32(1), String("two"), Null(),
 		})},
+		"slice_nil":   {[]string(nil), MakeArray(nil)},
 		"slice_empty": {[]string{}, MakeArray(nil)},
+		"array_empty": {[0]string{}, MakeArray(nil)},
 		"map_nil":     {map[string]any(nil), Null()},
 		"map_empty":   {map[string]any{}, MakeObject(nil)},
 		"map_single":  {map[string]any{"k": int64(9)}, MakeObject([]Field{{Name: "k", Value: Int64(9)}})},
@@ -135,6 +144,21 @@ func TestMarshalMatchesValueOf(t *testing.T) {
 			}
 			if !bytes.Equal(gotMeta, wantMeta) {
 				t.Errorf("metadata bytes differ:\nMarshal:         %x\nEncode(ValueOf): %x", gotMeta, wantMeta)
+			}
+
+			var reflectBuilder MetadataBuilder
+			enc := getEncoder(&reflectBuilder)
+			defer releaseEncoder(enc)
+			start, end, err := enc.encodeReflect(reflect.ValueOf(tt.input))
+			if err != nil {
+				t.Fatalf("encodeReflect: %v", err)
+			}
+			_, reflectMeta := reflectBuilder.Build()
+			if !bytes.Equal(gotValue, enc.scratch[start:end]) {
+				t.Errorf("value bytes differ:\nMarshal:       %x\nencodeReflect: %x", gotValue, enc.scratch[start:end])
+			}
+			if !bytes.Equal(gotMeta, reflectMeta) {
+				t.Errorf("metadata bytes differ:\nMarshal:       %x\nencodeReflect: %x", gotMeta, reflectMeta)
 			}
 		})
 	}
