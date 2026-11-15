@@ -541,8 +541,10 @@ func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagRe
 	// the list elements themselves are optional (non-pointer basic types).
 	// For pointer types (like []*string), the pointer handling already
 	// takes care of optionality via writeRowsFuncOfPointer.
+	// JSON string and byte elements do the same in writeRowsFuncOfJSON;
+	// wrapping them again writes past the column's max definition level.
 	if elemType.Kind() != reflect.Ptr {
-		if node := findByPath(schema, path); node != nil && node.Optional() {
+		if node := findByPath(schema, path); node != nil && node.Optional() && !isJSONStringOrBytes(elemType, node) {
 			writeRows = writeRowsFuncOfOptional(elemType, schema, path, writeRows)
 		}
 	}
@@ -603,9 +605,15 @@ func writeRowsFuncOfStruct(t reflect.Type, schema *Schema, path columnPath, tagR
 			switch option {
 			case "list":
 				list = true
-				columnPath = columnPath.append("list", "element")
 			}
 		})
+		// writeRowsFuncOfSlice drills into list.element. Drilling here first
+		// makes a JSON element look like a plain JSON column while the Go
+		// value is still the whole slice, so the slice is stored as one null
+		// and reads back empty. Non-JSON lists keep the pre-drilled path.
+		if list && !listElementIsJSON(node) {
+			columnPath = columnPath.append("list", "element")
+		}
 		writeRows := writeRowsFuncOf(f.Type, schema, columnPath, tagReplacements)
 		// Check if the schema node is optional (from the schema, not the Go struct tag)
 		if node.Optional() {
@@ -835,8 +843,10 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath, tagRepl
 
 	valuePath := path.append("key_value", "value")
 	valueNode := findByPath(schema, valuePath)
-	// If the value is a LIST type, adjust the path to include list/element
-	if valueNode != nil && isList(valueNode) {
+	// If the value is a LIST type, adjust the path to include list/element.
+	// JSON elements stay on the list node so the slice writer splits them;
+	// see writeRowsFuncOfStruct.
+	if valueNode != nil && isList(valueNode) && !listElementIsJSON(valueNode) {
 		valuePath = valuePath.append("list", "element")
 	}
 	valueType := t.Elem()
@@ -883,6 +893,23 @@ func writeRowsFuncOfMap(t reflect.Type, schema *Schema, path columnPath, tagRepl
 // writeRowsFuncOfJSON fast path, which handles optional definition levels itself.
 func isJSONStringOrBytes(t reflect.Type, node Node) bool {
 	return node != nil && node.Leaf() && logicalTypeIs[*format.JsonType](node.Type().LogicalType()) && isStringOrBytes(t)
+}
+
+// listElementIsJSON reports whether node is a LIST whose element is a JSON leaf.
+// A non-standard LIST shape returns false so callers keep their previous path.
+func listElementIsJSON(node Node) bool {
+	if node == nil || node.Leaf() || !isList(node) {
+		return false
+	}
+	fields := node.Fields()
+	if len(fields) != 1 || fields[0].Leaf() || !fields[0].Repeated() {
+		return false
+	}
+	elems := fields[0].Fields()
+	if len(elems) != 1 || !elems[0].Leaf() {
+		return false
+	}
+	return logicalTypeIs[*format.JsonType](elems[0].Type().LogicalType())
 }
 
 func isStringOrBytes(t reflect.Type) bool {

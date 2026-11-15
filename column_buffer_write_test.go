@@ -1008,11 +1008,17 @@ func TestOptionalJSONDefinitionLevels(t *testing.T) {
 		assertRowsEqual(t, rows, roundTripRows(t, rows))
 	})
 	t.Run("list-element", func(t *testing.T) {
-		t.Skip("optional JSON list elements read back empty; predates issue 621")
 		type R struct {
 			L []string `parquet:"l,list" parquet-element:",json,optional"`
 		}
 		rows := []R{{L: []string{`{}`, ""}}}
+		assertRowsEqual(t, rows, roundTripRows(t, rows))
+	})
+	t.Run("list-element-required", func(t *testing.T) {
+		type R struct {
+			L []string `parquet:"l,list" parquet-element:",json"`
+		}
+		rows := []R{{L: []string{`{}`, `{"a":1}`}}}
 		assertRowsEqual(t, rows, roundTripRows(t, rows))
 	})
 	t.Run("ptr-string", func(t *testing.T) {
