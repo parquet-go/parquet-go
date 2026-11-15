@@ -1,7 +1,9 @@
 package parquet
 
 import (
+	"errors"
 	"io"
+	"slices"
 	"sync/atomic"
 )
 
@@ -210,24 +212,68 @@ func (w *Writer) writeRowGroupByColumn(columns []ColumnChunk) error {
 const reencodeValueBufferSize = 1024
 
 // copyColumnValues reads every value of src in order and writes it to dst,
-// without materializing rows.
+// without materializing rows. Batches are trimmed to the last row boundary
+// so WriteRowValues never sees a row split across calls.
 func copyColumnValues(dst *ColumnWriter, src ColumnChunk) error {
 	reader := NewColumnChunkValueReader(src)
 	defer reader.Close()
 
+	// Pending values can outlive their source page, so detach byte/string
+	// data to avoid corruption when the page's buffer is reused.
+	if r, ok := reader.(*columnChunkValueReader); ok {
+		r.detach = true
+	}
+
 	buf := make([]Value, reencodeValueBufferSize)
+	var pending []Value
+
 	for {
-		n, err := reader.ReadValues(buf)
+		n, readErr := reader.ReadValues(buf)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
+		}
+
+		atEOF := errors.Is(readErr, io.EOF)
 		if n > 0 {
-			if _, werr := dst.WriteRowValues(buf[:n]); werr != nil {
+			pending = append(pending, buf[:n]...)
+		}
+
+		toWrite, remainder := rowAlignedPrefix(pending, atEOF)
+		if len(toWrite) > 0 {
+			if _, werr := dst.WriteRowValues(toWrite); werr != nil {
 				return werr
 			}
 		}
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
+
+		// remainder aliases pending's backing array; the shift is safe since append copies.
+		pending = append(pending[:0], remainder...)
+
+		if atEOF {
+			return nil
 		}
 	}
+}
+
+// rowAlignedPrefix splits values at the last row boundary: everything before it
+// is safe to write, the rest is carried forward. At EOF, everything is returned.
+func rowAlignedPrefix(values []Value, atEOF bool) ([]Value, []Value) {
+	if atEOF {
+		return values, nil
+	}
+
+	cut := -1
+
+	for i, v := range slices.Backward(values) {
+		if v.RepetitionLevel() == 0 {
+			cut = i
+			break
+		}
+	}
+
+	if cut <= 0 {
+		// No completed row boundary yet; the whole slice is still one growing row.
+		return nil, values
+	}
+
+	return values[:cut], values[cut:]
 }
