@@ -170,7 +170,12 @@ type BloomFilterColumn interface {
 	Hash() bloom.Hash
 
 	// Returns an encoding which can be used to write columns of values to the
-	// filter.
+	// filter. It must be the split block encoding.
+	//
+	// The header records the split block algorithm for every column, and
+	// readers probe the bitset with that layout. When the bitset has a
+	// different layout, Check returns false for values that were written and
+	// readers skip those rows. SplitBlockFilter returns this encoding.
 	Encoding() encoding.Encoding
 
 	// Returns the size of the filter needed to encode values in the filter,
@@ -208,16 +213,9 @@ func (f splitBlockFilter) Size(numValues int64) int {
 
 // Creates a header from the given bloom filter and compression codec.
 //
-// For now there is only one type of filter supported, but we provide this
-// function to suggest a model for extending the implementation if new filters
-// are added to the parquet specs.
+// The split block algorithm is the only one defined by the parquet specs, so
+// every filter is written as one.
 func bloomFilterHeader(filter BloomFilterColumn, codec compress.Codec) (header format.BloomFilterHeader) {
-	// The split block algorithm is the only one the Parquet specification
-	// defines and the BloomFilterColumn interface cannot name another one, so
-	// every implementation writes it. Dispatching on the concrete type left the
-	// algorithm unset for user-defined BloomFilterColumn values (for example a
-	// filter whose size is rounded to a power of two), which produced files that
-	// readers, including this package, reject.
 	header.Algorithm.Value = &format.SplitBlockAlgorithm{}
 	switch filter.Hash().(type) {
 	case bloom.XXH64:
