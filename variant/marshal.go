@@ -13,10 +13,38 @@ import (
 // Marshal converts a Go value to variant binary encoding, returning the
 // metadata and value byte slices.
 func Marshal(v any) (metadata, value []byte, err error) {
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			rv = reflect.Value{}
+			break
+		}
+		rv = rv.Elem()
+	}
+
+	needsEncoder := false
+	switch rv.Kind() {
+	case reflect.Array, reflect.Slice:
+		needsEncoder = rv.Type().Elem().Kind() != reflect.Uint8 && rv.Len() != 0
+	case reflect.Map:
+		needsEncoder = rv.Len() != 0
+	case reflect.Struct:
+		needsEncoder = rv.Type() != reflect.TypeFor[time.Time]()
+	}
+
+	if !needsEncoder {
+		val, err := goToVariantReflect(rv)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Primitives and empty containers use an empty, sorted dictionary.
+		return []byte{0x11, 0, 0}, Encode(nil, val), nil
+	}
+
 	var b MetadataBuilder
 	enc := getEncoder(&b)
 
-	start, end, err := enc.encodeReflect(reflect.ValueOf(v))
+	start, end, err := enc.encodeReflect(rv)
 	if err != nil {
 		releaseEncoder(enc)
 		return nil, nil, err
@@ -50,10 +78,10 @@ func Unmarshal(metadata, value []byte) (any, error) {
 	return v.GoValue(), nil
 }
 
-// goToVariant converts a Go value to a variant Value. Marshal encodes
-// through the streaming encoder instead (see encodeReflect); this tree
-// walk backs ValueOf, whose callers need the Value tree to make per-field
-// decisions before encoding. The two must map Go types identically.
+// goToVariant converts a Go value to a variant Value. This tree walk backs
+// ValueOf, whose callers need the Value tree to make per-field decisions
+// before encoding. Marshal also uses it for primitives and empty containers,
+// and uses encodeReflect for other values. The two must map Go types identically.
 func goToVariant(v any) (Value, error) {
 	if v == nil {
 		return Null(), nil
@@ -76,12 +104,11 @@ func goToVariantReflect(rv reflect.Value) (Value, error) {
 	// uuid.UUID and time.Time must be recognized before the Kind switch:
 	// uuid.UUID is a [16]byte array and time.Time a struct with no exported
 	// fields, so the generic cases would mishandle them.
-	iface := rv.Interface()
-	switch val := iface.(type) {
-	case uuid.UUID:
-		return UUID(val), nil
-	case time.Time:
-		return timeToVariant(val), nil
+	if rv.Type() == reflect.TypeFor[uuid.UUID]() {
+		return UUID(rv.Interface().(uuid.UUID)), nil
+	}
+	if rv.Type() == reflect.TypeFor[time.Time]() {
+		return timeToVariant(rv.Interface().(time.Time)), nil
 	}
 
 	switch rv.Kind() {
