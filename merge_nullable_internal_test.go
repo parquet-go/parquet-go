@@ -136,12 +136,16 @@ func TestMergeRowGroupsNullableSecondaryAndNestedKeys(t *testing.T) {
 		First int64
 		Key   *key
 	}
-	v1, v5, v6 := int64(1), int64(5), int64(6)
-	a := []record{{1, nil}, {1, &key{&v1}}}
+	// The non-null secondary key sorts after the other row group. Page min/max
+	// drop the leading null, so bounds that ignore it concatenate that group
+	// first and emit 5, 6, null, 10.
+	v5, v6, v10 := int64(5), int64(6), int64(10)
+	a := []record{{1, nil}, {1, &key{&v10}}}
 	b := []record{{1, &key{&v5}}, {1, &key{&v6}}}
 	columns := []SortingColumn{Ascending("First"), NullsFirst(Ascending("Key", "Value"))}
 	fa, fb := nullableMergeFile(t, a, columns, 2, false), nullableMergeFile(t, b, columns, 2, false)
-	checkNullableMerge(t, []RowGroup{fa.RowGroups()[0], fb.RowGroups()[0]}, columns, append(a, b...))
+	want := []record{{1, nil}, {1, &key{&v5}}, {1, &key{&v6}}, {1, &key{&v10}}}
+	checkNullableMerge(t, []RowGroup{fa.RowGroups()[0], fb.RowGroups()[0]}, columns, want)
 }
 
 func TestMergeRowGroupsNoNullBounds(t *testing.T) {
