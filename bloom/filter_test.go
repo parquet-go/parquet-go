@@ -146,7 +146,7 @@ func TestSplitBlockFilterFoldTo(t *testing.T) {
 	if r := f.FalsePositiveRate(); r > maxFalsePositiveRate {
 		t.Fatalf("folded filter false positive rate is above the target: %g > %g", r, maxFalsePositiveRate)
 	}
-	if len(f) > 1 {
+	if len(f) > 1 && len(f)%2 == 0 {
 		if r := slices.Clone(f).Fold().FalsePositiveRate(); r <= maxFalsePositiveRate {
 			t.Fatalf("filter of %d blocks could have been folded further: %g <= %g", len(f), r, maxFalsePositiveRate)
 		}
@@ -174,6 +174,29 @@ func TestSplitBlockFilterFoldTo(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		if f := make(bloom.SplitBlockFilter, 64).FoldTo(maxFalsePositiveRate); len(f) != 1 {
 			t.Fatalf("empty filter folded to %d blocks instead of 1", len(f))
+		}
+	})
+
+	t.Run("odd", func(t *testing.T) {
+		// Few enough values that even a single block would stay under the
+		// target, so folding can only stop because 3 blocks cannot be halved.
+		x := x[:10]
+		single := make(bloom.SplitBlockFilter, 1)
+		single.InsertBulk(x)
+		if r := single.FalsePositiveRate(); r > maxFalsePositiveRate {
+			t.Fatalf("a single block holding the values is above the target: %g > %g", r, maxFalsePositiveRate)
+		}
+
+		f := make(bloom.SplitBlockFilter, 3*4)
+		f.InsertBulk(x)
+		f = f.FoldTo(maxFalsePositiveRate)
+		if len(f) != 3 {
+			t.Fatalf("filter of 12 blocks folded to %d blocks instead of 3", len(f))
+		}
+		want := make(bloom.SplitBlockFilter, 3)
+		want.InsertBulk(x)
+		if !bytes.Equal(f.Bytes(), want.Bytes()) {
+			t.Fatal("filter folded to 3 blocks differs from a filter of 3 blocks")
 		}
 	})
 }

@@ -85,7 +85,7 @@ func (f SplitBlockFilter) Insert(x uint64) { filterInsert(f, x) }
 // Check tests whether x is in f.
 func (f SplitBlockFilter) Check(x uint64) bool { return filterCheck(f, x) }
 
-// Fold halves the number of blocks in f by merging adjacent pairs of blocks,
+// fold halves the number of blocks in f by merging adjacent pairs of blocks,
 // returning the folded filter which shares the memory of f.
 //
 // Block indexes are derived from the hash with a multiply-shift, so halving the
@@ -94,7 +94,7 @@ func (f SplitBlockFilter) Check(x uint64) bool { return filterCheck(f, x) }
 // been inserted into, and no false negatives are introduced.
 //
 // The method panics if the number of blocks in f is odd.
-func (f SplitBlockFilter) Fold() SplitBlockFilter {
+func (f SplitBlockFilter) fold() SplitBlockFilter {
 	if len(f)%2 != 0 {
 		panic("bloom: cannot fold a split block filter with an odd number of blocks")
 	}
@@ -108,12 +108,17 @@ func (f SplitBlockFilter) Fold() SplitBlockFilter {
 // rate at or below maxFalsePositiveRate, returning the folded filter which
 // shares the memory of f.
 //
+// Each fold halves the number of blocks by merging adjacent pairs of blocks.
+// The folded filter is identical to a filter of the folded size that the same
+// values had been inserted into, so it introduces no false negatives and can
+// be read like any other split block filter.
+//
 // Folding stops early when the number of blocks becomes odd, so filters are
 // best allocated with a number of blocks that is a small odd number times a
 // power of two.
 func (f SplitBlockFilter) FoldTo(maxFalsePositiveRate float64) SplitBlockFilter {
 	for len(f) > 1 && len(f)%2 == 0 && f.foldedFalsePositiveRate() <= maxFalsePositiveRate {
-		f = f.Fold()
+		f = f.fold()
 	}
 	return f
 }
