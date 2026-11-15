@@ -121,15 +121,15 @@ func (page *repeatedPage) Slice(i, j int64) Page {
 		baseJ = int64(rowIndex2 - (numNulls1 + numNulls2))
 	}
 
-	slicedNumRows := j - i
-	sliced := &repeatedPage{
-		base:               page.base.Slice(baseI, baseJ),
-		maxRepetitionLevel: maxRepetitionLevel,
-		maxDefinitionLevel: maxDefinitionLevel,
-		definitionLevels:   definitionLevels[rowIndex1:rowIndex2:rowIndex2],
-		repetitionLevels:   repetitionLevels[rowIndex1:rowIndex2:rowIndex2],
-	}
-	sliced.numRows.Store(slicedNumRows)
+	// newRepeatedPage leaves the row count unknown. This slice already knows it.
+	sliced := newRepeatedPage(
+		page.base.Slice(baseI, baseJ),
+		maxRepetitionLevel,
+		maxDefinitionLevel,
+		repetitionLevels[rowIndex1:rowIndex2:rowIndex2],
+		definitionLevels[rowIndex1:rowIndex2:rowIndex2],
+	)
+	sliced.numRows.Store(j - i)
 	return sliced
 }
 
