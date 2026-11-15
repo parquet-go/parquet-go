@@ -2156,3 +2156,115 @@ func testProtoOptionalZeroValue[T any](t *testing.T, schema *Schema, rows []T) {
 		t.Errorf("got %v, want %v", got, want)
 	}
 }
+
+// Zero scalars other than int32 take the same isNullValue path: a present
+// zero must stay present, including an empty byte slice, which is not a null.
+func TestProtoOptionalZeroScalars(t *testing.T) {
+	type fieldMsg = descriptorpb.FieldDescriptorProto
+	type optionMsg = descriptorpb.UninterpretedOption
+	zeroLabel := descriptorpb.FieldDescriptorProto_Label(0)
+
+	t.Run("field", func(t *testing.T) {
+		zero := &fieldMsg{
+			Name:           proto.String(""),
+			Label:          &zeroLabel,
+			Proto3Optional: proto.Bool(false),
+		}
+		set := &fieldMsg{
+			Name:           proto.String("id"),
+			Label:          descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Proto3Optional: proto.Bool(true),
+		}
+		schema := NewSchema("subset", Group{
+			"label":           Optional(Int(32)),
+			"name":            Optional(String()),
+			"proto3_optional": Optional(Leaf(BooleanType)),
+		})
+		got := writtenColumnStrings(t, schema, []*fieldMsg{zero, set, {}})
+		want := map[string][]string{
+			"label":           {"0", "1", "<null>"},
+			"name":            {"", "id", "<null>"},
+			"proto3_optional": {"false", "true", "<null>"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("option", func(t *testing.T) {
+		zero := &optionMsg{
+			IdentifierValue:  proto.String(""),
+			PositiveIntValue: proto.Uint64(0),
+			NegativeIntValue: proto.Int64(0),
+			DoubleValue:      proto.Float64(0),
+			StringValue:      []byte{},
+		}
+		set := &optionMsg{
+			IdentifierValue:  proto.String("speed"),
+			PositiveIntValue: proto.Uint64(7),
+			NegativeIntValue: proto.Int64(-3),
+			DoubleValue:      proto.Float64(1.5),
+			StringValue:      []byte("x"),
+		}
+		schema := NewSchema("subset", Group{
+			"double_value":       Optional(Leaf(DoubleType)),
+			"identifier_value":   Optional(String()),
+			"negative_int_value": Optional(Int(64)),
+			"positive_int_value": Optional(Int(64)),
+			"string_value":       Optional(Leaf(ByteArrayType)),
+		})
+		got := writtenColumnStrings(t, schema, []*optionMsg{zero, set, {}})
+		want := map[string][]string{
+			"double_value":       {"0", "1.5", "<null>"},
+			"identifier_value":   {"", "speed", "<null>"},
+			"negative_int_value": {"0", "-3", "<null>"},
+			"positive_int_value": {"0", "7", "<null>"},
+			"string_value":       {"", "x", "<null>"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %#v, want %#v", got, want)
+		}
+	})
+}
+
+func writtenColumnStrings[T any](t *testing.T, schema *Schema, rows []T) map[string][]string {
+	t.Helper()
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[T](buf, schema)
+	if _, err := writer.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	read := make([]Row, len(rows))
+	n, err := NewReader(bytes.NewReader(buf.Bytes())).ReadRows(read)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != len(rows) {
+		t.Fatalf("read %d rows, want %d", n, len(rows))
+	}
+
+	got := make(map[string][]string, len(schema.Columns()))
+	for _, row := range read[:n] {
+		have := make(map[int]string, len(row))
+		for _, v := range row {
+			have[v.Column()] = v.String()
+		}
+		for _, path := range schema.Columns() {
+			leaf, ok := schema.Lookup(path...)
+			if !ok {
+				t.Fatalf("missing column %q", path)
+			}
+			value, ok := have[leaf.ColumnIndex]
+			if !ok {
+				t.Fatalf("column %q missing from row", path)
+			}
+			name := path[len(path)-1]
+			got[name] = append(got[name], value)
+		}
+	}
+	return got
+}
