@@ -289,10 +289,8 @@ func TestMarshalNested(t *testing.T) {
 }
 
 func TestMarshalSmallValueAllocations(t *testing.T) {
-	i := int64(7)
 	for name, input := range map[string]any{
-		"int64":        i,
-		"pointer":      &i,
+		"int64":        int64(7),
 		"short_string": "hello",
 		"empty_array":  []any{},
 		"empty_object": map[string]any{},

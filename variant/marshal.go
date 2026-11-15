@@ -112,11 +112,12 @@ func goToVariantReflect(rv reflect.Value) (Value, error) {
 	// uuid.UUID and time.Time must be recognized before the Kind switch:
 	// uuid.UUID is a [16]byte array and time.Time a struct with no exported
 	// fields, so the generic cases would mishandle them.
-	if rv.Type() == reflect.TypeFor[uuid.UUID]() {
-		return UUID(rv.Interface().(uuid.UUID)), nil
-	}
-	if rv.Type() == reflect.TypeFor[time.Time]() {
-		return timeToVariant(rv.Interface().(time.Time)), nil
+	iface := rv.Interface()
+	switch val := iface.(type) {
+	case uuid.UUID:
+		return UUID(val), nil
+	case time.Time:
+		return timeToVariant(val), nil
 	}
 
 	switch rv.Kind() {
