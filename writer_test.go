@@ -1963,6 +1963,51 @@ func TestWriterResetWithBloomFilters(t *testing.T) {
 	}
 }
 
+func TestWriterResetPreservesColumnMetadata(t *testing.T) {
+	type Record struct {
+		RecordType string `parquet:"record_type"`
+	}
+	type Event struct {
+		ID     int64  `parquet:"id"`
+		Record Record `parquet:"record"`
+		Name   string `parquet:"name"`
+	}
+
+	wantPaths := [][]string{{"id"}, {"record", "record_type"}, {"name"}}
+	wantSorting := []format.SortingColumn{{ColumnIdx: 2}, {ColumnIdx: 0}}
+
+	writer := parquet.NewGenericWriter[Event](nil, parquet.SortingWriterConfig(
+		parquet.SortingColumns(parquet.Ascending("name"), parquet.Ascending("id")),
+	))
+
+	for i := range 3 {
+		output := new(bytes.Buffer)
+		writer.Reset(output)
+
+		if _, err := writer.Write([]Event{{}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rowGroup := f.Metadata().RowGroups[0]
+		for j, column := range rowGroup.Columns {
+			if got := []string(column.MetaData.PathInSchema); !slices.Equal(got, wantPaths[j]) {
+				t.Errorf("file %d: column %d: path_in_schema = %q, want %q", i, j, got, wantPaths[j])
+			}
+		}
+		if !slices.Equal(rowGroup.SortingColumns, wantSorting) {
+			t.Errorf("file %d: sorting columns = %+v, want %+v", i, rowGroup.SortingColumns, wantSorting)
+		}
+	}
+}
+
 func TestWriterMaxRowsPerRowGroup(t *testing.T) {
 	output := new(bytes.Buffer)
 	writer := parquet.NewWriter(output, parquet.MaxRowsPerRowGroup(10))

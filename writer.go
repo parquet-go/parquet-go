@@ -1742,7 +1742,9 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		reuseRowGroup = &w.rowGroups[rowGroupIndex] // Pointer to the last element
 	}
 
-	sortingColumns := w.sortingColumns
+	// Copy the writer's sorting columns: the stored row group is cleared in
+	// place by Reset, which must not zero w.sortingColumns.
+	sortingColumns := slices.Clone(w.sortingColumns)
 	if len(sortingColumns) == 0 && len(rowGroupSortingColumns) > 0 {
 		scLen := len(rowGroupSortingColumns)
 		if reuseRowGroup == nil {
@@ -1801,6 +1803,11 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 	}
 	for i := range columns {
 		c := &columns[i]
+		// Encoding and PathInSchema alias the column writer's encodings and
+		// columnPath; copy them so Reset clearing the stored row group does
+		// not corrupt the metadata of files written after it.
+		c.MetaData.Encoding = slices.Clone(rg.columnChunk[i].MetaData.Encoding)
+		c.MetaData.PathInSchema = slices.Clone(rg.columnChunk[i].MetaData.PathInSchema)
 		c.MetaData.EncodingStats = slices.Clone(rg.columnChunk[i].MetaData.EncodingStats)
 	}
 
