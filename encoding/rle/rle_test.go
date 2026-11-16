@@ -78,7 +78,7 @@ func TestDecodeBooleanSpecRuns(t *testing.T) {
 	if len(got) != 126 {
 		t.Fatalf("len = %d, want 126", len(got))
 	}
-	for i := 0; i < 1001; i++ {
+	for i := range 1001 {
 		if !booleanBit(got, i) {
 			t.Fatalf("bit %d clear, want set", i)
 		}
@@ -113,6 +113,64 @@ func TestDecodeBooleanSpecRuns(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte{0x03, 0x00}) {
 		t.Fatalf("shifted pack = %x, want 0300", got)
+	}
+}
+
+func TestDecodeBooleanDirtyCapacity(t *testing.T) {
+	enc := &Encoding{BitWidth: 1}
+	dirty := bytes.Repeat([]byte{0xAA}, 8)
+
+	ones := appendUvarint(nil, uint64(16)<<1)
+	ones = append(ones, 1)
+	got, err := enc.DecodeBoolean(dirty[:0], booleanPayload(ones))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, []byte{0xFF, 0xFF}) {
+		t.Fatalf("aligned ones = %x", got)
+	}
+
+	partial := appendUvarint(nil, uint64(10)<<1)
+	partial = append(partial, 1)
+	got, err = enc.DecodeBoolean(dirty[:0], booleanPayload(partial))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, []byte{0xFF, 0x03}) {
+		t.Fatalf("partial ones = %x", got)
+	}
+
+	zeros := appendUvarint(nil, uint64(16)<<1)
+	zeros = append(zeros, 0)
+	got, err = enc.DecodeBoolean(dirty[:0], booleanPayload(zeros))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, []byte{0x00, 0x00}) {
+		t.Fatalf("zeros = %x", got)
+	}
+
+	packed := appendUvarint(nil, uint64(2)<<1|1)
+	packed = append(packed, 0xAA, 0x55)
+	got, err = enc.DecodeBoolean(dirty[:0], booleanPayload(packed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, []byte{0xAA, 0x55}) {
+		t.Fatalf("aligned pack = %x", got)
+	}
+
+	// One true bit, then eight packed bits. The packed group starts mid-byte.
+	shifted := appendUvarint(nil, uint64(1)<<1)
+	shifted = append(shifted, 1)
+	shifted = appendUvarint(shifted, uint64(1)<<1|1)
+	shifted = append(shifted, 0x01)
+	got, err = enc.DecodeBoolean(dirty[:0], booleanPayload(shifted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, []byte{0x03, 0x00}) {
+		t.Fatalf("shifted pack = %x", got)
 	}
 }
 

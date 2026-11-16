@@ -306,8 +306,15 @@ func appendBooleanRun(dst []byte, nbits, count int, ones bool) []byte {
 	nbytes := (end + 7) / 8
 	old := len(dst)
 	dst = resize(dst, nbytes)
-	if nbytes > old {
-		clear(dst[old:])
+	// A run of ones that ends on a byte boundary overwrites every new byte.
+	// The tail byte of a run that ends mid-byte is only partly written, and a
+	// run of zeros writes nothing, so those bytes still have to be cleared.
+	if nbytes > old && !(ones && end%8 == 0) {
+		if ones {
+			dst[nbytes-1] = 0
+		} else {
+			clear(dst[old:])
+		}
 	}
 	if ones {
 		setBooleanBits(dst, nbits, count)
@@ -340,12 +347,12 @@ func appendBooleanPacked(dst []byte, nbits int, src []byte) []byte {
 	nbytes := (end + 7) / 8
 	old := len(dst)
 	dst = resize(dst, nbytes)
-	if nbytes > old {
-		clear(dst[old:])
-	}
 	if nbits%8 == 0 {
 		copy(dst[nbits/8:], src)
 		return dst
+	}
+	if nbytes > old {
+		clear(dst[old:])
 	}
 	shift := uint(nbits % 8)
 	di := nbits / 8
