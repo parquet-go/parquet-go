@@ -461,7 +461,11 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 					break
 				}
 			}
-			c.compression = LookupCompressionCodec(c.chunks[0].MetaData.Codec)
+			var codecs []compress.Codec
+			if file != nil && file.config != nil {
+				codecs = file.config.CompressionCodecs
+			}
+			c.compression = lookupCompressionCodec(codecs, c.chunks[0].MetaData.Codec)
 		}
 
 		return c, nil
