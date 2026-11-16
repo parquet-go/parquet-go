@@ -11,7 +11,7 @@ require (
 	github.com/klauspost/compress v1.20.4
 	github.com/parquet-go/bitpack v0.0.0-20251026130316-7709569977d0
 	github.com/parquet-go/jsonlite v0.1.0
-	github.com/pierrec/lz4/v4 v4.1.22
+	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/twpayne/go-geom v1.6.1
 	golang.org/x/sys v0.37.0
 	google.golang.org/protobuf v1.36.12
