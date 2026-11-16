@@ -12,5 +12,5 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.21
 	github.com/twpayne/go-geom v1.6.1
 	golang.org/x/sys v0.48.0
-	google.golang.org/protobuf v1.34.2
+	google.golang.org/protobuf v1.36.12
 )
