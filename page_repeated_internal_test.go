@@ -329,14 +329,7 @@ func requireBoundaryRowStart(t *testing.T, rep []byte) {
 func requireRowSpansFullBlock(t *testing.T, rep, def []byte, maxDef byte) {
 	t.Helper()
 	for b := 0; b+repeatedRowBlockSize <= len(rep); b += repeatedRowBlockSize {
-		continuation := true
-		for _, level := range rep[b : b+repeatedRowBlockSize] {
-			if level == 0 {
-				continuation = false
-				break
-			}
-		}
-		if !continuation {
+		if slices.Contains(rep[b:b+repeatedRowBlockSize], 0) {
 			continue
 		}
 		start := b
