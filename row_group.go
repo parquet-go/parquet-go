@@ -301,7 +301,6 @@ readColumnValues:
 	for columnIndex := range r.columns {
 		c := &r.columns[columnIndex]
 		b := r.buffer(columnIndex)
-		eof := false
 
 		for rowIndex := range rows {
 			numValuesInRow := 1
@@ -318,9 +317,12 @@ readColumnValues:
 
 					if n == 0 {
 						if err == io.EOF {
-							eof = true
+							// The column has no values left: the slots
+							// after this one cannot be filled, so move on
+							// to the next column instead of asking the
+							// reader again for each slot.
 							eofCount++
-							break
+							continue readColumnValues
 						}
 						return 0, err
 					}
@@ -340,9 +342,6 @@ readColumnValues:
 
 				if numValuesInRow != len(values) {
 					break
-				}
-				if eof {
-					continue readColumnValues
 				}
 				numValuesInRow = 0
 			}
