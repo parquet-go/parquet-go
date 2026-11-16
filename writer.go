@@ -202,12 +202,15 @@ func makeWriteFunc[T any](t reflect.Type, writeRows writeRowsFunc) writeFunc[T] 
 			rg.columnBuffers = make([]ColumnBuffer, len(rg.columns))
 			for i, c := range rg.columns {
 				// These fields are usually lazily initialized when writing rows,
-				// we need them to exist now tho.
-				c.columnBuffer = c.newColumnBuffer()
-				// Record the original buffer so the dictionary-encoded buffer is
-				// restored when the row group is flushed after a fallback to PLAIN
-				// switched the column to a different buffer.
-				c.originalColumnBuffer = c.columnBuffer
+				// we need them to exist now tho. Keep any that WriteRows already
+				// created, or the rows it buffered would be dropped.
+				if c.columnBuffer == nil {
+					c.columnBuffer = c.newColumnBuffer()
+					// Record the original buffer so the dictionary-encoded buffer is
+					// restored when the row group is flushed after a fallback to PLAIN
+					// switched the column to a different buffer.
+					c.originalColumnBuffer = c.columnBuffer
+				}
 				rg.columnBuffers[i] = c.columnBuffer
 			}
 		} else {

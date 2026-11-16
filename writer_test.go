@@ -3164,6 +3164,92 @@ func TestGenericConcurrentRowGroupWriterWrite(t *testing.T) {
 	})
 }
 
+func TestGenericWriterWriteRowsThenWrite(t *testing.T) {
+	type Row struct {
+		ID     int64  `parquet:"id"`
+		Unique string `parquet:"unique,dict"`
+	}
+
+	rows := make([]Row, 400)
+	for i := range rows {
+		rows[i] = Row{ID: int64(i), Unique: fmt.Sprintf("unique-value-%032d", i)}
+	}
+	// Small pages flush in the middle of WriteRows, and the small dictionary
+	// makes WriteRows fall back to PLAIN before the typed Write runs.
+	options := []parquet.WriterOption{
+		parquet.PageBufferSize(1024),
+		parquet.DictionaryMaxBytes(512),
+	}
+
+	deconstruct := func(schema *parquet.Schema, rows []Row) []parquet.Row {
+		values := make([]parquet.Row, len(rows))
+		for i := range rows {
+			values[i] = schema.Deconstruct(nil, &rows[i])
+		}
+		return values
+	}
+
+	assertAllRows := func(t *testing.T, buf *bytes.Buffer) {
+		t.Helper()
+		got, err := parquet.Read[Row](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, rows) {
+			t.Fatalf("read back %d rows that don't match the %d written", len(got), len(rows))
+		}
+	}
+
+	t.Run("GenericWriter", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf, options...)
+
+		if _, err := writer.WriteRows(deconstruct(writer.Schema(), rows[:300])); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(rows[300:350]); err != nil {
+			t.Fatal(err)
+		}
+		// The next row group starts from the buffers that flushing this one
+		// restores, which must still be the dictionary-encoded ones.
+		if err := writer.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(rows[350:]); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		assertAllRows(t, buf)
+	})
+
+	t.Run("GenericConcurrentRowGroupWriter", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[Row](buf, options...)
+
+		rg := writer.BeginGenericRowGroup()
+		if _, err := rg.WriteRows(deconstruct(writer.Schema(), rows[:300])); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rg.Write(rows[300:350]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rg.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(rows[350:]); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		assertAllRows(t, buf)
+	})
+}
+
 func TestDictionaryMaxBytes(t *testing.T) {
 	// Test that dictionary encoding switches to PLAIN when size limit is exceeded
 	type Record struct {
