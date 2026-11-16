@@ -411,6 +411,11 @@ func Convert(to, from Node) (conv Conversion, err error) {
 
 	targetFieldCache := make(map[Node]map[string]Field)
 	sourceFieldCache := make(map[Node]map[string]Field)
+	// Legacy LIST shapes (PyArrow's "item", 2-level lists, ...) do not share
+	// the "list"/"element" paths of a Go schema. Resolve them before the
+	// missing-column path, which would otherwise copy the sibling levels and
+	// replace the values with zeros.
+	var normalized normalizedLists
 
 	// Helper function to get or build field map for a node
 	getFieldMap := func(cache map[Node]map[string]Field, node Node) map[string]Field {
@@ -434,6 +439,13 @@ func Convert(to, from Node) (conv Conversion, err error) {
 
 		targetColumn := targetMapping.lookup(path)
 		sourceColumn := sourceMapping.lookup(path)
+		sourceRoot := from
+		if sourceColumn.node == nil {
+			if col, root, found := normalized.lookup(from, path); found {
+				sourceColumn = col
+				sourceRoot = root
+			}
+		}
 
 		// Track whether this column exists in source BEFORE any closestColumn lookup
 		isMissingColumn := sourceColumn.node == nil
@@ -453,11 +465,18 @@ func Convert(to, from Node) (conv Conversion, err error) {
 			sourceRepetitionLevel := byte(0)
 			sourceDefinitionLevel := byte(0)
 			targetNode := to
-			sourceNode := from
+			sourceNode := sourceRoot
 
+			levelsOK := true
 			for j := range path {
-				targetNode = getFieldMap(targetFieldCache, targetNode)[path[j]]
-				sourceNode = getFieldMap(sourceFieldCache, sourceNode)[path[j]]
+				targetField := getFieldMap(targetFieldCache, targetNode)[path[j]]
+				sourceField := getFieldMap(sourceFieldCache, sourceNode)[path[j]]
+				if targetField == nil || sourceField == nil {
+					levelsOK = false
+					break
+				}
+				targetNode = targetField
+				sourceNode = sourceField
 
 				targetRepetitionLevel, targetDefinitionLevel = applyFieldRepetitionType(
 					fieldRepetitionTypeOf(targetNode),
@@ -474,14 +493,22 @@ func Convert(to, from Node) (conv Conversion, err error) {
 				definitionLevels[sourceDefinitionLevel] = targetDefinitionLevel
 			}
 
-			repetitionLevels = repetitionLevels[:sourceRepetitionLevel+1]
-			definitionLevels = definitionLevels[:sourceDefinitionLevel+1]
+			if !levelsOK {
+				// The normalized path did not line up with the target. Treat
+				// the column as missing rather than indexing a short level map.
+				sourceColumn = leafColumn{columnIndex: math.MaxUint16}
+				isMissingColumn = true
+				conversions = nil
+			} else {
+				repetitionLevels = repetitionLevels[:sourceRepetitionLevel+1]
+				definitionLevels = definitionLevels[:sourceDefinitionLevel+1]
 
-			if !isDirectLevelMapping(repetitionLevels) || !isDirectLevelMapping(definitionLevels) {
-				conversions = append(conversions, convertToLevels(repetitionLevels, definitionLevels))
+				if !isDirectLevelMapping(repetitionLevels) || !isDirectLevelMapping(definitionLevels) {
+					conversions = append(conversions, convertToLevels(repetitionLevels, definitionLevels))
+				}
 			}
-
-		} else {
+		}
+		if isMissingColumn {
 			// Column doesn't exist in source - this is a missing column
 			targetType := targetColumn.node.Type()
 			targetKind := targetType.Kind()
