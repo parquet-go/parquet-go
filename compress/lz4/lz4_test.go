@@ -18,7 +18,7 @@ func TestEncodeLevels(t *testing.T) {
 		want  func(dst []byte) (int, error) // generate expected output at that compression level
 	}{
 		{"fastest", lz4.Fastest, func(dst []byte) (int, error) { return pierrec.CompressBlock(src, dst, nil) }},
-		{"fast", lz4.Fast, func(dst []byte) (int, error) { return pierrec.CompressBlock(src, dst, nil) }},
+		{"fast", lz4.Fast, func(dst []byte) (int, error) { return pierrec.CompressBlockHC(src, dst, lz4.Fast, nil, nil) }},
 		{"level9", lz4.Level9, func(dst []byte) (int, error) { return pierrec.CompressBlockHC(src, dst, lz4.Level9, nil, nil) }},
 	} {
 		t.Run(test.name, func(t *testing.T) {

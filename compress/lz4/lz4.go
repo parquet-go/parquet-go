@@ -45,9 +45,7 @@ func (c *Codec) Encode(dst, src []byte) ([]byte, error) {
 		n   int
 		err error
 	)
-	// lz4.Fast is zero, which CompressorHC treats as unlimited search depth,
-	// so it must use the fast compressor like Fastest.
-	if c.Level == Fastest || c.Level == Fast {
+	if c.Level == Fastest {
 		n, err = lz4.CompressBlock(src, dst, nil)
 	} else {
 		n, err = lz4.CompressBlockHC(src, dst, c.Level, nil, nil)
