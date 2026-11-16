@@ -125,16 +125,18 @@ func findRowStart(repetitionLevels []byte, rowIndex int64) int {
 	const blockSize = 256
 
 	offset := 0
-	for len(repetitionLevels) > blockSize {
-		block := repetitionLevels[:blockSize]
-		numRows := int64(countLevelsEqual(block, 0))
-		if numRows > rowIndex {
-			repetitionLevels = block
-			break
+	if rowIndex > 0 {
+		for len(repetitionLevels) > blockSize {
+			block := repetitionLevels[:blockSize]
+			numRows := int64(countLevelsEqual(block, 0))
+			if numRows > rowIndex {
+				repetitionLevels = block
+				break
+			}
+			rowIndex -= numRows
+			offset += blockSize
+			repetitionLevels = repetitionLevels[blockSize:]
 		}
-		rowIndex -= numRows
-		offset += blockSize
-		repetitionLevels = repetitionLevels[blockSize:]
 	}
 
 	for i, level := range repetitionLevels {
