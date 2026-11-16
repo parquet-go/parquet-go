@@ -1624,6 +1624,16 @@ func convertStringToTimeMicros(v Value, tz *time.Location) (Value, error) {
 	return v.convertToInt64(microseconds), nil
 }
 
+func convertStringToTimeNanos(v Value, tz *time.Location) (Value, error) {
+	t, err := time.ParseInLocation("15:04:05.999999999", v.string(), tz)
+	if err != nil {
+		return v, conversionError(v, "STRING", "TIME", err)
+	}
+	m := nearestMidnightLessThan(t)
+	nanoseconds := t.Sub(m).Nanoseconds()
+	return v.convertToInt64(nanoseconds), nil
+}
+
 func convertDateToTimestamp(v Value, u format.TimeUnit, tz *time.Location) (Value, error) {
 	t := unixEpoch.AddDate(0, 0, int(v.int32()))
 	d := timeUnitDuration(u)
@@ -1648,6 +1658,12 @@ func convertTimeMicrosToString(v Value, tz *time.Location) (Value, error) {
 	return v.convertToByteArray(b), nil
 }
 
+func convertTimeNanosToString(v Value, tz *time.Location) (Value, error) {
+	t := time.Unix(0, v.int64()).In(tz)
+	b := t.AppendFormat(make([]byte, 0, 18), "15:04:05.999999999")
+	return v.convertToByteArray(b), nil
+}
+
 func convertTimestampToDate(v Value, u format.TimeUnit, tz *time.Location) (Value, error) {
 	t := timestamp(v, u, tz)
 	d := daysSinceUnixEpoch(t)
@@ -1666,6 +1682,13 @@ func convertTimestampToTimeMicros(v Value, u format.TimeUnit, sourceZone, target
 	m := nearestMidnightLessThan(t)
 	microseconds := t.In(targetZone).Sub(m).Microseconds()
 	return v.convertToInt64(int64(microseconds)), nil
+}
+
+func convertTimestampToTimeNanos(v Value, u format.TimeUnit, sourceZone, targetZone *time.Location) (Value, error) {
+	t := timestamp(v, u, sourceZone)
+	m := nearestMidnightLessThan(t)
+	nanoseconds := t.In(targetZone).Sub(m).Nanoseconds()
+	return v.convertToInt64(nanoseconds), nil
 }
 
 func convertTimestampToTimestamp(v Value, sourceUnit, targetUnit format.TimeUnit) (Value, error) {
