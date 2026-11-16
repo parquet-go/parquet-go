@@ -554,7 +554,7 @@ func readGeneric[T any](t *testing.T, f *File) []T {
 	if n == len(rows) {
 		t.Fatal("row buffer filled")
 	}
-	return append([]T(nil), rows[:n]...)
+	return slices.Clone(rows[:n])
 }
 
 func readClassic[T any](t *testing.T, f *File) []T {

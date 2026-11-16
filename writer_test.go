@@ -1782,14 +1782,19 @@ func parquetCLI(cmd, path string) ([]byte, error) {
 		return output, err
 	}
 
-	// parquet-cli has trailing spaces on some lines.
+	// parquet-cli has trailing spaces on some lines. Parallel Java processes
+	// also race for the same hsperfdata file and print a warning on stdout.
 	lines := bytes.Split(output, []byte("\n"))
-
-	for i, line := range lines {
-		lines[i] = bytes.TrimRight(line, " ")
+	filtered := lines[:0]
+	for _, line := range lines {
+		line = bytes.TrimRight(line, " ")
+		if bytes.Contains(line, []byte("hsperfdata_")) {
+			continue
+		}
+		filtered = append(filtered, line)
 	}
 
-	return bytes.Join(lines, []byte("\n")), nil
+	return bytes.Join(filtered, []byte("\n")), nil
 }
 
 func TestWriterGenerateBloomFilters(t *testing.T) {
