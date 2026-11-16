@@ -46,11 +46,9 @@ func (c *Codec) Encode(dst, src []byte) ([]byte, error) {
 		err error
 	)
 	if c.Level == Fastest {
-		compressor := lz4.Compressor{}
-		n, err = compressor.CompressBlock(src, dst)
+		n, err = lz4.CompressBlock(src, dst, nil)
 	} else {
-		compressor := lz4.CompressorHC{Level: c.Level}
-		n, err = compressor.CompressBlock(src, dst)
+		n, err = lz4.CompressBlockHC(src, dst, c.Level, nil, nil)
 	}
 	return dst[:n], err
 }

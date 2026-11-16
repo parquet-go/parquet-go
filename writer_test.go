@@ -151,6 +151,64 @@ func benchmarkGenericWriter[Row generator[Row]](b *testing.B) {
 	})
 }
 
+type compressionBenchmarkRow struct {
+	ID       int64
+	Count    int64
+	Price    float64
+	Name     string
+	Category string `parquet:",dict"`
+	Parent   *int64 `parquet:",optional"`
+}
+
+func (row compressionBenchmarkRow) generate(prng *rand.Rand) compressionBenchmarkRow {
+	categories := [...]string{"alpha", "beta", "gamma", "delta"}
+	row.ID = prng.Int63n(1 << 20)
+	row.Count = prng.Int63n(1000)
+	row.Price = float64(prng.Intn(100_000)) / 100
+	row.Name = fmt.Sprintf("name-%06d", prng.Intn(1_000_000))
+	row.Category = categories[prng.Intn(len(categories))]
+	if prng.Intn(3) != 0 {
+		parent := prng.Int63n(1 << 20)
+		row.Parent = &parent
+	}
+	return row
+}
+
+func BenchmarkGenericWriterCompression(b *testing.B) {
+	prng := rand.New(rand.NewSource(0))
+	rows := make([]compressionBenchmarkRow, benchmarkNumRows)
+	for i := range rows {
+		rows[i] = rows[i].generate(prng)
+	}
+
+	for _, codec := range []compress.Codec{
+		&parquet.Uncompressed,
+		&parquet.Snappy,
+		&parquet.Gzip,
+		&parquet.Zstd,
+		&parquet.Lz4Raw,
+	} {
+		b.Run(codec.String(), func(b *testing.B) {
+			buf := new(bytes.Buffer)
+			writer := parquet.NewGenericWriter[compressionBenchmarkRow](buf, parquet.Compression(codec))
+			b.ReportAllocs()
+			benchmarkRowsPerSecond(b, func() int {
+				buf.Reset()
+				writer.Reset(buf)
+				n, err := writer.Write(rows)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					b.Fatal(err)
+				}
+				return n
+			})
+			b.ReportMetric(float64(buf.Len()), "file-bytes")
+		})
+	}
+}
+
 // TestIssue176DataPageV1WithDecimal tests the bug reported in issue #176
 // where files written with data page version 1 and DECIMAL type cannot be read
 // by Apache Parquet CLI tools.
