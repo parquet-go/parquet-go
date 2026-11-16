@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -515,6 +516,7 @@ func TestConvertValue(t *testing.T) {
 		fromValue parquet.Value
 		toType    parquet.Type
 		toValue   parquet.Value
+		wantErr   error
 	}{
 		{
 			scenario:  "true to boolean",
@@ -1056,6 +1058,30 @@ func TestConvertValue(t *testing.T) {
 		},
 
 		{
+			scenario:  "string to nanosecond time short fraction",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`12:34:56.789`)),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(45296789000000),
+		},
+
+		{
+			scenario:  "string to nanosecond time truncated fraction",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`12:34:56.7890123456`)),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(45296789012345),
+		},
+
+		{
+			scenario:  "string to nanosecond time invalid clock",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`24:00:00`)),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			wantErr:   parquet.ErrInvalidConversion,
+		},
+
+		{
 			scenario:  "nanosecond time to string",
 			fromType:  parquet.Time(parquet.Nanosecond).Type(),
 			fromValue: parquet.Int64Value(45296789012345),
@@ -1308,13 +1334,19 @@ func TestConvertValue(t *testing.T) {
 		t.Run(test.scenario, func(t *testing.T) {
 			// Set levels to ensure that they are retained by the conversion.
 			from := test.fromValue.Level(1, 2, 3)
-			want := test.toValue.Level(1, 2, 3)
 
 			got, err := test.toType.ConvertValue(from, test.fromType)
+			if test.wantErr != nil {
+				if !errors.Is(err, test.wantErr) {
+					t.Fatalf("converted value error mismatch:\nwant = %v\ngot  = %v", test.wantErr, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
 
+			want := test.toValue.Level(1, 2, 3)
 			if !parquet.DeepEqual(want, got) {
 				t.Errorf("converted value mismatch:\nwant = %+v\ngot  = %+v", want, got)
 			}
