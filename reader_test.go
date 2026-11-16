@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -1100,61 +1101,118 @@ func TestIssue406LeadingBooleanField(t *testing.T) {
 	}
 }
 
+// TestIssue537DeferredOpenError verifies that NewGenericReader/NewReader do
+// not panic when the input is not a readable parquet file: the open error is
+// returned from Read/ReadRows/SeekToRow instead, and methods that cannot
+// return an error panic with it.
+// See https://github.com/parquet-go/parquet-go/issues/537.
+func TestIssue537DeferredOpenError(t *testing.T) {
+	type row struct {
+		ID int64 `parquet:"id"`
+	}
+
+	malformed, err := os.ReadFile("testdata/malformed/negative_row_group_num_rows.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, input := range []struct {
+		name string
+		data []byte
+	}{
+		{"not_parquet", []byte("not a parquet file")},
+		{"negative_row_group_num_rows", malformed},
+	} {
+		_, wantErr := parquet.OpenFile(bytes.NewReader(input.data), int64(len(input.data)))
+		if wantErr == nil {
+			t.Fatalf("%s: OpenFile: got nil error, want an error", input.name)
+		}
+
+		checkErr := func(t *testing.T, method string, err error) {
+			t.Helper()
+			if err == nil || err.Error() != wantErr.Error() {
+				t.Errorf("%s: got %v, want %v", method, err, wantErr)
+			}
+		}
+
+		checkPanic := func(t *testing.T, method string, f func()) {
+			t.Helper()
+			defer func() {
+				t.Helper()
+				err, _ := recover().(error)
+				checkErr(t, method+" panic", err)
+			}()
+			f()
+		}
+
+		t.Run(input.name+"/GenericReader", func(t *testing.T) {
+			r := parquet.NewGenericReader[row](bytes.NewReader(input.data))
+			defer r.Close()
+
+			_, err := r.Read(make([]row, 1))
+			checkErr(t, "Read", err)
+			_, err = r.ReadRows(make([]parquet.Row, 1))
+			checkErr(t, "ReadRows", err)
+			checkErr(t, "SeekToRow", r.SeekToRow(0))
+			checkPanic(t, "Schema", func() { r.Schema() })
+			checkPanic(t, "NumRows", func() { r.NumRows() })
+			checkPanic(t, "File", func() { r.File() })
+			r.Reset()
+		})
+
+		t.Run(input.name+"/Reader", func(t *testing.T) {
+			r := parquet.NewReader(bytes.NewReader(input.data))
+			defer r.Close()
+
+			checkErr(t, "Read", r.Read(&row{}))
+			_, err := r.ReadRows(make([]parquet.Row, 1))
+			checkErr(t, "ReadRows", err)
+			checkErr(t, "SeekToRow", r.SeekToRow(0))
+			checkPanic(t, "Schema", func() { r.Schema() })
+			checkPanic(t, "NumRows", func() { r.NumRows() })
+			checkPanic(t, "File", func() { r.File() })
+			r.Reset()
+		})
+	}
+}
+
+// TestIssue537UnknownSizePanics verifies that an input whose size cannot be
+// determined still panics in the constructor: that is a programming error,
+// not a malformed file.
+func TestIssue537UnknownSizePanics(t *testing.T) {
+	type row struct {
+		ID int64 `parquet:"id"`
+	}
+	input := readerAtOnly{bytes.NewReader([]byte("not a parquet file"))}
+
+	for _, test := range []struct {
+		name string
+		open func()
+	}{
+		{"GenericReader", func() { parquet.NewGenericReader[row](input) }},
+		{"Reader", func() { parquet.NewReader(input) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer func() {
+				err, _ := recover().(error)
+				if err == nil || !strings.Contains(err.Error(), "cannot determine length") {
+					t.Errorf("got panic %v, want cannot determine length", err)
+				}
+			}()
+			test.open()
+		})
+	}
+}
+
+type readerAtOnly struct{ r io.ReaderAt }
+
+func (r readerAtOnly) ReadAt(b []byte, off int64) (int, error) { return r.r.ReadAt(b, off) }
+
 // TestIssue522 checks that optional pointer fields are freshly allocated on
 // every Read call. Reusing the caller's previous-call pointer let downstream
 // AssignValue mutate bytes behind any retained shallow copy of an earlier
 // batch.
 // Issue: https://github.com/parquet-go/parquet-go/issues/522
-// TestIssue537DeferredOpenError verifies that NewGenericReader/NewReader do
-// not panic when the input is not a readable parquet file: the open error is
-// returned from Read/ReadRows/SeekToRow instead.
-// See https://github.com/parquet-go/parquet-go/issues/537.
-func TestIssue537DeferredOpenError(t *testing.T) {
-	data := []byte("not a parquet file")
-
-	type row struct {
-		ID int64 `parquet:"id"`
-	}
-
-	t.Run("GenericReader", func(t *testing.T) {
-		r := parquet.NewGenericReader[row](bytes.NewReader(data))
-		defer r.Close()
-
-		if s := r.Schema(); s != nil {
-			t.Errorf("Schema: got %v, want nil", s)
-		}
-		if f := r.File(); f != nil {
-			t.Errorf("File: got %v, want nil", f)
-		}
-		if _, err := r.Read(make([]row, 1)); err == nil {
-			t.Fatal("Read: got nil error, want deferred open error")
-		}
-		if _, err := r.ReadRows(make([]parquet.Row, 1)); err == nil {
-			t.Fatal("ReadRows: got nil error, want deferred open error")
-		}
-		if err := r.SeekToRow(0); err == nil {
-			t.Fatal("SeekToRow: got nil error, want deferred open error")
-		}
-		r.Reset()
-	})
-
-	t.Run("Reader", func(t *testing.T) {
-		r := parquet.NewReader(bytes.NewReader(data))
-		defer r.Close()
-
-		if err := r.Read(&row{}); err == nil {
-			t.Fatal("Read: got nil error, want deferred open error")
-		}
-		if _, err := r.ReadRows(make([]parquet.Row, 1)); err == nil {
-			t.Fatal("ReadRows: got nil error, want deferred open error")
-		}
-		if err := r.SeekToRow(0); err == nil {
-			t.Fatal("SeekToRow: got nil error, want deferred open error")
-		}
-		r.Reset()
-	})
-}
-
 func TestIssue522(t *testing.T) {
 	type Row struct {
 		ID  int64   `parquet:"id"`
