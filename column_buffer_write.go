@@ -501,6 +501,13 @@ func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path col
 	// should not increment the definition level.
 	node := findByPath(schema, path)
 	isOptional := node != nil && node.Optional()
+	// A legacy repeated fixed-length byte array (for example []*uuid.UUID
+	// without a list tag) has a single definition level meaning the element
+	// is present. The slice writer has already consumed that level, so a nil
+	// pointer must be written one level lower. Otherwise the missing value is
+	// read back as a present zero UUID.
+	nilDropsDefinitionLevel := node != nil && node.Repeated() && !isOptional &&
+		node.Leaf() && node.Type().Kind() == FixedLenByteArray
 
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
@@ -517,6 +524,8 @@ func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path col
 				if isOptional {
 					elemLevels.definitionLevel++
 				}
+			} else if nilDropsDefinitionLevel && elemLevels.definitionLevel > 0 {
+				elemLevels.definitionLevel--
 			}
 			writeRows(columns, elemLevels, a)
 		}
