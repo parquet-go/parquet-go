@@ -257,8 +257,10 @@ func (w *GenericWriter[T]) Write(rows []T) (written int, err error) {
 			}
 
 			for _, c := range currentRowGroup.columns {
-				if err := c.flushIfFull(); err != nil {
-					return n, err
+				if c.columnBuffer != nil && c.columnBuffer.Size() >= int64(c.bufferSize) {
+					if err := c.Flush(); err != nil {
+						return n, err
+					}
 				}
 			}
 
@@ -409,8 +411,10 @@ func (rg *GenericConcurrentRowGroupWriter[T]) Write(rows []T) (int, error) {
 		}
 
 		for _, c := range rg.columns {
-			if err := c.flushIfFull(); err != nil {
-				return n, err
+			if c.columnBuffer != nil && c.columnBuffer.Size() >= int64(c.bufferSize) {
+				if err := c.Flush(); err != nil {
+					return n, err
+				}
 			}
 		}
 
@@ -2172,16 +2176,6 @@ func (c *ColumnWriter) Flush() (err error) {
 	return err
 }
 
-// flushIfFull writes the buffered page out once it reaches the configured page
-// buffer size. The typed write paths fill the column buffer directly, so they
-// have to make this check themselves.
-func (c *ColumnWriter) flushIfFull() error {
-	if c.columnBuffer == nil || c.columnBuffer.Size() < int64(c.bufferSize) {
-		return nil
-	}
-	return c.Flush()
-}
-
 func (c *ColumnWriter) flushFilterPages() (err error) {
 	if c.columnFilter == nil {
 		return nil
@@ -2382,7 +2376,10 @@ func (c *ColumnWriter) WriteRowValues(rows []Value) (int, error) {
 		return 0, err
 	}
 	numRows := int(int64(c.columnBuffer.Len()) - startingRows)
-	return numRows, c.flushIfFull()
+	if c.columnBuffer.Size() >= int64(c.bufferSize) {
+		return numRows, c.Flush()
+	}
+	return numRows, nil
 }
 
 // Close closes the column writer and resets all dependent resources.
