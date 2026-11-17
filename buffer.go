@@ -258,8 +258,12 @@ func (buf *Buffer) configure(schema *Schema) {
 		}
 
 		sortingIndex := searchSortingColumn(sortingColumns, leaf.path)
-		if sortingIndex < len(sortingColumns) && sortingColumns[sortingIndex].NullsFirst() {
-			nullOrdering = nullsGoFirst
+		if sortingIndex < len(sortingColumns) {
+			sortingColumn := sortingColumns[sortingIndex]
+			// Descending comparisons reverse the optional wrapper's null ordering too.
+			if sortingColumn.NullsFirst() != (leaf.maxRepetitionLevel == 0 && sortingColumn.Descending()) {
+				nullOrdering = nullsGoFirst
+			}
 		}
 
 		column := columnType.NewColumnBuffer(columnIndex, bufferCap)

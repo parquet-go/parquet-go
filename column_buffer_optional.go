@@ -114,9 +114,9 @@ func (col *optionalColumnBuffer) Page() Page {
 
 		rows := col.rows.Slice()
 		i := 0
-		for _, r := range rows {
+		for j, r := range rows {
 			if r >= 0 {
-				rows[i] = int32(i)
+				rows[j] = int32(i)
 				i++
 			}
 		}
