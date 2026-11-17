@@ -67,6 +67,18 @@ func LookupCompressionCodec(codec format.CompressionCodec) compress.Codec {
 	return &unsupported{codec}
 }
 
+// lookupCompressionCodec returns the codec of the given code from codecs,
+// the last one of that code when there are several, or the default codec
+// of LookupCompressionCodec when codecs has none.
+func lookupCompressionCodec(codecs []compress.Codec, codec format.CompressionCodec) compress.Codec {
+	for i := len(codecs) - 1; i >= 0; i-- {
+		if c := codecs[i]; c != nil && c.CompressionCodec() == codec {
+			return c
+		}
+	}
+	return LookupCompressionCodec(codec)
+}
+
 type unsupported struct {
 	codec format.CompressionCodec
 }
