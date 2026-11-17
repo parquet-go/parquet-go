@@ -316,21 +316,19 @@ func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	if _, ok := header.Compression.Value.(*format.BloomFilterUncompressed); !ok {
 		return false
 	}
-	size := dst.columnFilter.Size(meta.NumValues)
-	checker, ok := dst.columnFilter.(BloomFilterCopyChecker)
-	if !ok {
-		return int(header.NumBytes) == size
+	if checker, ok := dst.columnFilter.(BloomFilterCopyChecker); ok {
+		// Filters may be finalized to a smaller size than allocated, which also
+		// bounds the bitset read below.
+		if header.NumBytes <= 0 || int(header.NumBytes) > dst.columnFilter.Size(meta.NumValues) {
+			return false
+		}
+		bitset := make([]byte, header.NumBytes)
+		if _, err := io.ReadFull(rbuf, bitset); err != nil {
+			return false
+		}
+		return checker.CanCopyBloomFilter(meta.NumValues, bitset)
 	}
-	// Filters may be finalized to a smaller size than allocated, which also
-	// bounds the bitset read below.
-	if header.NumBytes <= 0 || int(header.NumBytes) > size {
-		return false
-	}
-	bitset := make([]byte, header.NumBytes)
-	if _, err := io.ReadFull(rbuf, bitset); err != nil {
-		return false
-	}
-	return checker.CanCopyBloomFilter(meta.NumValues, bitset)
+	return int(header.NumBytes) == dst.columnFilter.Size(meta.NumValues)
 }
 
 // loadCopiedChunk prepares the destination ColumnWriter to emit a source column
