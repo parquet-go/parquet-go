@@ -2205,10 +2205,10 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 			// be reused after resetting which would have reset the length of
 			// the filter to 0.
 			if s, ok := c.columnFilter.(BloomFilterDistinctSizer); ok {
-			c.resizeBloomFilterTo(s.DistinctSize(int64(dict.Len())))
-		} else {
-			c.resizeBloomFilter(int64(dict.Len()))
-		}
+				c.resizeBloomFilterTo(s.DistinctSize(int64(dict.Len())))
+			} else {
+				c.resizeBloomFilter(int64(dict.Len()))
+			}
 			return c.writePageToFilter(dict.Page())
 		}
 		// The dictionary is hashed last because resizeBloomFilter below
