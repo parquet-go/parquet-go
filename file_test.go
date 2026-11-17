@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/jsonlite"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -338,6 +340,121 @@ func TestFileTypes(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestFileColumnChunkBoundsNaN(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		min, max float64
+		omitMin  bool
+		omitMax  bool
+		wantOK   bool
+	}{
+		{name: "nan_min", min: math.NaN(), max: 1},
+		{name: "nan_max", min: -1, max: math.NaN()},
+		{name: "all_nan", min: math.NaN(), max: math.NaN()},
+		{name: "finite", min: -1, max: 1, wantOK: true},
+		{name: "float32_limits", min: -math.MaxFloat32, max: math.MaxFloat32, wantOK: true},
+		{name: "float64_limits", min: -math.MaxFloat64, max: math.MaxFloat64, wantOK: true},
+		{name: "infinities", min: math.Inf(-1), max: math.Inf(1), wantOK: true},
+		{name: "missing_min", max: 1, omitMin: true},
+		{name: "missing_max", min: -1, omitMax: true},
+		{name: "no_statistics", omitMin: true, omitMax: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			type row struct {
+				Float  float32 `parquet:"float"`
+				Double float64 `parquet:"double"`
+				Int    int64   `parquet:"int"`
+			}
+			// These integer bits encode a NaN as DOUBLE, but INT64 bounds must
+			// remain valid. Only the physical floating-point types need filtering.
+			integer := int64(math.Float64bits(math.NaN()))
+			rows := []row{
+				{float32(test.min), test.min, integer},
+				{float32(test.max), test.max, integer},
+			}
+			var buf bytes.Buffer
+			writer := parquet.NewGenericWriter[row](&buf)
+			if _, err := writer.Write(rows); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			data := buf.Bytes()
+			file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Model statistics from other producers independently of the writer's
+			// NaN aggregation. Keep the real data pages and replace only the footer.
+			metadata := file.Metadata()
+			for i := range metadata.RowGroups[0].Columns {
+				column := &metadata.RowGroups[0].Columns[i].MetaData
+				var min, max []byte
+				switch column.Type {
+				case format.Float:
+					min = binary.LittleEndian.AppendUint32(nil, math.Float32bits(float32(test.min)))
+					max = binary.LittleEndian.AppendUint32(nil, math.Float32bits(float32(test.max)))
+				case format.Double:
+					min = binary.LittleEndian.AppendUint64(nil, math.Float64bits(test.min))
+					max = binary.LittleEndian.AppendUint64(nil, math.Float64bits(test.max))
+				default:
+					continue
+				}
+				if test.omitMin {
+					min = nil
+				}
+				if test.omitMax {
+					max = nil
+				}
+				column.Statistics = format.Statistics{MinValue: min, MaxValue: max}
+			}
+			footer, err := thrift.Marshal(new(thrift.CompactProtocol), metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			footerSize := int(binary.LittleEndian.Uint32(data[len(data)-8:]))
+			data = append(data[:len(data)-8-footerSize:len(data)-8-footerSize], footer...)
+			data = binary.LittleEndian.AppendUint32(data, uint32(len(footer)))
+			data = append(data, "PAR1"...)
+			file, err = parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, chunk := range file.RowGroups()[0].ColumnChunks() {
+				column := chunk.(*parquet.FileColumnChunk)
+				stats := &file.Metadata().RowGroups[0].Columns[i].MetaData.Statistics
+				storedMin, storedMax := bytes.Clone(stats.MinValue), bytes.Clone(stats.MaxValue)
+				min, max, ok := column.Bounds()
+				if column.Type().Kind() == parquet.Int64 {
+					if !ok || min.Int64() != integer || max.Int64() != integer {
+						t.Fatalf("INT64 Bounds() = (%v, %v, %v)", min, max, ok)
+					}
+					continue
+				}
+				if ok != test.wantOK {
+					t.Errorf("%s Bounds() = (%v, %v, %v), want ok=%v", column.Type(), min, max, ok, test.wantOK)
+				}
+				if test.wantOK {
+					gotMin, gotMax := min.Double(), max.Double()
+					wantMin, wantMax := test.min, test.max
+					if column.Type().Kind() == parquet.Float {
+						gotMin, gotMax = float64(min.Float()), float64(max.Float())
+						wantMin, wantMax = float64(float32(test.min)), float64(float32(test.max))
+					}
+					if gotMin != wantMin || gotMax != wantMax {
+						t.Errorf("%s Bounds() = (%v, %v), want (%v, %v)", column.Type(), gotMin, gotMax, wantMin, wantMax)
+					}
+				}
+				if !bytes.Equal(stats.MinValue, storedMin) || !bytes.Equal(stats.MaxValue, storedMax) {
+					t.Errorf("%s Bounds() changed the stored statistics", column.Type())
+				}
+			}
+		})
 	}
 }
 
