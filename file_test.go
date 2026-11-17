@@ -924,6 +924,203 @@ func TestSeekToRowGeneral(t *testing.T) {
 	}
 }
 
+func TestFilePagesConsecutiveSeeks(t *testing.T) {
+	type Row struct {
+		Plain int64
+		Dict  int64 `parquet:",dict"`
+	}
+
+	for _, version := range []int{1, 2} {
+		var buf bytes.Buffer
+		w := parquet.NewGenericWriter[Row](&buf, parquet.DataPageVersion(version))
+		const numRows = 8
+		for i := 0; i < numRows; i += 2 {
+			if _, err := w.Write([]Row{{int64(i), int64(i)}, {int64(i + 1), int64(i + 1)}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, column := range w.ColumnWriters() {
+				if err := column.Flush(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, bufferSize := range []int{16, 4096} {
+			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()), parquet.ReadBufferSize(bufferSize))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for col, chunk := range f.RowGroups()[0].ColumnChunks() {
+				for _, test := range []struct {
+					name  string
+					reads int
+					seeks []int64
+				}{
+					{"next-page", 1, []int64{0, 3}},
+					{"skip-page", 1, []int64{0, 5}},
+					{"backward", 3, []int64{4, 1}},
+					{"away-and-back", 1, []int64{5, 1}},
+					{"replace-replay", 1, []int64{0, 5, 1}},
+					{"same-page", 1, []int64{1, 0}},
+				} {
+					t.Run(fmt.Sprintf("v%d/buffer%d/col%d/%s", version, bufferSize, col, test.name), func(t *testing.T) {
+						pages := chunk.Pages()
+						defer pages.Close()
+						for range test.reads {
+							page, err := pages.ReadPage()
+							if err != nil {
+								t.Fatal(err)
+							}
+							parquet.Release(page)
+						}
+						for _, row := range test.seeks {
+							if err := pages.SeekToRow(row); err != nil {
+								t.Fatalf("SeekToRow(%d): %v", row, err)
+							}
+						}
+
+						row := test.seeks[len(test.seeks)-1]
+						for row < numRows {
+							page, err := pages.ReadPage()
+							if err != nil {
+								t.Fatalf("ReadPage at row %d: %v", row, err)
+							}
+							values := make([]parquet.Value, page.NumValues())
+							n, err := page.Values().ReadValues(values)
+							parquet.Release(page)
+							if (err != nil && err != io.EOF) || n == 0 {
+								t.Fatalf("ReadValues at row %d: n=%d err=%v", row, n, err)
+							}
+							for _, value := range values[:n] {
+								if value.Int64() != row {
+									t.Fatalf("row %d: got %d, want %d", row, value.Int64(), row)
+								}
+								row++
+							}
+						}
+						page, err := pages.ReadPage()
+						parquet.Release(page)
+						if err != io.EOF {
+							t.Fatalf("ReadPage after last row: got %v, want EOF", err)
+						}
+					})
+				}
+			}
+
+			t.Run(fmt.Sprintf("v%d/buffer%d/reader", version, bufferSize), func(t *testing.T) {
+				r := parquet.NewGenericReader[Row](f)
+				defer r.Close()
+				rows := make([]Row, 1)
+				if n, err := r.Read(rows); n != 1 || (err != nil && err != io.EOF) {
+					t.Fatalf("initial Read: n=%d err=%v", n, err)
+				}
+				for _, row := range []int64{0, 3} {
+					if err := r.SeekToRow(row); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for row := int64(3); row < numRows; row++ {
+					n, err := r.Read(rows)
+					if n != 1 || (err != nil && err != io.EOF) || rows[0] != (Row{row, row}) {
+						t.Fatalf("row %d: got %v n=%d err=%v", row, rows, n, err)
+					}
+				}
+				if n, err := r.Read(rows); n != 0 || err != io.EOF {
+					t.Fatalf("Read after last row: n=%d err=%v, want EOF", n, err)
+				}
+			})
+		}
+	}
+}
+
+func TestFilePagesSeekToRowIndexState(t *testing.T) {
+	type Row struct {
+		Plain int64
+		Dict  int64 `parquet:",dict"`
+	}
+
+	for _, version := range []int{1, 2} {
+		var buf bytes.Buffer
+		w := parquet.NewGenericWriter[Row](&buf, parquet.DataPageVersion(version))
+		for i := range 2 {
+			if _, err := w.Write([]Row{{int64(i), int64(i)}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, column := range w.ColumnWriters() {
+				if err := column.Flush(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, test := range []struct {
+			name      string
+			lazyIndex bool
+			reads     int
+		}{
+			{"load-before-read", true, 0},
+			{"load-after-read", true, 1},
+			{"away-and-back-at-eof", false, 2},
+		} {
+			for col := range 2 {
+				t.Run(fmt.Sprintf("v%d/col%d/%s", version, col, test.name), func(t *testing.T) {
+					f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()), parquet.SkipPageIndex(test.lazyIndex))
+					if err != nil {
+						t.Fatal(err)
+					}
+					chunk := f.RowGroups()[0].ColumnChunks()[col]
+					pages := chunk.Pages()
+					defer pages.Close()
+					if test.lazyIndex {
+						if err := pages.SeekToRow(0); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for range test.reads {
+						page, err := pages.ReadPage()
+						if err != nil {
+							t.Fatal(err)
+						}
+						parquet.Release(page)
+					}
+					if test.lazyIndex {
+						if _, err := chunk.OffsetIndex(); err != nil {
+							t.Fatal(err)
+						}
+					} else if err := pages.SeekToRow(0); err != nil {
+						t.Fatal(err)
+					}
+					if err := pages.SeekToRow(1); err != nil {
+						t.Fatal(err)
+					}
+					page, err := pages.ReadPage()
+					if err != nil {
+						t.Fatalf("ReadPage at row 1: %v", err)
+					}
+					values := make([]parquet.Value, 1)
+					n, err := page.Values().ReadValues(values)
+					rows := page.NumRows()
+					parquet.Release(page)
+					if (err != nil && err != io.EOF) || n != 1 || rows != 1 || values[0].Int64() != 1 {
+						t.Fatalf("row 1: got values=%v rows=%d n=%d err=%v, want one row with value 1", values, rows, n, err)
+					}
+					page, err = pages.ReadPage()
+					parquet.Release(page)
+					if err != io.EOF {
+						t.Fatalf("ReadPage after last row: got %v, want EOF", err)
+					}
+				})
+			}
+		}
+	}
+}
+
 type nopPageWriter struct{}
 
 func (n nopPageWriter) WritePage(page parquet.Page) (int64, error) {
