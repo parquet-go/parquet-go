@@ -1564,9 +1564,6 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 
 		f.skip = rowIndex
 		f.index = 0
-		if f.dictOffset > 0 {
-			f.index = 1
-		}
 		if f.dec != nil {
 			f.dec.dataPageOrd = 0
 			f.dec.dictPagePending = false
@@ -1592,9 +1589,9 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 
 		f.skip = rowIndex - pages[target].FirstRowIndex
 
-		// positioned at the last returned page: serve it
-		if f.lastPage != nil && target == f.lastPageIndex {
-			f.serveLastPage = true
+		// Replay the last page only if the stream is still positioned after it.
+		f.serveLastPage = f.lastPage != nil && target == f.lastPageIndex && f.index == target+1
+		if f.serveLastPage {
 			return nil
 		}
 
