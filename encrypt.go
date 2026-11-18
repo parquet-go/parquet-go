@@ -4,26 +4,55 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 )
 
-// Module type constants per the Apache Parquet encryption spec.
+// Module type constants per the Apache Parquet encryption spec
+// (Encryption.md section 4.4.2).
 const (
 	footerModule          byte = 0
 	columnMetaDataModule  byte = 1
 	dataPageBodyModule    byte = 2
-	dataPageHeaderModule  byte = 3
-	dictPageBodyModule    byte = 4
+	dictPageBodyModule    byte = 3
+	dataPageHeaderModule  byte = 4
 	dictPageHeaderModule  byte = 5
-	bloomFilterHdrModule  byte = 6
-	bloomFilterBitsModule byte = 7
-	columnIndexModule     byte = 8
-	offsetIndexModule     byte = 9
+	columnIndexModule     byte = 6
+	offsetIndexModule     byte = 7
+	bloomFilterHdrModule  byte = 8
+	bloomFilterBitsModule byte = 9
 )
+
+// Module type ids written by parquet-go v0.30.1 through v0.32.1. Dictionary
+// page headers already used the spec id, but the writer appended a page
+// ordinal of 0. The spec includes a page ordinal only for data pages and
+// data page headers.
+const (
+	legacyDataPageHeaderModule  byte = 3
+	legacyDictPageBodyModule    byte = 4
+	legacyBloomFilterHdrModule  byte = 6
+	legacyBloomFilterBitsModule byte = 7
+	legacyColumnIndexModule     byte = 8
+	legacyOffsetIndexModule     byte = 9
+)
+
+// errGCMAuth marks an AES-GCM tag mismatch. A retry with the legacy AAD is
+// safe only for this error: GCM still authenticated the ciphertext, so the
+// plaintext is the one the writer produced.
+var errGCMAuth = errors.New("parquet decryption: AES-GCM authentication failed")
+
+func errSupplyAADPrefix() error {
+	return errors.New("parquet decryption: file requires an AAD prefix that is not stored in the file")
+}
+
+func errCTRPage() error {
+	return errors.New("parquet decryption: AES_GCM_CTR_V1 page encryption is not supported")
+}
 
 const (
 	encNonceSize = 12
@@ -224,9 +253,70 @@ func decryptModule(key, aad, envelope []byte) ([]byte, error) {
 
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
-		return nil, fmt.Errorf("parquet decryption: AES-GCM authentication failed: %w", err)
+		return nil, fmt.Errorf("%w: %w", errGCMAuth, err)
 	}
 	return plaintext, nil
+}
+
+// moduleHasLegacy reports whether module was written with a different AAD by
+// parquet-go before the spec fix. Data page bodies, column metadata, and the
+// footer used the spec ids all along.
+func moduleHasLegacy(module byte) bool {
+	switch module {
+	case dataPageHeaderModule, dictPageHeaderModule, dictPageBodyModule,
+		columnIndexModule, offsetIndexModule,
+		bloomFilterHdrModule, bloomFilterBitsModule:
+		return true
+	default:
+		return false
+	}
+}
+
+// legacyModuleAAD is the AAD parquet-go v0.30.1 through v0.32.1 produced for
+// module. ordinals are the spec ordinals (no page ordinal on dictionary pages).
+func legacyModuleAAD(prefix, fileUnique []byte, module byte, ordinals []int16) []byte {
+	switch module {
+	case dataPageHeaderModule:
+		return makeAAD(prefix, fileUnique, legacyDataPageHeaderModule, ordinals...)
+	case dictPageHeaderModule:
+		ords := append(append([]int16{}, ordinals...), 0)
+		return makeAAD(prefix, fileUnique, dictPageHeaderModule, ords...)
+	case dictPageBodyModule:
+		ords := append(append([]int16{}, ordinals...), 0)
+		return makeAAD(prefix, fileUnique, legacyDictPageBodyModule, ords...)
+	case columnIndexModule:
+		return makeAAD(prefix, fileUnique, legacyColumnIndexModule, ordinals...)
+	case offsetIndexModule:
+		return makeAAD(prefix, fileUnique, legacyOffsetIndexModule, ordinals...)
+	case bloomFilterHdrModule:
+		return makeAAD(prefix, fileUnique, legacyBloomFilterHdrModule, ordinals...)
+	case bloomFilterBitsModule:
+		return makeAAD(prefix, fileUnique, legacyBloomFilterBitsModule, ordinals...)
+	default:
+		return nil
+	}
+}
+
+// decryptWithLegacy decrypts envelope with the spec AAD. If authentication
+// fails, it retries with the AAD written by parquet-go before the spec fix.
+// A successful retry stores true in legacy so later modules skip the spec
+// attempt. legacy may be nil.
+func decryptWithLegacy(key, envelope, prefix, fileUnique []byte, module byte, ordinals []int16, legacy *atomic.Bool) ([]byte, error) {
+	if moduleHasLegacy(module) && legacy != nil && legacy.Load() {
+		return decryptModule(key, legacyModuleAAD(prefix, fileUnique, module, ordinals), envelope)
+	}
+	plain, err := decryptModule(key, makeAAD(prefix, fileUnique, module, ordinals...), envelope)
+	if err == nil || !moduleHasLegacy(module) || !errors.Is(err, errGCMAuth) {
+		return plain, err
+	}
+	plain, lerr := decryptModule(key, legacyModuleAAD(prefix, fileUnique, module, ordinals), envelope)
+	if lerr != nil {
+		return nil, err
+	}
+	if legacy != nil {
+		legacy.Store(true)
+	}
+	return plain, nil
 }
 
 // makeAAD constructs the Additional Authenticated Data for a module.
@@ -244,27 +334,18 @@ func makeAAD(aadPrefix, fileUnique []byte, moduleType byte, ordinals ...int16) [
 }
 
 // signFooter produces the 28-byte footer signature (nonce || GCM tag) used in
-// plaintext-footer mode. The footer bytes are authenticated (but not encrypted)
-// as additional data with an empty plaintext.
+// plaintext-footer mode. The signature is the nonce and tag from AES-GCM
+// encryption of the serialized FileMetaData with the footer AAD. The
+// ciphertext is discarded, per Encryption.md section 5.5.
 func signFooter(key, aad, footerBytes []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("parquet encryption: footer sign: creating cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("parquet encryption: footer sign: creating GCM: %w", err)
-	}
-
 	var nonce [encNonceSize]byte
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		return nil, fmt.Errorf("parquet encryption: footer sign: generating nonce: %w", err)
 	}
-
-	// Encrypt empty plaintext; footerBytes become the AAD so the tag authenticates them.
-	combined := append(aad, footerBytes...)
-	tag := gcm.Seal(nil, nonce[:], nil, combined)
-
+	tag, err := gcmTag(key, nonce[:], footerBytes, aad)
+	if err != nil {
+		return nil, fmt.Errorf("parquet encryption: footer sign: %w", err)
+	}
 	sig := make([]byte, encNonceSize+encTagSize)
 	copy(sig[:encNonceSize], nonce[:])
 	copy(sig[encNonceSize:], tag)
@@ -272,27 +353,57 @@ func signFooter(key, aad, footerBytes []byte) ([]byte, error) {
 }
 
 // verifyFooterSignature checks the 28-byte signature appended to the footer.
-func verifyFooterSignature(key, aad, footerBytes, sig []byte) error {
+// legacy is true when the signature matched the construction written by
+// parquet-go before the spec fix (empty plaintext, AAD = footer AAD ||
+// serialized footer) rather than the spec.
+func verifyFooterSignature(key, aad, footerBytes, sig []byte) (legacy bool, err error) {
 	if len(sig) != encNonceSize+encTagSize {
-		return fmt.Errorf("parquet decryption: footer signature has wrong length %d (want %d)", len(sig), encNonceSize+encTagSize)
+		return false, fmt.Errorf("parquet decryption: footer signature has wrong length %d (want %d)", len(sig), encNonceSize+encTagSize)
 	}
+	nonce := sig[:encNonceSize]
+	tag := sig[encNonceSize:]
+	ok, err := footerTagMatches(key, nonce, footerBytes, aad, tag)
+	if err != nil {
+		return false, fmt.Errorf("parquet decryption: footer verify: %w", err)
+	}
+	if ok {
+		return false, nil
+	}
+	legacyAAD := make([]byte, 0, len(aad)+len(footerBytes))
+	legacyAAD = append(legacyAAD, aad...)
+	legacyAAD = append(legacyAAD, footerBytes...)
+	ok, err = footerTagMatches(key, nonce, nil, legacyAAD, tag)
+	if err != nil {
+		return false, fmt.Errorf("parquet decryption: footer verify: %w", err)
+	}
+	if ok {
+		return true, nil
+	}
+	return false, fmt.Errorf("parquet decryption: footer signature verification failed")
+}
+
+// gcmTag returns the AES-GCM tag for plaintext authenticated with aad.
+func gcmTag(key, nonce, plaintext, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return fmt.Errorf("parquet decryption: footer verify: creating cipher: %w", err)
+		return nil, err
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return fmt.Errorf("parquet decryption: footer verify: creating GCM: %w", err)
+		return nil, err
 	}
+	sealed := gcm.Seal(nil, nonce, plaintext, aad)
+	tag := make([]byte, encTagSize)
+	copy(tag, sealed[len(sealed)-encTagSize:])
+	return tag, nil
+}
 
-	nonce := sig[:encNonceSize]
-	tag := sig[encNonceSize:]
-	combined := append(aad, footerBytes...)
-	_, err = gcm.Open(nil, nonce, tag, combined)
+func footerTagMatches(key, nonce, plaintext, aad, tag []byte) (bool, error) {
+	got, err := gcmTag(key, nonce, plaintext, aad)
 	if err != nil {
-		return fmt.Errorf("parquet decryption: footer signature verification failed: %w", err)
+		return false, err
 	}
-	return nil
+	return subtle.ConstantTimeCompare(got, tag) == 1, nil
 }
 
 // columnPathString returns the dot-joined string for a column path.

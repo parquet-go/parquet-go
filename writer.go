@@ -2503,14 +2503,10 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 	}
 
 	plainHeaderLen := int32(c.header.buffer.Len())
+	plainBodyLen := c.header.page.CompressedPageSize
 
 	if c.encKey != nil {
 		pageOrd := int16(c.numPages)
-		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrd)
-		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
-		if err != nil {
-			return 0, fmt.Errorf("encrypting data page header: %w", err)
-		}
 		body := make([]byte, 0, len(buf.repetitions)+len(buf.definitions)+len(buf.page))
 		body = append(body, buf.repetitions...)
 		body = append(body, buf.definitions...)
@@ -2519,6 +2515,20 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 		encBody, err := encryptModule(c.encKey, bodyAAD, body)
 		if err != nil {
 			return 0, fmt.Errorf("encrypting data page body: %w", err)
+		}
+		// Readers take compressed_page_size bytes after the header module and
+		// decrypt that buffer. It is the encrypted body, and the CRC covers
+		// those bytes (encryption.md / PageHeader: CRC is after encryption).
+		c.header.page.CompressedPageSize = int32(len(encBody))
+		c.header.page.CRC = int32(crc32.ChecksumIEEE(encBody))
+		c.header.buffer.Reset()
+		if err := c.header.encoder.Encode(&c.header.page); err != nil {
+			return 0, err
+		}
+		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrd)
+		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
+		if err != nil {
+			return 0, fmt.Errorf("encrypting data page header: %w", err)
 		}
 		encSize := int64(len(encHdr) + len(encBody))
 		err = c.writePageTo(encSize, func(output io.Writer) (int64, error) {
@@ -2529,8 +2539,9 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
+		c.header.page.CompressedPageSize = plainBodyLen
 		c.recordPageStats(plainHeaderLen, &c.header.page, page, minValue, maxValue, pageHasBounds)
-		c.patchEncryptedCompressedSize(encSize, plainHeaderLen, c.header.page.CompressedPageSize)
+		c.patchEncryptedCompressedSize(encSize, plainHeaderLen, plainBodyLen)
 		return numValues, nil
 	}
 
@@ -2598,15 +2609,23 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	}
 
 	if c.encKey != nil {
-		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, 0)
-		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
-		if err != nil {
-			return fmt.Errorf("encrypting dictionary page header: %w", err)
-		}
-		bodyAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageBodyModule, c.rowGroupOrdinal, c.columnOrdinal, 0)
+		plainHeaderLen := int32(c.header.buffer.Len())
+		plainBodyLen := c.header.dict.CompressedPageSize
+		bodyAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageBodyModule, c.rowGroupOrdinal, c.columnOrdinal)
 		encBody, err := encryptModule(c.encKey, bodyAAD, buf.page)
 		if err != nil {
 			return fmt.Errorf("encrypting dictionary page body: %w", err)
+		}
+		c.header.dict.CompressedPageSize = int32(len(encBody))
+		c.header.dict.CRC = int32(crc32.ChecksumIEEE(encBody))
+		c.header.buffer.Reset()
+		if err := c.header.encoder.Encode(&c.header.dict); err != nil {
+			return err
+		}
+		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal)
+		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
+		if err != nil {
+			return fmt.Errorf("encrypting dictionary page header: %w", err)
 		}
 		if _, err := output.Write(encHdr); err != nil {
 			return err
@@ -2614,9 +2633,9 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 		if _, err := output.Write(encBody); err != nil {
 			return err
 		}
-		plainHeaderLen := int32(c.header.buffer.Len())
+		c.header.dict.CompressedPageSize = plainBodyLen
 		c.recordPageStats(plainHeaderLen, &c.header.dict, nil, Value{}, Value{}, false)
-		c.patchEncryptedCompressedSize(int64(len(encHdr)+len(encBody)), plainHeaderLen, c.header.dict.CompressedPageSize)
+		c.patchEncryptedCompressedSize(int64(len(encHdr)+len(encBody)), plainHeaderLen, plainBodyLen)
 		return nil
 	}
 
