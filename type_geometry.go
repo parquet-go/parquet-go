@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"cmp"
 	"errors"
 	"reflect"
 
@@ -15,8 +16,9 @@ func Geometry(crs string) Node { return Leaf(&geometryType{CRS: crs}) }
 
 type geometryType format.GeometryType
 
-var geometryDefaultCRSLogicType = format.GeometryType{
-	CRS: format.GeometryDefaultCRS,
+// An omitted geometry or geography CRS denotes OGC:CRS84.
+func effectiveCRS(crs string) string {
+	return cmp.Or(crs, format.GeometryDefaultCRS)
 }
 
 func (t *geometryType) String() string { return (*format.GeometryType)(t).String() }
@@ -36,9 +38,6 @@ func (t *geometryType) ColumnOrder() *format.ColumnOrder { return byteArrayType{
 func (t *geometryType) PhysicalType() *format.Type { return byteArrayType{}.PhysicalType() }
 
 func (t *geometryType) LogicalType() *format.LogicalType {
-	if t.CRS == "" {
-		return &format.LogicalType{Value: &geometryDefaultCRSLogicType}
-	}
 	return &format.LogicalType{Value: (*format.GeometryType)(t)}
 }
 
@@ -114,14 +113,12 @@ func (t *geometryType) AssignValue(dst reflect.Value, src Value) error {
 func (t *geometryType) ConvertValue(val Value, typ Type) (Value, error) {
 	switch src := typ.(type) {
 	case *geometryType:
-		srcGeometry, _ := logicalTypeOf[*format.GeometryType](src.LogicalType())
-		if srcGeometry.CRS != t.CRS {
+		if effectiveCRS(src.CRS) != effectiveCRS(t.CRS) {
 			return Value{}, errors.New("cannot convert between geometry types with different CRS")
 		}
 		return val, nil
 	case *geographyType:
-		srcGeography, _ := logicalTypeOf[*format.GeographyType](src.LogicalType())
-		if srcGeography.CRS != t.CRS {
+		if effectiveCRS(src.CRS) != effectiveCRS(t.CRS) {
 			return Value{}, errors.New("cannot convert between geography and geometry types with different CRS")
 		}
 		return val, nil

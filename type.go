@@ -210,7 +210,7 @@ type Type interface {
 // EqualTypes returns true if type1 and type2 are equal.
 //
 // Types are considered equal if they have the same Kind, Length, and LogicalType.
-// The comparison uses reflect.DeepEqual for LogicalType comparison.
+// An omitted geospatial CRS compares equal to the default CRS.
 //
 // Note: This function is designed for leaf types. For complex group types like
 // MAP and LIST, use EqualNodes instead, as those types require structural comparison
@@ -228,7 +228,18 @@ func equalLength(type1, type2 Type) bool {
 }
 
 func equalLogicalTypes(type1, type2 Type) bool {
-	return reflect.DeepEqual(type1.LogicalType(), type2.LogicalType())
+	a, b := type1.LogicalType(), type2.LogicalType()
+	switch t := logicalTypeValueOf(a).(type) {
+	case *format.GeometryType:
+		if u, ok := logicalTypeOf[*format.GeometryType](b); ok && t != nil && u != nil {
+			return effectiveCRS(t.CRS) == effectiveCRS(u.CRS)
+		}
+	case *format.GeographyType:
+		if u, ok := logicalTypeOf[*format.GeographyType](b); ok && t != nil && u != nil {
+			return effectiveCRS(t.CRS) == effectiveCRS(u.CRS) && t.Algorithm == u.Algorithm
+		}
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 var (
