@@ -106,6 +106,9 @@ type FileConfig struct {
 	ReadMode             ReadMode
 	Schema               *Schema
 	Decryption           *DecryptionConfig
+
+	// WindowedDictionaryReading is set by the WindowedDictionaryReading option.
+	WindowedDictionaryReading bool
 }
 
 // DefaultFileConfig returns a new FileConfig value initialized with the
@@ -147,10 +150,13 @@ func (c *FileConfig) ConfigureFile(config *FileConfig) {
 		SkipPageIndex:        c.SkipPageIndex,
 		SkipBloomFilters:     c.SkipBloomFilters,
 		PrefetchBloomFilters: c.PrefetchBloomFilters,
+		OptimisticRead:       c.OptimisticRead,
 		ReadBufferSize:       cmp.Or(c.ReadBufferSize, config.ReadBufferSize),
 		ReadMode:             ReadMode(cmp.Or(int(c.ReadMode), int(config.ReadMode))),
 		Schema:               cmp.Or(c.Schema, config.Schema),
 		Decryption:           cmp.Or(c.Decryption, config.Decryption),
+
+		WindowedDictionaryReading: c.WindowedDictionaryReading,
 	}
 }
 
@@ -536,6 +542,17 @@ func PrefetchBloomFilters(prefetch bool) FileOption {
 // caches and achieve similar results (e.g., Tempo).
 func OptimisticRead(enabled bool) FileOption {
 	return fileOption(func(config *FileConfig) { config.OptimisticRead = enabled })
+}
+
+// WindowedDictionaryReading enables bounded dictionary-index windows for flat,
+// required byte-array columns. It defaults to false. Other columns retain eager
+// decoding. ReadValues and ReadRows do not materialize the full index array;
+// Page.Data explicitly materializes it for compatibility with page encoders.
+// Compressed/encoded pages, dictionaries and returned values are not bounded by
+// this option. Each active value reader uses at most 1024 int32 index slots,
+// sized to its read batch and allocated only when bit-packed IDs are read.
+func WindowedDictionaryReading(enabled bool) FileOption {
+	return fileOption(func(config *FileConfig) { config.WindowedDictionaryReading = enabled })
 }
 
 // FileReadMode is a file configuration option which controls the way pages

@@ -45,3 +45,21 @@ func TestConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestFileConfigConfigureFile(t *testing.T) {
+	// Passing a *FileConfig as an option must carry every boolean field.
+	src := DefaultFileConfig()
+	v := reflect.ValueOf(src).Elem()
+	for i := range v.NumField() {
+		if f := v.Field(i); f.Kind() == reflect.Bool {
+			f.SetBool(true)
+		}
+	}
+	got, err := NewFileConfig(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, src) {
+		t.Fatalf("want %+v, got %+v", src, got)
+	}
+}
