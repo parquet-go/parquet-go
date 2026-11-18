@@ -1589,11 +1589,22 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 
 		f.skip = rowIndex - pages[target].FirstRowIndex
 
-		// Replay the last page only if the stream is still positioned after it.
-		f.serveLastPage = f.lastPage != nil && target == f.lastPageIndex && f.index == target+1
-		if f.serveLastPage {
+		// The previous read left this page decoded. Replay that copy instead of
+		// reading it again, once the input sits on the following page so the
+		// next sequential read stays aligned with f.index.
+		if f.lastPage != nil && target == f.lastPageIndex {
+			if f.index != target+1 {
+				// Drop a stale replay before moving the input. A failed
+				// reposition must not serve the cached page from the wrong offset.
+				f.serveLastPage = false
+				if err := f.positionAfterCachedPage(pages, target); err != nil {
+					return err
+				}
+			}
+			f.serveLastPage = true
 			return nil
 		}
+		f.serveLastPage = false
 
 		// already positioned at the target page
 		if f.index == target {
@@ -1606,32 +1617,54 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 			f.dec.dataPageOrd = int16(target)
 			f.dec.dictPagePending = false
 		}
-
-		// if the target page is within the unread portion of the current buffer, just skip/discard some bytes
-		var pos int64
-		pos, err := f.section.Seek(0, io.SeekCurrent) // no-op seek to retrieve position
-		if err != nil {
-			return err
-		}
-
-		unread := int64(f.rbuf.Buffered())
-		currOffset := pos - unread                          // section relative offset
-		targetOffset := pages[target].Offset - f.baseOffset // section relative target offset
-		skipBytes := targetOffset - currOffset
-		if skipBytes == 0 {
-			return nil
-		}
-		if skipBytes > 0 && skipBytes <= unread {
-			_, err = f.rbuf.Discard(int(skipBytes))
-			return err
-		}
-
-		_, err = f.section.Seek(pages[target].Offset-f.baseOffset, io.SeekStart)
-		if err != nil {
-			return err
-		}
+		return f.seekToSectionOffset(pages[target].Offset - f.baseOffset)
 	}
 
+	f.rbuf.Reset(&f.section)
+	return nil
+}
+
+// positionAfterCachedPage moves the input to the first byte after data page
+// target and records that position in f.index. The decoded page is left
+// cached so ReadPage can replay it.
+func (f *FilePages) positionAfterCachedPage(pages []format.PageLocation, target int) error {
+	next := pages[target].Offset + int64(pages[target].CompressedPageSize) - f.baseOffset
+	if target+1 < len(pages) {
+		next = pages[target+1].Offset - f.baseOffset
+	}
+	if err := f.seekToSectionOffset(next); err != nil {
+		return err
+	}
+	f.index = target + 1
+	if f.dec != nil {
+		// readEncryptedPage increments the ordinal of the page it consumes.
+		// The next page is target+1, which has not been read yet.
+		f.dec.dataPageOrd = int16(target + 1)
+		f.dec.dictPagePending = false
+	}
+	return nil
+}
+
+// seekToSectionOffset moves the column-chunk input to offset, relative to the
+// start of the chunk section. Bytes already sitting in the read buffer are
+// discarded when the target falls inside them.
+func (f *FilePages) seekToSectionOffset(offset int64) error {
+	pos, err := f.section.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	unread := int64(f.rbuf.Buffered())
+	skipBytes := offset - (pos - unread)
+	if skipBytes == 0 {
+		return nil
+	}
+	if skipBytes > 0 && skipBytes <= unread {
+		_, err = f.rbuf.Discard(int(skipBytes))
+		return err
+	}
+	if _, err = f.section.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
 	f.rbuf.Reset(&f.section)
 	return nil
 }
