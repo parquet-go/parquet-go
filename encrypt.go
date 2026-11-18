@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync/atomic"
 )
@@ -279,10 +280,10 @@ func legacyModuleAAD(prefix, fileUnique []byte, module byte, ordinals []int16) [
 	case dataPageHeaderModule:
 		return makeAAD(prefix, fileUnique, legacyDataPageHeaderModule, ordinals...)
 	case dictPageHeaderModule:
-		ords := append(append([]int16{}, ordinals...), 0)
+		ords := append(slices.Clone(ordinals), 0)
 		return makeAAD(prefix, fileUnique, dictPageHeaderModule, ords...)
 	case dictPageBodyModule:
-		ords := append(append([]int16{}, ordinals...), 0)
+		ords := append(slices.Clone(ordinals), 0)
 		return makeAAD(prefix, fileUnique, legacyDictPageBodyModule, ords...)
 	case columnIndexModule:
 		return makeAAD(prefix, fileUnique, legacyColumnIndexModule, ordinals...)

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -175,7 +176,7 @@ func TestWriterEncryptionFollowsSpec(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("spec footer signature: ok=%v err=%v", ok, err)
 	}
-	legacyAAD := append(append([]byte{}, aad...), plain...)
+	legacyAAD := slices.Concat(aad, plain)
 	ok, err = footerTagMatches(footerKey, nonce, nil, legacyAAD, tag)
 	if err != nil {
 		t.Fatal(err)
