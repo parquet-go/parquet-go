@@ -1031,6 +1031,80 @@ func TestBufferSortNulls(t *testing.T) {
 	}
 }
 
+func TestBufferSortRepeatedNulls(t *testing.T) {
+	// An empty repeated value is a null at the leaf: its definition level is
+	// below the maximum. Descending must keep that null placement.
+	type row struct {
+		Key []int64
+	}
+	negative, zero, positive := []int64{-1}, []int64{0}, []int64{1}
+	empty := []int64{}
+	for _, test := range []struct {
+		name    string
+		sorting parquet.SortingColumn
+		want    []row
+	}{
+		{"ascending/nulls-last", parquet.Ascending("Key"), []row{{negative}, {zero}, {zero}, {positive}, {empty}, {empty}}},
+		{"ascending/nulls-first", parquet.NullsFirst(parquet.Ascending("Key")), []row{{empty}, {empty}, {negative}, {zero}, {zero}, {positive}}},
+		{"descending/nulls-last", parquet.Descending("Key"), []row{{positive}, {zero}, {zero}, {negative}, {empty}, {empty}}},
+		{"descending/nulls-first", parquet.NullsFirst(parquet.Descending("Key")), []row{{empty}, {empty}, {positive}, {zero}, {zero}, {negative}}},
+	} {
+		for _, values := range []struct {
+			name  string
+			input []row
+			want  []row
+		}{
+			{"mixed", []row{{Key: zero}, {}, {Key: negative}, {Key: positive}, {}, {Key: zero}}, test.want},
+			{"equal", []row{{Key: zero}, {Key: zero}}, []row{{Key: zero}, {Key: zero}}},
+			{"all-null", []row{{}, {}}, []row{{Key: empty}, {Key: empty}}},
+			{"empty", []row{}, []row{}},
+		} {
+			for _, generic := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/generic=%t", test.name, values.name, generic), func(t *testing.T) {
+					option := parquet.SortingRowGroupConfig(parquet.SortingColumns(test.sorting))
+					var buffer interface {
+						parquet.RowGroup
+						sort.Interface
+					}
+					if generic {
+						b := parquet.NewGenericBuffer[row](option)
+						if _, err := b.Write(values.input); err != nil {
+							t.Fatal(err)
+						}
+						buffer = b
+					} else {
+						b := parquet.NewBuffer(parquet.SchemaOf(row{}), option)
+						rows := make([]parquet.Row, len(values.input))
+						for i := range rows {
+							rows[i] = b.Schema().Deconstruct(nil, &values.input[i])
+						}
+						if _, err := b.WriteRows(rows); err != nil {
+							t.Fatal(err)
+						}
+						buffer = b
+					}
+					for cycle := 1; cycle <= 2; cycle++ {
+						sort.Sort(buffer)
+						reader := parquet.NewGenericRowGroupReader[row](buffer)
+						got := make([]row, len(values.input))
+						n, err := reader.Read(got)
+						reader.Close()
+						if err != nil && !errors.Is(err, io.EOF) {
+							t.Fatal(err)
+						}
+						if n != len(got) {
+							t.Fatalf("read %d rows, want %d", n, len(got))
+						}
+						if !reflect.DeepEqual(got, values.want) {
+							t.Fatalf("sorted rows mismatch after sort/read %d: got %#v, want %#v", cycle, got, values.want)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestBufferSortNullsAfterRead(t *testing.T) {
 	type row struct {
 		Key *int64
