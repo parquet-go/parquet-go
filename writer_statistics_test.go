@@ -555,6 +555,23 @@ func TestSkipPageStatistics(t *testing.T) {
 		}
 	})
 
+	t.Run("enable specific columns when stats globally disabled", func(t *testing.T) {
+		f := writeAndOpen(t,
+			DataPageStatistics(false),
+			EnablePageStatistics("id"),
+		)
+
+		if !hasPageStats(columnStats(t, f, "id")) {
+			t.Error("expected page statistics on column \"id\" (was in EnablePageStatistics)")
+		}
+		if hasPageStats(columnStats(t, f, "name")) {
+			t.Error("expected no page statistics on column \"name\"")
+		}
+		if hasPageStats(columnStats(t, f, "blob")) {
+			t.Error("expected no page statistics on column \"blob\"")
+		}
+	})
+
 	t.Run("verify uncompressed JSON in file", func(t *testing.T) {
 		for _, tt := range []struct {
 			name   string
