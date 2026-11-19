@@ -715,13 +715,16 @@ func incrementByteArrayInplace(value []byte) {
 
 func splitByteArrays(data []byte) [][]byte {
 	length := 0
-	plain.RangeByteArray(data, func([]byte) error {
+	// data is produced by plain.AppendByteArray in IndexPage. The callback
+	// does not fail, and ColumnIndex has no error to report if the buffer
+	// were somehow corrupt.
+	_ = plain.RangeByteArray(data, func([]byte) error {
 		length++
 		return nil
 	})
 	buffer := make([]byte, 0, len(data)-(4*length))
 	values := make([][]byte, 0, length)
-	plain.RangeByteArray(data, func(value []byte) error {
+	_ = plain.RangeByteArray(data, func(value []byte) error {
 		offset := len(buffer)
 		buffer = append(buffer, value...)
 		values = append(values, buffer[offset:])

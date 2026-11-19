@@ -1,11 +1,14 @@
 package parquet
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"testing"
 
+	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
@@ -339,4 +342,46 @@ func injectEmptyRowGroup(t *testing.T, data []byte) []byte {
 	out.Write(trailer[:])
 
 	return out.Bytes()
+}
+
+func newDictionaryPageHeader(body int32) []byte {
+	header := format.PageHeader{
+		Type:                 format.DictionaryPage,
+		UncompressedPageSize: body,
+		CompressedPageSize:   body,
+	}
+	var buf bytes.Buffer
+	proto := thrift.CompactProtocol{}
+	if err := thrift.NewEncoder(proto.NewWriter(&buf)).Encode(&header); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+func dictionaryFilePages(t *testing.T, data []byte) FilePages {
+	t.Helper()
+	var fp FilePages
+	fp.chunk = &FileColumnChunk{column: &Column{path: columnPath{"", "values"}}}
+	fp.dictionary = Int32Type.NewDictionary(0, 0, encoding.Int32Values(nil))
+	fp.rbuf = bufio.NewReader(bytes.NewReader(data))
+	fp.decoder.Reset(fp.protocol.NewReader(fp.rbuf))
+	return fp
+}
+
+func TestReadPageDiscardShortDictionaryPage(t *testing.T) {
+	fp := dictionaryFilePages(t, newDictionaryPageHeader(8))
+	_, err := fp.ReadPage()
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ReadPage: got %v, want a short read", err)
+	}
+}
+
+func TestReadPageDiscardDuplicateDictionaryPage(t *testing.T) {
+	body := []byte{1, 2, 3, 4}
+	data := append(newDictionaryPageHeader(int32(len(body))), body...)
+	fp := dictionaryFilePages(t, data)
+	_, err := fp.ReadPage()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("ReadPage after discarding the dictionary page: got %v, want EOF", err)
+	}
 }

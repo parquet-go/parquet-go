@@ -185,8 +185,10 @@ func (col *decimalColumnBuffer) ColumnIndex() (ColumnIndex, error) {
 func (col *decimalColumnBuffer) Less(i, j int) bool {
 	u := [1]Value{}
 	v := [1]Value{}
-	col.ColumnBuffer.ReadValuesAt(u[:], int64(i))
-	col.ColumnBuffer.ReadValuesAt(v[:], int64(j))
+	// Sort only calls Less with indexes that are in range, and ReadValuesAt
+	// returns a value with a nil error for those indexes.
+	_, _ = col.ColumnBuffer.ReadValuesAt(u[:], int64(i))
+	_, _ = col.ColumnBuffer.ReadValuesAt(v[:], int64(j))
 	return compareDecimalByteArrays(u[0].byteArray(), v[0].byteArray()) < 0
 }
 
