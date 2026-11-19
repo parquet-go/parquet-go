@@ -217,7 +217,7 @@ func (t *timestampType) EstimateDecodeSize(numValues int, src []byte, enc encodi
 
 func (t *timestampType) AssignValue(dst reflect.Value, src Value) error {
 	switch dst.Type() {
-	case reflect.TypeOf(time.Time{}):
+	case reflect.TypeFor[time.Time]():
 		// Check if the value is NULL - if so, assign zero time.Time
 		if src.IsNull() {
 			dst.Set(reflect.ValueOf(time.Time{}))
@@ -235,7 +235,7 @@ func (t *timestampType) AssignValue(dst reflect.Value, src Value) error {
 		val := time.Unix(0, nanos).UTC()
 		dst.Set(reflect.ValueOf(val))
 		return nil
-	case reflect.TypeOf((*time.Time)(nil)):
+	case reflect.TypeFor[*time.Time]():
 		// Handle *time.Time (pointer to time.Time)
 		if src.IsNull() {
 			// For NULL values, set the pointer to nil

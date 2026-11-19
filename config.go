@@ -74,10 +74,10 @@ func parseModuleVersion(version string) (semver, datetime, buildsha string) {
 }
 
 func splitModuleVersion(s string) (head, tail string) {
-	if i := strings.IndexByte(s, '-'); i < 0 {
+	if before, after, ok := strings.Cut(s, "-"); !ok {
 		head = s
 	} else {
-		head, tail = s[:i], s[i+1:]
+		head, tail = before, after
 	}
 	return
 }

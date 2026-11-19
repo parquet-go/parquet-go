@@ -3,6 +3,7 @@ package thrift
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -65,7 +66,7 @@ func forEachStructField(t reflect.Type, index []int, do func(structField)) {
 		}
 
 		fieldIndex := append(index, i)
-		fieldIndex = fieldIndex[:len(fieldIndex):len(fieldIndex)]
+		fieldIndex = slices.Clip(fieldIndex)
 
 		if f.Anonymous {
 			fieldType := f.Type

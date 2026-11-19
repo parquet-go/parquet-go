@@ -72,7 +72,7 @@ type MakeValueFunc func(reflect.Value, *rand.Rand)
 
 func MakeValueFuncOf(t reflect.Type) MakeValueFunc {
 	switch t {
-	case reflect.TypeOf(time.Time{}):
+	case reflect.TypeFor[time.Time]():
 		return func(v reflect.Value, r *rand.Rand) {
 			// TODO: This is a hack to support the matching of times in a precision
 			// other than nanosecond by generating times rounded to the second. A

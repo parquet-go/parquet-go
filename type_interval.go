@@ -96,7 +96,7 @@ func (t *intervalType) EstimateDecodeSize(numValues int, src []byte, enc encodin
 }
 
 func (t *intervalType) AssignValue(dst reflect.Value, src Value) error {
-	if dst.Type() == reflect.TypeOf(Interval{}) {
+	if dst.Type() == reflect.TypeFor[Interval]() {
 		v := src.byteArray()
 		if len(v) == 12 {
 			dst.Set(reflect.ValueOf(Interval{

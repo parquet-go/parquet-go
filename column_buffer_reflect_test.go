@@ -92,7 +92,7 @@ func TestWriteValueFuncOfOptional(t *testing.T) {
 		},
 		{
 			name:       "valid pointer",
-			value:      ptrTo(int32(42)),
+			value:      new(int32(42)),
 			expectNull: false,
 			expected:   int32(42),
 		},
@@ -109,7 +109,7 @@ func TestWriteValueFuncOfOptional(t *testing.T) {
 		},
 		{
 			name:       "pointer to zero value",
-			value:      ptrTo(int32(0)),
+			value:      new(int32(0)),
 			expectNull: false,
 			expected:   int32(0),
 		},
@@ -700,8 +700,9 @@ func TestWriteValueFuncOfMapWithSliceValues(t *testing.T) {
 
 // Helper functions
 
+//go:fix inline
 func intPtr(v int32) *int32 {
-	return &v
+	return new(v)
 }
 
 // makeColumnBuffersForSchema creates column buffers for all leaf columns in a schema
@@ -749,8 +750,9 @@ func makeColumnBuffer(node Node, columnIndex int16, bufferCap int) ColumnBuffer 
 	}
 }
 
+//go:fix inline
 func ptrTo[T any](v T) *T {
-	return &v
+	return new(v)
 }
 
 func checkValue(t *testing.T, got Value, expected any) {
@@ -1930,7 +1932,7 @@ func TestGenericWriterAnyPointerVsOptionalTag(t *testing.T) {
 			}{}),
 			data: struct {
 				V *string `parquet:"v"`
-			}{V: ptr("hello")},
+			}{V: new("hello")},
 		},
 		{
 			name: "int32_nil",
@@ -1948,7 +1950,7 @@ func TestGenericWriterAnyPointerVsOptionalTag(t *testing.T) {
 			}{}),
 			data: struct {
 				V *int32 `parquet:"v"`
-			}{V: ptr(int32(42))},
+			}{V: new(int32(42))},
 		},
 		{
 			name: "map_nil",
@@ -2065,7 +2067,7 @@ func TestWriteOptionalZeroValues(t *testing.T) {
 		{
 			name:       "pointer to zero is not null",
 			schema:     Optional(Leaf(Int32Type)),
-			value:      ptr(int32(0)),
+			value:      new(int32(0)),
 			expectNull: false,
 			expected:   int32(0),
 		},
@@ -2163,12 +2165,12 @@ func TestGenericWriterStructOptionalZeroValues(t *testing.T) {
 	buf2 := new(bytes.Buffer)
 	writer2 := NewGenericWriter[PtrRecord](buf2)
 	if _, err := writer2.Write([]PtrRecord{{
-		Bool:    ptr(false),
-		Int32:   ptr(int32(0)),
-		Int64:   ptr(int64(0)),
-		Float32: ptr(float32(0)),
-		Float64: ptr(float64(0)),
-		String:  ptr(""),
+		Bool:    new(false),
+		Int32:   new(int32(0)),
+		Int64:   new(int64(0)),
+		Float32: new(float32(0)),
+		Float64: new(float64(0)),
+		String:  new(""),
 	}}); err != nil {
 		t.Fatalf("error writing PtrRecord: %v", err)
 	}
@@ -2385,10 +2387,10 @@ func TestDeconstructOptionalZeroValues(t *testing.T) {
 
 	ptrSchema := SchemaOf(PtrRecord{})
 	ptrDeconstructed := ptrSchema.Deconstruct(make([]Value, 0, 4), PtrRecord{
-		Bool:    ptr(false),
-		Int32:   ptr(int32(0)),
-		Float64: ptr(float64(0)),
-		String:  ptr(""),
+		Bool:    new(false),
+		Int32:   new(int32(0)),
+		Float64: new(float64(0)),
+		String:  new(""),
 	})
 	if len(ptrDeconstructed) != 4 {
 		t.Fatalf("expected 4 values, got %d", len(ptrDeconstructed))
@@ -2412,8 +2414,9 @@ func TestDeconstructOptionalZeroValues(t *testing.T) {
 	}
 }
 
+//go:fix inline
 func ptr[T any](v T) *T {
-	return &v
+	return new(v)
 }
 
 // TestOptionalZeroValueIsNullValueType locks in the v0.27.0 contract: when an

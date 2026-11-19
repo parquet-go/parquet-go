@@ -179,7 +179,7 @@ func testProtocolReadWriteValues(t *testing.T, p thrift.Protocol) {
 					reflect.ValueOf(w),
 					reflect.ValueOf(value),
 				})
-				if err, _ := ret[0].Interface().(error); err != nil {
+				if err, _ := reflect.TypeAssert[error](ret[0]); err != nil {
 					t.Fatal("encoding:", err)
 				}
 			}
@@ -188,7 +188,7 @@ func testProtocolReadWriteValues(t *testing.T, p thrift.Protocol) {
 				ret := reflect.ValueOf(test.read).Call([]reflect.Value{
 					reflect.ValueOf(r),
 				})
-				if err, _ := ret[1].Interface().(error); err != nil {
+				if err, _ := reflect.TypeAssert[error](ret[1]); err != nil {
 					t.Fatal("decoding:", err)
 				}
 				if res := ret[0].Interface(); !reflect.DeepEqual(value, res) {

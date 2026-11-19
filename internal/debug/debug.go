@@ -76,9 +76,9 @@ func init() {
 	for arg := range strings.SplitSeq(os.Getenv("PARQUETGODEBUG"), ",") {
 		k := arg
 		v := ""
-		i := strings.IndexByte(arg, '=')
-		if i >= 0 {
-			k, v = arg[:i], arg[i+1:]
+		before, after, ok := strings.Cut(arg, "=")
+		if ok {
+			k, v = before, after
 		}
 		var err error
 		switch k {

@@ -451,12 +451,13 @@ func buildVariantFile(t *testing.T, shred parquet.Node, values []*variant.Value,
 	return buf.Bytes()
 }
 
-func vptr(v variant.Value) *variant.Value { return &v }
+//go:fix inline
+func vptr(v variant.Value) *variant.Value { return new(v) }
 
 // TestVariantReaderErrors exercises the error paths of the constructor and
 // the positioning methods.
 func TestVariantReaderErrors(t *testing.T) {
-	values := []*variant.Value{vptr(variant.Int64(1)), vptr(variant.Int64(2))}
+	values := []*variant.Value{new(variant.Int64(1)), new(variant.Int64(2))}
 	data := buildVariantFile(t, parquet.Int(64), values)
 	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -497,7 +498,7 @@ func TestVariantReaderErrors(t *testing.T) {
 // shredded as int64 across the full disposition matrix, including type
 // conflicts surfaced through residuals.
 func TestVariantReaderLocs(t *testing.T) {
-	obj := func(fields ...variant.Field) *variant.Value { return vptr(variant.MakeObject(fields)) }
+	obj := func(fields ...variant.Field) *variant.Value { return new(variant.MakeObject(fields)) }
 	field := func(name string, v variant.Value) variant.Field { return variant.Field{Name: name, Value: v} }
 
 	values := []*variant.Value{
@@ -506,7 +507,7 @@ func TestVariantReaderLocs(t *testing.T) {
 		obj(field("a", variant.Null())),      // variant null
 		obj(field("b", variant.Int64(1))),    // field missing
 		nil,                                  // null variant row
-		vptr(variant.Int64(7)),               // root not an object
+		new(variant.Int64(7)),                // root not an object
 		obj(field("a", variant.MakeArray([]variant.Value{variant.Int64(1), variant.Int64(2)}))), // list where scalar shredded
 	}
 	data := buildVariantFile(t, parquet.Group{"a": parquet.Int(64)}, values)
@@ -584,11 +585,11 @@ func TestVariantReaderLocs(t *testing.T) {
 func TestVariantReaderMixedList(t *testing.T) {
 	arr := func(elems ...variant.Value) variant.Value { return variant.MakeArray(elems) }
 	values := []*variant.Value{
-		vptr(arr(variant.Int64(1), variant.Int64(2), variant.Int64(3))),
-		vptr(arr()),
-		vptr(variant.Int64(9)), // scalar where list shredded
+		new(arr(variant.Int64(1), variant.Int64(2), variant.Int64(3))),
+		new(arr()),
+		new(variant.Int64(9)), // scalar where list shredded
 		nil,
-		vptr(arr(variant.Int64(4), variant.String("x"), variant.Null())), // mixed element types
+		new(arr(variant.Int64(4), variant.String("x"), variant.Null())), // mixed element types
 	}
 	data := buildVariantFile(t, parquet.List(parquet.Int(64)), values)
 
@@ -674,7 +675,7 @@ func TestVariantReaderListSpansPages(t *testing.T) {
 	for i := range elems {
 		elems[i] = variant.Int64(int64(i))
 	}
-	values := []*variant.Value{vptr(variant.MakeArray(elems))}
+	values := []*variant.Value{new(variant.MakeArray(elems))}
 	data := buildVariantFile(t, parquet.List(parquet.Int(64)), values,
 		parquet.PageBufferSize(64))
 
@@ -716,9 +717,9 @@ func TestVariantReaderListSpansPages(t *testing.T) {
 func TestVariantReaderNestedLists(t *testing.T) {
 	arr := func(elems ...variant.Value) variant.Value { return variant.MakeArray(elems) }
 	values := []*variant.Value{
-		vptr(arr(arr(variant.Int64(1), variant.Int64(2)), arr(variant.Int64(3)))),
-		vptr(arr(arr(variant.Int64(4)))),
-		vptr(arr(arr())), // outer list with one empty inner list: [[]]
+		new(arr(arr(variant.Int64(1), variant.Int64(2)), arr(variant.Int64(3)))),
+		new(arr(arr(variant.Int64(4)))),
+		new(arr(arr())), // outer list with one empty inner list: [[]]
 	}
 	data := buildVariantFile(t, parquet.List(parquet.List(parquet.Int(64))), values)
 
@@ -779,7 +780,7 @@ func TestVariantReaderNestedLists(t *testing.T) {
 // the null location, leaving the typed vector empty.
 func TestVariantReaderTypedListOfNulls(t *testing.T) {
 	values := []*variant.Value{
-		vptr(variant.MakeArray([]variant.Value{variant.Null(), variant.Null(), variant.Null()})),
+		new(variant.MakeArray([]variant.Value{variant.Null(), variant.Null(), variant.Null()})),
 	}
 	data := buildVariantFile(t, parquet.List(parquet.Int(64)), values)
 
@@ -832,10 +833,10 @@ func TestVariantReaderVirtualNavigation(t *testing.T) {
 	field := func(name string, v variant.Value) variant.Field { return variant.Field{Name: name, Value: v} }
 
 	values := []*variant.Value{
-		vptr(obj(field("a", obj(field("b", variant.Int64(1)), field("c", variant.String("c0")))))),
-		vptr(obj(field("a", obj(field("b", obj(field("d", variant.Int64(42)))))))),  // b conflicts: object where int shredded
-		vptr(obj(field("a", variant.Int64(3)))),                                     // a conflicts: scalar where object shredded
-		vptr(obj(field("a", obj(field("c", obj(field("e", variant.Bool(true)))))))), // deep under never-shredded c
+		new(obj(field("a", obj(field("b", variant.Int64(1)), field("c", variant.String("c0")))))),
+		new(obj(field("a", obj(field("b", obj(field("d", variant.Int64(42)))))))),  // b conflicts: object where int shredded
+		new(obj(field("a", variant.Int64(3)))),                                     // a conflicts: scalar where object shredded
+		new(obj(field("a", obj(field("c", obj(field("e", variant.Bool(true)))))))), // deep under never-shredded c
 		nil,
 	}
 	shred := parquet.Group{"a": parquet.Group{"b": parquet.Int(64)}}
@@ -917,7 +918,7 @@ func TestVariantReaderSeekToRow(t *testing.T) {
 	const numRows = 500
 	values := make([]*variant.Value, numRows)
 	for i := range values {
-		values[i] = vptr(variant.MakeObject([]variant.Field{
+		values[i] = new(variant.MakeObject([]variant.Field{
 			{Name: "a", Value: variant.Int64(int64(i))},
 		}))
 	}
@@ -972,7 +973,7 @@ func TestVariantReaderDictionary(t *testing.T) {
 	values := make([]*variant.Value, numRows)
 	words := []string{"red", "green", "blue"}
 	for i := range values {
-		values[i] = vptr(variant.MakeObject([]variant.Field{
+		values[i] = new(variant.MakeObject([]variant.Field{
 			{Name: "a", Value: variant.Int64(int64(r.IntN(4)))},
 			{Name: "s", Value: variant.String(words[r.IntN(len(words))])},
 		}))

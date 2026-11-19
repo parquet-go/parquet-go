@@ -49,9 +49,9 @@ func nullIndexTime(bits []uint64, rows sparse.Array) {
 
 func nullIndexFuncOf(t reflect.Type) nullIndexFunc {
 	switch t {
-	case reflect.TypeOf(deprecated.Int96{}):
+	case reflect.TypeFor[deprecated.Int96]():
 		return nullIndex[deprecated.Int96]
-	case reflect.TypeOf(time.Time{}):
+	case reflect.TypeFor[time.Time]():
 		return nullIndexTime
 	}
 
