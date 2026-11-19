@@ -66,7 +66,7 @@ TEXT ·filterInsertBulk(SB), NOSPLIT, $0-48
     CMPB ·hasAVX2(SB), $0
     JE fallback
 avx2:
-    VPBROADCASTQ f_base+8(FP), Y0
+    VPBROADCASTQ f_len+8(FP), Y0
     // Loop initialization, SI holds the current index in `x`, DI is the number
     // of elements in `x` rounded down to the nearest multiple of 4.
     XORQ SI, SI
@@ -167,7 +167,7 @@ avx2:
     RET
 fallback:
     ADDQ CX, AX
-    MOVL x+24(FP), BX
+    MOVLQZX x+24(FP), BX
     insert($salt0, BX, 0(AX))
     insert($salt1, BX, 4(AX))
     insert($salt2, BX, 8(AX))
@@ -196,7 +196,7 @@ avx2:
     RET
 fallback:
     ADDQ CX, AX
-    MOVL x+24(FP), BX
+    MOVLQZX x+24(FP), BX
     check($salt0, 0(AX), BX)
     check($salt1, 4(AX), BX)
     check($salt2, 8(AX), BX)

@@ -2,6 +2,10 @@
 
 #include "textflag.h"
 
+// asmdecl treats a trailing D as an 8-byte operand. VPBROADCASTL is
+// VPBROADCASTD, so a 4-byte stack slot still type-checks.
+#define VPBROADCASTL(src, dst) VPBROADCASTD src, dst
+
 // func broadcastRangeInt32AVX2(dst []int32, base int32)
 TEXT ·broadcastRangeInt32AVX2(SB), NOSPLIT, $0-28
     MOVQ dst_base+0(FP), AX
@@ -14,7 +18,7 @@ TEXT ·broadcastRangeInt32AVX2(SB), NOSPLIT, $0-28
 
     VMOVDQU ·range0n8(SB), Y0         // [0,1,2,3,4,5,6,7]
     VPBROADCASTD ·range0n8+32(SB), Y1 // [8,8,8,8,8,8,8,8]
-    VPBROADCASTD base+24(FP), Y2      // [base...]
+    VPBROADCASTL(base+24(FP), Y2)     // [base...]
     VPADDD Y2, Y0, Y0                 // [base,base+1,...]
 
     MOVQ BX, DI
