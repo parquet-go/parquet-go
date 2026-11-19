@@ -2421,10 +2421,14 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 	defer dataPageBuffers.Put(buf)
 
 	if c.maxRepetitionLevel > 0 {
-		buf.encodeRepetitionLevels(page, c.maxRepetitionLevel)
+		if err := buf.encodeRepetitionLevels(page, c.maxRepetitionLevel); err != nil {
+			return 0, fmt.Errorf("encoding repetition levels: %w", err)
+		}
 	}
 	if c.maxDefinitionLevel > 0 {
-		buf.encodeDefinitionLevels(page, c.maxDefinitionLevel)
+		if err := buf.encodeDefinitionLevels(page, c.maxDefinitionLevel); err != nil {
+			return 0, fmt.Errorf("encoding definition levels: %w", err)
+		}
 	}
 
 	if err := buf.encode(page, c.encoding); err != nil {

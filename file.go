@@ -279,7 +279,9 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 						continue
 					}
 
-					section.Seek(offset, io.SeekStart)
+					// Seek only fails when the target is before the section base.
+					// This section starts at byte 0 and the offset is positive.
+					_, _ = section.Seek(offset, io.SeekStart)
 					rbuf.Reset(section)
 
 					header = format.BloomFilterHeader{}
@@ -372,7 +374,8 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 		return nil
 	}
 
-	forEachColumnChunk(func(_, _ int, c *format.ColumnChunk) error {
+	// The callback only adds the lengths together, so it cannot fail.
+	_ = forEachColumnChunk(func(_, _ int, c *format.ColumnChunk) error {
 		columnIndexLength += int64(c.ColumnIndexLength)
 		offsetIndexLength += int64(c.OffsetIndexLength)
 		return nil
@@ -1238,7 +1241,11 @@ func (f *FilePages) ReadPage() (Page, error) {
 			// if this is a dictionary page and we've already read and decoded the dictionary we can skip past it.
 			// call f.rbuf.Discard to skip the page data and realign f.rbuf with the next page header
 			if header.Type == format.DictionaryPage && f.dictionary != nil {
-				f.rbuf.Discard(int(header.CompressedPageSize))
+				// A short read here leaves the column chunk misaligned, so the
+				// next header would be decoded from the wrong bytes.
+				if _, err := f.rbuf.Discard(int(header.CompressedPageSize)); err != nil {
+					return nil, fmt.Errorf("skipping dictionary page of column %q: %w", f.columnPath(), err)
+				}
 				continue
 			}
 
