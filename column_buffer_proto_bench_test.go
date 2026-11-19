@@ -116,18 +116,18 @@ func optionalInt32Message(n int, value func(int) int32) (proto.Message, error) {
 	fields := make([]*descriptorpb.FieldDescriptorProto, n)
 	for i := range fields {
 		fields[i] = &descriptorpb.FieldDescriptorProto{
-			Name:   proto.String(fmt.Sprintf("f%d", i)),
-			Number: proto.Int32(int32(i + 1)),
+			Name:   new(fmt.Sprintf("f%d", i)),
+			Number: new(int32(i + 1)),
 			Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
 			Type:   descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum(),
 		}
 	}
 	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
-		Name:    proto.String("optional_int32.proto"),
-		Package: proto.String("bench"),
-		Syntax:  proto.String("proto2"),
+		Name:    new("optional_int32.proto"),
+		Package: new("bench"),
+		Syntax:  new("proto2"),
 		MessageType: []*descriptorpb.DescriptorProto{{
-			Name:  proto.String("Row"),
+			Name:  new("Row"),
 			Field: fields,
 		}},
 	}, nil)

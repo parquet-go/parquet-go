@@ -305,7 +305,7 @@ func TestNullDictionary(t *testing.T) {
 	}
 
 	// Test Index - all values should be null
-	for i := int32(0); i < int32(numValues); i++ {
+	for i := range int32(numValues) {
 		if val := dict.Index(i); !val.IsNull() {
 			t.Errorf("Index(%d) = %v, want null", i, val)
 		}

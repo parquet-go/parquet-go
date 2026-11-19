@@ -631,7 +631,7 @@ func reconstructFuncOfOptional(columnIndex uint16, node Node) (uint16, reconstru
 func setMakeSlice(v reflect.Value, n int) reflect.Value {
 	t := v.Type()
 	if t.Kind() == reflect.Interface {
-		t = reflect.TypeOf(([]any)(nil))
+		t = reflect.TypeFor[[]any]()
 	}
 	s := reflect.MakeSlice(t, n, n)
 	v.Set(s)
@@ -641,7 +641,7 @@ func setMakeSlice(v reflect.Value, n int) reflect.Value {
 func setNullSlice(v reflect.Value) reflect.Value {
 	t := v.Type()
 	if t.Kind() == reflect.Interface {
-		t = reflect.TypeOf(([]any)(nil))
+		t = reflect.TypeFor[[]any]()
 	}
 	s := reflect.Zero(t)
 	v.Set(s)
@@ -773,7 +773,7 @@ func reconstructFuncOfMap(columnIndex uint16, node Node) (uint16, reconstructFun
 		column := columns[0]
 		t := value.Type()
 		if t.Kind() == reflect.Interface {
-			t = reflect.TypeOf((map[string]any)(nil))
+			t = reflect.TypeFor[map[string]any]()
 		}
 		k := t.Key()
 		v := t.Elem()
@@ -889,13 +889,13 @@ func reconstructFuncOfGroup(columnIndex uint16, node Node) (uint16, reconstructF
 
 	return columnIndex, func(value reflect.Value, levels columnLevels, columns [][]Value) error {
 		if value.Kind() == reflect.Interface {
-			value.Set(reflect.MakeMap(reflect.TypeOf((map[string]any)(nil))))
+			value.Set(reflect.MakeMap(reflect.TypeFor[map[string]any]()))
 			value = value.Elem()
 		}
 
 		if value.Kind() == reflect.Map {
 			elemType := value.Type().Elem()
-			name := reflect.New(reflect.TypeOf("")).Elem()
+			name := reflect.New(reflect.TypeFor[string]()).Elem()
 			elem := reflect.New(elemType).Elem()
 
 			if value.Len() > 0 {

@@ -169,8 +169,7 @@ func validateColumns(t reflect.Type) (string, bool) {
 
 	columns := make(map[string]struct{}, t.NumField())
 
-	for i := range t.NumField() {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		if !f.IsExported() {
 			continue
 		}

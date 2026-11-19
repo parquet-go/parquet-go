@@ -284,8 +284,8 @@ func verifyMetadata(t *testing.T, raw []byte, wantStrings []string) {
 
 func readLE(b []byte) int {
 	v := 0
-	for i := len(b) - 1; i >= 0; i-- {
-		v = v<<8 | int(b[i])
+	for _, v0 := range slices.Backward(b) {
+		v = v<<8 | int(v0)
 	}
 	return v
 }

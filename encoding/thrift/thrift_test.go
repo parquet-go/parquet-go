@@ -148,7 +148,7 @@ var marshalTestValues = [...]struct {
 			RecursiveStruct{},
 			RecursiveStruct{Value: "hello"},
 			RecursiveStruct{Value: "hello", Next: &RecursiveStruct{}},
-			RecursiveStruct{Value: "hello", Next: &RecursiveStruct{Value: "world", Test: newBool(true)}},
+			RecursiveStruct{Value: "hello", Next: &RecursiveStruct{Value: "world", Test: new(true)}},
 		},
 	},
 
@@ -257,12 +257,17 @@ func (*UnionInt) FieldID() int16    { return 2 }
 func (*UnionString) FieldID() int16 { return 3 }
 func (*UnionEmpty) FieldID() int16  { return 4 }
 
-func newBool(b bool) *bool       { return &b }
-func newInt(i int) *int          { return &i }
-func newString(s string) *string { return &s }
+//go:fix inline
+func newBool(b bool) *bool { return new(b) }
+
+//go:fix inline
+func newInt(i int) *int { return new(i) }
+
+//go:fix inline
+func newString(s string) *string { return new(s) }
 
 func newBoolPtr(b bool) **bool {
-	p := newBool(b)
+	p := new(b)
 	return &p
 }
 

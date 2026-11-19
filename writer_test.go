@@ -472,9 +472,7 @@ func testWriteRowsColumns[T any](t *testing.T) {
 					wg        sync.WaitGroup
 				)
 				for i, col := range vals {
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
+					wg.Go(func() {
 						num, err := w.ColumnWriters()[i].WriteRowValues(col)
 						if err != nil {
 							mu.Lock()
@@ -488,7 +486,7 @@ func testWriteRowsColumns[T any](t *testing.T) {
 						mu.Lock()
 						rowCounts = append(rowCounts, num)
 						mu.Unlock()
-					}()
+					})
 				}
 				wg.Wait()
 				for i, n := range rowCounts[1:] {

@@ -93,7 +93,7 @@ func (t *geometryType) AssignValue(dst reflect.Value, src Value) error {
 		}
 		dst.Set(reflect.ValueOf(g))
 		return nil
-	case reflect.TypeOf((*geom.T)(nil)).Elem():
+	case reflect.TypeFor[geom.T]():
 		if src.IsNull() {
 			dst.Set(reflect.Zero(dst.Type()))
 			return nil

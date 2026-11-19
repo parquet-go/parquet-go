@@ -386,19 +386,19 @@ func goTypeOfLeaf(node Node) reflect.Type {
 	case Boolean:
 		return reflect.TypeOf(false)
 	case Int32:
-		return reflect.TypeOf(int32(0))
+		return reflect.TypeFor[int32]()
 	case Int64:
-		return reflect.TypeOf(int64(0))
+		return reflect.TypeFor[int64]()
 	case Int96:
-		return reflect.TypeOf(deprecated.Int96{})
+		return reflect.TypeFor[deprecated.Int96]()
 	case Float:
-		return reflect.TypeOf(float32(0))
+		return reflect.TypeFor[float32]()
 	case Double:
-		return reflect.TypeOf(float64(0))
+		return reflect.TypeFor[float64]()
 	case ByteArray:
-		return reflect.TypeOf(([]byte)(nil))
+		return reflect.TypeFor[[]byte]()
 	case FixedLenByteArray:
-		return reflect.ArrayOf(t.Length(), reflect.TypeOf(byte(0)))
+		return reflect.ArrayOf(t.Length(), reflect.TypeFor[byte]())
 	default:
 		panic("BUG: parquet type returned an unsupported kind")
 	}

@@ -1129,11 +1129,11 @@ func (n nopPageWriter) WritePage(page parquet.Page) (int64, error) {
 
 type countingReaderAt struct {
 	ra    io.ReaderAt
-	reads int64
+	reads atomic.Int64
 }
 
 func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
-	atomic.AddInt64(&c.reads, 1)
+	c.reads.Add(1)
 	return c.ra.ReadAt(p, off)
 }
 
@@ -1197,7 +1197,7 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 						name = "no-seek"
 					}
 					b.Run(name, func(b *testing.B) {
-						atomic.StoreInt64(&ctr.reads, 0)
+						ctr.reads.Store(0)
 
 						// benchmark loop: read / seek through the whole file
 						b.ResetTimer()
@@ -1226,7 +1226,7 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 							_ = r.Close()
 						}
 
-						b.ReportMetric(float64(atomic.LoadInt64(&ctr.reads))/float64(b.N), "reads/op")
+						b.ReportMetric(float64(ctr.reads.Load())/float64(b.N), "reads/op")
 					})
 				}
 			})
@@ -1239,7 +1239,7 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 						name = "no-seek"
 					}
 					b.Run(name, func(b *testing.B) {
-						atomic.StoreInt64(&ctr.reads, 0)
+						ctr.reads.Store(0)
 
 						b.ResetTimer()
 						for b.Loop() {
@@ -1292,7 +1292,7 @@ func BenchmarkSeekThroughFile(b *testing.B) {
 							}
 						}
 
-						b.ReportMetric(float64(atomic.LoadInt64(&ctr.reads))/float64(b.N), "reads/op")
+						b.ReportMetric(float64(ctr.reads.Load())/float64(b.N), "reads/op")
 					})
 				}
 			})

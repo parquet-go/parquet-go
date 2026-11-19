@@ -2166,14 +2166,14 @@ func TestProtoOptionalZeroScalars(t *testing.T) {
 
 	t.Run("field", func(t *testing.T) {
 		zero := &fieldMsg{
-			Name:           proto.String(""),
+			Name:           new(""),
 			Label:          &zeroLabel,
-			Proto3Optional: proto.Bool(false),
+			Proto3Optional: new(false),
 		}
 		set := &fieldMsg{
-			Name:           proto.String("id"),
+			Name:           new("id"),
 			Label:          descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
-			Proto3Optional: proto.Bool(true),
+			Proto3Optional: new(true),
 		}
 		schema := NewSchema("subset", Group{
 			"label":           Optional(Int(32)),
@@ -2193,17 +2193,17 @@ func TestProtoOptionalZeroScalars(t *testing.T) {
 
 	t.Run("option", func(t *testing.T) {
 		zero := &optionMsg{
-			IdentifierValue:  proto.String(""),
+			IdentifierValue:  new(""),
 			PositiveIntValue: proto.Uint64(0),
 			NegativeIntValue: proto.Int64(0),
 			DoubleValue:      proto.Float64(0),
 			StringValue:      []byte{},
 		}
 		set := &optionMsg{
-			IdentifierValue:  proto.String("speed"),
+			IdentifierValue:  new("speed"),
 			PositiveIntValue: proto.Uint64(7),
 			NegativeIntValue: proto.Int64(-3),
-			DoubleValue:      proto.Float64(1.5),
+			DoubleValue:      new(1.5),
 			StringValue:      []byte("x"),
 		}
 		schema := NewSchema("subset", Group{
