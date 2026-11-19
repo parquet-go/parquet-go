@@ -183,6 +183,41 @@ type BloomFilterColumn interface {
 	Size(numValues int64) int
 }
 
+// BloomFilterFinalizer may be implemented by a BloomFilterColumn to transform
+// the filter of a column chunk once every value of the row group has been
+// inserted into it, and before it is written. For example, an implementation
+// can shrink the filter to fit the values it contains.
+//
+// FinalizeBloomFilter returns the bitset to write, which must be a non-empty
+// multiple of bloom.BlockSize and no longer than filter. The returned slice may
+// share the memory of filter; the writer retains the capacity of filter to
+// reuse it for the next row group. The method is not called for column chunks
+// copied verbatim from a source file.
+type BloomFilterFinalizer interface {
+	FinalizeBloomFilter(filter []byte) []byte
+}
+
+// BloomFilterDistinctSizer may be implemented by a BloomFilterColumn to size
+// filters when all the values inserted into them are known to be distinct,
+// such as the values of a dictionary page. Size is used when a filter does not
+// implement this interface.
+type BloomFilterDistinctSizer interface {
+	DistinctSize(numDistinctValues int64) int
+}
+
+// BloomFilterCopyChecker may be implemented by a BloomFilterColumn to decide
+// whether the bloom filter of a source column chunk can be copied verbatim when
+// the chunk is copied to a writer. bitset is the uncompressed content of a
+// split block filter hashed with xxhash, built for a chunk of numValues values,
+// and the method reports whether it is identical to the filter this column
+// would have produced for the same values.
+//
+// When a filter does not implement this interface, the source filter is copied
+// only if its size equals Size(numValues).
+type BloomFilterCopyChecker interface {
+	CanCopyBloomFilter(numValues int64, bitset []byte) bool
+}
+
 // SplitBlockFilter constructs a split block bloom filter object for the column
 // at the given path, with the given bitsPerValue.
 //
