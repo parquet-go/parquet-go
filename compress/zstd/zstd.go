@@ -41,6 +41,12 @@ type Codec struct {
 	// If Concurrency is 0, it will use DefaultConcurrency.
 	Concurrency uint
 
+	// WindowSize is the maximum back-reference distance, in bytes.
+	// It must be a power of two between 1 KiB and 512 MiB.
+	// Zero leaves the encoder default for the configured Level
+	// (currently 4 MiB for SpeedFastest, 8 MiB otherwise).
+	WindowSize int
+
 	encoders memory.Pool[zstd.Encoder]
 	decoders memory.Pool[zstd.Decoder]
 }
@@ -56,12 +62,16 @@ func (c *Codec) CompressionCodec() format.CompressionCodec {
 func (c *Codec) Encode(dst, src []byte) ([]byte, error) {
 	e := c.encoders.Get(
 		func() *zstd.Encoder {
-			e, err := zstd.NewWriter(nil,
+			opts := []zstd.EOption{
 				zstd.WithEncoderConcurrency(c.concurrency()),
 				zstd.WithEncoderLevel(c.level()),
 				zstd.WithZeroFrames(true),
 				zstd.WithEncoderCRC(false),
-			)
+			}
+			if c.WindowSize != 0 {
+				opts = append(opts, zstd.WithWindowSize(c.WindowSize))
+			}
+			e, err := zstd.NewWriter(nil, opts...)
 			if err != nil {
 				panic(err)
 			}
