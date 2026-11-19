@@ -508,6 +508,16 @@ func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path col
 	// read back as a present zero UUID.
 	nilDropsDefinitionLevel := node != nil && node.Repeated() && !isOptional &&
 		node.Leaf() && node.Type().Kind() == FixedLenByteArray
+	// A repeated field that is not optional has only the repetition's
+	// definition level, which the slice writer already consumed. A nil
+	// element cannot be a null there. Write one zero value, matching a nil
+	// pointer on a required non-repeated leaf. Fixed-length byte arrays keep
+	// the definition-level drop above so nil stays distinct from a zero.
+	// The zero lives for the writer and is only read.
+	var zero reflect.Value
+	if node != nil && node.Repeated() && !isOptional && !nilDropsDefinitionLevel {
+		zero = reflect.New(elemType)
+	}
 
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
@@ -526,6 +536,8 @@ func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path col
 				}
 			} else if nilDropsDefinitionLevel && elemLevels.definitionLevel > 0 {
 				elemLevels.definitionLevel--
+			} else if zero.IsValid() {
+				a = makeArray(zero.UnsafePointer(), 1, elemSize)
 			}
 			writeRows(columns, elemLevels, a)
 		}
