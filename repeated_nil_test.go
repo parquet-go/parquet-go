@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 
@@ -230,7 +231,7 @@ func compareRepeatedElements(a, b []repeatedElement, descending, nullsFirst bool
 	if len(b) == 0 {
 		b = []repeatedElement{{}}
 	}
-	for i := 0; i < min(len(a), len(b)); i++ {
+	for i := range min(len(a), len(b)) {
 		x, y := a[i].Value, b[i].Value
 		if x == nil || y == nil {
 			if x == y {
@@ -268,7 +269,7 @@ func TestRepeatedColumnLessPairs(t *testing.T) {
 	for range 3 {
 		for _, key := range keys[start:end] {
 			for _, e := range alphabet {
-				next := append([]repeatedElement(nil), key...)
+				next := slices.Clone(key)
 				keys = append(keys, append(next, e))
 			}
 		}
