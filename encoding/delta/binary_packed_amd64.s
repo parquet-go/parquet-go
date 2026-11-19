@@ -2,6 +2,10 @@
 
 #include "textflag.h"
 
+// asmdecl treats a trailing D as an 8-byte operand. VPBROADCASTL is
+// VPBROADCASTD, so a 4-byte stack slot still type-checks.
+#define VPBROADCASTL(src, dst) VPBROADCASTD src, dst
+
 #define blockSize 128
 #define numMiniBlocks 4
 #define miniBlockSize 32
@@ -24,7 +28,7 @@ TEXT ·blockDeltaInt32AVX2(SB), NOSPLIT, $0-20
     MOVL 4*blockSize-4(AX), CX
     MOVL CX, ret+16(FP)
 
-    VPBROADCASTD lastValue+8(FP), Y0
+    VPBROADCASTL(lastValue+8(FP), Y0)
     VMOVDQU ·rotateLeft32(SB), Y3
 
     XORQ SI, SI
@@ -112,7 +116,7 @@ TEXT ·blockMinInt32AVX2(SB), NOSPLIT, $0-12
 // func blockSubInt32AVX2(block *[blockSize]int32, value int32)
 TEXT ·blockSubInt32AVX2(SB), NOSPLIT, $0-12
     MOVQ block+0(FP), AX
-    VPBROADCASTD value+8(FP), Y0
+    VPBROADCASTL(value+8(FP), Y0)
     subInt32AVX2x32(AX, 0)
     subInt32AVX2x32(AX, 128)
     subInt32AVX2x32(AX, 256)

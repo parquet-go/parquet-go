@@ -149,6 +149,12 @@ jobs:
         if: steps.cpu.outputs.supported == 'true' && matrix.goamd64 == 'v3'
         run: go vet -tags purego ./...
 
+      # The purego step above does not compile the assembly. This is the
+      # default configuration, so clear the job's GOEXPERIMENT=simd.
+      - name: Vet
+        if: steps.cpu.outputs.supported == 'true' && matrix.goamd64 == 'v3'
+        run: GOEXPERIMENT= go vet ./...
+
   format:
     runs-on: ubuntu-latest
 
