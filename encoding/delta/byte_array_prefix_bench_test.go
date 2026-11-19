@@ -39,6 +39,19 @@ func BenchmarkEncodeByteArrayPrefixHeavy(b *testing.B) {
 	b.ReportMetric(float64(len(buffer))/float64(len(values)), "ratio")
 }
 
+func BenchmarkEstimateDecodeByteArraySize(b *testing.B) {
+	e := &ByteArrayEncoding{}
+	values, offsets := generatePrefixHeavyByteArrays(10000, rand.New(rand.NewSource(1)))
+	encoded, err := e.EncodeByteArray(nil, values, offsets)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(values)))
+	for b.Loop() {
+		_ = e.EstimateDecodeByteArraySize(encoded)
+	}
+}
+
 func BenchmarkDecodeByteArrayPrefixHeavy(b *testing.B) {
 	e := &ByteArrayEncoding{}
 	values, offsets := generatePrefixHeavyByteArrays(10000, rand.New(rand.NewSource(1)))

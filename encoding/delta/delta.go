@@ -2,6 +2,7 @@ package delta
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/internal/memory"
@@ -25,11 +26,56 @@ func (buf *int32Buffer) decode(src []byte) ([]byte, error) {
 	return remain, err
 }
 
-func (buf *int32Buffer) sum() (sum int32) {
-	for _, v := range buf.values {
-		sum += v
+// sumNonNegative returns the sum of values when every value is non-negative
+// and the sum is within limit. Otherwise it returns 0. limit is the input
+// length for encodings whose decoded payload is a subset of that input, so a
+// corrupt length list cannot request a buffer larger than the page.
+func sumNonNegative(values []int32, limit int) int {
+	if limit < 0 {
+		return 0
 	}
-	return sum
+	var sum int64
+	for _, v := range values {
+		if v < 0 {
+			return 0
+		}
+		sum += int64(v)
+	}
+	if sum > int64(limit) || sum > int64(math.MaxInt) {
+		return 0
+	}
+	return int(sum)
+}
+
+// reconstructedByteArraySize is the decoded size of a DELTA_BYTE_ARRAY page.
+// Suffix bytes are copied from the input, so their sum cannot exceed srcLen.
+// Prefix bytes repeat earlier values and may expand the page; a length list
+// that is negative, inconsistent, or overflows does not name a buffer size.
+func reconstructedByteArraySize(prefix, suffix []int32, srcLen int) int {
+	if len(prefix) != len(suffix) || srcLen < 0 {
+		return 0
+	}
+	var total int64
+	var suffixTotal int64
+	var last int64
+	src := int64(srcLen)
+	for i := range prefix {
+		p := int64(prefix[i])
+		n := int64(suffix[i])
+		if p < 0 || n < 0 || p > last {
+			return 0
+		}
+		if n > src-suffixTotal {
+			return 0
+		}
+		suffixTotal += n
+		total += p + n
+		last = p + n
+	}
+	if total > int64(math.MaxInt) {
+		return 0
+	}
+	return int(total)
 }
 
 var (

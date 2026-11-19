@@ -1,6 +1,10 @@
 package delta
 
-import "testing"
+import (
+	"math"
+	"math/rand"
+	"testing"
+)
 
 func TestDecodeByteArrayLengths(t *testing.T) {
 	lengths := make([]int32, 999)
@@ -33,6 +37,33 @@ func TestDecodeByteArrayLengths(t *testing.T) {
 	}
 }
 
+func TestEstimateDecodeLengthByteArraySize(t *testing.T) {
+	e := &LengthByteArrayEncoding{}
+	values, offsets := generatePrefixHeavyByteArrays(1000, rand.New(rand.NewSource(1)))
+	encoded, err := e.EncodeByteArray(nil, values, offsets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, _, err := e.DecodeByteArray(nil, encoded, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.EstimateDecodeByteArraySize(encoded); got != len(decoded) {
+		t.Fatalf("valid page: estimate = %d, decoded = %d", got, len(decoded))
+	}
+
+	for _, src := range [][]byte{
+		nil,
+		{0xff, 0xff, 0xff, 0xff, 0xff},
+		encodeInt32(nil, []int32{-1}),
+		encodeInt32(nil, []int32{math.MaxInt32, math.MaxInt32}),
+	} {
+		if got := e.EstimateDecodeByteArraySize(src); got != 0 {
+			t.Fatalf("corrupt page %x: estimate = %d, want 0", src, got)
+		}
+	}
+}
+
 func BenchmarkEncodeByteArrayLengths(b *testing.B) {
 	offsets := make([]uint32, 1001)
 	lengths := make([]int32, 1000)
@@ -42,6 +73,19 @@ func BenchmarkEncodeByteArrayLengths(b *testing.B) {
 	b.SetBytes(int64(len(lengths) * 4))
 	for b.Loop() {
 		encodeByteArrayLengths(lengths, offsets)
+	}
+}
+
+func BenchmarkEstimateDecodeLengthByteArraySize(b *testing.B) {
+	e := &LengthByteArrayEncoding{}
+	values, offsets := generatePrefixHeavyByteArrays(10000, rand.New(rand.NewSource(1)))
+	encoded, err := e.EncodeByteArray(nil, values, offsets)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(values)))
+	for b.Loop() {
+		_ = e.EstimateDecodeByteArraySize(encoded)
 	}
 }
 

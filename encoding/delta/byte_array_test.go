@@ -3,6 +3,8 @@ package delta
 import (
 	"bytes"
 	"fmt"
+	"math"
+	"math/rand"
 	"testing"
 )
 
@@ -134,6 +136,59 @@ func testSearchPrefixLength(t *testing.T, prefixLength func(base, data []byte) i
 				t.Errorf("prefixLength(%q,%q): want=%d got=%d", test.base, test.data, test.len, n)
 			}
 		})
+	}
+}
+
+func TestEstimateDecodeByteArraySize(t *testing.T) {
+	e := &ByteArrayEncoding{}
+
+	values, offsets := generatePrefixHeavyByteArrays(1000, rand.New(rand.NewSource(1)))
+	encoded, err := e.EncodeByteArray(nil, values, offsets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, _, err := e.DecodeByteArray(nil, encoded, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.EstimateDecodeByteArraySize(encoded); got != len(decoded) {
+		t.Fatalf("valid page: estimate = %d, decoded = %d", got, len(decoded))
+	}
+
+	// A length list that does not decode, or that decodes to lengths the
+	// byte array format rejects, must not produce a negative or huge size.
+	for _, src := range [][]byte{
+		nil,
+		{0xff, 0xff, 0xff, 0xff, 0xff},
+		append(encodeInt32(nil, []int32{-1}), encodeInt32(nil, []int32{0})...),
+		append(encodeInt32(nil, []int32{5}), encodeInt32(nil, []int32{0})...),
+		append(encodeInt32(nil, []int32{0, 0}), encodeInt32(nil, []int32{1})...),
+		append(encodeInt32(nil, []int32{0}), encodeInt32(nil, []int32{math.MaxInt32})...),
+	} {
+		if got := e.EstimateDecodeByteArraySize(src); got != 0 {
+			t.Fatalf("corrupt page %x: estimate = %d, want 0", src, got)
+		}
+	}
+}
+
+func TestReconstructedByteArraySize(t *testing.T) {
+	// Three copies of a MaxInt32-byte value. The int32 sum used to wrap.
+	prefix := []int32{0, math.MaxInt32, math.MaxInt32}
+	suffix := []int32{math.MaxInt32, 0, 0}
+	got := reconstructedByteArraySize(prefix, suffix, math.MaxInt32)
+	want := int64(math.MaxInt32) * 3
+	if want > int64(math.MaxInt) {
+		if got != 0 {
+			t.Fatalf("sum that does not fit in int: got %d, want 0", got)
+		}
+		return
+	}
+	if int64(got) != want {
+		t.Fatalf("got %d, want %d", got, want)
+	}
+
+	if got := reconstructedByteArraySize([]int32{1}, []int32{0}, 0); got != 0 {
+		t.Fatalf("prefix past the previous value: got %d, want 0", got)
 	}
 }
 

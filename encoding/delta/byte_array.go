@@ -174,12 +174,18 @@ func (e *ByteArrayEncoding) DecodeFixedLenByteArray(dst []byte, src []byte, size
 }
 
 func (e *ByteArrayEncoding) EstimateDecodeByteArraySize(src []byte) int {
-	length := getInt32Buffer()
-	defer putInt32Buffer(length)
-	src, _ = length.decode(src)
-	sum := int(length.sum())
-	length.decode(src)
-	return sum + int(length.sum())
+	prefix := getInt32Buffer()
+	defer putInt32Buffer(prefix)
+	rest, err := prefix.decode(src)
+	if err != nil {
+		return 0
+	}
+	suffix := getInt32Buffer()
+	defer putInt32Buffer(suffix)
+	if _, err := suffix.decode(rest); err != nil {
+		return 0
+	}
+	return reconstructedByteArraySize(prefix.values, suffix.values, len(src))
 }
 
 func (e *ByteArrayEncoding) wrap(err error) error {
