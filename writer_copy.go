@@ -289,7 +289,9 @@ func encodingStatsMatch(stats []format.PageEncodingStats, dst *ColumnWriter) boo
 //   - the source header describes the same algorithm and hash the writer would
 //     use (split-block, xxhash — the only ones supported); and
 //   - the source bitset has exactly the size the destination filter would
-//     allocate for this chunk's value count, i.e. the same bits-per-value.
+//     allocate for this chunk's value count, i.e. the same bits-per-value; or,
+//     when the destination folds its filter, the source bitset is what folding
+//     would produce (see splitBlockFilter.isFoldOf).
 func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	meta := &src.chunk.MetaData
 	if meta.BloomFilterOffset == 0 || meta.BloomFilterLength <= 0 {
@@ -314,7 +316,20 @@ func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	if _, ok := header.Compression.Value.(*format.BloomFilterUncompressed); !ok {
 		return false
 	}
-	return int(header.NumBytes) == dst.columnFilter.Size(meta.NumValues)
+	size := dst.columnFilter.Size(meta.NumValues)
+	if f, ok := foldingFilter(dst.columnFilter); ok {
+		// Folded filters are smaller than the allocated size, which also bounds
+		// the bitset read below.
+		if header.NumBytes <= 0 || int(header.NumBytes) > size {
+			return false
+		}
+		bitset := make([]byte, header.NumBytes)
+		if _, err := io.ReadFull(rbuf, bitset); err != nil {
+			return false
+		}
+		return f.isFoldOf(size, bitset)
+	}
+	return int(header.NumBytes) == size
 }
 
 // loadCopiedChunk prepares the destination ColumnWriter to emit a source column

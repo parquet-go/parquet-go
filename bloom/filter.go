@@ -2,6 +2,8 @@ package bloom
 
 import (
 	"io"
+	"math"
+	"math/bits"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/internal/memory"
@@ -38,6 +40,31 @@ func NumSplitBlocksOf(numValues int64, bitsPerValue uint) int {
 	return int(numBlocks)
 }
 
+// FalsePositiveRateOf returns the false positive rate that a split block filter
+// sized with NumSplitBlocksOf for the given bits of filter per value is
+// expected to have once it holds that number of distinct values.
+//
+// The number of values hashed to a block follows a Poisson distribution, and
+// each value sets one bit in each of the 8 words of 32 bits of its block.
+func FalsePositiveRateOf(bitsPerValue uint) float64 {
+	if bitsPerValue == 0 {
+		return 1
+	}
+	lambda := float64(8*BlockSize) / float64(bitsPerValue)
+	limit := int(lambda+12*math.Sqrt(lambda)) + 16
+	p := math.Exp(-lambda) // probability that a block holds i values
+	q := 1.0               // probability that a bit is still unset with i values
+	sum := 0.0
+	for i := 0; i <= limit; i++ {
+		if i > 0 {
+			p *= lambda / float64(i)
+			q *= 31.0 / 32
+		}
+		sum += p * math.Pow(1-q, 8)
+	}
+	return sum
+}
+
 // Reset clears the content of the filter f.
 func (f SplitBlockFilter) Reset() {
 	for i := range f {
@@ -57,6 +84,85 @@ func (f SplitBlockFilter) Insert(x uint64) { filterInsert(f, x) }
 
 // Check tests whether x is in f.
 func (f SplitBlockFilter) Check(x uint64) bool { return filterCheck(f, x) }
+
+// fold halves the number of blocks in f by merging adjacent pairs of blocks,
+// returning the folded filter which shares the memory of f.
+//
+// Block indexes are derived from the hash with a multiply-shift, so halving the
+// number of blocks maps a value from block i to block i/2. The folded filter is
+// therefore identical to a filter of half the size that the same values had
+// been inserted into, and no false negatives are introduced.
+//
+// The method panics if the number of blocks in f is odd.
+func (f SplitBlockFilter) fold() SplitBlockFilter {
+	if len(f)%2 != 0 {
+		panic("bloom: cannot fold a split block filter with an odd number of blocks")
+	}
+	for i := range len(f) / 2 {
+		f[i] = mergeBlocks(&f[2*i], &f[2*i+1])
+	}
+	return f[:len(f)/2]
+}
+
+// FoldTo folds f as many times as possible while keeping its false positive
+// rate at or below maxFalsePositiveRate, returning the folded filter which
+// shares the memory of f.
+//
+// Each fold halves the number of blocks by merging adjacent pairs of blocks.
+// The folded filter is identical to a filter of the folded size that the same
+// values had been inserted into, so it introduces no false negatives and can
+// be read like any other split block filter.
+//
+// Folding stops early when the number of blocks becomes odd, so filters are
+// best allocated with a number of blocks that is a small odd number times a
+// power of two.
+func (f SplitBlockFilter) FoldTo(maxFalsePositiveRate float64) SplitBlockFilter {
+	for len(f) > 1 && len(f)%2 == 0 && f.foldedFalsePositiveRate() <= maxFalsePositiveRate {
+		f = f.fold()
+	}
+	return f
+}
+
+// FalsePositiveRate returns the probability that f reports a value which was
+// never inserted as present, based on the bits currently set in f.
+func (f SplitBlockFilter) FalsePositiveRate() float64 {
+	if len(f) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for i := range f {
+		sum += blockFalsePositiveRate(&f[i])
+	}
+	return sum / float64(len(f))
+}
+
+// foldedFalsePositiveRate returns the false positive rate that f would have
+// after a call to Fold, without modifying f.
+func (f SplitBlockFilter) foldedFalsePositiveRate() float64 {
+	sum := 0.0
+	for i := 0; i+1 < len(f); i += 2 {
+		b := mergeBlocks(&f[i], &f[i+1])
+		sum += blockFalsePositiveRate(&b)
+	}
+	return sum / float64(len(f)/2)
+}
+
+func mergeBlocks(a, b *Block) (m Block) {
+	for i := range m {
+		m[i] = a[i] | b[i]
+	}
+	return m
+}
+
+// A value tests positive when the bit it selects in each of the 8 words is set,
+// with bits selected uniformly.
+func blockFalsePositiveRate(b *Block) float64 {
+	p := 1.0
+	for _, w := range b {
+		p *= float64(bits.OnesCount32(uint32(w))) / 32
+	}
+	return p
+}
 
 // Bytes converts f to a byte slice.
 //

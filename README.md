@@ -430,6 +430,23 @@ away when rows are copied from a `parquet.GenericBuffer[T]` to a writer, since
 in this case the number of values per column in known since the buffer already
 holds all the values in memory.
 
+Filters are sized from the number of values in a column chunk, which
+over-sizes them for columns that repeat the same values. Applications can
+instead use `parquet.FoldingSplitBlockFilter`, which takes the same bits per
+value as `parquet.SplitBlockFilter`: the filter is sized for every value being
+distinct, then folded down to the smallest size that keeps the false positive
+rate expected with every value distinct once the row group is flushed. Folded
+filters are standard split-block bloom filters, so readers need no special
+support for them.
+
+```go
+writer := parquet.NewGenericWriter[RowType](output,
+    parquet.BloomFilters(
+        parquet.FoldingSplitBlockFilter(10, "first_name"),
+    ),
+)
+```
+
 When reading parquet files, column chunks expose the generated bloom filters
 with the `parquet.ColumnChunk.BloomFilter` method, returning a
 `parquet.BloomFilter` instance if a filter was available, or `nil` when there

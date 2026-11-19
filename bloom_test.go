@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"math/bits"
 	"math/rand"
 	"testing"
 
@@ -170,4 +171,36 @@ func BenchmarkSplitBlockFilter(b *testing.B) {
 	}
 
 	b.SetBytes(8 * N)
+}
+
+func TestFoldableNumBlocks(t *testing.T) {
+	for _, test := range []struct{ numBlocks, want int }{
+		{0, 0},
+		{1, 1},
+		{15, 15},
+		{16, 16},
+		{17, 18},
+		{65, 72},
+		{128, 128},
+		{860, 896},
+	} {
+		if got := foldableNumBlocks(test.numBlocks); got != test.want {
+			t.Errorf("foldableNumBlocks(%d): want=%d got=%d", test.numBlocks, test.want, got)
+		}
+	}
+
+	for numBlocks := 1; numBlocks <= 1<<16; numBlocks++ {
+		got := foldableNumBlocks(numBlocks)
+		if got < numBlocks {
+			t.Fatalf("foldableNumBlocks(%d) rounded down to %d", numBlocks, got)
+		}
+		// Rounding must add less than 1/8 of the blocks.
+		if 8*(got-numBlocks) >= numBlocks {
+			t.Fatalf("foldableNumBlocks(%d) rounded up too much to %d", numBlocks, got)
+		}
+		// Folding down to the odd part must reach at most 15 blocks.
+		if odd := got >> bits.TrailingZeros(uint(got)); odd > 15 {
+			t.Fatalf("foldableNumBlocks(%d) = %d cannot fold below %d blocks", numBlocks, got, odd)
+		}
+	}
 }
