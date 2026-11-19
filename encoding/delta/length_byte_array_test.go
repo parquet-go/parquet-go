@@ -62,6 +62,13 @@ func TestEstimateDecodeLengthByteArraySize(t *testing.T) {
 			t.Fatalf("corrupt page %x: estimate = %d, want 0", src, got)
 		}
 	}
+
+	// One claimed byte and no payload. The length fits in the encoded page
+	// and not in the bytes that follow the length list.
+	page := encodeInt32(nil, []int32{1})
+	if got := e.EstimateDecodeByteArraySize(page); got != 0 {
+		t.Fatalf("length past payload: estimate = %d, page = %d, want 0", got, len(page))
+	}
 }
 
 func BenchmarkEncodeByteArrayLengths(b *testing.B) {

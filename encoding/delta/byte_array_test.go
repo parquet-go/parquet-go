@@ -169,6 +169,19 @@ func TestEstimateDecodeByteArraySize(t *testing.T) {
 			t.Fatalf("corrupt page %x: estimate = %d, want 0", src, got)
 		}
 	}
+
+	// Suffix lengths that fit in the whole page, but not in the payload left
+	// after the length lists. Prefix repetition would otherwise size a buffer
+	// much larger than decode will accept.
+	prefix := encodeInt32(nil, []int32{0, 1, 1, 1})
+	suffix := encodeInt32(nil, []int32{1, 0, 0, 0})
+	page := append(prefix, suffix...)
+	if len(page) < 1 {
+		t.Fatal("encoded length lists are empty")
+	}
+	if got := e.EstimateDecodeByteArraySize(page); got != 0 {
+		t.Fatalf("suffix past payload: estimate = %d, page = %d, want 0", got, len(page))
+	}
 }
 
 func TestReconstructedByteArraySize(t *testing.T) {

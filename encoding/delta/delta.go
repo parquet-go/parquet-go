@@ -48,7 +48,7 @@ func sumNonNegative(values []int32, limit int) int {
 }
 
 // reconstructedByteArraySize is the decoded size of a DELTA_BYTE_ARRAY page.
-// Suffix bytes are copied from the input, so their sum cannot exceed srcLen.
+// srcLen is the suffix payload, the bytes left after both length lists.
 // Prefix bytes repeat earlier values and may expand the page; a length list
 // that is negative, inconsistent, or overflows does not name a buffer size.
 func reconstructedByteArraySize(prefix, suffix []int32, srcLen int) int {

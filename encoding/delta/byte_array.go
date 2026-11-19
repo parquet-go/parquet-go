@@ -182,10 +182,13 @@ func (e *ByteArrayEncoding) EstimateDecodeByteArraySize(src []byte) int {
 	}
 	suffix := getInt32Buffer()
 	defer putInt32Buffer(suffix)
-	if _, err := suffix.decode(rest); err != nil {
+	// The bytes left after both length lists are the suffix payload. Decode
+	// bounds suffix lengths against that, not against the whole page.
+	payload, err := suffix.decode(rest)
+	if err != nil {
 		return 0
 	}
-	return reconstructedByteArraySize(prefix.values, suffix.values, len(src))
+	return reconstructedByteArraySize(prefix.values, suffix.values, len(payload))
 }
 
 func (e *ByteArrayEncoding) wrap(err error) error {
