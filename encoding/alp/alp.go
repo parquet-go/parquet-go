@@ -65,7 +65,7 @@ func decode[F float32 | float64, I int32 | int64](dst []F, src []byte, wordSize,
 	if uint64(binary.LittleEndian.Uint32(body)) != uint64(start) {
 		return dst, invalid("invalid first vector offset")
 	}
-	for i := 0; i < vectors; i++ {
+	for i := range vectors {
 		end := len(body)
 		if i+1 < vectors {
 			offset := binary.LittleEndian.Uint32(body[4*(i+1):])
@@ -139,7 +139,7 @@ func decodeVector[F float32 | float64, I int32 | int64](dst []F, src []byte, cou
 			values[i] = F(F(frame+delta)*mul) * inv
 		}
 	}
-	for i := 0; i < exceptions; i++ {
+	for i := range exceptions {
 		idx := int(binary.LittleEndian.Uint16(positions[2*i:]))
 		if idx >= count {
 			return dst, invalid("exception position outside vector")

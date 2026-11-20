@@ -40,7 +40,7 @@ func TestDecodeFullWidthFloat(t *testing.T) {
 	page = append(page, 32)
 	page = binary.LittleEndian.AppendUint32(page, 0)
 	page = binary.LittleEndian.AppendUint32(page, math.MaxUint32)
-	got, err := new(alp.Encoding).DecodeFloat(nil, page[:len(page):len(page)])
+	got, err := new(alp.Encoding).DecodeFloat(nil, slices.Clip(page))
 	if err != nil || !slices.Equal(got, []float32{math.MinInt32, float32(math.MaxInt32)}) {
 		t.Fatalf("got %v, %v", got, err)
 	}
@@ -128,7 +128,7 @@ func TestPackedWidths(t *testing.T) {
 			}
 		}
 		page = append(page, packed...)
-		got, err := new(alp.Encoding).DecodeDouble(nil, page[:len(page):len(page)])
+		got, err := new(alp.Encoding).DecodeDouble(nil, slices.Clip(page))
 		if err != nil || !slices.Equal(got, want) {
 			t.Fatalf("incorrect %d-bit deltas: %v", width, err)
 		}
