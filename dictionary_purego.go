@@ -3,6 +3,7 @@
 package parquet
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -121,10 +122,13 @@ func (d *floatDictionary) bounds(indexes []int32) (min, max float32) {
 
 	for _, i := range indexes[1:] {
 		value := d.index(i)
-		if value < min {
+		switch {
+		case math.IsNaN(float64(value)):
+		case math.IsNaN(float64(min)):
+			min, max = value, value
+		case value < min:
 			min = value
-		}
-		if value > max {
+		case value > max:
 			max = value
 		}
 	}
@@ -138,10 +142,13 @@ func (d *doubleDictionary) bounds(indexes []int32) (min, max float64) {
 
 	for _, i := range indexes[1:] {
 		value := d.index(i)
-		if value < min {
+		switch {
+		case math.IsNaN(value):
+		case math.IsNaN(min):
+			min, max = value, value
+		case value < min:
 			min = value
-		}
-		if value > max {
+		case value > max:
 			max = value
 		}
 	}

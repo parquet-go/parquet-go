@@ -216,6 +216,9 @@ TEXT ·dictionaryBoundsFloat32(SB), NOSPLIT, $0-64
     MOVSS (AX)(DI*4), X3
     MOVAPS X3, X4
 
+    UCOMISS X3, X3
+    JP test
+
     CMPQ DX, $8
     JB test
 
@@ -239,6 +242,10 @@ loopAVX512:
     CMPB R9, $0xFF
     JNE indexOutOfBounds
     VPGATHERDD (AX)(Y0*4), K1, Y1
+    VCMPPS $3, Y1, Y1, K2
+    KMOVW K2, R9
+    TESTB R9, R9
+    JNE restartScalar
     VMINPS Y1, Y3, Y3
     VMAXPS Y1, Y4, Y4
     KMOVW R8, K1
@@ -263,11 +270,23 @@ loopAVX512:
 
     VZEROUPPER
     JMP test
+restartScalar:
+    VZEROUPPER
+    XORQ SI, SI
+    JMP test
 loop:
     MOVL (CX)(SI*4), DI
     CMPL DI, BX
     JAE indexOutOfBounds
     MOVSS (AX)(DI*4), X1
+    UCOMISS X1, X1
+    JP skipAssignMax
+    UCOMISS X3, X3
+    JNP compare
+    MOVAPS X1, X3
+    MOVAPS X1, X4
+    JMP skipAssignMax
+compare:
     UCOMISS X3, X1
     JAE skipAssignMin
     MOVAPS X1, X3
@@ -311,6 +330,9 @@ TEXT ·dictionaryBoundsFloat64(SB), NOSPLIT, $0-72
     MOVSD (AX)(DI*8), X3
     MOVAPS X3, X4
 
+    UCOMISD X3, X3
+    JP test
+
     CMPQ DX, $8
     JB test
 
@@ -334,6 +356,10 @@ loopAVX512:
     CMPB R9, $0xFF
     JNE indexOutOfBounds
     VPGATHERDQ (AX)(Y0*8), K1, Z1
+    VCMPPD $3, Z1, Z1, K2
+    KMOVW K2, R9
+    TESTB R9, R9
+    JNE restartScalar
     VMINPD Z1, Z3, Z3
     VMAXPD Z1, Z4, Z4
     KMOVW R8, K1
@@ -358,11 +384,23 @@ loopAVX512:
 
     VZEROUPPER
     JMP test
+restartScalar:
+    VZEROUPPER
+    XORQ SI, SI
+    JMP test
 loop:
     MOVL (CX)(SI*4), DI
     CMPL DI, BX
     JAE indexOutOfBounds
     MOVSD (AX)(DI*8), X1
+    UCOMISD X1, X1
+    JP skipAssignMax
+    UCOMISD X3, X3
+    JNP compare
+    MOVAPD X1, X3
+    MOVAPD X1, X4
+    JMP skipAssignMax
+compare:
     UCOMISD X3, X1
     JAE skipAssignMin
     MOVAPD X1, X3
