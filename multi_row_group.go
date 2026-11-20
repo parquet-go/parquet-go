@@ -345,6 +345,14 @@ func (m *multiColumnIndex) NullCount(pageIndex int) int64 {
 	return m.indexes[chunkIndex].NullCount(localIndex)
 }
 
+func (m *multiColumnIndex) hasNullCount(pageIndex int) bool {
+	chunkIndex, localIndex := m.mapPageIndex(pageIndex)
+	if nc, ok := m.indexes[chunkIndex].(columnIndexNullCounts); ok {
+		return nc.hasNullCount(localIndex)
+	}
+	return true
+}
+
 func (m *multiColumnIndex) NullPage(pageIndex int) bool {
 	chunkIndex, localIndex := m.mapPageIndex(pageIndex)
 	return m.indexes[chunkIndex].NullPage(localIndex)

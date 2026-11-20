@@ -660,3 +660,75 @@ func TestSearchAscendingNullPagesExhaustive(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchNullValueAbsentNullCounts(t *testing.T) {
+	makeIndex := func(pages []testPageBounds, order format.BoundaryOrder, omitNullCounts bool) parquet.ColumnIndex {
+		indexer := parquet.Int32Type.NewColumnIndexer(0)
+		for _, p := range pages {
+			if p.null {
+				indexer.IndexPage(1, 1, parquet.Value{}, parquet.Value{})
+			} else {
+				indexer.IndexPage(2, p.nullCount, parquet.ValueOf(p.min), parquet.ValueOf(p.max))
+			}
+		}
+		fi := indexer.ColumnIndex()
+		fi.BoundaryOrder = order
+		if omitNullCounts {
+			fi.NullCounts = nil
+		}
+		return parquet.NewColumnIndex(parquet.Int32, &fi)
+	}
+
+	tests := []struct {
+		name           string
+		pages          []testPageBounds
+		omitNullCounts bool
+		want           int
+	}{
+		{
+			name:           "single mixed page without null counts",
+			pages:          []testPageBounds{{min: 1, max: 2}},
+			omitNullCounts: true,
+			want:           0,
+		},
+		{
+			name:           "mixed page before all-null page without null counts",
+			pages:          []testPageBounds{{min: 1, max: 2}, {null: true}},
+			omitNullCounts: true,
+			want:           0,
+		},
+		{
+			name:           "control with null counts skips zero-null page",
+			pages:          []testPageBounds{{min: 1, max: 2, nullCount: 0}, {min: 3, max: 4, nullCount: 1}},
+			omitNullCounts: false,
+			want:           1,
+		},
+		{
+			name:           "control with all zero null counts returns NumPages",
+			pages:          []testPageBounds{{min: 1, max: 2, nullCount: 0}, {min: 3, max: 4, nullCount: 0}},
+			omitNullCounts: false,
+			want:           2,
+		},
+		{
+			name:           "empty index without null counts",
+			pages:          nil,
+			omitNullCounts: true,
+			want:           0,
+		},
+	}
+
+	for _, tt := range tests {
+		for _, order := range []format.BoundaryOrder{format.Ascending, format.Descending, format.Unordered} {
+			ci := makeIndex(tt.pages, order, tt.omitNullCounts)
+
+			t.Run(tt.name+"/"+order.String(), func(t *testing.T) {
+				if got := parquet.Search(ci, parquet.Value{}, parquet.Int32Type); got != tt.want {
+					t.Errorf("Search(null): got=%d want=%d", got, tt.want)
+				}
+				if got := parquet.Find(ci, parquet.Value{}, parquet.CompareNullsFirst(parquet.Int32Type.Compare)); got != tt.want {
+					t.Errorf("Find(null, CompareNullsFirst): got=%d want=%d", got, tt.want)
+				}
+			})
+		}
+	}
+}

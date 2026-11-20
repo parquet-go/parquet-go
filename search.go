@@ -26,8 +26,8 @@ func Search(index ColumnIndex, value Value, typ Type) int {
 // whether pages are ascending, descending, or unordered.
 //
 // When value is null, the comparison function is not used: Find returns the
-// first page whose NullPage is true or whose NullCount is greater than zero
-// (when optional NullCounts metadata is absent, only all-null pages match).
+// first page that may contain nulls (an all-null page, a page with a non-zero
+// NullCount, or a page whose optional NullCounts metadata is absent).
 func Find(index ColumnIndex, value Value, cmp func(Value, Value) int) int {
 	switch {
 	case index.IsAscending() && !value.IsNull():
@@ -76,8 +76,9 @@ func linearSearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 
 	// Page bounds exclude nulls, so a null value cannot be matched by them.
 	if value.IsNull() {
+		nc, hasCheck := index.(columnIndexNullCounts)
 		for i := range n {
-			if index.NullPage(i) || index.NullCount(i) > 0 {
+			if index.NullPage(i) || (hasCheck && !nc.hasNullCount(i)) || index.NullCount(i) > 0 {
 				return i
 			}
 		}
