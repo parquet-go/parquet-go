@@ -628,6 +628,9 @@ const (
 	// This itself does not reduce the size of the data but can lead to better compression
 	// afterwards.
 	ByteStreamSplit Encoding = 9
+
+	// Adaptive Lossless floating-Point encoding for FLOAT and DOUBLE.
+	ALP Encoding = 10
 )
 
 func (e Encoding) String() string {
@@ -650,6 +653,8 @@ func (e Encoding) String() string {
 		return "RLE_DICTIONARY"
 	case ByteStreamSplit:
 		return "BYTE_STREAM_SPLIT"
+	case ALP:
+		return "ALP"
 	default:
 		return "Encoding(?)"
 	}

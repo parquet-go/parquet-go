@@ -531,6 +531,10 @@ func mapKeyValueOf(node Node) Node {
 
 func encodingOf(node Node, defaultEncodings map[Kind]encoding.Encoding) encoding.Encoding {
 	encoding := node.Encoding()
+	// An ALP column from a file schema needs a writable encoding for new pages.
+	if encoding == encodings[format.ALP] {
+		encoding = nil
+	}
 	kind := node.Type().Kind()
 	if encoding == nil && defaultEncodings != nil {
 		encoding = defaultEncodings[kind]
