@@ -1105,6 +1105,55 @@ func TestBufferSortRepeatedNulls(t *testing.T) {
 	}
 }
 
+func TestBufferSortRepeatedPrefix(t *testing.T) {
+	type row struct{ Key []int64 }
+	input := []row{{Key: []int64{0}}, {Key: []int64{0, 0}}}
+	schema := parquet.SchemaOf(row{})
+	rows := make([]parquet.Row, len(input))
+	for i := range input {
+		rows[i] = schema.Deconstruct(nil, &input[i])
+	}
+	for _, test := range []struct {
+		name    string
+		columns []parquet.SortingColumn
+		want    bool
+	}{
+		{"default", nil, false},
+		{"ascending", []parquet.SortingColumn{parquet.Ascending("Key")}, true},
+		{"ascending/nulls-first", []parquet.SortingColumn{parquet.NullsFirst(parquet.Ascending("Key"))}, true},
+		{"descending", []parquet.SortingColumn{parquet.Descending("Key")}, false},
+		{"descending/nulls-first", []parquet.SortingColumn{parquet.NullsFirst(parquet.Descending("Key"))}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			option := parquet.SortingRowGroupConfig(parquet.SortingColumns(test.columns...))
+			buffer := parquet.NewBuffer(schema, option)
+			if _, err := buffer.WriteRows(rows); err != nil {
+				t.Fatal(err)
+			}
+			generic := parquet.NewGenericBuffer[row](option)
+			if _, err := generic.Write(input); err != nil {
+				t.Fatal(err)
+			}
+			rowBuffer := parquet.NewRowBuffer[row](option)
+			if _, err := rowBuffer.Write(input); err != nil {
+				t.Fatal(err)
+			}
+			compare := schema.Comparator(test.columns...)
+			wantReverse := len(test.columns) > 0 && !test.want
+			if (compare(rows[0], rows[1]) < 0) != test.want || (compare(rows[1], rows[0]) < 0) != wantReverse {
+				t.Error("schema comparator prefix order disagrees with sorting direction")
+			}
+			for name, b := range map[string]sort.Interface{
+				"Buffer": buffer, "GenericBuffer": generic, "RowBuffer": rowBuffer,
+			} {
+				if b.Less(0, 1) != test.want || b.Less(1, 0) != wantReverse {
+					t.Errorf("%s prefix order: Less(0,1)=%t Less(1,0)=%t, want %t and %t", name, b.Less(0, 1), b.Less(1, 0), test.want, wantReverse)
+				}
+			}
+		})
+	}
+}
+
 func TestBufferSortNullsAfterRead(t *testing.T) {
 	type row struct {
 		Key *int64
