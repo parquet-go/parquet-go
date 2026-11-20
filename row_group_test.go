@@ -256,3 +256,71 @@ func BenchmarkReadModeAsync(b *testing.B) {
 	b.ReportMetric(float64(r.reads.Load()), "reads")
 	b.ReportMetric(float64(r.bytes.Load()), "bytes")
 }
+
+type countingColumnChunk struct {
+	parquet.ColumnChunk
+	reads *int
+}
+
+func (c countingColumnChunk) Pages() parquet.Pages {
+	return countingPages{c.ColumnChunk.Pages(), c.reads}
+}
+
+type countingPages struct {
+	parquet.Pages
+	reads *int
+}
+
+func (p countingPages) ReadPage() (parquet.Page, error) {
+	*p.reads++
+	return p.Pages.ReadPage()
+}
+
+type countingRowGroup struct {
+	parquet.RowGroup
+	columns []parquet.ColumnChunk
+}
+
+func (g countingRowGroup) ColumnChunks() []parquet.ColumnChunk { return g.columns }
+
+// A read into a buffer longer than the rows left must not read the
+// pages of a column again for each slot it cannot fill.
+func TestRowGroupReadRowsStopsAtEndOfColumn(t *testing.T) {
+	type row struct {
+		ID   int64    `parquet:"id"`
+		Name string   `parquet:"name"`
+		Tags []string `parquet:"tags,list"`
+	}
+	buf := new(bytes.Buffer)
+	w := parquet.NewGenericWriter[row](buf)
+	if _, err := w.Write([]row{{1, "a", []string{"x"}}, {2, "b", nil}, {3, "c", []string{"y", "z"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rg := f.RowGroups()[0]
+	chunks := rg.ColumnChunks()
+	reads := make([]int, len(chunks))
+	wrapped := make([]parquet.ColumnChunk, len(chunks))
+	for i, c := range chunks {
+		wrapped[i] = countingColumnChunk{c, &reads[i]}
+	}
+	rows := parquet.NewRowGroupRowReader(countingRowGroup{rg, wrapped})
+	defer rows.Close()
+
+	n, err := rows.ReadRows(make([]parquet.Row, 1000))
+	if n != 3 || err != io.EOF {
+		t.Fatalf("ReadRows: got %d, %v; want 3, io.EOF", n, err)
+	}
+	for i, r := range reads {
+		// One data page, and one more read that finds the end.
+		if r > 2 {
+			t.Errorf("column %d: %d page reads for one page", i, r)
+		}
+	}
+}
