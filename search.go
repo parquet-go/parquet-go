@@ -22,7 +22,8 @@ func Search(index ColumnIndex, value Value, typ Type) int {
 //
 // The comparison function passed as last argument determines the relative order
 // of non-null values (generally the Compare method of the column type) and must
-// match the index's boundary order.
+// match the ordering used for the index's min and max values, regardless of
+// whether pages are ascending, descending, or unordered.
 //
 // When value is null, the comparison function is not used: Find returns the
 // first page whose NullPage is true or whose NullCount is greater than zero
