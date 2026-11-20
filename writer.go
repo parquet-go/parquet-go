@@ -1543,12 +1543,14 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 
 	for i, c := range rg.columns {
 		if c.copied != nil {
-			// Column copied verbatim: use the source's column index and size
-			// statistics, and stream the dictionary and data page bytes straight
-			// from the source file into the output (no intermediate buffer).
+			// Column copied verbatim: use the source's column index, size
+			// statistics, and geospatial statistics, and stream the dictionary
+			// and data page bytes straight from the source file into the output
+			// (no intermediate buffer).
 			cc := c.copied
 			rg.columnIndex[i] = cc.columnIndex
 			c.columnChunk.MetaData.SizeStatistics = cc.sizeStats
+			c.columnChunk.MetaData.GeospatialStatistics = cc.geospatial
 
 			if cc.dictLength > 0 {
 				c.columnChunk.MetaData.DictionaryPageOffset = w.writer.offset
