@@ -2414,6 +2414,59 @@ func TestDeconstructOptionalZeroValues(t *testing.T) {
 	}
 }
 
+func TestDeconstructOptionalListElements(t *testing.T) {
+	tests := []struct {
+		name  string
+		elem  Node
+		value any
+		want  Row
+	}{
+		{
+			name:  "leaf",
+			elem:  Optional(Int(32)),
+			value: []int32{7, 0, 9},
+			want: Row{
+				Int32Value(7).Level(0, 2, 0),
+				NullValue().Level(1, 1, 0),
+				Int32Value(9).Level(1, 2, 0),
+			},
+		},
+		{
+			name:  "group",
+			elem:  Optional(Group{"a": Int(32), "b": String()}),
+			value: []map[string]any{{"a": int32(1), "b": "x"}, nil, {"a": int32(3), "b": "z"}},
+			want: Row{
+				Int32Value(1).Level(0, 2, 0),
+				NullValue().Level(1, 1, 0),
+				Int32Value(3).Level(1, 2, 0),
+				ByteArrayValue([]byte("x")).Level(0, 2, 1),
+				NullValue().Level(1, 1, 1),
+				ByteArrayValue([]byte("z")).Level(1, 2, 1),
+			},
+		},
+		{
+			name:  "list",
+			elem:  Optional(List(Int(32))),
+			value: [][]int32{{1, 2}, nil, {3}},
+			want: Row{
+				Int32Value(1).Level(0, 3, 0),
+				Int32Value(2).Level(2, 3, 0),
+				NullValue().Level(1, 1, 0),
+				Int32Value(3).Level(1, 3, 0),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := NewSchema("row", Group{"x": List(tt.elem)})
+			got := schema.Deconstruct(nil, map[string]any{"x": tt.value})
+			if !got.Equal(tt.want) {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 //go:fix inline
 func ptr[T any](v T) *T {
 	return new(v)

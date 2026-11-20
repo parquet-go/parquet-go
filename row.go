@@ -419,7 +419,7 @@ func deconstructFuncOf(columnIndex uint16, node Node) (uint16, deconstructFunc) 
 	case node.Optional():
 		return deconstructFuncOfOptional(columnIndex, node)
 	case node.Repeated():
-		return deconstructFuncOfRepeated(columnIndex, node)
+		return deconstructFuncOfRepeated(columnIndex, Required(node))
 	case isList(node):
 		return deconstructFuncOfList(columnIndex, node)
 	case isMap(node):
@@ -451,7 +451,7 @@ func deconstructFuncOfOptional(columnIndex uint16, node Node) (uint16, deconstru
 
 //go:noinline
 func deconstructFuncOfRepeated(columnIndex uint16, node Node) (uint16, deconstructFunc) {
-	columnIndex, deconstruct := deconstructFuncOf(columnIndex, Required(node))
+	columnIndex, deconstruct := deconstructFuncOf(columnIndex, node)
 	return columnIndex, func(columns [][]Value, levels columnLevels, value reflect.Value) {
 		if value.Kind() == reflect.Interface {
 			value = value.Elem()
@@ -482,7 +482,13 @@ func deconstructFuncOfRequired(columnIndex uint16, node Node) (uint16, deconstru
 }
 
 func deconstructFuncOfList(columnIndex uint16, node Node) (uint16, deconstructFunc) {
-	return deconstructFuncOf(columnIndex, Repeated(listElementOf(node)))
+	elem := listElementOf(node)
+	// An optional element is passed as is, since Repeated would hide it and
+	// its definition level would not be counted.
+	if elem.Optional() {
+		return deconstructFuncOfRepeated(columnIndex, elem)
+	}
+	return deconstructFuncOf(columnIndex, Repeated(elem))
 }
 
 // makeKeyValueType returns a key-value struct type for use with actual map
