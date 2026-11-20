@@ -33,6 +33,10 @@ type ColumnIndex interface {
 	IsDescending() bool
 }
 
+type columnIndexNullCounts interface {
+	hasNullCount(int) bool
+}
+
 // NewColumnIndex constructs a ColumnIndex instance from the given parquet
 // format column index. The kind argument configures the type of values
 func NewColumnIndex(kind Kind, index *format.ColumnIndex) ColumnIndex {
@@ -56,6 +60,10 @@ func (f *formatColumnIndex) NullCount(i int) int64 {
 		return f.index.NullCounts[i]
 	}
 	return 0
+}
+
+func (f *formatColumnIndex) hasNullCount(int) bool {
+	return len(f.index.NullCounts) > 0
 }
 
 func (f *formatColumnIndex) NullPage(i int) bool {
@@ -98,6 +106,10 @@ func (i *FileColumnIndex) NullCount(j int) int64 {
 		return i.index.NullCounts[j]
 	}
 	return 0
+}
+
+func (i *FileColumnIndex) hasNullCount(int) bool {
+	return len(i.index.NullCounts) > 0
 }
 
 func (i *FileColumnIndex) NullPage(j int) bool {

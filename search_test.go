@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 func TestSearchBinary(t *testing.T) {
@@ -364,5 +365,370 @@ func TestSearchBoundaryValues(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type testPageBounds struct {
+	null      bool
+	nullCount int64
+	min       int32
+	max       int32
+}
+
+func makeInt32ColumnIndex(pages []testPageBounds, order format.BoundaryOrder) parquet.ColumnIndex {
+	indexer := parquet.Int32Type.NewColumnIndexer(0)
+	for _, p := range pages {
+		if p.null {
+			indexer.IndexPage(1, 1, parquet.Value{}, parquet.Value{})
+		} else {
+			indexer.IndexPage(1+p.nullCount, p.nullCount, parquet.ValueOf(p.min), parquet.ValueOf(p.max))
+		}
+	}
+	fi := indexer.ColumnIndex()
+	fi.BoundaryOrder = order
+	return parquet.NewColumnIndex(parquet.Int32, &fi)
+}
+
+func TestSearchAscendingNullPages(t *testing.T) {
+	nullPage := testPageBounds{null: true}
+	page := func(min, max int32) testPageBounds {
+		return testPageBounds{min: min, max: max}
+	}
+
+	type query struct {
+		value parquet.Value
+		want  int
+	}
+
+	tests := []struct {
+		name    string
+		pages   []testPageBounds
+		queries []query
+	}{
+		{
+			name:  "leading null",
+			pages: []testPageBounds{nullPage, page(1, 1), page(2, 2)},
+			queries: []query{
+				{parquet.ValueOf(int32(0)), 3},
+				{parquet.ValueOf(int32(1)), 1},
+				{parquet.ValueOf(int32(2)), 2},
+				{parquet.ValueOf(int32(3)), 3},
+				{parquet.Value{}, 0},
+			},
+		},
+		{
+			name:  "two leading nulls",
+			pages: []testPageBounds{nullPage, nullPage, page(1, 1), page(2, 2)},
+			queries: []query{
+				{parquet.ValueOf(int32(0)), 4},
+				{parquet.ValueOf(int32(1)), 2},
+				{parquet.ValueOf(int32(2)), 3},
+				{parquet.ValueOf(int32(3)), 4},
+				{parquet.Value{}, 0},
+			},
+		},
+		{
+			name:  "intervening null",
+			pages: []testPageBounds{page(1, 1), nullPage, page(2, 2)},
+			queries: []query{
+				{parquet.ValueOf(int32(0)), 3},
+				{parquet.ValueOf(int32(1)), 0},
+				{parquet.ValueOf(int32(2)), 2},
+				{parquet.ValueOf(int32(3)), 3},
+				{parquet.Value{}, 1},
+			},
+		},
+		{
+			name:  "two intervening nulls",
+			pages: []testPageBounds{page(1, 1), nullPage, nullPage, page(3, 3)},
+			queries: []query{
+				{parquet.ValueOf(int32(0)), 4},
+				{parquet.ValueOf(int32(1)), 0},
+				{parquet.ValueOf(int32(2)), 4},
+				{parquet.ValueOf(int32(3)), 3},
+				{parquet.ValueOf(int32(4)), 4},
+				{parquet.Value{}, 1},
+			},
+		},
+		{
+			name:  "trailing null",
+			pages: []testPageBounds{page(1, 1), page(2, 2), nullPage},
+			queries: []query{
+				{parquet.ValueOf(int32(0)), 3},
+				{parquet.ValueOf(int32(1)), 0},
+				{parquet.ValueOf(int32(2)), 1},
+				{parquet.ValueOf(int32(3)), 3},
+				{parquet.Value{}, 2},
+			},
+		},
+		{
+			name:  "mixed nulls",
+			pages: []testPageBounds{nullPage, page(1, 1), nullPage, page(3, 3), nullPage},
+			queries: []query{
+				{parquet.ValueOf(int32(0)), 5},
+				{parquet.ValueOf(int32(1)), 1},
+				{parquet.ValueOf(int32(2)), 5},
+				{parquet.ValueOf(int32(3)), 3},
+				{parquet.ValueOf(int32(4)), 5},
+				{parquet.Value{}, 0},
+			},
+		},
+		{
+			name:  "overlapping bounds across null",
+			pages: []testPageBounds{page(1, 3), nullPage, page(2, 4)},
+			queries: []query{
+				{parquet.ValueOf(int32(0)), 3},
+				{parquet.ValueOf(int32(1)), 0},
+				{parquet.ValueOf(int32(2)), 0},
+				{parquet.ValueOf(int32(3)), 0},
+				{parquet.ValueOf(int32(4)), 2},
+				{parquet.ValueOf(int32(5)), 3},
+				{parquet.Value{}, 1},
+			},
+		},
+		{
+			name:  "all nulls",
+			pages: []testPageBounds{nullPage, nullPage},
+			queries: []query{
+				{parquet.ValueOf(int32(1)), 2},
+				{parquet.Value{}, 0},
+			},
+		},
+		{
+			name:  "no nulls searching null",
+			pages: []testPageBounds{page(1, 1), page(2, 2)},
+			queries: []query{
+				{parquet.Value{}, 2},
+			},
+		},
+	}
+
+	cmps := []struct {
+		name string
+		fn   func(parquet.ColumnIndex, parquet.Value) int
+	}{
+		{
+			name: "Search(CompareNullsLast)",
+			fn: func(ci parquet.ColumnIndex, v parquet.Value) int {
+				return parquet.Search(ci, v, parquet.Int32Type)
+			},
+		},
+		{
+			name: "Find(CompareNullsFirst)",
+			fn: func(ci parquet.ColumnIndex, v parquet.Value) int {
+				return parquet.Find(ci, v, parquet.CompareNullsFirst(parquet.Int32Type.Compare))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		ci := makeInt32ColumnIndex(tt.pages, format.Ascending)
+		if !ci.IsAscending() {
+			t.Fatalf("%s: expected ascending column index", tt.name)
+		}
+		for _, c := range cmps {
+			for _, q := range tt.queries {
+				got := c.fn(ci, q.value)
+				if got != q.want {
+					t.Errorf("%s/%s(%v): got=%d want=%d", tt.name, c.name, q.value, got, q.want)
+				}
+			}
+		}
+	}
+}
+
+// TestSearchNullValueInMixedPages verifies that a null search finds pages
+// which contain nulls next to non-null values. Page bounds exclude nulls, so
+// the bounds alone cannot tell whether a page holds any.
+func TestSearchNullValueInMixedPages(t *testing.T) {
+	mixedPage := testPageBounds{min: 1, max: 1, nullCount: 1}
+	nullPage := testPageBounds{null: true}
+
+	tests := []struct {
+		name  string
+		pages []testPageBounds
+	}{
+		{name: "mixed then null page", pages: []testPageBounds{mixedPage, nullPage}},
+		{name: "mixed page only", pages: []testPageBounds{mixedPage}},
+	}
+
+	for _, tt := range tests {
+		for _, order := range []format.BoundaryOrder{format.Ascending, format.Descending, format.Unordered} {
+			ci := makeInt32ColumnIndex(tt.pages, order)
+
+			t.Run(tt.name+"/"+order.String(), func(t *testing.T) {
+				if got := parquet.Search(ci, parquet.Value{}, parquet.Int32Type); got != 0 {
+					t.Errorf("Search(null): got=%d want=0", got)
+				}
+				if got := parquet.Find(ci, parquet.Value{}, parquet.CompareNullsFirst(parquet.Int32Type.Compare)); got != 0 {
+					t.Errorf("Find(null, CompareNullsFirst): got=%d want=0", got)
+				}
+			})
+		}
+	}
+}
+
+// TestSearchNullPageBoundsIgnored verifies that linear search does not match an
+// all-null page through the zero Value its bounds report. A comparator without
+// null ordering reads that zero as int32(0).
+func TestSearchNullPageBoundsIgnored(t *testing.T) {
+	for _, order := range []format.BoundaryOrder{format.Descending, format.Unordered} {
+		ci := makeInt32ColumnIndex([]testPageBounds{{null: true}, {min: 0, max: 0}}, order)
+
+		if got := parquet.Find(ci, parquet.ValueOf(int32(0)), parquet.Int32Type.Compare); got != 1 {
+			t.Errorf("%v: searching 0: got=%d want=1", order, got)
+		}
+	}
+}
+
+// nullBoundsColumnIndex reports page 0 as an all-null page while still exposing
+// non-null bounds for it, which the built-in indexes never do.
+type nullBoundsColumnIndex struct{ parquet.ColumnIndex }
+
+func (i nullBoundsColumnIndex) NullPage(j int) bool { return j == 0 }
+
+func TestSearchNullPageWithoutNullBounds(t *testing.T) {
+	base := makeInt32ColumnIndex([]testPageBounds{{min: 5, max: 5}, {min: 6, max: 6}}, format.Unordered)
+	ci := nullBoundsColumnIndex{ColumnIndex: base}
+
+	if got := parquet.Find(ci, parquet.ValueOf(int32(5)), parquet.Int32Type.Compare); got != 2 {
+		t.Errorf("non-null search matched the null page: got=%d want=2", got)
+	}
+	if got := parquet.Search(ci, parquet.Value{}, parquet.Int32Type); got != 0 {
+		t.Errorf("null search: got=%d want=0", got)
+	}
+}
+
+func TestSearchEmptyColumnIndex(t *testing.T) {
+	ci := makeInt32ColumnIndex(nil, format.Unordered)
+	if n := ci.NumPages(); n != 0 {
+		t.Fatalf("expected an empty column index, got %d pages", n)
+	}
+
+	if got := parquet.Search(ci, parquet.ValueOf(int32(1)), parquet.Int32Type); got != 0 {
+		t.Errorf("Search(1): got=%d want=0", got)
+	}
+	if got := parquet.Search(ci, parquet.Value{}, parquet.Int32Type); got != 0 {
+		t.Errorf("Search(null): got=%d want=0", got)
+	}
+}
+
+func TestSearchAscendingNullPagesExhaustive(t *testing.T) {
+	for n := 1; n <= 8; n++ {
+		for mask := 0; mask < (1 << n); mask++ {
+			for _, overlap := range []bool{false, true} {
+				pages := make([]testPageBounds, n)
+				val := int32(1)
+				for i := range n {
+					if mask&(1<<i) != 0 {
+						pages[i] = testPageBounds{null: true}
+					} else if overlap {
+						pages[i] = testPageBounds{min: val, max: val + 2}
+						val += 2
+					} else {
+						pages[i] = testPageBounds{min: val, max: val + 1}
+						val += 3
+					}
+				}
+
+				asc := makeInt32ColumnIndex(pages, format.Ascending)
+				unord := makeInt32ColumnIndex(pages, format.Unordered)
+
+				queries := make([]parquet.Value, 0, val+3)
+				queries = append(queries, parquet.Value{})
+				for v := int32(0); v <= val+1; v++ {
+					queries = append(queries, parquet.ValueOf(v))
+				}
+
+				for _, q := range queries {
+					wantLast := parquet.Search(unord, q, parquet.Int32Type)
+					gotLast := parquet.Search(asc, q, parquet.Int32Type)
+					if gotLast != wantLast {
+						t.Fatalf("n=%d mask=%0*b overlap=%v Search(%v): got=%d want=%d",
+							n, n, mask, overlap, q, gotLast, wantLast)
+					}
+
+					cmpFirst := parquet.CompareNullsFirst(parquet.Int32Type.Compare)
+					wantFirst := parquet.Find(unord, q, cmpFirst)
+					gotFirst := parquet.Find(asc, q, cmpFirst)
+					if gotFirst != wantFirst {
+						t.Fatalf("n=%d mask=%0*b overlap=%v Find(NullsFirst, %v): got=%d want=%d",
+							n, n, mask, overlap, q, gotFirst, wantFirst)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestSearchNullValueAbsentNullCounts(t *testing.T) {
+	makeIndex := func(pages []testPageBounds, order format.BoundaryOrder, omitNullCounts bool) parquet.ColumnIndex {
+		indexer := parquet.Int32Type.NewColumnIndexer(0)
+		for _, p := range pages {
+			if p.null {
+				indexer.IndexPage(1, 1, parquet.Value{}, parquet.Value{})
+			} else {
+				indexer.IndexPage(2, p.nullCount, parquet.ValueOf(p.min), parquet.ValueOf(p.max))
+			}
+		}
+		fi := indexer.ColumnIndex()
+		fi.BoundaryOrder = order
+		if omitNullCounts {
+			fi.NullCounts = nil
+		}
+		return parquet.NewColumnIndex(parquet.Int32, &fi)
+	}
+
+	tests := []struct {
+		name           string
+		pages          []testPageBounds
+		omitNullCounts bool
+		want           int
+	}{
+		{
+			name:           "single mixed page without null counts",
+			pages:          []testPageBounds{{min: 1, max: 2}},
+			omitNullCounts: true,
+			want:           0,
+		},
+		{
+			name:           "mixed page before all-null page without null counts",
+			pages:          []testPageBounds{{min: 1, max: 2}, {null: true}},
+			omitNullCounts: true,
+			want:           0,
+		},
+		{
+			name:           "control with null counts skips zero-null page",
+			pages:          []testPageBounds{{min: 1, max: 2, nullCount: 0}, {min: 3, max: 4, nullCount: 1}},
+			omitNullCounts: false,
+			want:           1,
+		},
+		{
+			name:           "control with all zero null counts returns NumPages",
+			pages:          []testPageBounds{{min: 1, max: 2, nullCount: 0}, {min: 3, max: 4, nullCount: 0}},
+			omitNullCounts: false,
+			want:           2,
+		},
+		{
+			name:           "empty index without null counts",
+			pages:          nil,
+			omitNullCounts: true,
+			want:           0,
+		},
+	}
+
+	for _, tt := range tests {
+		for _, order := range []format.BoundaryOrder{format.Ascending, format.Descending, format.Unordered} {
+			ci := makeIndex(tt.pages, order, tt.omitNullCounts)
+
+			t.Run(tt.name+"/"+order.String(), func(t *testing.T) {
+				if got := parquet.Search(ci, parquet.Value{}, parquet.Int32Type); got != tt.want {
+					t.Errorf("Search(null): got=%d want=%d", got, tt.want)
+				}
+				if got := parquet.Find(ci, parquet.Value{}, parquet.CompareNullsFirst(parquet.Int32Type.Compare)); got != tt.want {
+					t.Errorf("Find(null, CompareNullsFirst): got=%d want=%d", got, tt.want)
+				}
+			})
+		}
 	}
 }
