@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+
+	geom "github.com/twpayne/go-geom"
 )
 
 type copyTestRow struct {
@@ -87,6 +89,46 @@ func TestWriteRowGroupCopyFastPath(t *testing.T) {
 	got := readCopyTestRows(t, dst.Bytes(), len(rows))
 	if !reflect.DeepEqual(got, rows) {
 		t.Fatalf("round-tripped rows differ from source: got %d rows", len(got))
+	}
+}
+
+func TestWriteRowGroupCopiesGeospatialStatistics(t *testing.T) {
+	type row struct {
+		Geometry geom.T `parquet:"geometry,geometry(OGC:CRS84)"`
+	}
+	var input bytes.Buffer
+	if err := Write(&input, []row{
+		{geom.NewPointFlat(geom.XYZM, []float64{1, 2, 3, 4})},
+		{geom.NewLineStringFlat(geom.XYZM, []float64{5, 6, 7, 8, -1, -2, -3, -4})},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	src := openTestFile(t, input.Bytes())
+	sourceStats := &src.Metadata().RowGroups[0].Columns[0].MetaData.GeospatialStatistics
+	want := *sourceStats
+	want.GeoSpatialTypes = slices.Clone(want.GeoSpatialTypes)
+	if len(want.GeoSpatialTypes) != 2 || !want.BBox.ZMin.Valid || !want.BBox.MMax.Valid {
+		t.Fatalf("missing source geometry types or bounds: %+v", want)
+	}
+
+	var output bytes.Buffer
+	w := NewGenericWriter[row](&output)
+	before := copyPathCounter.Load()
+	if _, err := w.WriteRowGroup(src.RowGroups()[0]); err != nil {
+		t.Fatal(err)
+	}
+	if copyPathCounter.Load() == before {
+		t.Fatal("expected the column chunk to be copied verbatim")
+	}
+	// The writer owns the staged metadata until it writes the footer on Close.
+	sourceStats.GeoSpatialTypes[0] = 0
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dst := openTestFile(t, output.Bytes())
+	got := dst.Metadata().RowGroups[0].Columns[0].MetaData.GeospatialStatistics
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("copied geospatial statistics: got %+v, want %+v", got, want)
 	}
 }
 
