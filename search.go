@@ -20,17 +20,16 @@ func Search(index ColumnIndex, value Value, typ Type) int {
 // file. If you call writer.Flush before closing the file, then you will have
 // multiple RowGroups to iterate over, otherwise Flush is called once on Close.
 //
-// The comparison function passed as last argument is used to determine the
-// relative order of values. This should generally be the Compare method of
-// the column type, but can sometimes be customized to modify how null values
-// are interpreted, for example:
+// The comparison function passed as last argument determines the relative order
+// of non-null values (generally the Compare method of the column type) and must
+// match the index's boundary order.
 //
-//	pageIndex := parquet.Find(columnIndex, value,
-//		parquet.CompareNullsFirst(typ.Compare),
-//	)
+// When value is null, the comparison function is not used: Find returns the
+// first page whose NullPage is true or whose NullCount is greater than zero
+// (when optional NullCounts metadata is absent, only all-null pages match).
 func Find(index ColumnIndex, value Value, cmp func(Value, Value) int) int {
 	switch {
-	case index.IsAscending():
+	case index.IsAscending() && !value.IsNull():
 		return binarySearch(index, value, cmp)
 	default:
 		return linearSearch(index, value, cmp)
@@ -41,48 +40,53 @@ func binarySearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 	numPages := index.NumPages()
 	topIndex := numPages
 	currentIndex := 0
+	found := numPages
 
-	// while there's at least one more page to check
 	for currentIndex < topIndex {
-		// nextIndex is set to halfway between currentIndex and topIndex
-		nextIndex := ((topIndex - currentIndex) / 2) + currentIndex
+		nextIndex := currentIndex + (topIndex-currentIndex)/2
 
-		// Compare against both min and max to handle overlapping page bounds.
-		// When page bounds overlap due to truncation, we need to search left
-		// to find the first page that might contain the value.
+		// All-null pages are not ordered relative to non-null pages in the
+		// column index; scan left for the nearest non-null page in range.
+		probe := nextIndex
+		for probe >= currentIndex && index.NullPage(probe) {
+			probe--
+		}
+		if probe < currentIndex {
+			currentIndex = nextIndex + 1
+			continue
+		}
+
 		switch {
-		case cmp(value, index.MinValue(nextIndex)) < 0:
-			// value < min: can't be in this page or any after it
-			topIndex = nextIndex
-		case cmp(value, index.MaxValue(nextIndex)) > 0:
-			// value > max: can't be in this page or any before it (including nextIndex)
+		case cmp(value, index.MinValue(probe)) < 0:
+			topIndex = probe
+		case cmp(value, index.MaxValue(probe)) > 0:
 			currentIndex = nextIndex + 1
 		default:
-			// min <= value <= max: value might be in this page or an earlier one
-			// with overlapping bounds, so search left to find the first occurrence
-			topIndex = nextIndex
+			found = probe
+			topIndex = probe
 		}
 	}
 
-	// After the loop, currentIndex == topIndex points to the candidate page.
-	// Verify the value is actually within the page bounds.
-	if currentIndex < numPages {
-		minValue := index.MinValue(currentIndex)
-		maxValue := index.MaxValue(currentIndex)
-
-		// If value is not in pages[currentIndex], then it's not in this columnChunk
-		if cmp(value, minValue) < 0 || cmp(value, maxValue) > 0 {
-			return numPages
-		}
-	}
-
-	return currentIndex
+	return found
 }
 
 func linearSearch(index ColumnIndex, value Value, cmp func(Value, Value) int) int {
 	n := index.NumPages()
 
+	// Page bounds exclude nulls, so a null value cannot be matched by them.
+	if value.IsNull() {
+		for i := range n {
+			if index.NullPage(i) || index.NullCount(i) > 0 {
+				return i
+			}
+		}
+		return n
+	}
+
 	for i := range n {
+		if index.NullPage(i) {
+			continue
+		}
 		min := index.MinValue(i)
 		max := index.MaxValue(i)
 
