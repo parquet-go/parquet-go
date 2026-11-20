@@ -470,7 +470,9 @@ func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tag
 // writeRowsFuncOfPointerValue writes values of a pointer type. A nil pointer is
 // a null; a non-nil pointer writes the value writeRows produces. When the
 // schema node is optional, a non-nil pointer increments the definition level.
-// An empty path is a pointer to the row value, which does not change levels.
+// A nil pointer on a required leaf (or repeated element) writes a physical
+// zero, because a required value cannot be null. An empty path is a pointer to
+// the row value, which does not change levels.
 func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
 	elemSize := uintptr(elemType.Size())
 
@@ -508,14 +510,14 @@ func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path col
 	// read back as a present zero UUID.
 	nilDropsDefinitionLevel := node != nil && node.Repeated() && !isOptional &&
 		node.Leaf() && node.Type().Kind() == FixedLenByteArray
-	// A repeated field that is not optional has only the repetition's
-	// definition level, which the slice writer already consumed. A nil
-	// element cannot be a null there. Write one zero value, matching a nil
-	// pointer on a required non-repeated leaf. Fixed-length byte arrays keep
-	// the definition-level drop above so nil stays distinct from a zero.
-	// The zero lives for the writer and is only read.
+	// A required leaf or repeated element has no definition level of its own,
+	// so a nil pointer cannot be written as null. Write one zero value so both
+	// plain and dictionary columns stay aligned with the definition levels.
+	// Repeated fixed-length byte arrays keep the definition-level drop above so
+	// nil stays distinct from a zero value. The zero lives for the writer and
+	// is only read.
 	var zero reflect.Value
-	if node != nil && node.Repeated() && !isOptional && !nilDropsDefinitionLevel {
+	if node != nil && !isOptional && !nilDropsDefinitionLevel && (node.Repeated() || node.Leaf()) {
 		zero = reflect.New(elemType)
 	}
 
