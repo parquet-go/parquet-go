@@ -123,6 +123,7 @@ func TestFixedLenByteArrayColumnIndexNullPages(t *testing.T) {
 		{"leading nulls", []byte{0, 0, 1, 2}, 1, false, format.Ascending},
 		{"null between pages", []byte{1, 0, 2}, 1, false, format.Ascending},
 		{"skipped bounds", []byte{1, 0, 2}, 1, true, format.Unordered},
+		{"skipped bounds single page", []byte{1}, 1, true, format.Unordered},
 		{"second row group", []byte{1, 0, 2}, 2, false, format.Ascending},
 	}
 
@@ -174,9 +175,27 @@ func TestFixedLenByteArrayColumnIndexNullPages(t *testing.T) {
 				if n := len(f.RowGroups()); n != test.rowGroups {
 					t.Fatalf("%d row groups, want %d", n, test.rowGroups)
 				}
-				for rowGroup, written := range f.ColumnIndexes() {
+				columnIndexes := f.ColumnIndexes()
+				for rowGroup, written := range columnIndexes {
+					if test.skipBounds {
+						// The format requires bounds on every page which is not a
+						// null page, so the index drops the page entries with them.
+						if len(written.NullPages) != 0 || len(written.NullCounts) != 0 {
+							t.Errorf("row group %d: %d null pages, %d null counts, want none without page bounds", rowGroup, len(written.NullPages), len(written.NullCounts))
+						}
+						if len(written.MinValues) != 0 || len(written.MaxValues) != 0 {
+							t.Errorf("row group %d: bounds %x/%x, want none without page bounds", rowGroup, written.MinValues, written.MaxValues)
+						}
+						if written.BoundaryOrder != format.Unordered {
+							t.Errorf("row group %d: boundary order %v, want %v", rowGroup, written.BoundaryOrder, format.Unordered)
+						}
+						continue
+					}
 					if !slices.Equal(written.NullPages, nullPages) {
 						t.Errorf("row group %d: null pages %v, want %v", rowGroup, written.NullPages, nullPages)
+					}
+					if written.BoundaryOrder != test.order {
+						t.Errorf("row group %d: boundary order %v, want %v", rowGroup, written.BoundaryOrder, test.order)
 					}
 					if !slices.EqualFunc(written.MinValues, bounds, bytes.Equal) {
 						t.Errorf("row group %d: min values %x, want %x", rowGroup, written.MinValues, bounds)
@@ -184,9 +203,30 @@ func TestFixedLenByteArrayColumnIndexNullPages(t *testing.T) {
 					if !slices.EqualFunc(written.MaxValues, bounds, bytes.Equal) {
 						t.Errorf("row group %d: max values %x, want %x", rowGroup, written.MaxValues, bounds)
 					}
-					if written.BoundaryOrder != test.order {
-						t.Errorf("row group %d: boundary order %v, want %v", rowGroup, written.BoundaryOrder, test.order)
+				}
+
+				if test.skipBounds {
+					// Searching a column without bounds must not reach page bounds
+					// which are not there: 16-byte values compare as be128 and read
+					// past empty bounds, and the file-backed index derives its page
+					// count from the null pages.
+					fileIndex, err := f.RowGroups()[0].ColumnChunks()[0].ColumnIndex()
+					if err != nil {
+						t.Fatal(err)
 					}
+					memoryIndex := parquet.NewColumnIndex(parquet.FixedLenByteArray, &columnIndexes[0])
+					for _, index := range []parquet.ColumnIndex{fileIndex, memoryIndex} {
+						if n := index.NumPages(); n != 0 {
+							t.Errorf("%T: %d pages, want 0 without page bounds", index, n)
+						}
+						for _, b := range []byte{1, 3} {
+							value := parquet.FixedLenByteArrayValue(bytes.Repeat([]byte{b}, size))
+							if n := parquet.Search(index, value, parquet.FixedLenByteArrayType(size)); n != index.NumPages() {
+								t.Errorf("%T: search %x = %d, want %d", index, b, n, index.NumPages())
+							}
+						}
+					}
+					return
 				}
 
 				index, err := f.RowGroups()[0].ColumnChunks()[0].ColumnIndex()
@@ -206,5 +246,34 @@ func TestFixedLenByteArrayColumnIndexNullPages(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestFixedLenByteArrayColumnIndexResetMissingBounds(t *testing.T) {
+	for _, size := range []int{2, 16} {
+		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
+			indexer := parquet.FixedLenByteArrayType(size).NewColumnIndexer(0)
+			indexer.IndexPage(1, 0, parquet.NullValue(), parquet.NullValue())
+			if index := indexer.ColumnIndex(); len(index.MinValues) != 0 || len(index.MaxValues) != 0 {
+				t.Fatalf("bounds %x/%x, want none without page bounds", index.MinValues, index.MaxValues)
+			}
+
+			indexer.Reset()
+
+			min := bytes.Repeat([]byte{1}, size)
+			max := bytes.Repeat([]byte{2}, size)
+			indexer.IndexPage(1, 0, parquet.FixedLenByteArrayValue(min), parquet.FixedLenByteArrayValue(max))
+			indexer.IndexPage(1, 0, parquet.FixedLenByteArrayValue(max), parquet.FixedLenByteArrayValue(max))
+			index := indexer.ColumnIndex()
+			if !slices.EqualFunc(index.MinValues, [][]byte{min, max}, bytes.Equal) {
+				t.Errorf("min values %x, want %x", index.MinValues, [][]byte{min, max})
+			}
+			if !slices.EqualFunc(index.MaxValues, [][]byte{max, max}, bytes.Equal) {
+				t.Errorf("max values %x, want %x", index.MaxValues, [][]byte{max, max})
+			}
+			if index.BoundaryOrder != format.Ascending {
+				t.Errorf("boundary order %v, want %v", index.BoundaryOrder, format.Ascending)
+			}
+		})
 	}
 }
