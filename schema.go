@@ -468,7 +468,9 @@ func (s *Schema) Lookup(path ...string) (LeafColumn, bool) {
 func (s *Schema) Columns() [][]string { return s.lazyLoadState().columns }
 
 // Comparator constructs a comparator function which orders rows according to
-// the list of sorting columns passed as arguments.
+// the list of sorting columns passed as arguments. Repeated values are compared
+// lexicographically: a shorter equal prefix sorts first ascending and last
+// descending.
 func (s *Schema) Comparator(sortingColumns ...SortingColumn) func(Row, Row) int {
 	return compareRowsFuncOf(s, sortingColumns)
 }
