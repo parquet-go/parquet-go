@@ -742,6 +742,74 @@ func TestIssue326(t *testing.T) {
 	}
 }
 
+func TestGeospatialCRSInFile(t *testing.T) {
+	for _, crs := range []string{"", format.GeometryDefaultCRS, "EPSG:4326"} {
+		t.Run("crs="+crs, func(t *testing.T) {
+			schema := parquet.NewSchema("locations", parquet.Group{
+				"geometry":  parquet.Geometry(crs),
+				"geography": parquet.Geography(crs, format.Vincenty),
+			})
+			var buf bytes.Buffer
+			writer := parquet.NewWriter(&buf, schema)
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := file.Metadata().Schema[1:] // Skip the root schema element.
+			want := map[string]format.LogicalTypeValue{
+				"geography": &format.GeographyType{CRS: crs, Algorithm: format.Vincenty},
+				"geometry":  &format.GeometryType{CRS: crs},
+			}
+			if len(fields) != len(want) {
+				t.Fatalf("got %d fields, want %d", len(fields), len(want))
+			}
+			for _, field := range fields {
+				if got := field.LogicalType.Value; !reflect.DeepEqual(got, want[field.Name]) {
+					t.Errorf("%s annotation = %#v, want %#v", field.Name, got, want[field.Name])
+				}
+			}
+		})
+	}
+}
+
+func TestConvertGeospatialDefaultCRS(t *testing.T) {
+	types := []parquet.Type{
+		parquet.Geometry("").Type(),
+		parquet.Geometry(format.GeometryDefaultCRS).Type(),
+		parquet.Geography("", format.Spherical).Type(),
+		parquet.Geography(format.GeographyDefaultCRS, format.Spherical).Type(),
+	}
+	point, err := wkb.Marshal(geom.NewPointFlat(geom.XY, []float64{1, 2}), wkb.NDR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := parquet.ByteArrayValue(point)
+	for _, src := range types {
+		for _, dst := range types {
+			got, err := dst.ConvertValue(value, src)
+			if err != nil {
+				t.Errorf("%#v -> %#v: %v", src, dst, err)
+			} else if !parquet.Equal(got, value) {
+				t.Errorf("%#v -> %#v: got WKB %x, want %x", src, dst, got.ByteArray(), point)
+			}
+		}
+	}
+	for _, pair := range []struct{ src, dst parquet.Node }{
+		{parquet.Geometry("EPSG:4326"), parquet.Geometry("")},
+		{parquet.Geography("EPSG:4326", format.Spherical), parquet.Geography("", format.Spherical)},
+		{parquet.Geometry("EPSG:4326"), parquet.Geography("", format.Spherical)},
+		{parquet.Geography("EPSG:4326", format.Spherical), parquet.Geometry("")},
+		{parquet.Geography("", format.Karney), parquet.Geography(format.GeographyDefaultCRS, format.Spherical)},
+	} {
+		if _, err := pair.dst.Type().ConvertValue(value, pair.src.Type()); err == nil {
+			t.Errorf("%s -> %s: expected incompatible geospatial types", pair.src.Type(), pair.dst.Type())
+		}
+	}
+}
+
 func TestGeometry(t *testing.T) {
 	type Record struct {
 		Geometry  geom.T `parquet:"geometry,optional,geometry(OGC:CRS84)"`
