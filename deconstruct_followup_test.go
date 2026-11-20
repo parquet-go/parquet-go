@@ -360,6 +360,46 @@ func TestDeconstructOptionalListNilSliceInInterface(t *testing.T) {
 	}
 }
 
+func TestDeconstructMapInterface(t *testing.T) {
+	schema := NewSchema("row", Group{"m": Map(String(), Int(32))})
+
+	type typed struct {
+		M map[string]int32 `parquet:"m"`
+	}
+	want := SchemaOf(new(typed)).Deconstruct(nil, typed{M: map[string]int32{"a": 1}})
+
+	got := schema.Deconstruct(nil, map[string]any{"m": map[string]int32{"a": 1}})
+	if !got.Equal(want) {
+		t.Fatalf("concrete map:\ngot  %+v\nwant %+v", got, want)
+	}
+
+	got = schema.Deconstruct(nil, map[string]any{"m": map[string]any{"a": int32(1)}})
+	if !got.Equal(want) {
+		t.Fatalf("any values:\ngot  %+v\nwant %+v", got, want)
+	}
+
+	one := int32(1)
+	got = schema.Deconstruct(nil, map[string]any{"m": map[string]any{"a": &one}})
+	if !got.Equal(want) {
+		t.Fatalf("pointer value:\ngot  %+v\nwant %+v", got, want)
+	}
+
+	type boxed struct {
+		M any `parquet:"m"`
+	}
+	got = schema.Deconstruct(nil, boxed{M: map[string]int32{"a": 1}})
+	if !got.Equal(want) {
+		t.Fatalf("interface field:\ngot  %+v\nwant %+v", got, want)
+	}
+
+	var nilMap map[string]int32
+	got = schema.Deconstruct(nil, map[string]any{"m": nilMap})
+	empty := schema.Deconstruct(nil, typed{})
+	if !got.Equal(empty) {
+		t.Fatalf("nil map:\ngot  %+v\nwant %+v", got, empty)
+	}
+}
+
 func readAllRows(t *testing.T, data []byte) []Row {
 	t.Helper()
 	r := NewReader(bytes.NewReader(data))

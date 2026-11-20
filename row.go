@@ -512,11 +512,18 @@ func deconstructFuncOfMap(columnIndex uint16, node Node) (uint16, deconstructFun
 	keyValue := mapKeyValueOf(node)
 	keyValueType := keyValue.GoType()
 	keyValueElem := keyValueType.Elem()
-	keyType := keyValueElem.Field(0).Type
-	valueType := keyValueElem.Field(1).Type
 	nextColumnIndex, deconstruct := deconstructFuncOf(columnIndex, schemaOf(keyValueElem))
 	return nextColumnIndex, func(columns [][]Value, levels columnLevels, mapValue reflect.Value) {
-		if !mapValue.IsValid() || mapValue.Len() == 0 {
+		// A map stored in an interface (a map[string]any field, or a value
+		// passed through map[string]any) has no Len until it is unwrapped.
+		for mapValue.Kind() == reflect.Interface || mapValue.Kind() == reflect.Pointer {
+			if !mapValue.IsValid() || mapValue.IsNil() {
+				mapValue = reflect.Value{}
+				break
+			}
+			mapValue = mapValue.Elem()
+		}
+		if !mapValue.IsValid() || mapValue.Kind() != reflect.Map || mapValue.Len() == 0 {
 			deconstruct(columns, levels, reflect.Value{})
 			return
 		}
@@ -529,12 +536,50 @@ func deconstructFuncOfMap(columnIndex uint16, node Node) (uint16, deconstructFun
 		v := elem.Field(1)
 
 		for _, key := range mapValue.MapKeys() {
-			k.Set(key.Convert(keyType))
-			v.Set(mapValue.MapIndex(key).Convert(valueType))
+			// The stand-in struct may use the map's own key and value types
+			// when they differ from the schema types. Convert into that field,
+			// then let the column deconstruct read the Go value back out.
+			k.Set(mapValueForDeconstruct(mapKeyForDeconstruct(key), k.Type()))
+			v.Set(mapValueForDeconstruct(mapValue.MapIndex(key), v.Type()))
 			deconstruct(columns, levels, elem)
 			levels.repetitionLevel = levels.repetitionDepth
 		}
 	}
+}
+
+func mapKeyForDeconstruct(key reflect.Value) reflect.Value {
+	if key.Kind() == reflect.Interface && key.IsValid() && !key.IsNil() {
+		return key.Elem()
+	}
+	return key
+}
+
+// mapValueForDeconstruct unwraps interface and pointer values so a
+// map[string]any can fill a concrete map value column. A nil stays the zero
+// of the column type: nil *int32 for an optional value, int32(0) for a
+// required one.
+func mapValueForDeconstruct(mv reflect.Value, valueType reflect.Type) reflect.Value {
+	if mv.Kind() == reflect.Interface {
+		if !mv.IsValid() || mv.IsNil() {
+			return reflect.Zero(valueType)
+		}
+		mv = mv.Elem()
+	}
+	if mv.Kind() == reflect.Pointer {
+		if !mv.IsValid() || mv.IsNil() {
+			return reflect.Zero(valueType)
+		}
+		if !mv.Type().AssignableTo(valueType) && !mv.Type().ConvertibleTo(valueType) {
+			mv = mv.Elem()
+		}
+	}
+	if !mv.IsValid() {
+		return reflect.Zero(valueType)
+	}
+	if mv.Type().AssignableTo(valueType) {
+		return mv
+	}
+	return mv.Convert(valueType)
 }
 
 //go:noinline
