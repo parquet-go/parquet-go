@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	geom "github.com/twpayne/go-geom"
+	"github.com/twpayne/go-geom/encoding/wkb"
 )
 
 type copyTestRow struct {
@@ -129,6 +130,105 @@ func TestWriteRowGroupCopiesGeospatialStatistics(t *testing.T) {
 	got := dst.Metadata().RowGroups[0].Columns[0].MetaData.GeospatialStatistics
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("copied geospatial statistics: got %+v, want %+v", got, want)
+	}
+}
+
+// TestSortingWriterSingleRunCopiesGeospatialStatistics is the case from #627:
+// every row fits in the sort buffer, so Close writes that single sorted run
+// through loadCopiedChunk. The copied geometry column must keep its bounding
+// box and geometry types.
+//
+// Rows are WKB values on an explicit schema. SortingWriter buffers through
+// RowBuffer, and Schema.Deconstruct does not marshal geom.T.
+func TestSortingWriterSingleRunCopiesGeospatialStatistics(t *testing.T) {
+	schema := NewSchema("t", Group{
+		"id":       Int(64),
+		"geometry": Geometry("OGC:CRS84"),
+	})
+	idCol, geomCol := -1, -1
+	for i, path := range schema.Columns() {
+		switch path[0] {
+		case "id":
+			idCol = i
+		case "geometry":
+			geomCol = i
+		}
+	}
+	if idCol < 0 || geomCol < 0 {
+		t.Fatalf("schema columns = %v", schema.Columns())
+	}
+
+	point, err := wkb.Marshal(geom.NewPointFlat(geom.XYZM, []float64{1, 2, 3, 4}), wkb.NDR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := wkb.Marshal(geom.NewLineStringFlat(geom.XYZM, []float64{5, 6, 7, 8, -1, -2, -3, -4}), wkb.NDR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Values are addressed by leaf index. Group orders fields by name, so the
+	// slice order is the schema order rather than the order the fields were
+	// declared. Written out of id order so a missed sort is visible, and with
+	// two XYZM geometry types so the copied bounds and type list are non-trivial.
+	rowOf := func(id int64, g []byte) Row {
+		row := make(Row, len(schema.Columns()))
+		row[idCol] = Int64Value(id).Level(0, 0, idCol)
+		row[geomCol] = ByteArrayValue(g).Level(0, 0, geomCol)
+		return row
+	}
+	rows := []Row{rowOf(2, point), rowOf(1, line)}
+
+	var plain bytes.Buffer
+	pw := NewWriter(&plain, schema)
+	if _, err := pw.WriteRows(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantFile := openTestFile(t, plain.Bytes())
+	want := wantFile.Metadata().RowGroups[0].Columns[geomCol].MetaData.GeospatialStatistics
+	want.GeoSpatialTypes = slices.Clone(want.GeoSpatialTypes)
+	if len(want.GeoSpatialTypes) != 2 || !want.BBox.ZMin.Valid || !want.BBox.MMax.Valid {
+		t.Fatalf("missing source geometry types or bounds: %+v", want)
+	}
+
+	var output bytes.Buffer
+	// sortRowCount is larger than the input, so Close flushes one sorted run
+	// and does not spill a second.
+	w := NewSortingWriter[any](&output, 1000, schema, SortingWriterConfig(SortingColumns(Ascending("id"))))
+	before := copyPathCounter.Load()
+	if _, err := w.WriteRows(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if copied := copyPathCounter.Load() - before; copied != int64(len(schema.Columns())) {
+		t.Fatalf("single sorted run copied %d columns through loadCopiedChunk, want %d", copied, len(schema.Columns()))
+	}
+
+	dst := openTestFile(t, output.Bytes())
+	if got := len(dst.RowGroups()); got != 1 {
+		t.Fatalf("row groups = %d, want 1", got)
+	}
+	geomMeta := dst.Metadata().RowGroups[0].Columns[geomCol].MetaData
+	if path := geomMeta.PathInSchema; len(path) != 1 || path[0] != "geometry" {
+		t.Fatalf("geometry column path = %v", path)
+	}
+	if got := geomMeta.GeospatialStatistics; !reflect.DeepEqual(got, want) {
+		t.Errorf("geospatial statistics: got %+v, want %+v", got, want)
+	}
+
+	r := dst.RowGroups()[0].Rows()
+	defer r.Close()
+	read := make([]Row, len(rows))
+	n, err := r.ReadRows(read)
+	if n != len(rows) {
+		t.Fatal(err)
+	}
+	if read[0][idCol].Int64() != 1 || read[1][idCol].Int64() != 2 {
+		t.Fatalf("sorted ids = %d, %d", read[0][idCol].Int64(), read[1][idCol].Int64())
 	}
 }
 
