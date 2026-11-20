@@ -310,6 +310,56 @@ func TestDeconstructListOfRepeated(t *testing.T) {
 	})
 }
 
+func TestDeconstructOptionalListNilSliceInInterface(t *testing.T) {
+	schema := NewSchema("row", Group{"x": Optional(List(Int(32)))})
+	var nilSlice []int32
+
+	got := schema.Deconstruct(nil, map[string]any{"x": nilSlice})
+	want := Row{NullValue().Level(0, 0, 0)}
+	if !got.Equal(want) {
+		t.Fatalf("nil slice: got %+v, want %+v", got, want)
+	}
+
+	got = schema.Deconstruct(nil, map[string]any{"x": []int32{}})
+	want = Row{NullValue().Level(0, 1, 0)}
+	if !got.Equal(want) {
+		t.Fatalf("empty slice: got %+v, want %+v", got, want)
+	}
+
+	got = schema.Deconstruct(nil, map[string]any{"x": []int32{1}})
+	want = Row{Int32Value(1).Level(0, 2, 0)}
+	if !got.Equal(want) {
+		t.Fatalf("values: got %+v, want %+v", got, want)
+	}
+
+	type model struct {
+		X any `parquet:"x"`
+	}
+	var buf bytes.Buffer
+	w := NewGenericWriter[model](&buf, schema)
+	if _, err := w.Write([]model{{X: nilSlice}, {X: []int32{}}, {X: []int32{1}}, {}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rows := readAllRows(t, buf.Bytes())
+	wantRows := []Row{
+		{NullValue().Level(0, 0, 0)},
+		{NullValue().Level(0, 1, 0)},
+		{Int32Value(1).Level(0, 2, 0)},
+		{NullValue().Level(0, 0, 0)},
+	}
+	if len(rows) != len(wantRows) {
+		t.Fatalf("generic rows: got %d, want %d", len(rows), len(wantRows))
+	}
+	for i := range wantRows {
+		if !rows[i].Equal(wantRows[i]) {
+			t.Fatalf("generic row %d: got %+v, want %+v", i, rows[i], wantRows[i])
+		}
+	}
+}
+
 func readAllRows(t *testing.T, data []byte) []Row {
 	t.Helper()
 	r := NewReader(bytes.NewReader(data))

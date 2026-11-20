@@ -46,7 +46,7 @@ func isNullValue(value reflect.Value) bool {
 	case reflect.Invalid:
 		return true
 
-	case reflect.Pointer, reflect.Interface:
+	case reflect.Pointer:
 		if value.IsNil() {
 			return true
 		}
@@ -58,6 +58,35 @@ func isNullValue(value reflect.Value) bool {
 			return isNull
 		}
 		return false
+
+	case reflect.Interface:
+		if value.IsNil() {
+			return true
+		}
+		switch v := value.Interface().(type) {
+		case *jsonlite.Value:
+			return v.Kind() == jsonlite.Null
+		case *structpb.Value:
+			_, isNull := v.GetKind().(*structpb.Value_NullValue)
+			return isNull
+		}
+		// map[string]any stores a nil slice as a non-nil interface. The slice
+		// itself is still null. json.RawMessage stays on its previous path:
+		// the text "null" is not a nil slice.
+		elem := value.Elem()
+		switch elem.Kind() {
+		case reflect.Map, reflect.Pointer:
+			return elem.IsNil()
+		case reflect.Slice:
+			if elem.Type() == reflect.TypeFor[json.RawMessage]() {
+				return false
+			}
+			return elem.IsNil()
+		case reflect.Interface:
+			return isNullValue(elem)
+		default:
+			return false
+		}
 
 	case reflect.Slice:
 		if value.IsNil() {
