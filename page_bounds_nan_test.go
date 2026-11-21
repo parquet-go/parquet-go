@@ -600,6 +600,52 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 		}
 	})
 
+	t.Run("four_wide_differential_extrema_sweep", func(t *testing.T) {
+		refBounds := func(indexes []int32) (minVal, maxVal float64, isNaN bool) {
+			found := false
+			for _, idx := range indexes {
+				v := doubleDictVals[idx]
+				if math.IsNaN(v) {
+					continue
+				}
+				if !found {
+					minVal, maxVal, found = v, v, true
+					continue
+				}
+				if v < minVal {
+					minVal = v
+				}
+				if v > maxVal {
+					maxVal = v
+				}
+			}
+			return minVal, maxVal, !found
+		}
+
+		for _, nanFiller := range []bool{false, true} {
+			for n := 1; n <= 33; n++ {
+				indexes := make([]int32, n)
+				for minPos := range n {
+					for maxPos := range n {
+						for i := range n {
+							if nanFiller {
+								indexes[i] = 8 + int32(i%4)
+							} else {
+								indexes[i] = 0 // 0.0
+							}
+						}
+						indexes[minPos] = 3 // -50
+						if maxPos != minPos {
+							indexes[maxPos] = 4 // 500
+						}
+						wantMin, wantMax, wantIsNaN := refBounds(indexes)
+						checkBounds(t, indexes, wantMin, wantMax, wantIsNaN)
+					}
+				}
+			}
+		}
+	})
+
 	t.Run("payload_nans_and_specials", func(t *testing.T) {
 		cases := []struct {
 			name    string
@@ -704,6 +750,24 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 				})
 			})
 		}
+
+		t.Run("systematic_oob_lane_matrix", func(t *testing.T) {
+			for _, n := range []int{5, 8, 9, 10, 12} {
+				for _, k := range []int{0, 2} {
+					for oobPos := range n {
+						for _, oobVal := range []int32{-1, oobLen} {
+							indexes := makePrefixOOB(n, k, oobPos, oobVal)
+							expectPanic(t, fmt.Sprintf("float32/n=%d/k=%d/pos=%d/val=%d", n, k, oobPos, oobVal), func() {
+								floatDict.Bounds(indexes)
+							})
+							expectPanic(t, fmt.Sprintf("float64/n=%d/k=%d/pos=%d/val=%d", n, k, oobPos, oobVal), func() {
+								doubleDict.Bounds(indexes)
+							})
+						}
+					}
+				}
+			}
+		})
 
 		t.Run("empty_dict_non_empty_indexes", func(t *testing.T) {
 			emptyFloatDict := newFloatDictionary(FloatType, 0, 0, encoding.FloatValues(nil))
