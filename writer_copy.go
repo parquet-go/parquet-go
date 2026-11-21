@@ -229,7 +229,7 @@ func columnChunkIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	}
 	// We copy statistics and the page index from the source; require both to be
 	// present so the output honors the writer's statistics configuration.
-	if src.chunk.ColumnIndexOffset == 0 || src.chunk.OffsetIndexOffset == 0 {
+	if src.column.ignoreOrder || src.chunk.ColumnIndexOffset == 0 || src.chunk.OffsetIndexOffset == 0 {
 		return false
 	}
 	// All data pages must use the configured encoding and data page version, and
