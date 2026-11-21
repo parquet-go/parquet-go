@@ -5,10 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"os"
+	"os/exec"
+	"regexp"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 // staticKeyRetriever is a test-only KeyRetriever backed by static key maps.
@@ -413,11 +420,149 @@ func TestEncryptionSeekToRow(t *testing.T) {
 	}
 }
 
+// tracebufLeakEnv selects the subprocess that runs a test with buffer tracing.
+// PARQUETGODEBUG is read once, from init, so the leak check cannot be turned on
+// inside an already-started test binary.
+const tracebufLeakEnv = "PARQUET_TEST_TRACEBUF_LEAK"
+
+// syncBuffer is a log sink the finalizer goroutine can write while the test
+// reads it back after GC.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// flushFilterPagesLeakReport returns tracebuf leak reports whose stack is
+// flushFilterPages. Other leaked buffers are ignored.
+func flushFilterPagesLeakReport(text string) string {
+	const header = "PARQUETGODEBUG: buffer["
+	var b strings.Builder
+	rest := text
+	for {
+		i := strings.Index(rest, header)
+		if i < 0 {
+			break
+		}
+		rest = rest[i:]
+		next := strings.Index(rest[len(header):], header)
+		report := rest
+		if next >= 0 {
+			report = rest[:len(header)+next]
+			rest = rest[len(header)+next:]
+		} else {
+			rest = ""
+		}
+		if strings.Contains(report, "non-zero reference count") && strings.Contains(report, "flushFilterPages") {
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(strings.TrimSpace(report))
+		}
+	}
+	return b.String()
+}
+
+// tracebufLeakCapture collects tracebuf leak logs for one subprocess test.
+type tracebufLeakCapture struct {
+	buf     syncBuffer
+	scanned int
+}
+
+// activeTracebufLeaks is set only in the subprocess started by withTracebufLeakCheck.
+var activeTracebufLeaks *tracebufLeakCapture
+
+// collectTracebufLeaks forces finalizers and fails t when a buffer allocated
+// from flushFilterPages was collected with a non-zero reference count.
+// Safe to call more than once: each call reports only leaks logged since the
+// previous call. No-op outside the tracing subprocess.
+func collectTracebufLeaks(t *testing.T) {
+	t.Helper()
+	c := activeTracebufLeaks
+	if c == nil {
+		return
+	}
+	// Finalizers run after the allocating frame returns. Two collections are
+	// enough for a pointer-containing buffer; the third covers a finalizer
+	// queued by the second.
+	runtime.GC()
+	runtime.GC()
+	runtime.GC()
+	text := c.buf.String()
+	if c.scanned > len(text) {
+		c.scanned = 0
+	}
+	report := flushFilterPagesLeakReport(text[c.scanned:])
+	c.scanned = len(text)
+	if report != "" {
+		t.Errorf("PARQUETGODEBUG=tracebuf=1 reported a buffer leaked from flushFilterPages:\n%s", report)
+	}
+}
+
+// withTracebufLeakCheck re-executes the calling top-level test in a subprocess
+// with PARQUETGODEBUG=tracebuf=1. The subprocess fails when tracebuf reports a
+// buffer leaked from flushFilterPages; logging the leak is not enough.
+//
+// Call it before any other test logic. It returns false in the parent process
+// after the subprocess has been checked, and true in the subprocess.
+func withTracebufLeakCheck(t *testing.T) bool {
+	t.Helper()
+	if strings.Contains(t.Name(), "/") {
+		t.Fatalf("withTracebufLeakCheck must run on the top-level test, not %s", t.Name())
+	}
+	if os.Getenv(tracebufLeakEnv) != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.v")
+		env := make([]string, 0, len(os.Environ())+3)
+		for _, e := range os.Environ() {
+			if strings.HasPrefix(e, "PARQUETGODEBUG=") || strings.HasPrefix(e, "GOGC=") || strings.HasPrefix(e, tracebufLeakEnv+"=") {
+				continue
+			}
+			env = append(env, e)
+		}
+		cmd.Env = append(env, "PARQUETGODEBUG=tracebuf=1", "GOGC=1", tracebufLeakEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("buffer leak check failed: %v\n%s", err, out)
+		}
+		// A finalizer can log after the subprocess has already decided the test
+		// passed. Treat that the same as a failure inside the test.
+		if leak := flushFilterPagesLeakReport(string(out)); leak != "" {
+			t.Fatalf("PARQUETGODEBUG=tracebuf=1 reported a buffer leaked from flushFilterPages:\n%s", leak)
+		}
+		return false
+	}
+
+	logs := &tracebufLeakCapture{}
+	activeTracebufLeaks = logs
+	prev := log.Writer()
+	log.SetOutput(io.MultiWriter(prev, &logs.buf))
+	t.Cleanup(func() {
+		collectTracebufLeaks(t)
+		log.SetOutput(prev)
+		activeTracebufLeaks = nil
+	})
+	return true
+}
+
 // TestEncryptionBloomFilter verifies that bloom filters written on encrypted
 // columns can be loaded and queried after decryption.  The bug: the read path
 // tried to thrift-decode the encrypted bloom filter header as plaintext,
 // causing an error whenever SkipBloomFilters=false (the default).
 func TestEncryptionBloomFilter(t *testing.T) {
+	if !withTracebufLeakCheck(t) {
+		return
+	}
 	footerKey := aes128Key(0xBC)
 	cfg := &parquet.EncryptionConfig{
 		FooterKey:       footerKey,
@@ -596,6 +741,9 @@ func TestEncryptionMultipleRowGroupsOrdinals(t *testing.T) {
 // codex finding 4: newBloomFilterFromBytes only handled the Uncompressed
 // header variant, dropping encrypted gzip-compressed bloom filters silently.
 func TestEncryptionBloomFilterGzip(t *testing.T) {
+	if !withTracebufLeakCheck(t) {
+		return
+	}
 	footerKey := aes128Key(0xC1)
 	cfg := &parquet.EncryptionConfig{
 		FooterKey:       footerKey,
@@ -657,6 +805,139 @@ func TestEncryptionBloomFilterGzip(t *testing.T) {
 	}
 	if !present {
 		t.Error("bloom filter should report 'alice' as present")
+	}
+}
+
+// TestEncryptionBloomFilterPageBuffers is the flushFilterPages leak path with
+// more than one data page, and with compressed data pages. The bloom filter is
+// not sized ahead of time, and the column is not dictionary-encoded, so the
+// writer decrypts each page back into a pooled buffer at flush.
+func TestEncryptionBloomFilterPageBuffers(t *testing.T) {
+	if !withTracebufLeakCheck(t) {
+		return
+	}
+
+	rows := make([]encryptionTestRow, 24)
+	for i := range rows {
+		rows[i] = encryptionTestRow{
+			Name:  fmt.Sprintf("name-%04d-%s", i, strings.Repeat("x", 32)),
+			Value: int64(i),
+		}
+	}
+
+	t.Run("multiple pages", func(t *testing.T) {
+		t.Cleanup(func() { collectTracebufLeaks(t) })
+		f := encryptedBloomFile(t, 0xD1, rows, parquet.PageBufferSize(48))
+		assertEncryptedBloomPages(t, f, rows, format.Uncompressed, 2)
+	})
+
+	t.Run("compressed pages", func(t *testing.T) {
+		t.Cleanup(func() { collectTracebufLeaks(t) })
+		f := encryptedBloomFile(t, 0xD2, rows,
+			parquet.PageBufferSize(48),
+			parquet.Compression(&parquet.Snappy),
+		)
+		assertEncryptedBloomPages(t, f, rows, format.Snappy, 2)
+	})
+}
+
+func encryptedBloomFile(t *testing.T, keyByte byte, rows []encryptionTestRow, opts ...parquet.WriterOption) *parquet.File {
+	t.Helper()
+	footerKey := aes128Key(keyByte)
+	cfg := &parquet.EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: true,
+		FileIdentifier:  bytes.Repeat([]byte{keyByte}, 8),
+	}
+	options := make([]parquet.WriterOption, 0, 2+len(opts))
+	options = append(options,
+		parquet.WithEncryption(cfg),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "name")),
+	)
+	options = append(options, opts...)
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[encryptionTestRow](&buf, options...)
+	// One row at a time: a single Write of the whole slice is flushed as one
+	// page once the buffer crosses the target size, so it cannot produce the
+	// multiple pages this test exists to cover.
+	for i := range rows {
+		if _, err := w.Write(rows[i : i+1]); err != nil {
+			t.Fatalf("write row %d: %v", i, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	data := append([]byte(nil), buf.Bytes()...)
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(&staticKeyRetriever{footerKey: footerKey}))
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	return f
+}
+
+func assertEncryptedBloomPages(t *testing.T, f *parquet.File, rows []encryptionTestRow, codec format.CompressionCodec, minPages int) {
+	t.Helper()
+	rgs := f.RowGroups()
+	if len(rgs) != 1 {
+		t.Fatalf("row groups: got %d, want 1", len(rgs))
+	}
+	chunks := rgs[0].ColumnChunks()
+	cols := f.Metadata().RowGroups[0].Columns
+	if len(chunks) != len(cols) {
+		t.Fatalf("column chunks %d, metadata columns %d", len(chunks), len(cols))
+	}
+
+	var nameChunk parquet.ColumnChunk
+	var meta format.ColumnMetaData
+	found := false
+	for i, cc := range chunks {
+		path := cols[i].MetaData.PathInSchema
+		if len(path) == 1 && path[0] == "name" {
+			nameChunk = cc
+			meta = cols[i].MetaData
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("name column not found")
+	}
+	if meta.Codec != codec {
+		t.Fatalf("name column codec: got %s, want %s", meta.Codec, codec)
+	}
+	for _, enc := range meta.Encoding {
+		if enc == format.RLEDictionary || enc == format.PlainDictionary {
+			t.Fatalf("name column encoding %s uses a dictionary; flushFilterPages would not re-read data pages", enc)
+		}
+	}
+
+	oi, err := nameChunk.OffsetIndex()
+	if err != nil {
+		t.Fatalf("offset index: %v", err)
+	}
+	if oi.NumPages() < minPages {
+		t.Fatalf("name column pages: got %d, want at least %d", oi.NumPages(), minPages)
+	}
+
+	bf := nameChunk.BloomFilter()
+	if bf == nil {
+		t.Fatal("expected bloom filter on name column")
+	}
+	present, err := bf.Check(parquet.ValueOf(rows[0].Name))
+	if err != nil {
+		t.Fatalf("bloom filter Check(%q): %v", rows[0].Name, err)
+	}
+	if !present {
+		t.Errorf("bloom filter should report %q as present", rows[0].Name)
+	}
+	absent, err := bf.Check(parquet.ValueOf("not-written"))
+	if err != nil {
+		t.Fatalf("bloom filter Check(not-written): %v", err)
+	}
+	if absent {
+		t.Error("bloom filter should not report \"not-written\" as present")
 	}
 }
 
