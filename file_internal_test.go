@@ -824,3 +824,68 @@ func TestReadPageIndexMalformedBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestFileSortingColumnsWithUnsupportedAnnotation(t *testing.T) {
+	type row struct {
+		Group int32
+		Stamp [12]byte
+		ID    int32
+	}
+	var data bytes.Buffer
+	// 255 and 256 in little endian are sorted as timestamps, but not as bytes.
+	err := Write(&data, []row{{Stamp: [12]byte{255}}, {Stamp: [12]byte{0, 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		order []int32
+		want  []SortingColumn
+	}{
+		{"first", []int32{1, 2}, nil},
+		{"middle", []int32{0, 1, 2}, []SortingColumn{Ascending("Group")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := data.Bytes()
+			start := len(original) - 8 - int(binary.LittleEndian.Uint32(original[len(original)-8:]))
+			var meta format.FileMetaData
+			var proto thrift.CompactProtocol
+			if err := thrift.Unmarshal(&proto, original[start:len(original)-8], &meta); err != nil {
+				t.Fatal(err)
+			}
+			meta.Schema[2].LogicalType = *Timestamp(Millisecond).Type().LogicalType()
+			for _, idx := range tc.order {
+				meta.RowGroups[0].SortingColumns = append(meta.RowGroups[0].SortingColumns, format.SortingColumn{ColumnIdx: idx})
+			}
+			footer, err := thrift.Marshal(&proto, &meta)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := append(bytes.Clone(original[:start]), footer...)
+			b = binary.LittleEndian.AppendUint32(b, uint32(len(footer)))
+			b = append(b, "PAR1"...)
+			f, err := OpenFile(bytes.NewReader(b), int64(len(b)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := f.RowGroups()[0].SortingColumns(); !EqualSortingColumns(got, tc.want) {
+				t.Fatalf("sorting columns = %v, want %v", got, tc.want)
+			}
+			var copied bytes.Buffer
+			w := NewWriter(&copied, f.Schema())
+			if _, err := w.WriteRowGroup(f.RowGroups()[0]); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := Read[row](bytes.NewReader(copied.Bytes()), int64(copied.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 2 || rows[0].Stamp != [12]byte{255} || rows[1].Stamp != [12]byte{0, 1} {
+				t.Fatalf("unexpected rows after WriteRowGroup: %v", rows)
+			}
+		})
+	}
+}

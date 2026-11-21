@@ -39,6 +39,7 @@ type Column struct {
 	maxRepetitionLevel byte
 	maxDefinitionLevel byte
 	index              uint16
+	ignoreOrder        bool
 }
 
 // Type returns the type of the column.
@@ -390,10 +391,12 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 	}
 
 	if isLeafSchemaElement(c.schema) {
-		c.typ = schemaElementTypeOf(c.schema)
+		c.typ, c.ignoreOrder = schemaElementTypeOf(c.schema)
 
 		if cl.columnOrderIndex < len(metadata.ColumnOrders) {
-			c.order = &metadata.ColumnOrders[cl.columnOrderIndex]
+			if !c.ignoreOrder {
+				c.order = &metadata.ColumnOrders[cl.columnOrderIndex]
+			}
 			cl.columnOrderIndex++
 		}
 
@@ -539,7 +542,24 @@ func isLeafSchemaElement(element *format.SchemaElement) bool {
 	return element.Type.Valid
 }
 
-func schemaElementTypeOf(s *format.SchemaElement) Type {
+// schemaElementTypeOf returns the leaf type and whether the file's column
+// order must be ignored because the annotation is unsupported.
+func schemaElementTypeOf(s *format.SchemaElement) (Type, bool) {
+	if t := annotatedSchemaElementType(s); t != nil {
+		// UNKNOWN represents an all-null column regardless of physical type.
+		if _, ok := t.(*nullType); ok {
+			return t, false
+		}
+		if physical := t.PhysicalType(); physical != nil && *physical == s.Type.V {
+			if *physical != format.FixedLenByteArray || (s.TypeLength.Valid && t.Length() == int(s.TypeLength.V)) {
+				return t, false
+			}
+		}
+	}
+	return physicalSchemaElementType(s), s.LogicalType.Value != nil || s.ConvertedType.Valid
+}
+
+func annotatedSchemaElementType(s *format.SchemaElement) Type {
 	// A logical type exists, the Type interface implementations in this
 	// package are all based on the logical parquet types declared in the
 	// format sub-package so we can return them directly via a pointer type
@@ -566,11 +586,11 @@ func schemaElementTypeOf(s *format.SchemaElement) Type {
 				typ = ByteArrayType
 			case FixedLenByteArray:
 				if !s.TypeLength.Valid {
-					panic("DECIMAL using FIXED_LEN_BYTE_ARRAY must specify a length")
+					return nil
 				}
 				typ = FixedLenByteArrayType(int(s.TypeLength.V))
 			default:
-				panic("DECIMAL must be of type INT32, INT64, BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY but got " + kind.String())
+				return nil
 			}
 			return &decimalType{
 				decimal: *lt,
@@ -627,13 +647,13 @@ func schemaElementTypeOf(s *format.SchemaElement) Type {
 						typ = Int64Type
 					case FixedLenByteArray:
 						if !s.TypeLength.Valid {
-							panic("DECIMAL using FIXED_LEN_BYTE_ARRAY must specify a length")
+							return nil
 						}
 						typ = FixedLenByteArrayType(int(s.TypeLength.V))
 					case ByteArray:
 						typ = ByteArrayType
 					default:
-						panic("DECIMAL must be of type INT32, INT64, BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY but got " + kind.String())
+						return nil
 					}
 					return &decimalType{
 						decimal: format.DecimalType{
@@ -679,6 +699,10 @@ func schemaElementTypeOf(s *format.SchemaElement) Type {
 		}
 	}
 
+	return nil
+}
+
+func physicalSchemaElementType(s *format.SchemaElement) Type {
 	if s.Type.Valid {
 		// The column only has a physical type, convert it to one of the
 		// primitive types supported by this package.

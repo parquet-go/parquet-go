@@ -838,11 +838,17 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 		g.columns[i] = &fileColumnChunks[i]
 	}
 
-	for i := range g.sorting {
+	for i, sorting := range rowGroup.SortingColumns {
+		column := columns[sorting.ColumnIdx]
+		if column.ignoreOrder {
+			// Later sorting keys are ordered only within ties on this key.
+			g.sorting = g.sorting[:i]
+			break
+		}
 		g.sorting[i] = &fileSortingColumn{
-			column:     columns[rowGroup.SortingColumns[i].ColumnIdx],
-			descending: rowGroup.SortingColumns[i].Descending,
-			nullsFirst: rowGroup.SortingColumns[i].NullsFirst,
+			column:     column,
+			descending: sorting.Descending,
+			nullsFirst: sorting.NullsFirst,
 		}
 	}
 	return nil
@@ -944,6 +950,9 @@ func (c *FileColumnChunk) Column() int { return int(c.column.Index()) }
 
 // Bounds returns the min and max values found in the column chunk.
 func (c *FileColumnChunk) Bounds() (min, max Value, ok bool) {
+	if c.column.ignoreOrder {
+		return min, max, false
+	}
 	stats := &c.chunk.MetaData.Statistics
 	columnKind := c.Type().Kind()
 	hasMinValue := stats.MinValue != nil
@@ -1070,6 +1079,9 @@ func (c *FileColumnChunk) readColumnIndex() (*FileColumnIndex, error) {
 func (c *FileColumnChunk) readColumnIndexFrom(reader io.ReaderAt) (*FileColumnIndex, error) {
 	if err := c.errIfMissingKey(); err != nil {
 		return nil, err
+	}
+	if c.column.ignoreOrder {
+		return nil, nil
 	}
 	if index := c.columnIndex.Load(); index != nil {
 		return index, nil
