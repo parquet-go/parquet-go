@@ -577,6 +577,10 @@ func writeValueFuncOfMap(columnIndex uint16, node Node) (uint16, writeValueFunc)
 			writeJSONToMap(columns, levels, m, writeValue, zeroKeyValue, jsonElem)
 			return
 		case protoreflect.Map:
+			if m == nil {
+				writeValue(columns, levels, zeroKeyValue)
+				return
+			}
 			n := m.Len()
 			if n == 0 {
 				writeValue(columns, levels, zeroKeyValue)
@@ -642,24 +646,29 @@ func writeValueFuncOfMap(columnIndex uint16, node Node) (uint16, writeValueFunc)
 	}
 }
 
-// unwrapMapValue exposes the map, JSON value, or proto map stored in an
-// interface or pointer. A nil interface or pointer is invalid.
+// unwrapMapValue exposes the map or JSON value stored in an interface or
+// pointer. A nil interface or pointer is invalid. *jsonlite.Value and
+// protoreflect.Map stay as they are: a proto map is a pointer, and
+// dereferencing it drops the interface the writer type-switches on.
 func unwrapMapValue(value reflect.Value) reflect.Value {
 	for value.IsValid() {
-		switch value.Kind() {
-		case reflect.Interface:
-			if value.IsNil() {
-				return reflect.Value{}
-			}
-			value = value.Elem()
-		case reflect.Pointer:
-			if value.IsNil() {
-				return reflect.Value{}
-			}
-			// *jsonlite.Value is the JSON value; dereferencing it loses the
-			// type the map writer switches on.
+		if value.CanInterface() {
 			if _, ok := reflect.TypeAssert[*jsonlite.Value](value); ok {
 				return value
+			}
+			if _, ok := reflect.TypeAssert[json.RawMessage](value); ok {
+				return value
+			}
+			// A proto map is *impl.mapReflect. Dereferencing it drops the
+			// interface the writer type-switches on.
+			if _, ok := reflect.TypeAssert[protoreflect.Map](value); ok {
+				return value
+			}
+		}
+		switch value.Kind() {
+		case reflect.Interface, reflect.Pointer:
+			if value.IsNil() {
+				return reflect.Value{}
 			}
 			value = value.Elem()
 		default:

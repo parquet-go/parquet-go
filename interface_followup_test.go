@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"testing"
+
+	"google.golang.org/protobuf/reflect/protoreflect"
+
+	testproto "github.com/parquet-go/parquet-go/testdata/gen/go"
 )
 
 func writtenRows[T any](t *testing.T, schema *Schema, rows []T) []Row {
@@ -238,4 +242,27 @@ func TestRawMessageNullAndMap(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A protoreflect.Map is a pointer. Unwrapping it drops the interface.
+func TestProtoMapInInterface(t *testing.T) {
+	msg := &testproto.ProtoWithMap{StringMap: map[string]string{"a": "b"}}
+	field := msg.ProtoReflect().Descriptor().Fields().ByName("string_map")
+	protoMap := msg.ProtoReflect().Get(field).Map()
+	if _, ok := any(protoMap).(protoreflect.Map); !ok || protoMap == nil {
+		t.Fatal("expected a proto map")
+	}
+
+	schema := NewSchema("row", Group{"x": Optional(Map(String(), String()))})
+	type boxed struct {
+		X any `parquet:"x"`
+	}
+	type concrete struct {
+		X map[string]string `parquet:"x,optional"`
+	}
+	got := writtenRows(t, schema, []boxed{{X: protoMap}})
+	want := writtenRows(t, schema, []concrete{{X: map[string]string{"a": "b"}}})
+	if !rowsEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
 }
