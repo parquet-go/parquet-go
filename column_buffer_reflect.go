@@ -658,7 +658,7 @@ func unwrapMapValue(value reflect.Value) reflect.Value {
 			}
 			// *jsonlite.Value is the JSON value; dereferencing it loses the
 			// type the map writer switches on.
-			if _, ok := value.Interface().(*jsonlite.Value); ok {
+			if _, ok := reflect.TypeAssert[*jsonlite.Value](value); ok {
 				return value
 			}
 			value = value.Elem()
