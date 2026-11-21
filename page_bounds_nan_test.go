@@ -325,8 +325,8 @@ func TestWriterDictionaryStatisticsExcludeNaN(t *testing.T) {
 		for i := range vals {
 			vals[i] = float64(i + 10)
 		}
-		// Place extrema in non-zero lanes of batch 0 so AVX-512 restartScalar
-		// must recover them rather than relying on lane 0 alone.
+		// Place extrema in non-zero lanes of batch 0 so AVX-512 must preserve
+		// them alongside NaN lanes rather than relying on lane 0 alone.
 		vals[1] = -50
 		vals[2] = 500
 		vals[nanPos] = nan
@@ -415,14 +415,20 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 	nan32 := float32(math.NaN())
 	qnan32Pos := math.Float32frombits(0x7fc00001)
 	qnan32Neg := math.Float32frombits(0xffc00001)
+	snan32 := math.Float32frombits(0x7f800001)
 	inf32 := float32(math.Inf(1))
 	negZero32 := float32(math.Copysign(0, -1))
+	subPos32 := float32(math.SmallestNonzeroFloat32)
+	subNeg32 := -subPos32
 
 	nan64 := math.NaN()
 	qnan64Pos := math.Float64frombits(0x7ff8000000000001)
 	qnan64Neg := math.Float64frombits(0xfff8000000000001)
+	snan64 := math.Float64frombits(0x7ff0000000000001)
 	inf64 := math.Inf(1)
 	negZero64 := math.Copysign(0, -1)
+	subPos64 := math.SmallestNonzeroFloat64
+	subNeg64 := -subPos64
 
 	floatDictVals := []float32{
 		0,         // 0
@@ -436,6 +442,9 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 		nan32,     // 8
 		qnan32Pos, // 9
 		qnan32Neg, // 10
+		snan32,    // 11
+		subNeg32,  // 12
+		subPos32,  // 13
 	}
 	doubleDictVals := []float64{
 		0,         // 0
@@ -449,6 +458,9 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 		nan64,     // 8
 		qnan64Pos, // 9
 		qnan64Neg, // 10
+		snan64,    // 11
+		subNeg64,  // 12
+		subPos64,  // 13
 	}
 
 	floatDict := newFloatDictionary(FloatType, 0, int32(len(floatDictVals)), encoding.FloatValues(floatDictVals))
@@ -526,6 +538,68 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 		}
 	})
 
+	t.Run("leading_nan_prefix_sweep", func(t *testing.T) {
+		for _, n := range []int{1, 7, 8, 9, 10, 15, 16, 17, 25, 33} {
+			for k := 0; k <= n; k++ {
+				indexes := make([]int32, n)
+				for i := 0; i < k; i++ {
+					indexes[i] = 8 + int32(i%4) // mix qNaN payloads and sNaN
+				}
+				for i := k; i < n; i++ {
+					indexes[i] = 0 // 0.0
+				}
+				if k == n {
+					checkBounds(t, indexes, 0, 0, true)
+					continue
+				}
+				rem := n - k
+				wantMin, wantMax := 0.0, 0.0
+				switch rem {
+				case 1:
+					indexes[k] = 2 // 1.0
+					wantMin, wantMax = 1.0, 1.0
+				case 2:
+					indexes[k] = 3   // -50
+					indexes[k+1] = 4 // 500
+					wantMin, wantMax = -50.0, 500.0
+				default:
+					indexes[k] = 0
+					indexes[k+1] = 4 // 500
+					indexes[n-1] = 3 // -50
+					wantMin, wantMax = -50.0, 500.0
+				}
+				checkBounds(t, indexes, wantMin, wantMax, false)
+			}
+		}
+	})
+
+	t.Run("all_8_lane_extrema_sweep", func(t *testing.T) {
+		for _, n := range []int{8, 16} {
+			for base := 0; base < n; base += 8 {
+				for minLane := 0; minLane < 8; minLane++ {
+					for maxLane := 0; maxLane < 8; maxLane++ {
+						indexes := make([]int32, n)
+						for i := range indexes {
+							if i%2 == 0 {
+								indexes[i] = 9 // qNaN
+							} else {
+								indexes[i] = 11 // sNaN
+							}
+						}
+						if minLane == maxLane {
+							indexes[base+minLane] = 3 // -50
+							checkBounds(t, indexes, -50, -50, false)
+							continue
+						}
+						indexes[base+minLane] = 3 // -50
+						indexes[base+maxLane] = 4 // 500
+						checkBounds(t, indexes, -50, 500, false)
+					}
+				}
+			}
+		}
+	})
+
 	t.Run("payload_nans_and_specials", func(t *testing.T) {
 		cases := []struct {
 			name    string
@@ -534,18 +608,55 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 			wantMax float64
 		}{
 			{"qnan_payloads", []int32{9, 1, 10, 2, 8}, -1, 1},
+			{"snan_mixed_short", []int32{11, 1, 11, 2, 11}, -1, 1},
+			{"snan_mixed_long", []int32{11, 0, 11, 3, 11, 4, 11, 0, 11, 2}, -50, 500},
 			{"infinities_and_nan", []int32{8, 5, 0, 10, 6, 9}, math.Inf(-1), math.Inf(1)},
 			{"signed_zeros_and_nan", []int32{7, 8, 0, 9, 7, 10, 0, 7, 8}, 0, 0},
+			{"unreferenced_nan_in_dict", []int32{0, 1, 2, 0, 1, 2, 0, 1, 2}, -1, 1},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				checkBounds(t, tc.indexes, tc.wantMin, tc.wantMax, false)
 			})
 		}
+
+		t.Run("subnormals_with_nan", func(t *testing.T) {
+			indexes := []int32{11, 12, 8, 13, 9, 12, 10, 13, 11}
+			fMin, fMax := floatDict.Bounds(indexes)
+			if fMin.Float() != subNeg32 || fMax.Float() != subPos32 {
+				t.Errorf("float32 subnormals = (%g, %g), want (%g, %g)", fMin.Float(), fMax.Float(), subNeg32, subPos32)
+			}
+			dMin, dMax := doubleDict.Bounds(indexes)
+			if dMin.Double() != subNeg64 || dMax.Double() != subPos64 {
+				t.Errorf("float64 subnormals = (%g, %g), want (%g, %g)", dMin.Double(), dMax.Double(), subNeg64, subPos64)
+			}
+		})
+
+		t.Run("empty_indexes", func(t *testing.T) {
+			for _, indexes := range [][]int32{nil, {}} {
+				fMin, fMax := floatDict.Bounds(indexes)
+				if !fMin.IsNull() || !fMax.IsNull() {
+					t.Errorf("float32 Bounds(%v) = (%v, %v), want null values", indexes, fMin, fMax)
+				}
+				dMin, dMax := doubleDict.Bounds(indexes)
+				if !dMin.IsNull() || !dMax.IsNull() {
+					t.Errorf("float64 Bounds(%v) = (%v, %v), want null values", indexes, dMin, dMax)
+				}
+			}
+		})
 	})
 
 	t.Run("out_of_bounds_with_nan", func(t *testing.T) {
 		oobLen := int32(len(floatDictVals))
+		makePrefixOOB := func(n, k, oobPos int, oobVal int32) []int32 {
+			indexes := make([]int32, n)
+			for i := 0; i < k; i++ {
+				indexes[i] = 8
+			}
+			indexes[oobPos] = oobVal
+			return indexes
+		}
+
 		cases := []struct {
 			name    string
 			indexes []int32
@@ -556,9 +667,21 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 			{"high_after_nan_short", []int32{8, 0, oobLen}},
 			{"oob_same_batch_before_nan", []int32{0, 1, oobLen, 8, 0, 0, 0, 0, 0}},
 			{"oob_same_batch_after_nan", []int32{0, 1, 8, -1, 0, 0, 0, 0, 0}},
-			{"oob_after_nan_avx512_restart", []int32{0, 1, 2, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, oobLen}},
-			{"neg_after_nan_avx512_restart", []int32{0, 1, 2, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, -1}},
+			{"oob_after_nan_avx512", []int32{0, 1, 2, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, oobLen}},
+			{"neg_after_nan_avx512", []int32{0, 1, 2, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, -1}},
 			{"oob_in_all_nan_long", []int32{8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, oobLen}},
+			{"prefix_k1_oob_inside_neg", makePrefixOOB(20, 1, 0, -1)},
+			{"prefix_k1_oob_inside_high", makePrefixOOB(20, 1, 0, oobLen)},
+			{"prefix_k1_oob_after_neg", makePrefixOOB(20, 1, 10, -1)},
+			{"prefix_k1_oob_after_high", makePrefixOOB(20, 1, 19, oobLen)},
+			{"prefix_k8_oob_inside_neg", makePrefixOOB(20, 8, 5, -1)},
+			{"prefix_k8_oob_inside_high", makePrefixOOB(20, 8, 7, oobLen)},
+			{"prefix_k8_oob_after_neg", makePrefixOOB(20, 8, 12, -1)},
+			{"prefix_k8_oob_after_high", makePrefixOOB(20, 8, 19, oobLen)},
+			{"prefix_k9_oob_inside_neg", makePrefixOOB(20, 9, 8, -1)},
+			{"prefix_k9_oob_inside_high", makePrefixOOB(20, 9, 4, oobLen)},
+			{"prefix_k9_oob_after_neg", makePrefixOOB(20, 9, 15, -1)},
+			{"prefix_k9_oob_after_high", makePrefixOOB(20, 9, 19, oobLen)},
 		}
 
 		expectPanic := func(t *testing.T, label string, fn func()) {
@@ -581,5 +704,16 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 				})
 			})
 		}
+
+		t.Run("empty_dict_non_empty_indexes", func(t *testing.T) {
+			emptyFloatDict := newFloatDictionary(FloatType, 0, 0, encoding.FloatValues(nil))
+			emptyDoubleDict := newDoubleDictionary(DoubleType, 0, 0, encoding.DoubleValues(nil))
+			expectPanic(t, "float32/empty_dict", func() {
+				emptyFloatDict.Bounds([]int32{0})
+			})
+			expectPanic(t, "float64/empty_dict", func() {
+				emptyDoubleDict.Bounds([]int32{0})
+			})
+		})
 	})
 }

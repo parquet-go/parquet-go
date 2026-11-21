@@ -217,18 +217,17 @@ TEXT ·dictionaryBoundsFloat32(SB), NOSPLIT, $0-64
     MOVAPS X3, X4
 
     UCOMISS X3, X3
-    JP test
+    JP findNonNaN
 
     CMPQ DX, $8
-    JB test
+    JB skipAssignMax
 
     CMPB ·hasAVX512VL(SB), $0
-    JE test
+    JE skipAssignMax
 
     MOVQ DX, DI
-    SHRQ $3, DI
-    SHLQ $3, DI
-
+    ANDQ $-8, DI
+initAVX512:
     MOVQ $0xFFFF, R8
     KMOVW R8, K1
 
@@ -242,12 +241,9 @@ loopAVX512:
     CMPB R9, $0xFF
     JNE indexOutOfBounds
     VPGATHERDD (AX)(Y0*4), K1, Y1
-    VCMPPS $3, Y1, Y1, K2
-    KMOVW K2, R9
-    TESTB R9, R9
-    JNE restartScalar
-    VMINPS Y1, Y3, Y3
-    VMAXPS Y1, Y4, Y4
+    // Keep non-NaN accumulators in SRC2 so NaN lanes preserve Y3 and Y4.
+    VMINPS Y3, Y1, Y3
+    VMAXPS Y4, Y1, Y4
     KMOVW R8, K1
     ADDQ $8, SI
     CMPQ SI, DI
@@ -270,25 +266,14 @@ loopAVX512:
 
     VZEROUPPER
     JMP test
-restartScalar:
-    VZEROUPPER
-    XORQ SI, SI
-    JMP test
+    PCALIGN $16
 loop:
     MOVL (CX)(SI*4), DI
     CMPL DI, BX
     JAE indexOutOfBounds
     MOVSS (AX)(DI*4), X1
-    UCOMISS X1, X1
-    JP skipAssignMax
-    UCOMISS X3, X3
-    JNP compare
-    MOVAPS X1, X3
-    MOVAPS X1, X4
-    JMP skipAssignMax
-compare:
-    UCOMISS X3, X1
-    JAE skipAssignMin
+    UCOMISS X1, X3
+    JBE skipAssignMin
     MOVAPS X1, X3
 skipAssignMin:
     UCOMISS X4, X1
@@ -307,6 +292,26 @@ return:
 indexOutOfBounds:
     MOVQ $errnoIndexOutOfBounds, R12
     JMP return
+findNonNaN:
+    INCQ SI
+    CMPQ SI, DX
+    JE return
+    MOVL (CX)(SI*4), DI
+    CMPL DI, BX
+    JAE indexOutOfBounds
+    MOVSS (AX)(DI*4), X1
+    UCOMISS X1, X1
+    JP findNonNaN
+    MOVAPS X1, X3
+    MOVAPS X1, X4
+    CMPB ·hasAVX512VL(SB), $0
+    JE skipAssignMax
+    MOVQ DX, DI
+    ANDQ $-8, DI
+    CMPQ SI, DI
+    JAE skipAssignMax
+    ANDQ $-8, SI
+    JMP initAVX512
 
 // func dictionaryBoundsFloat64(dict []float64, indexes []int32) (min, max float64, err errno)
 TEXT ·dictionaryBoundsFloat64(SB), NOSPLIT, $0-72
@@ -331,18 +336,17 @@ TEXT ·dictionaryBoundsFloat64(SB), NOSPLIT, $0-72
     MOVAPS X3, X4
 
     UCOMISD X3, X3
-    JP test
+    JP findNonNaN
 
     CMPQ DX, $8
-    JB test
+    JB skipAssignMax
 
     CMPB ·hasAVX512VL(SB), $0
-    JE test
+    JE skipAssignMax
 
     MOVQ DX, DI
-    SHRQ $3, DI
-    SHLQ $3, DI
-
+    ANDQ $-8, DI
+initAVX512:
     MOVQ $0xFFFF, R8
     KMOVW R8, K1
 
@@ -356,12 +360,9 @@ loopAVX512:
     CMPB R9, $0xFF
     JNE indexOutOfBounds
     VPGATHERDQ (AX)(Y0*8), K1, Z1
-    VCMPPD $3, Z1, Z1, K2
-    KMOVW K2, R9
-    TESTB R9, R9
-    JNE restartScalar
-    VMINPD Z1, Z3, Z3
-    VMAXPD Z1, Z4, Z4
+    // Keep non-NaN accumulators in SRC2 so NaN lanes preserve Z3 and Z4.
+    VMINPD Z3, Z1, Z3
+    VMAXPD Z4, Z1, Z4
     KMOVW R8, K1
     ADDQ $8, SI
     CMPQ SI, DI
@@ -384,25 +385,14 @@ loopAVX512:
 
     VZEROUPPER
     JMP test
-restartScalar:
-    VZEROUPPER
-    XORQ SI, SI
-    JMP test
+    PCALIGN $16
 loop:
     MOVL (CX)(SI*4), DI
     CMPL DI, BX
     JAE indexOutOfBounds
     MOVSD (AX)(DI*8), X1
-    UCOMISD X1, X1
-    JP skipAssignMax
-    UCOMISD X3, X3
-    JNP compare
-    MOVAPD X1, X3
-    MOVAPD X1, X4
-    JMP skipAssignMax
-compare:
-    UCOMISD X3, X1
-    JAE skipAssignMin
+    UCOMISD X1, X3
+    JBE skipAssignMin
     MOVAPD X1, X3
 skipAssignMin:
     UCOMISD X4, X1
@@ -421,6 +411,26 @@ return:
 indexOutOfBounds:
     MOVQ $errnoIndexOutOfBounds, R12
     JMP return
+findNonNaN:
+    INCQ SI
+    CMPQ SI, DX
+    JE return
+    MOVL (CX)(SI*4), DI
+    CMPL DI, BX
+    JAE indexOutOfBounds
+    MOVSD (AX)(DI*8), X1
+    UCOMISD X1, X1
+    JP findNonNaN
+    MOVAPD X1, X3
+    MOVAPD X1, X4
+    CMPB ·hasAVX512VL(SB), $0
+    JE skipAssignMax
+    MOVQ DX, DI
+    ANDQ $-8, DI
+    CMPQ SI, DI
+    JAE skipAssignMax
+    ANDQ $-8, SI
+    JMP initAVX512
 
 // func dictionaryBoundsUint32(dict []uint32, indexes []int32) (min, max uint32, err errno)
 TEXT ·dictionaryBoundsUint32(SB), NOSPLIT, $0-64
