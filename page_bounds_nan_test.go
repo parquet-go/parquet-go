@@ -576,8 +576,8 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 	t.Run("all_8_lane_extrema_sweep", func(t *testing.T) {
 		for _, n := range []int{8, 16} {
 			for base := 0; base < n; base += 8 {
-				for minLane := 0; minLane < 8; minLane++ {
-					for maxLane := 0; maxLane < 8; maxLane++ {
+				for minLane := range 8 {
+					for maxLane := range 8 {
 						indexes := make([]int32, n)
 						for i := range indexes {
 							if i%2 == 0 {
@@ -650,7 +650,7 @@ func TestDictionaryFloatBoundsNaN(t *testing.T) {
 		oobLen := int32(len(floatDictVals))
 		makePrefixOOB := func(n, k, oobPos int, oobVal int32) []int32 {
 			indexes := make([]int32, n)
-			for i := 0; i < k; i++ {
+			for i := range k {
 				indexes[i] = 8
 			}
 			indexes[oobPos] = oobVal
