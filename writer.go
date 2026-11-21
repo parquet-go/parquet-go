@@ -1331,6 +1331,9 @@ func (w *writer) writeFileFooter() error {
 	for i, columnIndexes := range w.columnIndexes {
 		rowGroup := &w.rowGroups[i]
 		for j := range columnIndexes {
+			if len(columnIndexes[j].NullPages) == 0 {
+				continue
+			}
 			column := &rowGroup.Columns[j]
 			column.ColumnIndexOffset = w.writer.offset
 			if key := pageIndexKey(column); key != nil {
@@ -1573,8 +1576,10 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		}
 
 		rg.columnIndex[i] = c.columnIndex.ColumnIndex()
-		rg.columnIndex[i].RepetitionLevelHistogram = append(rg.columnIndex[i].RepetitionLevelHistogram[:0], c.pageRepetitionLevelHistograms...)
-		rg.columnIndex[i].DefinitionLevelHistogram = append(rg.columnIndex[i].DefinitionLevelHistogram[:0], c.pageDefinitionLevelHistograms...)
+		if len(rg.columnIndex[i].NullPages) > 0 {
+			rg.columnIndex[i].RepetitionLevelHistogram = append(rg.columnIndex[i].RepetitionLevelHistogram[:0], c.pageRepetitionLevelHistograms...)
+			rg.columnIndex[i].DefinitionLevelHistogram = append(rg.columnIndex[i].DefinitionLevelHistogram[:0], c.pageDefinitionLevelHistograms...)
+		}
 
 		c.columnChunk.MetaData.SizeStatistics = format.SizeStatistics{
 			UnencodedByteArrayDataBytes: c.totalUnencodedByteArrayBytes,

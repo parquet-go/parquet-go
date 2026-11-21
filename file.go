@@ -326,6 +326,40 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 	return f, nil
 }
 
+const maxPageIndexGap = 1 << 20
+
+type pageIndexRange struct {
+	present bool
+	offset  int64
+	end     int64
+	total   int64
+}
+
+func (r *pageIndexRange) add(offset int64, length int32, fileSize int64, kind string) error {
+	if offset < 0 || length < 0 {
+		return fmt.Errorf("invalid %s range: offset=%d length=%d", kind, offset, length)
+	}
+	if offset == 0 {
+		return nil
+	}
+	n := int64(length)
+	if offset > fileSize || n > fileSize-offset {
+		return fmt.Errorf("%s range offset=%d length=%d exceeds file size %d", kind, offset, length, fileSize)
+	}
+	r.present = true
+	r.total += n
+	if n > 0 {
+		end := offset + n
+		if r.offset == 0 || offset < r.offset {
+			r.offset = offset
+		}
+		if end > r.end {
+			r.end = end
+		}
+	}
+	return nil
+}
+
 // ReadPageIndex reads the page index section of the parquet file f.
 //
 // If the file did not contain a page index, the method returns two empty slices
@@ -357,11 +391,6 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 		return nil, nil, nil
 	}
 
-	columnIndexOffset := f.metadata.RowGroups[0].Columns[0].ColumnIndexOffset
-	offsetIndexOffset := f.metadata.RowGroups[0].Columns[0].OffsetIndexOffset
-	columnIndexLength := int64(0)
-	offsetIndexLength := int64(0)
-
 	forEachColumnChunk := func(do func(int, int, *format.ColumnChunk) error) error {
 		for i := range f.metadata.RowGroups {
 			for j := range f.metadata.RowGroups[i].Columns {
@@ -374,36 +403,24 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 		return nil
 	}
 
-	// The callback only adds the lengths together, so it cannot fail.
-	_ = forEachColumnChunk(func(_, _ int, c *format.ColumnChunk) error {
-		columnIndexLength += int64(c.ColumnIndexLength)
-		offsetIndexLength += int64(c.OffsetIndexLength)
-		return nil
+	var columnIndexRange, offsetIndexRange pageIndexRange
+	err := forEachColumnChunk(func(_, _ int, c *format.ColumnChunk) error {
+		if err := columnIndexRange.add(c.ColumnIndexOffset, c.ColumnIndexLength, f.size, "column index"); err != nil {
+			return err
+		}
+		return offsetIndexRange.add(c.OffsetIndexOffset, c.OffsetIndexLength, f.size, "offset index")
 	})
+	if err != nil {
+		return nil, nil, err
+	}
 
-	if columnIndexLength == 0 && offsetIndexLength == 0 {
+	if !columnIndexRange.present && !offsetIndexRange.present {
 		return nil, nil, nil
 	}
 
 	numRowGroups := len(f.metadata.RowGroups)
 	numColumns := len(f.metadata.RowGroups[0].Columns)
 	numColumnChunks := numRowGroups * numColumns
-
-	columnIndexes := make([]format.ColumnIndex, numColumnChunks)
-	offsetIndexes := make([]format.OffsetIndex, numColumnChunks)
-
-	// The column index and the offset index get separate buffers because the
-	// values decoded below alias them: ColumnIndex.MinValues and MaxValues are
-	// sub-slices of the bytes they were decoded from. A single shared buffer
-	// would be overwritten by the offset index read, corrupting the min/max
-	// statistics of every column.
-	var columnIndexBuffer, offsetIndexBuffer []byte
-	if columnIndexOffset > 0 {
-		columnIndexBuffer = make([]byte, columnIndexLength)
-	}
-	if offsetIndexOffset > 0 {
-		offsetIndexBuffer = make([]byte, offsetIndexLength)
-	}
 
 	// One reader and one decoder are reused across every column chunk. Decoding
 	// each chunk with thrift.Unmarshal instead would clone the chunk's bytes and
@@ -440,87 +457,117 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 		}
 	}
 
-	if columnIndexOffset > 0 {
-		columnIndexData := columnIndexBuffer
+	// Column indexes and offset indexes get separate buffers because the values
+	// decoded below alias them: ColumnIndex.MinValues and MaxValues are
+	// sub-slices of the bytes they were decoded from.
+	readSection := func(
+		r pageIndexRange,
+		kind string,
+		module byte,
+		setSection func(offset, length int64),
+		chunkRange func(*format.ColumnChunk) (int64, int32),
+		decodeAt func(idx int, buf []byte) error,
+	) error {
+		span := r.end - r.offset
+		bulk := span > 0 && (span <= r.total || span-r.total <= maxPageIndexGap)
 
-		if cast, ok := f.reader.(interface{ SetColumnIndexSection(offset, length int64) }); ok {
-			cast.SetColumnIndexSection(columnIndexOffset, columnIndexLength)
-		}
-		if _, err := f.readAt(columnIndexData, columnIndexOffset); err != nil {
-			return nil, nil, fmt.Errorf("reading %d bytes column index at offset %d: %w", columnIndexLength, columnIndexOffset, err)
+		var data []byte
+		if bulk {
+			data = make([]byte, span)
+			if setSection != nil {
+				setSection(r.offset, span)
+			}
+			if _, err := f.readAt(data, r.offset); err != nil {
+				return fmt.Errorf("reading %d bytes %s at offset %d: %w", span, kind, r.offset, err)
+			}
+		} else if r.total > 0 {
+			data = make([]byte, r.total)
 		}
 
-		err := forEachColumnChunk(func(i, j int, c *format.ColumnChunk) error {
-			// Some parquet files are missing the column index on some columns.
-			//
-			// An example of this file is testdata/alltypes_tiny_pages_plain.parquet
-			// which was added in https://github.com/apache/parquet-testing/pull/24.
-			if c.ColumnIndexOffset > 0 {
-				offset := c.ColumnIndexOffset - columnIndexOffset
-				length := int64(c.ColumnIndexLength)
-				buffer := columnIndexData[offset : offset+length]
-				key, err := pageIndexKey(c)
+		pos := int64(0)
+		return forEachColumnChunk(func(i, j int, c *format.ColumnChunk) error {
+			offset, length := chunkRange(c)
+			if offset == 0 {
+				return nil
+			}
+			var buffer []byte
+			if n := int64(length); n > 0 {
+				if bulk {
+					rel := offset - r.offset
+					buffer = data[rel : rel+n]
+				} else {
+					buffer = data[pos : pos+n]
+					pos += n
+					if _, err := f.readAt(buffer, offset); err != nil {
+						return fmt.Errorf("reading %d bytes %s at offset %d: %w", n, kind, offset, err)
+					}
+				}
+			}
+			key, err := pageIndexKey(c)
+			if err != nil {
+				if errors.Is(err, ErrKeyNotFound) {
+					return nil
+				}
+				return fmt.Errorf("resolving %s key: rowGroup=%d col=%d: %w", kind, i, j, err)
+			}
+			if key != nil {
+				aad := makeAAD(f.aadPrefix, f.fileUnique, module, int16(i), int16(j))
+				plain, err := decryptModule(key, aad, buffer)
 				if err != nil {
-					if errors.Is(err, ErrKeyNotFound) {
-						return nil
-					}
-					return fmt.Errorf("resolving column index key: rowGroup=%d col=%d: %w", i, j, err)
+					return fmt.Errorf("decrypting %s: rowGroup=%d col=%d: %w", kind, i, j, err)
 				}
-				if key != nil {
-					aad := makeAAD(f.aadPrefix, f.fileUnique, columnIndexModule, int16(i), int16(j))
-					plain, err := decryptModule(key, aad, buffer)
-					if err != nil {
-						return fmt.Errorf("decrypting column index: rowGroup=%d col=%d: %w", i, j, err)
-					}
-					buffer = plain
-				}
-				if err := decode(buffer, &columnIndexes[(i*numColumns)+j]); err != nil {
-					return fmt.Errorf("decoding column index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
-				}
+				buffer = plain
+			}
+			if err := decodeAt((i*numColumns)+j, buffer); err != nil {
+				return fmt.Errorf("decoding %s: rowGroup=%d columnChunk=%d/%d: %w", kind, i, j, numColumns, err)
 			}
 			return nil
 		})
+	}
+
+	var columnIndexes []format.ColumnIndex
+	if columnIndexRange.present {
+		columnIndexes = make([]format.ColumnIndex, numColumnChunks)
+		var setSection func(offset, length int64)
+		if cast, ok := f.reader.(interface{ SetColumnIndexSection(offset, length int64) }); ok {
+			setSection = cast.SetColumnIndexSection
+		}
+		err := readSection(
+			columnIndexRange,
+			"column index",
+			columnIndexModule,
+			setSection,
+			func(c *format.ColumnChunk) (int64, int32) {
+				return c.ColumnIndexOffset, c.ColumnIndexLength
+			},
+			func(idx int, buf []byte) error {
+				return decode(buf, &columnIndexes[idx])
+			},
+		)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
-	if offsetIndexOffset > 0 {
-		offsetIndexData := offsetIndexBuffer
-
+	var offsetIndexes []format.OffsetIndex
+	if offsetIndexRange.present {
+		offsetIndexes = make([]format.OffsetIndex, numColumnChunks)
+		var setSection func(offset, length int64)
 		if cast, ok := f.reader.(interface{ SetOffsetIndexSection(offset, length int64) }); ok {
-			cast.SetOffsetIndexSection(offsetIndexOffset, offsetIndexLength)
+			setSection = cast.SetOffsetIndexSection
 		}
-		if _, err := f.readAt(offsetIndexData, offsetIndexOffset); err != nil {
-			return nil, nil, fmt.Errorf("reading %d bytes offset index at offset %d: %w", offsetIndexLength, offsetIndexOffset, err)
-		}
-
-		err := forEachColumnChunk(func(i, j int, c *format.ColumnChunk) error {
-			if c.OffsetIndexOffset > 0 {
-				offset := c.OffsetIndexOffset - offsetIndexOffset
-				length := int64(c.OffsetIndexLength)
-				buffer := offsetIndexData[offset : offset+length]
-				key, err := pageIndexKey(c)
-				if err != nil {
-					if errors.Is(err, ErrKeyNotFound) {
-						return nil
-					}
-					return fmt.Errorf("resolving offset index key: rowGroup=%d col=%d: %w", i, j, err)
-				}
-				if key != nil {
-					aad := makeAAD(f.aadPrefix, f.fileUnique, offsetIndexModule, int16(i), int16(j))
-					plain, err := decryptModule(key, aad, buffer)
-					if err != nil {
-						return fmt.Errorf("decrypting offset index: rowGroup=%d col=%d: %w", i, j, err)
-					}
-					buffer = plain
-				}
-				if err := decode(buffer, &offsetIndexes[(i*numColumns)+j]); err != nil {
-					return fmt.Errorf("decoding offset index: rowGroup=%d columnChunk=%d/%d: %w", i, j, numColumns, err)
-				}
-			}
-			return nil
-		})
+		err := readSection(
+			offsetIndexRange,
+			"offset index",
+			offsetIndexModule,
+			setSection,
+			func(c *format.ColumnChunk) (int64, int32) {
+				return c.OffsetIndexOffset, c.OffsetIndexLength
+			},
+			func(idx int, buf []byte) error {
+				return decode(buf, &offsetIndexes[idx])
+			},
+		)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -627,9 +674,11 @@ func (f *File) ReadAt(b []byte, off int64) (int, error) {
 	return f.readAt(b, off)
 }
 
-// ColumnIndexes returns the page index of the parquet file f.
+// ColumnIndexes returns the column index of the parquet file f.
 //
-// If the file did not contain a column index, the method returns an empty slice.
+// If the file did not contain any column indexes, the method returns an empty
+// slice. In a partially indexed file, chunks without a column index have
+// zero-valued entries; prefer ColumnChunk.ColumnIndex to inspect a single chunk.
 func (f *File) ColumnIndexes() []format.ColumnIndex { return f.columnIndexes }
 
 // OffsetIndexes returns the page index of the parquet file f.
@@ -644,10 +693,6 @@ func (f *File) OffsetIndexes() []format.OffsetIndex { return f.offsetIndexes }
 // The ok boolean will be true if the key was found, false otherwise.
 func (f *File) Lookup(key string) (value string, ok bool) {
 	return lookupKeyValueMetadata(f.metadata.KeyValueMetadata, key)
-}
-
-func (f *File) hasIndexes() bool {
-	return f.columnIndexes != nil && f.offsetIndexes != nil
 }
 
 var _ io.ReaderAt = (*File)(nil)
@@ -686,20 +731,26 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 	g.columns = make([]ColumnChunk, len(rowGroup.Columns))
 	g.sorting = make([]SortingColumn, len(rowGroup.SortingColumns))
 	fileColumnChunks := make([]FileColumnChunk, len(rowGroup.Columns))
-	fileColumnIndexes := make([]FileColumnIndex, len(rowGroup.Columns))
-	fileOffsetIndexes := make([]FileOffsetIndex, len(rowGroup.Columns))
+	var fileColumnIndexes []FileColumnIndex
+	if len(file.columnIndexes) > 0 {
+		fileColumnIndexes = make([]FileColumnIndex, len(rowGroup.Columns))
+	}
+	var fileOffsetIndexes []FileOffsetIndex
+	if len(file.offsetIndexes) > 0 {
+		fileOffsetIndexes = make([]FileOffsetIndex, len(rowGroup.Columns))
+	}
 
 	for i := range g.columns {
+		chunk := &rowGroup.Columns[i]
 		fileColumnChunks[i] = FileColumnChunk{
 			file:            file,
 			column:          columns[i],
 			rowGroup:        rowGroup,
-			chunk:           &rowGroup.Columns[i],
+			chunk:           chunk,
 			columnOrdinal:   int16(i),
 			rowGroupOrdinal: rowGroup.Ordinal,
 		}
 		if file.decryption != nil {
-			chunk := &rowGroup.Columns[i]
 			switch crypto := chunk.CryptoMetadata.Value.(type) {
 			case *format.EncryptionWithFooterKey:
 				key, err := file.decryption.Keys.FooterKey(nil)
@@ -725,14 +776,16 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 			}
 		}
 
-		if file.hasIndexes() {
+		if chunk.CryptoMetadata.Value == nil || fileColumnChunks[i].decryptionKey != nil {
 			j := (int(rowGroup.Ordinal) * len(columns)) + i
-
-			fileColumnIndexes[i] = FileColumnIndex{index: &file.columnIndexes[j], kind: columns[i].Type().Kind()}
-			fileOffsetIndexes[i] = FileOffsetIndex{index: &file.offsetIndexes[j]}
-
-			fileColumnChunks[i].columnIndex.Store(&fileColumnIndexes[i])
-			fileColumnChunks[i].offsetIndex.Store(&fileOffsetIndexes[i])
+			if len(file.columnIndexes) > 0 && chunk.ColumnIndexOffset > 0 {
+				fileColumnIndexes[i] = FileColumnIndex{index: &file.columnIndexes[j], kind: columns[i].Type().Kind()}
+				fileColumnChunks[i].columnIndex.Store(&fileColumnIndexes[i])
+			}
+			if len(file.offsetIndexes) > 0 && chunk.OffsetIndexOffset > 0 {
+				fileOffsetIndexes[i] = FileOffsetIndex{index: &file.offsetIndexes[j]}
+				fileColumnChunks[i].offsetIndex.Store(&fileOffsetIndexes[i])
+			}
 		}
 
 		g.columns[i] = &fileColumnChunks[i]
