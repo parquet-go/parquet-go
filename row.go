@@ -455,7 +455,13 @@ func deconstructFuncOfOptional(columnIndex uint16, node Node) (uint16, deconstru
 func deconstructFuncOfRepeated(columnIndex uint16, node Node) (uint16, deconstructFunc) {
 	columnIndex, deconstruct := deconstructFuncOf(columnIndex, node)
 	return columnIndex, func(columns [][]Value, levels columnLevels, value reflect.Value) {
-		if value.Kind() == reflect.Interface {
+		// An interface field can hold the slice or a pointer to it. A nil
+		// pointer has no elements. Len on the pointer itself panics.
+		for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
+			if value.IsNil() {
+				value = reflect.Value{}
+				break
+			}
 			value = value.Elem()
 		}
 
