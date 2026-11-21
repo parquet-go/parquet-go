@@ -1175,9 +1175,15 @@ func (f *FilePages) ReadDictionary() (Dictionary, error) {
 	return f.dictionary, nil
 }
 
+func (f *FilePages) isEmpty() bool {
+	return f.chunk != nil &&
+		f.chunk.rowGroup != nil && f.chunk.rowGroup.NumRows == 0 &&
+		f.chunk.chunk != nil && f.chunk.chunk.MetaData.NumValues == 0
+}
+
 // ReadPages reads the next from from f.
 func (f *FilePages) ReadPage() (Page, error) {
-	if f.chunk == nil {
+	if f.chunk == nil || f.isEmpty() {
 		return nil, io.EOF
 	}
 
@@ -1564,6 +1570,21 @@ func (f *FilePages) SeekToRow(rowIndex int64) error {
 	}
 
 	if index := f.chunk.offsetIndex.Load(); index == nil {
+		if f.isEmpty() {
+			// Zero-value dictionary-encoded chunks (e.g. from PyArrow or
+			// arrow-go) may have dictionary_page_offset > 0 and
+			// data_page_offset == 0, which would make dataOffset-baseOffset
+			// negative. There are no rows or values to seek to.
+			f.skip = rowIndex
+			f.index = 0
+			f.serveLastPage = false
+			if f.dec != nil {
+				f.dec.dataPageOrd = 0
+				f.dec.dictPagePending = false
+			}
+			return nil
+		}
+
 		_, err := f.section.Seek(f.dataOffset-f.baseOffset, io.SeekStart)
 		if err != nil {
 			return err

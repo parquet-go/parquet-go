@@ -385,3 +385,250 @@ func TestReadPageDiscardDuplicateDictionaryPage(t *testing.T) {
 		t.Fatalf("ReadPage after discarding the dictionary page: got %v, want EOF", err)
 	}
 }
+
+func buildSingleColumnParquet(t *testing.T, version int32, numRows, numValues, dictOffset, dataOffset int64, writeEmptyDictPage bool) []byte {
+	t.Helper()
+
+	var out bytes.Buffer
+	out.WriteString("PAR1")
+
+	var proto thrift.CompactProtocol
+	enc := thrift.NewEncoder(proto.NewWriter(&out))
+
+	var chunkSize int64
+	if writeEmptyDictPage {
+		dictHeader := format.PageHeader{
+			Type:                 format.DictionaryPage,
+			UncompressedPageSize: 0,
+			CompressedPageSize:   0,
+			DictionaryPageHeader: thrift.New(format.DictionaryPageHeader{
+				NumValues: 0,
+				Encoding:  format.Plain,
+			}),
+		}
+		before := out.Len()
+		if err := enc.Encode(&dictHeader); err != nil {
+			t.Fatalf("encode dictionary page header: %v", err)
+		}
+		chunkSize = int64(out.Len() - before)
+	}
+
+	encodings := []format.Encoding{format.Plain}
+	if dictOffset != 0 {
+		if version == 2 {
+			encodings = []format.Encoding{format.Plain, format.RLEDictionary}
+		} else {
+			encodings = []format.Encoding{format.Plain, format.PlainDictionary}
+		}
+	}
+
+	meta := format.FileMetaData{
+		Version: version,
+		Schema: []format.SchemaElement{
+			{
+				Name:        "schema",
+				NumChildren: thrift.New(int32(1)),
+			},
+			{
+				Name:           "x",
+				Type:           thrift.New(format.Int64),
+				RepetitionType: thrift.New(format.Optional),
+			},
+		},
+		NumRows: numRows,
+		RowGroups: []format.RowGroup{
+			{
+				NumRows:       numRows,
+				TotalByteSize: chunkSize,
+				Columns: []format.ColumnChunk{
+					{
+						FileOffset: dictOffset,
+						MetaData: format.ColumnMetaData{
+							Type:                  format.Int64,
+							Encoding:              encodings,
+							PathInSchema:          []string{"x"},
+							Codec:                 format.Uncompressed,
+							NumValues:             numValues,
+							TotalUncompressedSize: chunkSize,
+							TotalCompressedSize:   chunkSize,
+							DataPageOffset:        dataOffset,
+							DictionaryPageOffset:  dictOffset,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	footerStart := out.Len()
+	if err := enc.Encode(&meta); err != nil {
+		t.Fatalf("encode footer: %v", err)
+	}
+	footerSize := out.Len() - footerStart
+
+	var trailer [8]byte
+	binary.LittleEndian.PutUint32(trailer[:4], uint32(footerSize))
+	copy(trailer[4:], "PAR1")
+	out.Write(trailer[:])
+	return out.Bytes()
+}
+
+func TestEmptyDictionaryColumnChunk(t *testing.T) {
+	type row struct {
+		X *int64 `parquet:"x,optional"`
+	}
+
+	cases := []struct {
+		name               string
+		version            int32
+		dictOffset         int64
+		dataOffset         int64
+		writeEmptyDictPage bool
+	}{
+		{
+			name:               "v1_dict4_data0",
+			version:            1,
+			dictOffset:         4,
+			dataOffset:         0,
+			writeEmptyDictPage: true,
+		},
+		{
+			name:               "v2_dict4_data0",
+			version:            2,
+			dictOffset:         4,
+			dataOffset:         0,
+			writeEmptyDictPage: true,
+		},
+		{
+			name:               "v1_dict4_data0_zero_size",
+			version:            1,
+			dictOffset:         4,
+			dataOffset:         0,
+			writeEmptyDictPage: false,
+		},
+		{
+			name:               "v1_dict4_data4_control",
+			version:            1,
+			dictOffset:         4,
+			dataOffset:         4,
+			writeEmptyDictPage: true,
+		},
+		{
+			name:               "v1_no_dict_data0",
+			version:            1,
+			dictOffset:         0,
+			dataOffset:         0,
+			writeEmptyDictPage: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := buildSingleColumnParquet(t, tc.version, 0, 0, tc.dictOffset, tc.dataOffset, tc.writeEmptyDictPage)
+
+			rows, err := Read[row](bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("Read: got err=%v, want nil", err)
+			}
+			if len(rows) != 0 {
+				t.Fatalf("Read: got %d rows, want 0", len(rows))
+			}
+
+			f, err := OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+
+			r := NewGenericReader[row](f)
+			defer r.Close()
+			n, err := r.Read(make([]row, 4))
+			if n != 0 || err != io.EOF {
+				t.Fatalf("GenericReader.Read: got n=%d err=%v, want n=0 err=EOF", n, err)
+			}
+
+			chunk := f.RowGroups()[0].ColumnChunks()[0]
+
+			pages := chunk.Pages()
+			if p, err := pages.ReadPage(); p != nil || err != io.EOF {
+				pages.Close()
+				t.Fatalf("Pages.ReadPage: got p=%v err=%v, want nil, EOF", p, err)
+			}
+			if err := pages.Close(); err != nil {
+				t.Fatalf("Pages.Close: %v", err)
+			}
+
+			for _, seekRow := range []int64{0, 5} {
+				p := chunk.Pages()
+				if err := p.SeekToRow(seekRow); err != nil {
+					p.Close()
+					t.Fatalf("Pages.SeekToRow(%d): got %v, want nil", seekRow, err)
+				}
+				if page, err := p.ReadPage(); page != nil || err != io.EOF {
+					p.Close()
+					t.Fatalf("Pages.ReadPage after SeekToRow(%d): got page=%v err=%v, want nil, EOF", seekRow, page, err)
+				}
+				if err := p.Close(); err != nil {
+					t.Fatalf("Pages.Close: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestNonEmptyCorruptDataPageOffsetFails(t *testing.T) {
+	type row struct {
+		X *int64 `parquet:"x,optional"`
+	}
+
+	cases := []struct {
+		name       string
+		numRows    int64
+		numValues  int64
+		dictOffset int64
+		dataOffset int64
+	}{
+		{
+			name:       "non_empty_values",
+			numRows:    1,
+			numValues:  1,
+			dictOffset: 4,
+			dataOffset: 0,
+		},
+		{
+			// A row group with rows but no values in the column chunk is
+			// corrupt, not an empty column chunk.
+			name:       "inconsistent_nonzero_rows_zero_values",
+			numRows:    1,
+			numValues:  0,
+			dictOffset: 4,
+			dataOffset: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := buildSingleColumnParquet(t, 1, tc.numRows, tc.numValues, tc.dictOffset, tc.dataOffset, true)
+
+			if _, err := Read[row](bytes.NewReader(data), int64(len(data))); err == nil {
+				t.Fatal("Read on corrupt chunk: got nil error, want error")
+			}
+
+			f, err := OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+
+			r := NewGenericReader[row](f)
+			defer r.Close()
+			if _, err := r.Read(make([]row, 4)); err == nil {
+				t.Fatal("GenericReader.Read on corrupt chunk: got nil error, want error")
+			}
+
+			pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+			defer pages.Close()
+			if err := pages.SeekToRow(0); err == nil {
+				t.Fatal("Pages.SeekToRow(0) on corrupt chunk: got nil error, want error")
+			}
+		})
+	}
+}
