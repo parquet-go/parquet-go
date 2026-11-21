@@ -124,8 +124,11 @@ func (col *int96ColumnBuffer) writeByteArray(levels columnLevels, value []byte) 
 	col.writeInt96(levels, deprecated.Int64ToInt96(v.Int64()))
 }
 
+// writeNull stores the zero INT96. A required column cannot be null, so a nil
+// required group still has to leave a physical value. Dropping it shifts every
+// later row.
 func (col *int96ColumnBuffer) writeNull(_ columnLevels) {
-	panic("cannot write null to int96 column")
+	col.values = append(col.values, deprecated.Int96{})
 }
 
 func (col *int96ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
