@@ -116,37 +116,85 @@ func (d *int64Dictionary) bounds(indexes []int32) (min, max int64) {
 }
 
 func (d *floatDictionary) bounds(indexes []int32) (min, max float32) {
-	min = d.index(indexes[0])
+	values := d.values.Slice()
+	min = values[indexes[0]]
+	indexes = indexes[1:]
+	if min != min {
+		return boundsFloat32AfterNaN(values, indexes, min)
+	}
 	max = min
-
-	for _, i := range indexes[1:] {
-		value := d.index(i)
-		if value < min {
+	for _, i := range indexes {
+		value := values[i]
+		switch {
+		case value < min:
 			min = value
-		}
-		if value > max {
+		case value > max:
 			max = value
 		}
 	}
-
 	return min, max
 }
 
-func (d *doubleDictionary) bounds(indexes []int32) (min, max float64) {
-	min = d.index(indexes[0])
-	max = min
-
-	for _, i := range indexes[1:] {
-		value := d.index(i)
-		if value < min {
-			min = value
+//go:noinline
+func boundsFloat32AfterNaN(values []float32, indexes []int32, nan float32) (min, max float32) {
+	for k, i := range indexes {
+		v := values[i]
+		if v == v {
+			min, max = v, v
+			for _, j := range indexes[k+1:] {
+				value := values[j]
+				switch {
+				case value < min:
+					min = value
+				case value > max:
+					max = value
+				}
+			}
+			return min, max
 		}
-		if value > max {
+	}
+	return nan, nan
+}
+
+func (d *doubleDictionary) bounds(indexes []int32) (min, max float64) {
+	values := d.values.Slice()
+	min = values[indexes[0]]
+	indexes = indexes[1:]
+	if min != min {
+		return boundsFloat64AfterNaN(values, indexes, min)
+	}
+	max = min
+	for _, i := range indexes {
+		value := values[i]
+		switch {
+		case value < min:
+			min = value
+		case value > max:
 			max = value
 		}
 	}
-
 	return min, max
+}
+
+//go:noinline
+func boundsFloat64AfterNaN(values []float64, indexes []int32, nan float64) (min, max float64) {
+	for k, i := range indexes {
+		v := values[i]
+		if v == v {
+			min, max = v, v
+			for _, j := range indexes[k+1:] {
+				value := values[j]
+				switch {
+				case value < min:
+					min = value
+				case value > max:
+					max = value
+				}
+			}
+			return min, max
+		}
+	}
+	return nan, nan
 }
 
 func (d *uint32Dictionary) bounds(indexes []int32) (min, max uint32) {
