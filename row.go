@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strconv"
+	"sync"
 )
 
 const (
@@ -510,11 +512,18 @@ func deconstructFuncOfMap(columnIndex uint16, node Node) (uint16, deconstructFun
 	keyValue := mapKeyValueOf(node)
 	keyValueType := keyValue.GoType()
 	keyValueElem := keyValueType.Elem()
-	keyType := keyValueElem.Field(0).Type
-	valueType := keyValueElem.Field(1).Type
 	nextColumnIndex, deconstruct := deconstructFuncOf(columnIndex, schemaOf(keyValueElem))
 	return nextColumnIndex, func(columns [][]Value, levels columnLevels, mapValue reflect.Value) {
-		if !mapValue.IsValid() || mapValue.Len() == 0 {
+		// A map stored in an interface (a map[string]any field, or a value
+		// passed through map[string]any) has no Len until it is unwrapped.
+		for mapValue.Kind() == reflect.Interface || mapValue.Kind() == reflect.Pointer {
+			if !mapValue.IsValid() || mapValue.IsNil() {
+				mapValue = reflect.Value{}
+				break
+			}
+			mapValue = mapValue.Elem()
+		}
+		if !mapValue.IsValid() || mapValue.Kind() != reflect.Map || mapValue.Len() == 0 {
 			deconstruct(columns, levels, reflect.Value{})
 			return
 		}
@@ -527,12 +536,50 @@ func deconstructFuncOfMap(columnIndex uint16, node Node) (uint16, deconstructFun
 		v := elem.Field(1)
 
 		for _, key := range mapValue.MapKeys() {
-			k.Set(key.Convert(keyType))
-			v.Set(mapValue.MapIndex(key).Convert(valueType))
+			// The stand-in struct may use the map's own key and value types
+			// when they differ from the schema types. Convert into that field,
+			// then let the column deconstruct read the Go value back out.
+			k.Set(mapValueForDeconstruct(mapKeyForDeconstruct(key), k.Type()))
+			v.Set(mapValueForDeconstruct(mapValue.MapIndex(key), v.Type()))
 			deconstruct(columns, levels, elem)
 			levels.repetitionLevel = levels.repetitionDepth
 		}
 	}
+}
+
+func mapKeyForDeconstruct(key reflect.Value) reflect.Value {
+	if key.Kind() == reflect.Interface && key.IsValid() && !key.IsNil() {
+		return key.Elem()
+	}
+	return key
+}
+
+// mapValueForDeconstruct unwraps interface and pointer values so a
+// map[string]any can fill a concrete map value column. A nil stays the zero
+// of the column type: nil *int32 for an optional value, int32(0) for a
+// required one.
+func mapValueForDeconstruct(mv reflect.Value, valueType reflect.Type) reflect.Value {
+	if mv.Kind() == reflect.Interface {
+		if !mv.IsValid() || mv.IsNil() {
+			return reflect.Zero(valueType)
+		}
+		mv = mv.Elem()
+	}
+	if mv.Kind() == reflect.Pointer {
+		if !mv.IsValid() || mv.IsNil() {
+			return reflect.Zero(valueType)
+		}
+		if !mv.Type().AssignableTo(valueType) && !mv.Type().ConvertibleTo(valueType) {
+			mv = mv.Elem()
+		}
+	}
+	if !mv.IsValid() {
+		return reflect.Zero(valueType)
+	}
+	if mv.Type().AssignableTo(valueType) {
+		return mv
+	}
+	return mv.Convert(valueType)
 }
 
 //go:noinline
@@ -542,16 +589,144 @@ func deconstructFuncOfGroup(columnIndex uint16, node Node) (uint16, deconstructF
 	for i, field := range fields {
 		columnIndex, funcs[i] = deconstructFuncOf(columnIndex, field)
 	}
+	var wrap *singleFieldGroup
+	if len(fields) == 1 {
+		wrap = &singleFieldGroup{field: fields[0]}
+	}
 	return columnIndex, func(columns [][]Value, levels columnLevels, value reflect.Value) {
-		if value.IsValid() {
-			for i, f := range funcs {
-				f(columns, levels, fields[i].Value(value))
-			}
-		} else {
+		if !value.IsValid() {
 			for _, f := range funcs {
 				f(columns, levels, value)
 			}
+			return
 		}
+		switch value.Kind() {
+		case reflect.Struct, reflect.Map:
+			for i, f := range funcs {
+				f(columns, levels, fields[i].Value(value))
+			}
+			return
+		case reflect.Pointer, reflect.Interface:
+			// A nil pointer element of a repeated group has no definition
+			// level of its own. Write it as the zero struct.
+			value = unwrapGroupValue(value)
+			if value.Kind() == reflect.Struct || value.Kind() == reflect.Map {
+				for i, f := range funcs {
+					f(columns, levels, fields[i].Value(value))
+				}
+				return
+			}
+			if !value.IsValid() {
+				for _, f := range funcs {
+					f(columns, levels, value)
+				}
+				return
+			}
+		}
+		// List(Repeated(T)) is a list whose element group has one repeated
+		// field. A Go slice is not that struct; place the slice (or one
+		// scalar element) into the field instead of failing in MapIndex.
+		if wrapped := wrap.wrap(value); wrapped.IsValid() {
+			for i, f := range funcs {
+				f(columns, levels, fields[i].Value(wrapped))
+			}
+			return
+		}
+		for i, f := range funcs {
+			f(columns, levels, fields[i].Value(value))
+		}
+	}
+}
+
+// unwrapGroupValue exposes the struct or map a group is stored in. A nil
+// pointer becomes the zero value: a repeated group has no definition level of
+// its own for a nil element, so the element is written as zeros.
+func unwrapGroupValue(value reflect.Value) reflect.Value {
+	for value.IsValid() {
+		switch value.Kind() {
+		case reflect.Pointer:
+			if value.IsNil() {
+				return reflect.Zero(value.Type().Elem())
+			}
+			value = value.Elem()
+		case reflect.Interface:
+			if value.IsNil() {
+				return reflect.Value{}
+			}
+			value = value.Elem()
+		default:
+			return value
+		}
+	}
+	return value
+}
+
+// singleFieldGroup builds a one-field struct around a value that belongs in
+// that field. The struct type is created on first use so schemas that only
+// deconstruct structs never pay for it. A nil *singleFieldGroup wraps nothing.
+type singleFieldGroup struct {
+	field      Field
+	once       sync.Once
+	fieldType  reflect.Type
+	structType reflect.Type
+}
+
+func (g *singleFieldGroup) wrap(value reflect.Value) reflect.Value {
+	if g == nil || !value.IsValid() {
+		return reflect.Value{}
+	}
+	g.once.Do(func() {
+		g.fieldType = g.field.GoType()
+		g.structType = reflect.StructOf([]reflect.StructField{{
+			Name: exportedStructFieldName(g.field.Name()),
+			Type: g.fieldType,
+			Tag:  reflect.StructTag("parquet:" + strconv.Quote(g.field.Name())),
+		}})
+	})
+	fieldValue, ok := adaptSingleFieldValue(g.fieldType, value)
+	if !ok {
+		return reflect.Value{}
+	}
+	wrapped := reflect.New(g.structType).Elem()
+	wrapped.Field(0).Set(fieldValue)
+	return wrapped
+}
+
+// adaptSingleFieldValue returns value shaped as fieldType. A scalar is placed
+// in a one-element slice when the field itself is repeated.
+func adaptSingleFieldValue(fieldType reflect.Type, value reflect.Value) (reflect.Value, bool) {
+	if fieldType == nil || !value.IsValid() {
+		return reflect.Value{}, false
+	}
+	switch {
+	case value.Type().AssignableTo(fieldType):
+		return value, true
+	case value.Type().ConvertibleTo(fieldType):
+		return value.Convert(fieldType), true
+	case fieldType.Kind() == reflect.Slice && value.Type().AssignableTo(fieldType.Elem()):
+		s := reflect.MakeSlice(fieldType, 1, 1)
+		s.Index(0).Set(value)
+		return s, true
+	case fieldType.Kind() == reflect.Slice && value.Type().ConvertibleTo(fieldType.Elem()):
+		s := reflect.MakeSlice(fieldType, 1, 1)
+		s.Index(0).Set(value.Convert(fieldType.Elem()))
+		return s, true
+	default:
+		return reflect.Value{}, false
+	}
+}
+
+// repeatedColumn reports whether node is a repeated leaf whose repetition was
+// hidden by Required. A Go slice of pointers, such as []*int32, is stored as
+// one repeated column. The pointer distinguishes nil from a present value in
+// Go, but the parquet column has only the repetition's definition level.
+func repeatedColumn(node Node) bool {
+	for {
+		req, ok := node.(*requiredNode)
+		if !ok {
+			return node.Repeated()
+		}
+		node = req.Node
 	}
 }
 
@@ -564,9 +739,38 @@ func deconstructFuncOfLeaf(columnIndex uint16, node Node) (uint16, deconstructFu
 	kind := typ.Kind()
 	lt := typ.LogicalType()
 	valueColumnIndex := ^columnIndex
+	// A nil pointer in a repeated fixed-length column has nowhere to record a
+	// separate null, except by stepping the definition level back down. That
+	// keeps a nil []*uuid.UUID element distinct from a pointer to the zero
+	// UUID. Other repeated leaves have no such distinction: a nil element is
+	// written as the zero value, same as GenericWriter.
+	repeatedFixed := repeatedColumn(node) && kind == FixedLenByteArray
 	return columnIndex + 1, func(columns [][]Value, levels columnLevels, value reflect.Value) {
 		v := Value{}
 
+		if value.IsValid() {
+			for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+				if value.Kind() == reflect.Interface {
+					if value.IsNil() {
+						value = reflect.Value{}
+						break
+					}
+					value = value.Elem()
+					continue
+				}
+				if !value.IsNil() {
+					value = value.Elem()
+					continue
+				}
+				if repeatedFixed && levels.definitionLevel > 0 {
+					levels.definitionLevel--
+					value = reflect.Value{}
+					break
+				}
+				value = reflect.Zero(value.Type().Elem())
+				break
+			}
+		}
 		if value.IsValid() {
 			v = makeValue(kind, lt, value)
 		}

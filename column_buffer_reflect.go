@@ -46,7 +46,7 @@ func isNullValue(value reflect.Value) bool {
 	case reflect.Invalid:
 		return true
 
-	case reflect.Pointer, reflect.Interface:
+	case reflect.Pointer:
 		if value.IsNil() {
 			return true
 		}
@@ -58,6 +58,35 @@ func isNullValue(value reflect.Value) bool {
 			return isNull
 		}
 		return false
+
+	case reflect.Interface:
+		if value.IsNil() {
+			return true
+		}
+		switch v := value.Interface().(type) {
+		case *jsonlite.Value:
+			return v.Kind() == jsonlite.Null
+		case *structpb.Value:
+			_, isNull := v.GetKind().(*structpb.Value_NullValue)
+			return isNull
+		}
+		// map[string]any stores a nil slice as a non-nil interface. The slice
+		// itself is still null. json.RawMessage stays on its previous path:
+		// the text "null" is not a nil slice.
+		elem := value.Elem()
+		switch elem.Kind() {
+		case reflect.Map, reflect.Pointer:
+			return elem.IsNil()
+		case reflect.Slice:
+			if elem.Type() == reflect.TypeFor[json.RawMessage]() {
+				return false
+			}
+			return elem.IsNil()
+		case reflect.Interface:
+			return isNullValue(elem)
+		default:
+			return false
+		}
 
 	case reflect.Slice:
 		if value.IsNil() {
@@ -584,6 +613,21 @@ func writeValueFuncOfMap(columnIndex uint16, node Node) (uint16, writeValueFunc)
 
 var structFieldsCache atomic.Value // map[reflect.Type]map[string][]int
 
+// writeAdaptedSingleField writes value as the only field of a group when the
+// value is that field rather than the group struct. This is how a Go slice is
+// stored in List(Repeated(T)).
+func writeAdaptedSingleField(columns []ColumnBuffer, levels columnLevels, fields []Field, writers []fieldWriter, value reflect.Value) bool {
+	if len(fields) != 1 || len(writers) != 1 || !value.IsValid() {
+		return false
+	}
+	adapted, ok := adaptSingleFieldValue(fields[0].GoType(), value)
+	if !ok {
+		return false
+	}
+	writers[0].writeValue(columns, levels, adapted)
+	return true
+}
+
 func writeValueFuncOfGroup(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	fields := node.Fields()
 	writers := make([]fieldWriter, len(fields))
@@ -703,12 +747,18 @@ func writeValueFuncOfGroup(columnIndex uint16, node Node) (uint16, writeValueFun
 					panic(fmt.Errorf("failed to parse JSON: %w", err))
 				}
 				writeJSONToGroup(columns, levels, val, node, writers)
-			} else {
-				value = reflect.Value{}
-				goto writeGroupValue
+				return
 			}
+			if writeAdaptedSingleField(columns, levels, fields, writers, value) {
+				return
+			}
+			value = reflect.Value{}
+			goto writeGroupValue
 
 		default:
+			if writeAdaptedSingleField(columns, levels, fields, writers, value) {
+				return
+			}
 			value = reflect.Value{}
 			goto writeGroupValue
 		}
