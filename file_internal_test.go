@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/encoding"
@@ -628,6 +629,197 @@ func TestNonEmptyCorruptDataPageOffsetFails(t *testing.T) {
 			defer pages.Close()
 			if err := pages.SeekToRow(0); err == nil {
 				t.Fatal("Pages.SeekToRow(0) on corrupt chunk: got nil error, want error")
+			}
+		})
+	}
+}
+
+func TestReadPageIndexReorderedAndGapped(t *testing.T) {
+	type row struct {
+		A int32 `parquet:"a"`
+		B int32 `parquet:"b"`
+	}
+
+	var src bytes.Buffer
+	w := NewGenericWriter[row](&src, PageBufferSize(1))
+	for _, r := range []row{{A: 10, B: 100}, {A: 20, B: 200}} {
+		if _, err := w.Write([]row{r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	orig := src.Bytes()
+
+	rewriteWithLayout := func(t *testing.T, gap int, reverse bool) []byte {
+		t.Helper()
+		n := len(orig)
+		footerSize := int(binary.LittleEndian.Uint32(orig[n-8 : n-4]))
+		var proto thrift.CompactProtocol
+		var meta format.FileMetaData
+		if err := thrift.Unmarshal(&proto, orig[n-8-footerSize:n-8], &meta); err != nil {
+			t.Fatal(err)
+		}
+
+		cols := meta.RowGroups[0].Columns
+		ciBytes := make([][]byte, len(cols))
+		oiBytes := make([][]byte, len(cols))
+		pageIndexStart := int64(n)
+		for i := range cols {
+			ciBytes[i] = orig[cols[i].ColumnIndexOffset : cols[i].ColumnIndexOffset+int64(cols[i].ColumnIndexLength)]
+			oiBytes[i] = orig[cols[i].OffsetIndexOffset : cols[i].OffsetIndexOffset+int64(cols[i].OffsetIndexLength)]
+			pageIndexStart = min(pageIndexStart, cols[i].ColumnIndexOffset, cols[i].OffsetIndexOffset)
+		}
+
+		var out bytes.Buffer
+		out.Write(orig[:pageIndexStart])
+
+		order := []int{0, 1}
+		if reverse {
+			order = []int{1, 0}
+		}
+		for idx, colIdx := range order {
+			if idx > 0 && gap > 0 {
+				out.Write(make([]byte, gap))
+			}
+			cols[colIdx].ColumnIndexOffset = int64(out.Len())
+			out.Write(ciBytes[colIdx])
+			cols[colIdx].ColumnIndexLength = int32(len(ciBytes[colIdx]))
+		}
+		for idx, colIdx := range order {
+			if idx > 0 && gap > 0 {
+				out.Write(make([]byte, gap))
+			}
+			cols[colIdx].OffsetIndexOffset = int64(out.Len())
+			out.Write(oiBytes[colIdx])
+			cols[colIdx].OffsetIndexLength = int32(len(oiBytes[colIdx]))
+		}
+
+		footerStart := out.Len()
+		encoder := thrift.NewEncoder(proto.NewWriter(&out))
+		if err := encoder.Encode(&meta); err != nil {
+			t.Fatal(err)
+		}
+		var trailer [8]byte
+		binary.LittleEndian.PutUint32(trailer[:4], uint32(out.Len()-footerStart))
+		copy(trailer[4:], "PAR1")
+		out.Write(trailer[:])
+		return out.Bytes()
+	}
+
+	cases := []struct {
+		name    string
+		gap     int
+		reverse bool
+	}{
+		{name: "reordered", gap: 0, reverse: true},
+		{name: "small gap", gap: 64, reverse: false},
+		{name: "large gap", gap: (1 << 20) + 64, reverse: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := rewriteWithLayout(t, tc.gap, tc.reverse)
+			f, err := OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+			chunks := f.RowGroups()[0].ColumnChunks()
+			for i, wantMin := range []int32{10, 100} {
+				ci, err := chunks[i].ColumnIndex()
+				if err != nil {
+					t.Fatalf("col %d ColumnIndex(): %v", i, err)
+				}
+				if got := ci.MinValue(0).Int32(); got != wantMin {
+					t.Errorf("col %d page 0 min = %d, want %d", i, got, wantMin)
+				}
+				oi, err := chunks[i].OffsetIndex()
+				if err != nil {
+					t.Fatalf("col %d OffsetIndex(): %v", i, err)
+				}
+				if oi.NumPages() != 2 {
+					t.Errorf("col %d OffsetIndex NumPages = %d, want 2", i, oi.NumPages())
+				}
+			}
+		})
+	}
+}
+
+func TestReadPageIndexMalformedBounds(t *testing.T) {
+	type row struct {
+		A int32 `parquet:"a"`
+	}
+	var src bytes.Buffer
+	w := NewGenericWriter[row](&src)
+	if _, err := w.Write([]row{{A: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	orig := src.Bytes()
+
+	n := len(orig)
+	footerSize := int(binary.LittleEndian.Uint32(orig[n-8 : n-4]))
+	var proto thrift.CompactProtocol
+	var baseMeta format.FileMetaData
+	if err := thrift.Unmarshal(&proto, orig[n-8-footerSize:n-8], &baseMeta); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(c *format.ColumnChunk)
+	}{
+		{
+			name:   "negative column index offset",
+			mutate: func(c *format.ColumnChunk) { c.ColumnIndexOffset = -1 },
+		},
+		{
+			name:   "negative column index length",
+			mutate: func(c *format.ColumnChunk) { c.ColumnIndexLength = -1 },
+		},
+		{
+			name:   "column index past eof",
+			mutate: func(c *format.ColumnChunk) { c.ColumnIndexOffset = int64(len(orig)); c.ColumnIndexLength = 16 },
+		},
+		{
+			name:   "column index offset overflow",
+			mutate: func(c *format.ColumnChunk) { c.ColumnIndexOffset = math.MaxInt64 - 4; c.ColumnIndexLength = 16 },
+		},
+		{
+			name:   "negative offset index offset",
+			mutate: func(c *format.ColumnChunk) { c.OffsetIndexOffset = -1 },
+		},
+		{
+			name:   "negative offset index length",
+			mutate: func(c *format.ColumnChunk) { c.OffsetIndexLength = -1 },
+		},
+		{
+			name:   "offset index past eof",
+			mutate: func(c *format.ColumnChunk) { c.OffsetIndexOffset = int64(len(orig)); c.OffsetIndexLength = 16 },
+		},
+		{
+			name:   "offset index offset overflow",
+			mutate: func(c *format.ColumnChunk) { c.OffsetIndexOffset = math.MaxInt64 - 4; c.OffsetIndexLength = 16 },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := baseMeta
+			meta.RowGroups = append([]format.RowGroup(nil), baseMeta.RowGroups...)
+			meta.RowGroups[0].Columns = append([]format.ColumnChunk(nil), baseMeta.RowGroups[0].Columns...)
+			tc.mutate(&meta.RowGroups[0].Columns[0])
+
+			f := &File{
+				metadata: meta,
+				reader:   bytes.NewReader(orig),
+				size:     int64(len(orig)),
+			}
+			if _, _, err := f.ReadPageIndex(); err == nil {
+				t.Fatalf("ReadPageIndex() = nil, want error")
 			}
 		})
 	}
