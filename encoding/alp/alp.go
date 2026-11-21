@@ -135,7 +135,7 @@ func decodeVector[F float32 | float64, I int32 | int64](dst []F, src []byte, cou
 		}
 		unpack(words, packed, width, padding)
 		for i, delta := range words {
-			// Addition wraps at the encoded width before conversion to float.
+			// Addition wraps at the full int32 or int64 width before conversion to float.
 			values[i] = F(F(frame+delta)*mul) * inv
 		}
 	}
