@@ -155,7 +155,7 @@ func decodeVector[F float32 | float64, I int32 | int64](dst []F, src []byte, cou
 // exactly width bytes, so the split always falls on a byte boundary.
 func unpack[I int32 | int64](dst []I, src []byte, width, padding int) {
 	if cap(src)-len(src) >= padding {
-		bitpack.Unpack(dst, src, uint(width))
+		bitpack.Unpack(dst, src[:len(src)+padding], uint(width))
 		return
 	}
 	groups := max(0, len(src)-padding) / width
