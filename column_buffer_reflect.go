@@ -37,6 +37,7 @@ import (
 // This handles various types that can represent null including:
 // - Invalid reflect values
 // - Nil pointers/interfaces/slices/maps
+// - Interfaces holding a nil pointer
 // - json.RawMessage containing "null"
 // - *jsonlite.Value with Kind == jsonlite.Null
 // - *structpb.Value with NullValue kind
@@ -49,6 +50,11 @@ func isNullValue(value reflect.Value) bool {
 	case reflect.Pointer:
 		if value.IsNil() {
 			return true
+		}
+		if value.Kind() == reflect.Interface {
+			if e := value.Elem(); e.Kind() == reflect.Pointer && e.IsNil() {
+				return true
+			}
 		}
 		switch v := value.Interface().(type) {
 		case *jsonlite.Value:
@@ -371,7 +377,10 @@ func writeValueFuncOfOptional(columnIndex uint16, node Node) (uint16, writeValue
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 		if isNullValue(value) {
-			writeValue(columns, levels, value)
+			// An invalid value makes every writer below write a null at this
+			// level, which some of them do not do for the values isNullValue
+			// accepts.
+			writeValue(columns, levels, reflect.Value{})
 		} else {
 			levels.definitionLevel++
 			writeValue(columns, levels, value)

@@ -2,10 +2,13 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/parquet-go/jsonlite"
 )
 
 // TestWriteValueFuncOfPrimitives tests writing primitive types
@@ -2288,6 +2291,218 @@ func TestGenericWriterMapStringAnyOptionalZeroValues(t *testing.T) {
 	}
 	if r1.String != nil {
 		t.Errorf("row 1 String: expected nil, got %v", *r1.String)
+	}
+}
+
+func readRawRows(t *testing.T, buf *bytes.Buffer, n int) []Row {
+	t.Helper()
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]Row, n+1)
+	got, err := reader.ReadRows(rows)
+	if err != nil && err != io.EOF {
+		t.Fatalf("read rows: %v", err)
+	}
+	for i := range rows[:got] {
+		rows[i] = rows[i].Clone()
+	}
+	return rows[:got]
+}
+
+func TestGenericWriterMapStringAnyListOptionalNilPointer(t *testing.T) {
+	schema := NewSchema("row", Group{"x": List(Optional(Int(32)))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[map[string]any](buf, schema)
+	if _, err := writer.Write([]map[string]any{{"x": []any{ptr(int32(7)), (*int32)(nil), ptr(int32(0))}}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := []Row{{
+		Int32Value(7).Level(0, 2, 0),
+		NullValue().Level(1, 1, 0),
+		Int32Value(0).Level(1, 2, 0),
+	}}
+	got := readRawRows(t, buf, len(want))
+	if len(got) != len(want) || !got[0].Equal(want[0]) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterAnyFieldOptionalNilPointer(t *testing.T) {
+	type Record struct {
+		X any `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(Int(32))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: (*int32)(nil)}, {X: ptr(int32(5))}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := []Row{
+		{NullValue().Level(0, 0, 0)},
+		{Int32Value(5).Level(0, 1, 0)},
+	}
+	got := readRawRows(t, buf, len(want))
+	if len(got) != len(want) {
+		t.Fatalf("got %d rows, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if !got[i].Equal(want[i]) {
+			t.Errorf("row %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDeconstructInterfaceValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  Value
+	}{
+		{"optional zero", int32(0), Int32Value(0).Level(0, 1, 0)},
+		{"optional nil pointer", (*int32)(nil), NullValue().Level(0, 0, 0)},
+	}
+	schema := NewSchema("row", Group{"x": Optional(Int(32))})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := schema.Deconstruct(nil, map[string]any{"x": tt.value})
+			if want := (Row{tt.want}); !got.Equal(want) {
+				t.Errorf("got %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestGenericWriterNilFieldOptionalShreddedVariant(t *testing.T) {
+	type Record struct {
+		X any `parquet:"x"`
+	}
+	shredded, err := ShreddedVariant(Int(32))
+	if err != nil {
+		t.Fatalf("shredded variant: %v", err)
+	}
+	schema := NewSchema("row", Group{"x": Optional(shredded)})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+		NullValue().Level(0, 0, 1),
+		NullValue().Level(0, 0, 2),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterRawMessageNullOptionalList(t *testing.T) {
+	type Record struct {
+		X json.RawMessage `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(List(Int(32)))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: json.RawMessage("null")}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterRawMessageNullOptionalMap(t *testing.T) {
+	type Record struct {
+		X json.RawMessage `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(Map(String(), Int(32)))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: json.RawMessage("null")}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+		NullValue().Level(0, 0, 1),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterAnyFieldOptionalShreddedVariantNilPointer(t *testing.T) {
+	type Record struct {
+		X any `parquet:"x"`
+	}
+	shredded, err := ShreddedVariant(Int(32))
+	if err != nil {
+		t.Fatalf("shredded variant: %v", err)
+	}
+	schema := NewSchema("row", Group{"x": Optional(shredded)})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: (*int32)(nil)}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+		NullValue().Level(0, 0, 1),
+		NullValue().Level(0, 0, 2),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterAnyFieldOptionalJSONNilPointer(t *testing.T) {
+	type Record struct {
+		X any `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(JSON())})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: (*jsonlite.Value)(nil)}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{NullValue().Level(0, 0, 0)}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
