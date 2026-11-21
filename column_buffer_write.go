@@ -365,13 +365,13 @@ func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, wr
 			}
 
 			if y != 0 {
-				if b := nulls.bits[x] >> uint(y); b == (1<<uint64(y))-1 {
-					x++
-					y = 0
-				} else {
-					y += bits.TrailingZeros64(^b)
-					goto writeNonNulls
-				}
+				// b is bits[y:] of this word. The next zero bit is the
+				// next null, which ends this non-null run. A word with
+				// no null left ends at bit 64; the next iteration then
+				// scans whole words.
+				b := nulls.bits[x] >> uint(y)
+				y += bits.TrailingZeros64(^b)
+				goto writeNonNulls
 			}
 
 			for x < len(nulls.bits) && nulls.bits[x] == ^uint64(0) {
