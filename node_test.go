@@ -9,6 +9,8 @@ import (
 	"github.com/parquet-go/parquet-go/compress/snappy"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/encoding/alp"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 type mockNode struct {
@@ -766,6 +768,46 @@ func TestEncodingOf(t *testing.T) {
 		})
 	}
 }
+
+func TestEncodingOfALP(t *testing.T) {
+	// alp.Encoding is zero-sized, so &alp.Encoding{} shares the address of the
+	// shared value. Nest one in a non-empty struct to obtain a distinct pointer.
+	var held struct {
+		enc alp.Encoding
+		_   byte
+	}
+	distinct := &held.enc
+	if distinct == encodings[format.ALP] {
+		t.Fatal("expected a distinct ALP encoding value")
+	}
+	defaults := map[Kind]encoding.Encoding{Double: &ByteStreamSplit}
+	for _, tc := range []struct {
+		name string
+		enc  encoding.Encoding
+	}{
+		{name: "shared", enc: encodings[format.ALP]},
+		{name: "distinct", enc: distinct},
+		{name: "other", enc: alpReportingEncoding{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := &mockNode{
+				enc: func() encoding.Encoding { return tc.enc },
+				typ: func() Type { return DoubleType },
+			}
+			if got := encodingOf(node, nil); got != &Plain {
+				t.Fatalf("encodingOf returned %s, want PLAIN", got)
+			}
+			if got := encodingOf(node, defaults); got != &ByteStreamSplit {
+				t.Fatalf("encodingOf returned %s, want BYTE_STREAM_SPLIT", got)
+			}
+		})
+	}
+}
+
+// alpReportingEncoding reports ALP without being an *alp.Encoding.
+type alpReportingEncoding struct{ encoding.NotSupported }
+
+func (alpReportingEncoding) Encoding() format.Encoding { return format.ALP }
 
 func TestGoTypeOfGroup(t *testing.T) {
 	groupNode := Group{
