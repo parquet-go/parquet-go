@@ -310,8 +310,8 @@ func TestColumnBufferByteArraySwapEmpty(t *testing.T) {
 	col.Page()
 	// Exchange the equal-offset values without swapping them directly.
 	col.Swap(0, 2)
+	col.Swap(0, 1)
 	col.Swap(1, 2)
-	col.Swap(0, 2)
 	col = col.Clone().(*byteArrayColumnBuffer)
 	values := make([]Value, 3)
 	if _, err := col.Page().Values().ReadValues(values); err != nil && err != io.EOF {
