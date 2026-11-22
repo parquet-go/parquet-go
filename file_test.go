@@ -2,6 +2,7 @@ package parquet_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -1588,6 +1589,27 @@ func TestIssue537MalformedPageHeader(t *testing.T) {
 				t.Fatalf("ReadPage: got %v, want error wrapping ErrCorrupted", err)
 			}
 		})
+	}
+}
+
+// TestIssue727NegativeNumChildren verifies that OpenFile rejects a footer
+// whose schema group declares a negative num_children, rather than panicking
+// in columnLoader.open when that count is used to slice the children slab.
+//
+// The bytes are the 297-byte file from issue #727.
+func TestIssue727NegativeNumChildren(t *testing.T) {
+	const encoded = "UEFSMRUwGTxIBTAwMDAwFTEwFTAVgDAVMBgCMDA3MDAwMDAwMDAwFTAjMBgEMDAwMDgALDgAMDAWMBkcGSwmMDcwMDAwMDAwMEMwQzAsMTExMTExOSEwMCw4IzAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAxMTExMTE4AjAwMCYwLDk5MTAwMDEwMDA3MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTgVMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDFDMDAWrjAWMDcwMDAwMDAwMDA5KRgwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTAwMEMwMTlhMDAwMDAwMB0BAABQQVIx"
+	b, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = parquet.OpenFile(bytes.NewReader(b), int64(len(b)))
+	if err == nil {
+		t.Fatal("OpenFile: expected error for negative num_children, got nil")
+	}
+	if !strings.Contains(err.Error(), "children") || !strings.Contains(err.Error(), "-25") {
+		t.Fatalf("OpenFile: expected a num_children validation error, got %v", err)
 	}
 }
 

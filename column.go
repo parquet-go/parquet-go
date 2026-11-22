@@ -357,10 +357,11 @@ func (cl *columnLoader) reserve(metadata *format.FileMetaData, columnIndexes []f
 // with their capacity clamped, so that appending to the result cannot reach into
 // the rest of the slab.
 //
-// The caller must have reserved room for n; a slab shorter than that is a
-// programming error and panics. Every slab is sized from the schema, and the
-// only value the schema does not bound is a group's NumChildren, which open
-// checks against the children slab before allocating from it.
+// The caller must have reserved room for n, and n must not be negative: a
+// negative n or a slab shorter than n panics. Every slab is sized from the
+// schema, and the only value the schema does not bound is a group's
+// NumChildren, which open rejects when it is negative or larger than the
+// children slab before allocating from it.
 func allocate[T any](slab *[]T, n int) []T {
 	taken := (*slab)[:n:n]
 	*slab = (*slab)[n:]
@@ -495,10 +496,18 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 			}
 		}
 	}
-	// Bound NumChildren by what the children slab has left rather than by the
-	// schema elements that remain. Only the slab bounds the total across every
-	// group: a schema where each group's claim fits the elements after it can
-	// still claim more children in total than the schema has to give.
+	// NumChildren is read from the file. A negative count panics in allocate,
+	// and a count past the children slab would cut past the memory reserved
+	// for this schema. Reject both before slicing.
+	//
+	// The slab, rather than the schema elements that remain, is the upper
+	// bound. Only the slab bounds the total across every group: a schema
+	// where each group's claim fits the elements after it can still claim
+	// more children in total than the schema has to give.
+	if numChildren < 0 {
+		return nil, fmt.Errorf("column %q declares a negative number of children: %d",
+			c.schema.Name, numChildren)
+	}
 	if numChildren > len(cl.children) {
 		return nil, fmt.Errorf("column %q declares %d children but only %d schema elements are left to be children",
 			c.schema.Name, numChildren, len(cl.children))
