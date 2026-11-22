@@ -1,8 +1,13 @@
 package parquet
 
 import (
+	"io"
 	"math"
+	"slices"
 	"testing"
+
+	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/encoding/plain"
 )
 
 // TestColumnBufferByteArrayWriteTypes tests that byteArrayColumnBuffer
@@ -227,4 +232,137 @@ func TestColumnBufferByteArrayReadWriteRoundTrip(t *testing.T) {
 	if string(values[2].ByteArray()) != "true" {
 		t.Errorf("expected %q, got %q", "true", string(values[2].ByteArray()))
 	}
+}
+
+func TestColumnBufferByteArrayAppendAfterPage(t *testing.T) {
+	tests := []struct {
+		name  string
+		write func(*byteArrayColumnBuffer)
+		want  []string
+	}{
+		{"plain", func(col *byteArrayColumnBuffer) {
+			col.WriteByteArrays(plain.AppendByteArray(plain.AppendByteArray(nil, []byte("longer")), []byte("x")))
+		}, []string{"longer", "x"}},
+		{"null", func(col *byteArrayColumnBuffer) {
+			col.writeNull(columnLevels{})
+			col.writeNull(columnLevels{})
+		}, []string{"", ""}},
+		{"boolean", func(col *byteArrayColumnBuffer) {
+			col.writeBoolean(columnLevels{}, true)
+			col.writeBoolean(columnLevels{}, false)
+		}, []string{"true", "false"}},
+		{"int32", func(col *byteArrayColumnBuffer) {
+			col.writeInt32(columnLevels{}, 123)
+			col.writeInt32(columnLevels{}, -4)
+		}, []string{"123", "-4"}},
+		{"int64", func(col *byteArrayColumnBuffer) {
+			col.writeInt64(columnLevels{}, 4567)
+			col.writeInt64(columnLevels{}, -89)
+		}, []string{"4567", "-89"}},
+		{"int96", func(col *byteArrayColumnBuffer) {
+			col.writeInt96(columnLevels{}, deprecated.Int96{1, 0, 0})
+			col.writeInt96(columnLevels{}, deprecated.Int96{23, 0, 0})
+		}, []string{"1", "23"}},
+		{"float", func(col *byteArrayColumnBuffer) {
+			col.writeFloat(columnLevels{}, 1.25)
+			col.writeFloat(columnLevels{}, -2)
+		}, []string{"1.25", "-2"}},
+		{"double", func(col *byteArrayColumnBuffer) {
+			col.writeDouble(columnLevels{}, 12.5)
+			col.writeDouble(columnLevels{}, -2)
+		}, []string{"12.5", "-2"}},
+		{"byteArray", func(col *byteArrayColumnBuffer) {
+			col.writeByteArray(columnLevels{}, []byte("longer"))
+			col.writeByteArray(columnLevels{}, []byte("x"))
+		}, []string{"longer", "x"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			col := newByteArrayColumnBuffer(ByteArrayType, 0, 0)
+			col.Page()
+			test.write(col)
+			if col.offsets.Len() != col.lengths.Len() {
+				t.Errorf("offset count: got %d, want %d", col.offsets.Len(), col.lengths.Len())
+			}
+			want := slices.Clone(test.want)
+			col.Swap(0, col.Len()-1)
+			want[0], want[len(want)-1] = want[len(want)-1], want[0]
+			col = col.Clone().(*byteArrayColumnBuffer)
+			values := make([]Value, len(want))
+			for _, read := range []func([]Value) (int, error){
+				func(v []Value) (int, error) { return col.ReadValuesAt(v, 0) },
+				func(v []Value) (int, error) { return col.Page().Values().ReadValues(v) },
+			} {
+				n, err := read(values)
+				if err != nil && err != io.EOF {
+					t.Fatal(err)
+				}
+				got := make([]string, n)
+				for i := range got {
+					got[i] = string(values[i].ByteArray())
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("values mismatch: got %q, want %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestColumnBufferByteArraySwapEmpty(t *testing.T) {
+	col := newByteArrayColumnBuffer(ByteArrayType, 0, 0)
+	for _, s := range []string{"", "a", "bc"} {
+		col.writeByteArray(columnLevels{}, []byte(s))
+	}
+	col.Page()
+	// Exchange the equal-offset values without swapping them directly.
+	col.Swap(0, 2)
+	col.Swap(0, 1)
+	col.Swap(1, 2)
+	col = col.Clone().(*byteArrayColumnBuffer)
+	values := make([]Value, 3)
+	if _, err := col.Page().Values().ReadValues(values); err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"a", "", "bc"} {
+		if got := string(values[i].ByteArray()); got != want {
+			t.Errorf("value %d: got %q, want %q", i, got, want)
+		}
+	}
+}
+
+func BenchmarkByteArraySwap(b *testing.B) {
+	for _, self := range []bool{true, false} {
+		name := "SwapDistinct"
+		if self {
+			name = "SwapSelf"
+		}
+		b.Run(name, func(b *testing.B) {
+			col := newByteArrayColumnBuffer(ByteArrayType, 0, 0)
+			col.writeByteArray(columnLevels{}, []byte("a"))
+			col.writeByteArray(columnLevels{}, []byte("bc"))
+			j := 1
+			if self {
+				j = 0
+			}
+			for b.Loop() {
+				col.Swap(0, j)
+			}
+			col.Reset()
+		})
+	}
+}
+
+func BenchmarkByteArrayPageAfterUndo(b *testing.B) {
+	col := newByteArrayColumnBuffer(ByteArrayType, 0, 0)
+	for range 10000 {
+		col.writeByteArray(columnLevels{}, []byte("abcdefghij"))
+	}
+	col.Page()
+	for b.Loop() {
+		col.Swap(0, col.Len()-1)
+		col.Swap(0, col.Len()-1)
+		col.Page()
+	}
+	col.Reset()
 }

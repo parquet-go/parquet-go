@@ -1337,3 +1337,79 @@ func TestBufferSortIgnoresInvalidColumn(t *testing.T) {
 		t.Errorf("Sorted rows mismatch:\nWant: %#v\nGot:  %#v", expectedRows, outputRows)
 	}
 }
+
+func TestGenericBufferAppendAfterRead(t *testing.T) {
+	type row struct {
+		ID    int64
+		Value string
+	}
+	buffer := parquet.NewGenericBuffer[row](parquet.SortingRowGroupConfig(
+		parquet.SortingColumns(parquet.Ascending("ID")),
+	))
+	batches := [][]row{
+		{{2, "initial long string"}, {0, "a"}},
+		{{3, "appended null"}, {1, "appended low"}},
+		{{5, ""}, {4, "last"}},
+	}
+	for range 2 {
+		buffer.Reset()
+		var want []row
+		for _, batch := range batches {
+			if _, err := buffer.Write(batch); err != nil {
+				t.Fatal(err)
+			}
+			want = append(want, batch...)
+			slices.SortFunc(want, func(a, b row) int { return int(a.ID - b.ID) })
+			sort.Sort(buffer)
+			reader := parquet.NewGenericRowGroupReader[row](buffer)
+			got := make([]row, len(want))
+			n, err := reader.Read(got)
+			reader.Close()
+			if err != nil && err != io.EOF {
+				t.Fatal(err)
+			}
+			if n != len(want) || !reflect.DeepEqual(got, want) {
+				t.Fatalf("rows mismatch: got %#v, want %#v", got[:n], want)
+			}
+		}
+	}
+}
+
+func BenchmarkSortGenericBufferStrings(b *testing.B) {
+	type row struct {
+		ID    int64
+		Value string
+	}
+	for _, test := range []struct {
+		name       string
+		emptyEvery int
+	}{
+		{"NoEmpty", 0},
+		{"FewEmpty", 100},
+		{"ManyEmpty", 2},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			rows := make([]row, 10000)
+			for i := range rows {
+				rows[i] = row{ID: int64(i), Value: "abcdefghij"}
+				if test.emptyEvery != 0 && i%test.emptyEvery == 0 {
+					rows[i].Value = ""
+				}
+			}
+			buffer := parquet.NewGenericBuffer[row](parquet.SortingRowGroupConfig(
+				parquet.SortingColumns(parquet.Ascending("ID")),
+			))
+			defer buffer.Reset()
+			if _, err := buffer.Write(rows); err != nil {
+				b.Fatal(err)
+			}
+			prng := rand.New(rand.NewSource(0))
+			for b.Loop() {
+				for range 10 {
+					buffer.Swap(prng.Intn(len(rows)), prng.Intn(len(rows)))
+				}
+				sort.Sort(buffer)
+			}
+		})
+	}
+}

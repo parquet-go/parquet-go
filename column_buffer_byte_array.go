@@ -13,8 +13,9 @@ import (
 
 type byteArrayColumnBuffer struct {
 	byteArrayPage
-	lengths memory.SliceBuffer[uint32]
-	scratch memory.SliceBuffer[byte]
+	lengths      memory.SliceBuffer[uint32]
+	scratch      memory.SliceBuffer[byte]
+	swappedEmpty bool
 }
 
 func newByteArrayColumnBuffer(typ Type, columnIndex uint16, numValues int32) *byteArrayColumnBuffer {
@@ -36,7 +37,8 @@ func (col *byteArrayColumnBuffer) Clone() ColumnBuffer {
 			offsets:     col.cloneOffsets(),
 			columnIndex: col.columnIndex,
 		},
-		lengths: col.cloneLengths(),
+		lengths:      col.cloneLengths(),
+		swappedEmpty: col.swappedEmpty,
 	}
 }
 
@@ -62,7 +64,19 @@ func (col *byteArrayColumnBuffer) page() *byteArrayPage {
 	lengths := col.lengths.Slice()
 	offsets := col.offsets.Slice()
 
-	if len(lengths) > 0 && orderOfUint32(offsets) < 1 { // unordered?
+	reordered := len(lengths) > 1 && orderOfUint32(offsets) < 1
+	// Empty values can trade equal offsets, even through swaps with a third value.
+	if !reordered && col.swappedEmpty {
+		offset := uint32(0)
+		for i, length := range lengths {
+			if offsets[i] != offset {
+				reordered = true
+				break
+			}
+			offset += length
+		}
+	}
+	if reordered {
 		if col.scratch.Cap() < col.values.Len() {
 			col.scratch.Grow(col.values.Len())
 		}
@@ -76,6 +90,7 @@ func (col *byteArrayColumnBuffer) page() *byteArrayPage {
 
 		col.values, col.scratch = col.scratch, col.values
 	}
+	col.swappedEmpty = false
 	col.offsets.Resize(len(lengths))
 	col.offsets.AppendValue(uint32(col.values.Len()))
 	return &col.byteArrayPage
@@ -89,6 +104,7 @@ func (col *byteArrayColumnBuffer) Reset() {
 	col.values.Reset()
 	col.offsets.Reset()
 	col.lengths.Reset()
+	col.swappedEmpty = false
 }
 
 func (col *byteArrayColumnBuffer) NumRows() int64 { return int64(col.Len()) }
@@ -105,7 +121,12 @@ func (col *byteArrayColumnBuffer) Less(i, j int) bool {
 
 func (col *byteArrayColumnBuffer) Swap(i, j int) {
 	col.offsets.Swap(i, j)
-	col.lengths.Swap(i, j)
+	lengths := col.lengths.Slice()
+	a, b := lengths[i], lengths[j]
+	lengths[i], lengths[j] = b, a
+	if !col.swappedEmpty && (a == 0 || b == 0) {
+		col.swappedEmpty = i != j
+	}
 }
 
 func (col *byteArrayColumnBuffer) Write(b []byte) (int, error) {
@@ -123,7 +144,9 @@ func (col *byteArrayColumnBuffer) writeByteArrays(values []byte) (count, bytes i
 	baseBytes := col.values.Len() + (plain.ByteArrayLengthSize * col.lengths.Len())
 
 	err = plain.RangeByteArray(values, func(value []byte) error {
-		col.offsets.AppendValue(uint32(col.values.Len()))
+		if col.offsets.Len() == col.lengths.Len() {
+			col.offsets.AppendValue(uint32(col.values.Len()))
+		}
 		col.lengths.AppendValue(uint32(len(value)))
 		col.values.Append(value...)
 		return nil
@@ -151,9 +174,11 @@ func (col *byteArrayColumnBuffer) writeValues(levels columnLevels, rows sparse.A
 		totalBytes += len(stringArray.Index(i))
 	}
 
-	offsetsStart := col.offsets.Len()
+	// Page materialization adds a terminal offset, which is not a value.
+	offsetsStart := col.lengths.Len()
 	lengthsStart := col.lengths.Len()
 	valuesStart := col.values.Len()
+	hasTerminalOffset := col.offsets.Len() > offsetsStart
 
 	col.offsets.Resize(offsetsStart + n)
 	col.lengths.Resize(lengthsStart + n)
@@ -166,7 +191,9 @@ func (col *byteArrayColumnBuffer) writeValues(levels columnLevels, rows sparse.A
 	valueOffset := valuesStart
 	for i := range n {
 		s := stringArray.Index(i)
-		offsets[offsetsStart+i] = uint32(valueOffset)
+		if i > 0 || !hasTerminalOffset {
+			offsets[offsetsStart+i] = uint32(valueOffset)
+		}
 		lengths[lengthsStart+i] = uint32(len(s))
 		copy(values[valueOffset:], s)
 		valueOffset += len(s)
@@ -178,7 +205,9 @@ func (col *byteArrayColumnBuffer) writeBoolean(levels columnLevels, value bool) 
 	col.values.AppendFunc(func(b []byte) []byte {
 		return strconv.AppendBool(b, value)
 	})
-	col.offsets.AppendValue(uint32(offset))
+	if col.offsets.Len() == col.lengths.Len() {
+		col.offsets.AppendValue(uint32(offset))
+	}
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
@@ -187,7 +216,9 @@ func (col *byteArrayColumnBuffer) writeInt32(levels columnLevels, value int32) {
 	col.values.AppendFunc(func(b []byte) []byte {
 		return strconv.AppendInt(b, int64(value), 10)
 	})
-	col.offsets.AppendValue(uint32(offset))
+	if col.offsets.Len() == col.lengths.Len() {
+		col.offsets.AppendValue(uint32(offset))
+	}
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
@@ -196,7 +227,9 @@ func (col *byteArrayColumnBuffer) writeInt64(levels columnLevels, value int64) {
 	col.values.AppendFunc(func(b []byte) []byte {
 		return strconv.AppendInt(b, value, 10)
 	})
-	col.offsets.AppendValue(uint32(offset))
+	if col.offsets.Len() == col.lengths.Len() {
+		col.offsets.AppendValue(uint32(offset))
+	}
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
@@ -206,7 +239,9 @@ func (col *byteArrayColumnBuffer) writeInt96(levels columnLevels, value deprecat
 		result, _ := value.Int().AppendText(b)
 		return result
 	})
-	col.offsets.AppendValue(uint32(offset))
+	if col.offsets.Len() == col.lengths.Len() {
+		col.offsets.AppendValue(uint32(offset))
+	}
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
@@ -215,7 +250,9 @@ func (col *byteArrayColumnBuffer) writeFloat(levels columnLevels, value float32)
 	col.values.AppendFunc(func(b []byte) []byte {
 		return strconv.AppendFloat(b, float64(value), 'g', -1, 32)
 	})
-	col.offsets.AppendValue(uint32(offset))
+	if col.offsets.Len() == col.lengths.Len() {
+		col.offsets.AppendValue(uint32(offset))
+	}
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
@@ -224,18 +261,24 @@ func (col *byteArrayColumnBuffer) writeDouble(levels columnLevels, value float64
 	col.values.AppendFunc(func(b []byte) []byte {
 		return strconv.AppendFloat(b, value, 'g', -1, 64)
 	})
-	col.offsets.AppendValue(uint32(offset))
+	if col.offsets.Len() == col.lengths.Len() {
+		col.offsets.AppendValue(uint32(offset))
+	}
 	col.lengths.AppendValue(uint32(col.values.Len() - offset))
 }
 
 func (col *byteArrayColumnBuffer) writeByteArray(levels columnLevels, value []byte) {
-	col.offsets.AppendValue(uint32(col.values.Len()))
+	if col.offsets.Len() == col.lengths.Len() {
+		col.offsets.AppendValue(uint32(col.values.Len()))
+	}
 	col.lengths.AppendValue(uint32(len(value)))
 	col.values.Append(value...)
 }
 
 func (col *byteArrayColumnBuffer) writeNull(levels columnLevels) {
-	col.offsets.AppendValue(uint32(col.values.Len()))
+	if col.offsets.Len() == col.lengths.Len() {
+		col.offsets.AppendValue(uint32(col.values.Len()))
+	}
 	col.lengths.AppendValue(0)
 }
 
