@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 
+	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
@@ -883,10 +884,17 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 		return nil, err
 	}
 
-	if !isDictionaryEncoding(pageEncoding) {
-		if err := checkPageDataCapacity(pageKind, c.Type().Length(), numValues, values); err != nil {
-			return nil, err
+	if isDictionaryEncoding(pageEncoding) {
+		// Dictionary.Lookup panics on an index outside [0, dict.Len()). A
+		// corrupted page has to be rejected here, before those indexes are read.
+		if dict == nil {
+			return nil, fmt.Errorf("decoding dictionary-encoded data page: no dictionary found: %w", ErrCorrupted)
 		}
+		if err := checkDictionaryIndexBounds(values.Int32(), numValues, dict.Len()); err != nil {
+			return nil, fmt.Errorf("decoding indexes of dictionary-encoded data page: %w", err)
+		}
+	} else if err := checkPageDataCapacity(pageKind, c.Type().Length(), numValues, values); err != nil {
+		return nil, err
 	}
 
 	newPage := pageType.NewPage(c.Index(), numValues, values)
@@ -990,6 +998,74 @@ func (c *Column) decodeDictionary(header DictionaryPageHeader, page *buffer[byte
 		return nil, err
 	}
 	return pageType.NewDictionary(int(c.index), numValues, values), nil
+}
+
+// checkDictionaryIndexBounds reports an error when an index the page keeps is
+// outside [0, dictLen).
+//
+// newIndexedPage keeps the first numValues decoded indexes and drops the
+// tail. When the decoded slice is shorter, it fills the rest with zeros (the
+// truncated all-zero RLE case). Those zeros are indexes the page will look
+// up, so an empty dictionary is still rejected. An out-of-range value that
+// the page drops is not.
+func checkDictionaryIndexBounds(decoded []int32, numValues, dictLen int) error {
+	if numValues <= 0 {
+		return nil
+	}
+	n := numValues
+	if n > len(decoded) {
+		if dictLen <= 0 {
+			return dictionaryIndexOutOfBounds(0, dictLen)
+		}
+		n = len(decoded)
+	}
+	if n == 0 {
+		return nil
+	}
+	index, bad := dictionaryIndexOutOfRange(decoded[:n], dictLen)
+	if !bad {
+		return nil
+	}
+	return dictionaryIndexOutOfBounds(index, dictLen)
+}
+
+func dictionaryIndexOutOfBounds(index int32, dictLen int) error {
+	return fmt.Errorf("dictionary index %d is out of bounds [0,%d): %w", index, dictLen, ErrCorrupted)
+}
+
+// dictionaryIndexOutOfRange returns the first index outside [0, dictLen).
+//
+// Valid pages take a single unsigned max over the indexes. A negative index
+// is a uint32 at or above 1<<31, so it compares out of range for every
+// dictionary an int32 index can address (dictLen <= MaxInt32). A longer
+// dictionary can only reject a negative index.
+func dictionaryIndexOutOfRange(indexes []int32, dictLen int) (int32, bool) {
+	if dictLen <= 0 {
+		if len(indexes) == 0 {
+			return 0, false
+		}
+		return indexes[0], true
+	}
+	if dictLen > math.MaxInt32 {
+		for _, index := range indexes {
+			if index < 0 {
+				return index, true
+			}
+		}
+		return 0, false
+	}
+	limit := uint32(dictLen)
+	if maxUint32(unsafecast.Slice[uint32](indexes)) < limit {
+		return 0, false
+	}
+	// The max is out of range. Name the first such index. If the walk finds
+	// none, every kept index is inside the dictionary.
+	for _, index := range indexes {
+		if uint32(index) >= limit {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 // check data buffer has enough capacity for the nubmer of values & value type
