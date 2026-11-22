@@ -677,7 +677,8 @@ type copyTestRepeatedRow struct {
 func makeCopyTestRepeatedRows(n int) []copyTestRepeatedRow {
 	rows := make([]copyTestRepeatedRow, n)
 	for i := range rows {
-		// Varying list length forces rows to straddle both the read buffer and page boundaries.
+		// Varying list length (1-7 values) makes row boundaries drift against
+		// the fixed-size read batches.
 		tags := make([]string, 1+i%7)
 
 		for j := range tags {
@@ -690,14 +691,18 @@ func makeCopyTestRepeatedRows(n int) []copyTestRepeatedRow {
 	return rows
 }
 
-// TestWriteRowGroupReencodeRepeatedColumnValues checks that pending byte-array
-// values from a repeated column aren't corrupted when they straddle page boundaries.
-func TestWriteRowGroupReencodeRepeatedColumnValues(t *testing.T) {
+// TestWriteRowGroupReencodeRepeatedColumnRowAlignment checks that the L3
+// re-encode keeps repeated columns row-aligned. Source pages hold more values
+// than the read batch, so a batch can end in the middle of a row, and the
+// destination page buffer is small so every write ends in a page flush.
+func TestWriteRowGroupReencodeRepeatedColumnRowAlignment(t *testing.T) {
+	// 5000 rows hold 19995 tag values in total, which is not a multiple of the
+	// 1024-value read batch, so batch boundaries drift across row boundaries.
 	rows := makeCopyTestRepeatedRows(5000)
 
 	var srcBuf bytes.Buffer
 
-	sw := NewGenericWriter[copyTestRepeatedRow](&srcBuf, Compression(&Snappy), PageBufferSize(512))
+	sw := NewGenericWriter[copyTestRepeatedRow](&srcBuf, Compression(&Snappy))
 	if _, err := sw.Write(rows); err != nil {
 		t.Fatalf("writing source rows: %v", err)
 	}
@@ -711,15 +716,28 @@ func TestWriteRowGroupReencodeRepeatedColumnValues(t *testing.T) {
 		t.Fatalf("opening source file: %v", err)
 	}
 
-	defer func(prev bool) { disableWriteReencode = prev }(disableWriteReencode)
-	disableWriteReencode = false
+	// A batch can only end mid-row if a source page is larger than a read batch.
+	// Otherwise this test would pass without the fix.
+	tags, _ := src.Schema().Lookup("tags")
+	pages := src.RowGroups()[0].ColumnChunks()[tags.ColumnIndex].Pages()
+	defer pages.Close()
+
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatalf("reading first source page: %v", err)
+	}
+	defer Release(page)
+
+	if n := page.NumValues(); n <= reencodeValueBufferSize {
+		t.Fatalf("first source page has %d values, want more than %d", n, reencodeValueBufferSize)
+	}
 
 	var dst bytes.Buffer
 
 	// Codec differs from source (Snappy -> Zstd) so L0 cannot fire.
 	w := NewGenericWriter[copyTestRepeatedRow](&dst, Compression(&Zstd), PageBufferSize(512))
-
 	before := reencodePathCounter.Load()
+
 	for _, rg := range src.RowGroups() {
 		if _, writeErr := w.WriteRowGroup(rg); writeErr != nil {
 			t.Fatalf("WriteRowGroup: %v", writeErr)
@@ -727,31 +745,20 @@ func TestWriteRowGroupReencodeRepeatedColumnValues(t *testing.T) {
 	}
 
 	if closeErr := w.Close(); closeErr != nil {
-		t.Fatal(closeErr)
+		t.Fatalf("closing destination writer: %v", closeErr)
 	}
 
 	if reencodePathCounter.Load() == before {
 		t.Fatal("expected the L3 re-encode path to fire")
 	}
 
-	r := NewGenericReader[copyTestRepeatedRow](bytes.NewReader(dst.Bytes()))
-	defer func() { _ = r.Close() }()
-
-	got := make([]copyTestRepeatedRow, len(rows))
-	read := 0
-
-	for read < len(got) {
-		n, readErr := r.Read(got[read:])
-		read += n
-		if readErr != nil {
-			break
-		}
+	got, err := Read[copyTestRepeatedRow](bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+	if err != nil {
+		t.Fatalf("reading re-encoded file: %v", err)
 	}
 
-	got = got[:read]
-
 	if !reflect.DeepEqual(got, rows) {
-		t.Fatal("L3 re-encoded repeated-column output differs from source data")
+		t.Fatal("L3 re-encoded output differs from source data")
 	}
 }
 
