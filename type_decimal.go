@@ -2,6 +2,8 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/binary"
+	"fmt"
 	"log"
 	"math"
 	"math/big"
@@ -183,9 +185,41 @@ func (col *decimalColumnBuffer) ColumnIndex() (ColumnIndex, error) {
 func (col *decimalColumnBuffer) Less(i, j int) bool {
 	u := [1]Value{}
 	v := [1]Value{}
-	col.ColumnBuffer.ReadValuesAt(u[:], int64(i))
-	col.ColumnBuffer.ReadValuesAt(v[:], int64(j))
+	// Sort only calls Less with indexes that are in range, and ReadValuesAt
+	// returns a value with a nil error for those indexes.
+	_, _ = col.ColumnBuffer.ReadValuesAt(u[:], int64(i))
+	_, _ = col.ColumnBuffer.ReadValuesAt(v[:], int64(j))
 	return compareDecimalByteArrays(u[0].byteArray(), v[0].byteArray()) < 0
+}
+
+// writeInt64 stores value as big-endian two's complement. The physical
+// fixed-length buffer zero-pads, which turns a negative int64 into a wider
+// positive value when the column is longer than 8 bytes. Sign-extend instead
+// so the extra leading bytes are 0xFF.
+func (col *decimalColumnBuffer) writeInt64(levels columnLevels, value int64) {
+	if col.typ.Kind() != FixedLenByteArray {
+		col.ColumnBuffer.writeInt64(levels, value)
+		return
+	}
+	size := col.typ.Length()
+	if size <= 8 {
+		col.ColumnBuffer.writeInt64(levels, value)
+		return
+	}
+	var stack [16]byte
+	var buf []byte
+	if size <= len(stack) {
+		buf = stack[:size]
+	} else {
+		buf = make([]byte, size)
+	}
+	if value < 0 {
+		for i := range size - 8 {
+			buf[i] = 0xFF
+		}
+	}
+	binary.BigEndian.PutUint64(buf[size-8:], uint64(value))
+	col.ColumnBuffer.writeByteArray(levels, buf)
 }
 
 // decimalPage wraps a page of the underlying physical type to compute bounds
@@ -341,6 +375,63 @@ func (t *decimalType) LogicalType() *format.LogicalType {
 
 func (t *decimalType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Decimal]
+}
+
+// ConvertValue decodes a BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY decimal into an
+// integer decimal. Those physical types store a big-endian two's-complement
+// value. The generic byte-array conversion reads little-endian, which turns
+// the unscaled integer 100000 into a different int64.
+func (t *decimalType) ConvertValue(val Value, typ Type) (Value, error) {
+	if val.IsNull() || t.isBinary() {
+		return t.Type.ConvertValue(val, typ)
+	}
+	if typ.Kind() != ByteArray && typ.Kind() != FixedLenByteArray {
+		return t.Type.ConvertValue(val, typ)
+	}
+	n, err := int64FromDecimalBytes(val.byteArray())
+	if err != nil {
+		return val, err
+	}
+	switch t.Kind() {
+	case Int64:
+		return val.convertToInt64(n), nil
+	case Int32:
+		if n > math.MaxInt32 || n < math.MinInt32 {
+			return val, fmt.Errorf("decimal value %d does not fit in int32", n)
+		}
+		return val.convertToInt32(int32(n)), nil
+	default:
+		return t.Type.ConvertValue(val, typ)
+	}
+}
+
+// int64FromDecimalBytes reads a big-endian two's-complement decimal. A value
+// wider than 8 bytes is accepted only when the extra leading bytes are the
+// sign extension of an int64.
+func int64FromDecimalBytes(data []byte) (int64, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	if len(data) > 8 {
+		sign := byte(0)
+		if data[len(data)-8]&0x80 != 0 {
+			sign = 0xFF
+		}
+		for _, b := range data[:len(data)-8] {
+			if b != sign {
+				return 0, fmt.Errorf("decimal value does not fit in int64")
+			}
+		}
+		data = data[len(data)-8:]
+	}
+	var b [8]byte
+	if data[0]&0x80 != 0 {
+		for i := range b {
+			b[i] = 0xFF
+		}
+	}
+	copy(b[8-len(data):], data)
+	return int64(binary.BigEndian.Uint64(b[:])), nil
 }
 
 func (t *decimalType) AssignValue(dst reflect.Value, src Value) error {

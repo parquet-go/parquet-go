@@ -110,7 +110,7 @@ func testNullIndexTime(t *testing.T) {
 
 		array := makeArrayFromSlice(data)
 		bits := make([]uint64, 1)
-		nullIndexFuncOf(reflect.TypeOf(time.Time{}))(bits, array)
+		nullIndexFuncOf(reflect.TypeFor[time.Time]())(bits, array)
 
 		// bits should be 0b1010 = 10 (bit 1 and 3 are set for non-zero values)
 		expected := uint64(0b1010)

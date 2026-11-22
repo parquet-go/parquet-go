@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/encoding/alp"
 	"github.com/parquet-go/parquet-go/encoding/bitpacked"
 	"github.com/parquet-go/parquet-go/encoding/bytestreamsplit"
 	"github.com/parquet-go/parquet-go/encoding/delta"
@@ -57,6 +58,7 @@ var (
 		format.DeltaLengthByteArray: &DeltaLengthByteArray,
 		format.DeltaByteArray:       &DeltaByteArray,
 		format.ByteStreamSplit:      &ByteStreamSplit,
+		format.ALP:                  &alp.Encoding{},
 	}
 
 	// Table indexing RLE encodings for repetition and definition levels of

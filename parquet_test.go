@@ -1051,7 +1051,7 @@ func randValueFuncOf(t parquet.Type) func(*rand.Rand) parquet.Value {
 		}
 
 	case parquet.FixedLenByteArray:
-		arrayType := reflect.ArrayOf(t.Length(), reflect.TypeOf(byte(0)))
+		arrayType := reflect.ArrayOf(t.Length(), reflect.TypeFor[byte]())
 		return func(r *rand.Rand) parquet.Value {
 			b := make([]byte, arrayType.Len())
 			r.Read(b)
@@ -1293,7 +1293,6 @@ func TestParquetAnyValueConversions(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			pWtr := parquet.NewGenericWriter[any](&buf, parquet.NewSchema("", test.schema))

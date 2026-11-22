@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"io"
 	"reflect"
+	"runtime"
+	"runtime/debug"
+	"strings"
 	"testing"
 	"time"
 
@@ -1627,4 +1630,76 @@ func TestSplitEncodingNilPointerRoundtrip(t *testing.T) {
 		Value *float64 `parquet:"value,split"`
 	}
 	roundtripTester[Row]{}.test(t, Row{Value: nil})
+}
+
+func TestReconstructAfterError(t *testing.T) {
+	// Keep released scratch buffers available to the next call.
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+
+	type payload struct {
+		N int
+	}
+	type mapValue struct {
+		A string
+		B payload `parquet:",json"`
+	}
+	type element struct {
+		K string
+		A string
+		B payload `parquet:",json"`
+	}
+
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{"map", new(struct{ M map[string]mapValue })},
+		{"repeated", new(struct{ M []element })},
+		{"list", new(struct {
+			M []element `parquet:",list"`
+		})},
+	} {
+		for _, required := range []bool{false, true} {
+			name := "repeated"
+			if required {
+				name = "required"
+			}
+			t.Run(test.name+"/"+name, func(t *testing.T) {
+				schema := parquet.SchemaOf(test.value)
+				badRow := parquet.Row{
+					parquet.ByteArrayValue([]byte("key")).Level(0, 1, 0),
+					parquet.ByteArrayValue([]byte("rejected-data")).Level(0, 1, 1),
+					parquet.ByteArrayValue([]byte("{")).Level(0, 1, 2),
+				}
+				row := parquet.Row{parquet.ByteArrayValue([]byte("current")).Level(0, 0, 0)}
+
+				// The race build can discard sync.Pool entries on Put.
+				for range 10 {
+					if err := schema.Reconstruct(test.value, badRow); err == nil || !strings.Contains(err.Error(), "unexpected end of JSON input") {
+						t.Fatalf("expected invalid JSON error, got %v", err)
+					}
+					if required {
+						var result struct{ K, Z string }
+						err := parquet.SchemaOf(result).Reconstruct(&result, row)
+						if err == nil || !strings.Contains(err.Error(), "no values found in parquet row for column 1") {
+							t.Errorf("missing required column: got result %+v, error %v", result, err)
+						}
+						if result.K != "current" || result.Z != "" {
+							t.Errorf("values carried over after error: %+v", result)
+						}
+					} else {
+						var result struct {
+							K string
+							Z []string
+						}
+						err := parquet.SchemaOf(result).Reconstruct(&result, row)
+						if err != nil || result.K != "current" || len(result.Z) != 0 {
+							t.Errorf("values carried over after error: result %+v, error %v", result, err)
+						}
+					}
+				}
+			})
+		}
+	}
 }

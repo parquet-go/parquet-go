@@ -1,6 +1,8 @@
 package parquet_test
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -115,7 +117,7 @@ var conversionTests = [...]struct {
 		from: struct {
 			FirstName *string
 			LastName  string
-		}{FirstName: newString("Luke"), LastName: "Skywalker"},
+		}{FirstName: new("Luke"), LastName: "Skywalker"},
 		to: struct{ LastName string }{LastName: "Skywalker"},
 	},
 
@@ -228,7 +230,7 @@ var conversionTests = [...]struct {
 	{
 		scenario: "required to optional leaf",
 		from:     struct{ Name string }{Name: "Luke"},
-		to:       struct{ Name *string }{Name: newString("Luke")},
+		to:       struct{ Name *string }{Name: new("Luke")},
 	},
 
 	{
@@ -239,13 +241,13 @@ var conversionTests = [...]struct {
 
 	{
 		scenario: "optional to required leaf",
-		from:     struct{ Name *string }{Name: newString("Luke")},
+		from:     struct{ Name *string }{Name: new("Luke")},
 		to:       struct{ Name string }{Name: "Luke"},
 	},
 
 	{
 		scenario: "optional to repeated leaf",
-		from:     struct{ Name *string }{Name: newString("Luke")},
+		from:     struct{ Name *string }{Name: new("Luke")},
 		to:       struct{ Name []string }{Name: []string{"Luke"}},
 	},
 
@@ -264,7 +266,7 @@ var conversionTests = [...]struct {
 	{
 		scenario: "repeated to optional leaf",
 		from:     struct{ Name []string }{Name: []string{"Luke", "Han", "Leia"}},
-		to:       struct{ Name *string }{Name: newString("Luke")},
+		to:       struct{ Name *string }{Name: new("Luke")},
 	},
 
 	{
@@ -481,8 +483,11 @@ func TestConvert(t *testing.T) {
 	}
 }
 
-func newInt64(i int64) *int64    { return &i }
-func newString(s string) *string { return &s }
+//go:fix inline
+func newInt64(i int64) *int64 { return new(i) }
+
+//go:fix inline
+func newString(s string) *string { return new(s) }
 
 func TestConvertValue(t *testing.T) {
 	now := time.Unix(42, 0)
@@ -514,6 +519,7 @@ func TestConvertValue(t *testing.T) {
 		fromValue parquet.Value
 		toType    parquet.Type
 		toValue   parquet.Value
+		wantErr   error
 	}{
 		{
 			scenario:  "true to boolean",
@@ -1039,6 +1045,94 @@ func TestConvertValue(t *testing.T) {
 		},
 
 		{
+			scenario:  "string to nanosecond time",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`12:34:56.789012345`)),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(45296789012345),
+		},
+
+		{
+			scenario:  "string to nanosecond time before midnight",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`23:59:59.999999999`)),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(86399999999999),
+		},
+
+		{
+			scenario:  "string to nanosecond time short fraction",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`12:34:56.789`)),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(45296789000000),
+		},
+
+		{
+			scenario:  "string to nanosecond time truncated fraction",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`12:34:56.7890123456`)),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(45296789012345),
+		},
+
+		{
+			scenario:  "string to nanosecond time invalid clock",
+			fromType:  parquet.String().Type(),
+			fromValue: parquet.ByteArrayValue([]byte(`24:00:00`)),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			wantErr:   parquet.ErrInvalidConversion,
+		},
+
+		{
+			scenario:  "nanosecond time to string",
+			fromType:  parquet.Time(parquet.Nanosecond).Type(),
+			fromValue: parquet.Int64Value(45296789012345),
+			toType:    parquet.String().Type(),
+			toValue:   parquet.ByteArrayValue([]byte(`12:34:56.789012345`)),
+		},
+
+		{
+			scenario:  "nanosecond time before midnight to string",
+			fromType:  parquet.Time(parquet.Nanosecond).Type(),
+			fromValue: parquet.Int64Value(86399999999999),
+			toType:    parquet.String().Type(),
+			toValue:   parquet.ByteArrayValue([]byte(`23:59:59.999999999`)),
+		},
+
+		{
+			scenario:  "millisecond timestamp to nanosecond time",
+			fromType:  parquet.Timestamp(parquet.Millisecond).Type(),
+			fromValue: parquet.Int64Value(1670888613123),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(85413123000000),
+		},
+
+		{
+			scenario:  "microsecond timestamp to nanosecond time",
+			fromType:  parquet.Timestamp(parquet.Microsecond).Type(),
+			fromValue: parquet.Int64Value(1670888613123456),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(85413123456000),
+		},
+
+		{
+			scenario:  "nanosecond timestamp to nanosecond time",
+			fromType:  parquet.Timestamp(parquet.Nanosecond).Type(),
+			fromValue: parquet.Int64Value(1670888613123456789),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(85413123456789),
+		},
+
+		{
+			scenario:  "nanosecond timestamp to nanosecond time before epoch",
+			fromType:  parquet.Timestamp(parquet.Nanosecond).Type(),
+			fromValue: parquet.Int64Value(-1),
+			toType:    parquet.Time(parquet.Nanosecond).Type(),
+			toValue:   parquet.Int64Value(86399999999999),
+		},
+
+		{
 			scenario:  "date to millisecond timestamp",
 			fromType:  parquet.Date().Type(),
 			fromValue: parquet.Int32Value(19338),
@@ -1243,13 +1337,19 @@ func TestConvertValue(t *testing.T) {
 		t.Run(test.scenario, func(t *testing.T) {
 			// Set levels to ensure that they are retained by the conversion.
 			from := test.fromValue.Level(1, 2, 3)
-			want := test.toValue.Level(1, 2, 3)
 
 			got, err := test.toType.ConvertValue(from, test.fromType)
+			if test.wantErr != nil {
+				if !errors.Is(err, test.wantErr) {
+					t.Fatalf("converted value error mismatch:\nwant = %v\ngot  = %v", test.wantErr, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
 
+			want := test.toValue.Level(1, 2, 3)
 			if !parquet.DeepEqual(want, got) {
 				t.Errorf("converted value mismatch:\nwant = %+v\ngot  = %+v", want, got)
 			}
@@ -2672,5 +2772,34 @@ func TestConvertOutOfBoundsLevelsGuard(t *testing.T) {
 		if v.X != nil {
 			t.Errorf("reconstructed oob row %d: want X=nil, got %v", i+1, *v.X)
 		}
+	}
+}
+
+func TestConvertStringToNanosecondTime(t *testing.T) {
+	type stringRow struct {
+		Time string `parquet:"time"`
+	}
+	type timeRow struct {
+		Time int64 `parquet:"time,time(nanosecond)"`
+	}
+	var data bytes.Buffer
+	writer := parquet.NewGenericWriter[stringRow](&data)
+	if _, err := writer.Write([]stringRow{
+		{"00:00:00"},
+		{"12:34:56.789012345"},
+		{"23:59:59.999999999"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parquet.Read[timeRow](bytes.NewReader(data.Bytes()), int64(data.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []timeRow{{0}, {45296789012345}, {86399999999999}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("converted rows mismatch: got %#v, want %#v", got, want)
 	}
 }

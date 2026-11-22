@@ -1,11 +1,15 @@
 package parquet
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
+	"math"
 	"testing"
 
+	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
@@ -339,4 +343,484 @@ func injectEmptyRowGroup(t *testing.T, data []byte) []byte {
 	out.Write(trailer[:])
 
 	return out.Bytes()
+}
+
+func newDictionaryPageHeader(body int32) []byte {
+	header := format.PageHeader{
+		Type:                 format.DictionaryPage,
+		UncompressedPageSize: body,
+		CompressedPageSize:   body,
+	}
+	var buf bytes.Buffer
+	proto := thrift.CompactProtocol{}
+	if err := thrift.NewEncoder(proto.NewWriter(&buf)).Encode(&header); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+func dictionaryFilePages(t *testing.T, data []byte) FilePages {
+	t.Helper()
+	var fp FilePages
+	fp.chunk = &FileColumnChunk{column: &Column{path: columnPath{"", "values"}}}
+	fp.dictionary = Int32Type.NewDictionary(0, 0, encoding.Int32Values(nil))
+	fp.rbuf = bufio.NewReader(bytes.NewReader(data))
+	fp.decoder.Reset(fp.protocol.NewReader(fp.rbuf))
+	return fp
+}
+
+func TestReadPageDiscardShortDictionaryPage(t *testing.T) {
+	fp := dictionaryFilePages(t, newDictionaryPageHeader(8))
+	_, err := fp.ReadPage()
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ReadPage: got %v, want a short read", err)
+	}
+}
+
+func TestReadPageDiscardDuplicateDictionaryPage(t *testing.T) {
+	body := []byte{1, 2, 3, 4}
+	data := append(newDictionaryPageHeader(int32(len(body))), body...)
+	fp := dictionaryFilePages(t, data)
+	_, err := fp.ReadPage()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("ReadPage after discarding the dictionary page: got %v, want EOF", err)
+	}
+}
+
+func buildSingleColumnParquet(t *testing.T, version int32, numRows, numValues, dictOffset, dataOffset int64, writeEmptyDictPage bool) []byte {
+	t.Helper()
+
+	var out bytes.Buffer
+	out.WriteString("PAR1")
+
+	var proto thrift.CompactProtocol
+	enc := thrift.NewEncoder(proto.NewWriter(&out))
+
+	var chunkSize int64
+	if writeEmptyDictPage {
+		dictHeader := format.PageHeader{
+			Type:                 format.DictionaryPage,
+			UncompressedPageSize: 0,
+			CompressedPageSize:   0,
+			DictionaryPageHeader: thrift.New(format.DictionaryPageHeader{
+				NumValues: 0,
+				Encoding:  format.Plain,
+			}),
+		}
+		before := out.Len()
+		if err := enc.Encode(&dictHeader); err != nil {
+			t.Fatalf("encode dictionary page header: %v", err)
+		}
+		chunkSize = int64(out.Len() - before)
+	}
+
+	encodings := []format.Encoding{format.Plain}
+	if dictOffset != 0 {
+		if version == 2 {
+			encodings = []format.Encoding{format.Plain, format.RLEDictionary}
+		} else {
+			encodings = []format.Encoding{format.Plain, format.PlainDictionary}
+		}
+	}
+
+	meta := format.FileMetaData{
+		Version: version,
+		Schema: []format.SchemaElement{
+			{
+				Name:        "schema",
+				NumChildren: thrift.New(int32(1)),
+			},
+			{
+				Name:           "x",
+				Type:           thrift.New(format.Int64),
+				RepetitionType: thrift.New(format.Optional),
+			},
+		},
+		NumRows: numRows,
+		RowGroups: []format.RowGroup{
+			{
+				NumRows:       numRows,
+				TotalByteSize: chunkSize,
+				Columns: []format.ColumnChunk{
+					{
+						FileOffset: dictOffset,
+						MetaData: format.ColumnMetaData{
+							Type:                  format.Int64,
+							Encoding:              encodings,
+							PathInSchema:          []string{"x"},
+							Codec:                 format.Uncompressed,
+							NumValues:             numValues,
+							TotalUncompressedSize: chunkSize,
+							TotalCompressedSize:   chunkSize,
+							DataPageOffset:        dataOffset,
+							DictionaryPageOffset:  dictOffset,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	footerStart := out.Len()
+	if err := enc.Encode(&meta); err != nil {
+		t.Fatalf("encode footer: %v", err)
+	}
+	footerSize := out.Len() - footerStart
+
+	var trailer [8]byte
+	binary.LittleEndian.PutUint32(trailer[:4], uint32(footerSize))
+	copy(trailer[4:], "PAR1")
+	out.Write(trailer[:])
+	return out.Bytes()
+}
+
+func TestEmptyDictionaryColumnChunk(t *testing.T) {
+	type row struct {
+		X *int64 `parquet:"x,optional"`
+	}
+
+	cases := []struct {
+		name               string
+		version            int32
+		dictOffset         int64
+		dataOffset         int64
+		writeEmptyDictPage bool
+	}{
+		{
+			name:               "v1_dict4_data0",
+			version:            1,
+			dictOffset:         4,
+			dataOffset:         0,
+			writeEmptyDictPage: true,
+		},
+		{
+			name:               "v2_dict4_data0",
+			version:            2,
+			dictOffset:         4,
+			dataOffset:         0,
+			writeEmptyDictPage: true,
+		},
+		{
+			name:               "v1_dict4_data0_zero_size",
+			version:            1,
+			dictOffset:         4,
+			dataOffset:         0,
+			writeEmptyDictPage: false,
+		},
+		{
+			name:               "v1_dict4_data4_control",
+			version:            1,
+			dictOffset:         4,
+			dataOffset:         4,
+			writeEmptyDictPage: true,
+		},
+		{
+			name:               "v1_no_dict_data0",
+			version:            1,
+			dictOffset:         0,
+			dataOffset:         0,
+			writeEmptyDictPage: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := buildSingleColumnParquet(t, tc.version, 0, 0, tc.dictOffset, tc.dataOffset, tc.writeEmptyDictPage)
+
+			rows, err := Read[row](bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("Read: got err=%v, want nil", err)
+			}
+			if len(rows) != 0 {
+				t.Fatalf("Read: got %d rows, want 0", len(rows))
+			}
+
+			f, err := OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+
+			r := NewGenericReader[row](f)
+			defer r.Close()
+			n, err := r.Read(make([]row, 4))
+			if n != 0 || err != io.EOF {
+				t.Fatalf("GenericReader.Read: got n=%d err=%v, want n=0 err=EOF", n, err)
+			}
+
+			chunk := f.RowGroups()[0].ColumnChunks()[0]
+
+			pages := chunk.Pages()
+			if p, err := pages.ReadPage(); p != nil || err != io.EOF {
+				pages.Close()
+				t.Fatalf("Pages.ReadPage: got p=%v err=%v, want nil, EOF", p, err)
+			}
+			if err := pages.Close(); err != nil {
+				t.Fatalf("Pages.Close: %v", err)
+			}
+
+			for _, seekRow := range []int64{0, 5} {
+				p := chunk.Pages()
+				if err := p.SeekToRow(seekRow); err != nil {
+					p.Close()
+					t.Fatalf("Pages.SeekToRow(%d): got %v, want nil", seekRow, err)
+				}
+				if page, err := p.ReadPage(); page != nil || err != io.EOF {
+					p.Close()
+					t.Fatalf("Pages.ReadPage after SeekToRow(%d): got page=%v err=%v, want nil, EOF", seekRow, page, err)
+				}
+				if err := p.Close(); err != nil {
+					t.Fatalf("Pages.Close: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestNonEmptyCorruptDataPageOffsetFails(t *testing.T) {
+	type row struct {
+		X *int64 `parquet:"x,optional"`
+	}
+
+	cases := []struct {
+		name       string
+		numRows    int64
+		numValues  int64
+		dictOffset int64
+		dataOffset int64
+	}{
+		{
+			name:       "non_empty_values",
+			numRows:    1,
+			numValues:  1,
+			dictOffset: 4,
+			dataOffset: 0,
+		},
+		{
+			// A row group with rows but no values in the column chunk is
+			// corrupt, not an empty column chunk.
+			name:       "inconsistent_nonzero_rows_zero_values",
+			numRows:    1,
+			numValues:  0,
+			dictOffset: 4,
+			dataOffset: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := buildSingleColumnParquet(t, 1, tc.numRows, tc.numValues, tc.dictOffset, tc.dataOffset, true)
+
+			if _, err := Read[row](bytes.NewReader(data), int64(len(data))); err == nil {
+				t.Fatal("Read on corrupt chunk: got nil error, want error")
+			}
+
+			f, err := OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+
+			r := NewGenericReader[row](f)
+			defer r.Close()
+			if _, err := r.Read(make([]row, 4)); err == nil {
+				t.Fatal("GenericReader.Read on corrupt chunk: got nil error, want error")
+			}
+
+			pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+			defer pages.Close()
+			if err := pages.SeekToRow(0); err == nil {
+				t.Fatal("Pages.SeekToRow(0) on corrupt chunk: got nil error, want error")
+			}
+		})
+	}
+}
+
+func TestReadPageIndexReorderedAndGapped(t *testing.T) {
+	type row struct {
+		A int32 `parquet:"a"`
+		B int32 `parquet:"b"`
+	}
+
+	var src bytes.Buffer
+	w := NewGenericWriter[row](&src, PageBufferSize(1))
+	for _, r := range []row{{A: 10, B: 100}, {A: 20, B: 200}} {
+		if _, err := w.Write([]row{r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	orig := src.Bytes()
+
+	rewriteWithLayout := func(t *testing.T, gap int, reverse bool) []byte {
+		t.Helper()
+		n := len(orig)
+		footerSize := int(binary.LittleEndian.Uint32(orig[n-8 : n-4]))
+		var proto thrift.CompactProtocol
+		var meta format.FileMetaData
+		if err := thrift.Unmarshal(&proto, orig[n-8-footerSize:n-8], &meta); err != nil {
+			t.Fatal(err)
+		}
+
+		cols := meta.RowGroups[0].Columns
+		ciBytes := make([][]byte, len(cols))
+		oiBytes := make([][]byte, len(cols))
+		pageIndexStart := int64(n)
+		for i := range cols {
+			ciBytes[i] = orig[cols[i].ColumnIndexOffset : cols[i].ColumnIndexOffset+int64(cols[i].ColumnIndexLength)]
+			oiBytes[i] = orig[cols[i].OffsetIndexOffset : cols[i].OffsetIndexOffset+int64(cols[i].OffsetIndexLength)]
+			pageIndexStart = min(pageIndexStart, cols[i].ColumnIndexOffset, cols[i].OffsetIndexOffset)
+		}
+
+		var out bytes.Buffer
+		out.Write(orig[:pageIndexStart])
+
+		order := []int{0, 1}
+		if reverse {
+			order = []int{1, 0}
+		}
+		for idx, colIdx := range order {
+			if idx > 0 && gap > 0 {
+				out.Write(make([]byte, gap))
+			}
+			cols[colIdx].ColumnIndexOffset = int64(out.Len())
+			out.Write(ciBytes[colIdx])
+			cols[colIdx].ColumnIndexLength = int32(len(ciBytes[colIdx]))
+		}
+		for idx, colIdx := range order {
+			if idx > 0 && gap > 0 {
+				out.Write(make([]byte, gap))
+			}
+			cols[colIdx].OffsetIndexOffset = int64(out.Len())
+			out.Write(oiBytes[colIdx])
+			cols[colIdx].OffsetIndexLength = int32(len(oiBytes[colIdx]))
+		}
+
+		footerStart := out.Len()
+		encoder := thrift.NewEncoder(proto.NewWriter(&out))
+		if err := encoder.Encode(&meta); err != nil {
+			t.Fatal(err)
+		}
+		var trailer [8]byte
+		binary.LittleEndian.PutUint32(trailer[:4], uint32(out.Len()-footerStart))
+		copy(trailer[4:], "PAR1")
+		out.Write(trailer[:])
+		return out.Bytes()
+	}
+
+	cases := []struct {
+		name    string
+		gap     int
+		reverse bool
+	}{
+		{name: "reordered", gap: 0, reverse: true},
+		{name: "small gap", gap: 64, reverse: false},
+		{name: "large gap", gap: (1 << 20) + 64, reverse: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := rewriteWithLayout(t, tc.gap, tc.reverse)
+			f, err := OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+			chunks := f.RowGroups()[0].ColumnChunks()
+			for i, wantMin := range []int32{10, 100} {
+				ci, err := chunks[i].ColumnIndex()
+				if err != nil {
+					t.Fatalf("col %d ColumnIndex(): %v", i, err)
+				}
+				if got := ci.MinValue(0).Int32(); got != wantMin {
+					t.Errorf("col %d page 0 min = %d, want %d", i, got, wantMin)
+				}
+				oi, err := chunks[i].OffsetIndex()
+				if err != nil {
+					t.Fatalf("col %d OffsetIndex(): %v", i, err)
+				}
+				if oi.NumPages() != 2 {
+					t.Errorf("col %d OffsetIndex NumPages = %d, want 2", i, oi.NumPages())
+				}
+			}
+		})
+	}
+}
+
+func TestReadPageIndexMalformedBounds(t *testing.T) {
+	type row struct {
+		A int32 `parquet:"a"`
+	}
+	var src bytes.Buffer
+	w := NewGenericWriter[row](&src)
+	if _, err := w.Write([]row{{A: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	orig := src.Bytes()
+
+	n := len(orig)
+	footerSize := int(binary.LittleEndian.Uint32(orig[n-8 : n-4]))
+	var proto thrift.CompactProtocol
+	var baseMeta format.FileMetaData
+	if err := thrift.Unmarshal(&proto, orig[n-8-footerSize:n-8], &baseMeta); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(c *format.ColumnChunk)
+	}{
+		{
+			name:   "negative column index offset",
+			mutate: func(c *format.ColumnChunk) { c.ColumnIndexOffset = -1 },
+		},
+		{
+			name:   "negative column index length",
+			mutate: func(c *format.ColumnChunk) { c.ColumnIndexLength = -1 },
+		},
+		{
+			name:   "column index past eof",
+			mutate: func(c *format.ColumnChunk) { c.ColumnIndexOffset = int64(len(orig)); c.ColumnIndexLength = 16 },
+		},
+		{
+			name:   "column index offset overflow",
+			mutate: func(c *format.ColumnChunk) { c.ColumnIndexOffset = math.MaxInt64 - 4; c.ColumnIndexLength = 16 },
+		},
+		{
+			name:   "negative offset index offset",
+			mutate: func(c *format.ColumnChunk) { c.OffsetIndexOffset = -1 },
+		},
+		{
+			name:   "negative offset index length",
+			mutate: func(c *format.ColumnChunk) { c.OffsetIndexLength = -1 },
+		},
+		{
+			name:   "offset index past eof",
+			mutate: func(c *format.ColumnChunk) { c.OffsetIndexOffset = int64(len(orig)); c.OffsetIndexLength = 16 },
+		},
+		{
+			name:   "offset index offset overflow",
+			mutate: func(c *format.ColumnChunk) { c.OffsetIndexOffset = math.MaxInt64 - 4; c.OffsetIndexLength = 16 },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := baseMeta
+			meta.RowGroups = append([]format.RowGroup(nil), baseMeta.RowGroups...)
+			meta.RowGroups[0].Columns = append([]format.ColumnChunk(nil), baseMeta.RowGroups[0].Columns...)
+			tc.mutate(&meta.RowGroups[0].Columns[0])
+
+			f := &File{
+				metadata: meta,
+				reader:   bytes.NewReader(orig),
+				size:     int64(len(orig)),
+			}
+			if _, _, err := f.ReadPageIndex(); err == nil {
+				t.Fatalf("ReadPageIndex() = nil, want error")
+			}
+		})
+	}
 }

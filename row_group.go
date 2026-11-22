@@ -279,7 +279,7 @@ func (r *rowGroupRows) SeekToRow(rowIndex int64) error {
 }
 
 func (r *rowGroupRows) ReadRows(rows []Row) (int, error) {
-	if r.closed {
+	if r.closed || len(r.columns) == 0 {
 		return 0, io.EOF
 	}
 
@@ -385,7 +385,12 @@ func (g *seekRowGroup) SortingColumns() []SortingColumn {
 
 func (g *seekRowGroup) Rows() Rows {
 	rows := g.base.Rows()
-	rows.SeekToRow(g.seek)
+	if err := rows.SeekToRow(g.seek); err != nil {
+		if cerr := rows.Close(); cerr != nil {
+			err = errors.Join(err, cerr)
+		}
+		return &errorRows{err: err, schema: g.Schema()}
+	}
 	return rows
 }
 
@@ -404,7 +409,12 @@ func (c *seekColumnChunk) Column() int {
 
 func (c *seekColumnChunk) Pages() Pages {
 	pages := c.base.Pages()
-	pages.SeekToRow(c.seek)
+	if err := pages.SeekToRow(c.seek); err != nil {
+		if cerr := pages.Close(); cerr != nil {
+			err = errors.Join(err, cerr)
+		}
+		return &errorPages{err: err}
+	}
 	return pages
 }
 
@@ -469,6 +479,17 @@ type emptyBloomFilter struct{}
 func (emptyBloomFilter) ReadAt([]byte, int64) (int, error) { return 0, io.EOF }
 func (emptyBloomFilter) Size() int64                       { return 0 }
 func (emptyBloomFilter) Check(Value) (bool, error)         { return false, nil }
+
+// errorRows is a Rows implementation which returns an error on every read.
+type errorRows struct {
+	err    error
+	schema *Schema
+}
+
+func (r *errorRows) ReadRows([]Row) (int, error) { return 0, r.err }
+func (r *errorRows) SeekToRow(int64) error       { return r.err }
+func (r *errorRows) Close() error                { return nil }
+func (r *errorRows) Schema() *Schema             { return r.schema }
 
 type emptyRows struct{ schema *Schema }
 

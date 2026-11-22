@@ -216,16 +216,18 @@ TEXT ·dictionaryBoundsFloat32(SB), NOSPLIT, $0-64
     MOVSS (AX)(DI*4), X3
     MOVAPS X3, X4
 
+    UCOMISS X3, X3
+    JP findNonNaN
+
     CMPQ DX, $8
-    JB test
+    JB initSSE2
 
     CMPB ·hasAVX512VL(SB), $0
-    JE test
+    JE initSSE2
 
     MOVQ DX, DI
-    SHRQ $3, DI
-    SHLQ $3, DI
-
+    ANDQ $-8, DI
+initAVX512:
     MOVQ $0xFFFF, R8
     KMOVW R8, K1
 
@@ -239,8 +241,9 @@ loopAVX512:
     CMPB R9, $0xFF
     JNE indexOutOfBounds
     VPGATHERDD (AX)(Y0*4), K1, Y1
-    VMINPS Y1, Y3, Y3
-    VMAXPS Y1, Y4, Y4
+    // Keep non-NaN accumulators in SRC2 so NaN lanes preserve Y3 and Y4.
+    VMINPS Y3, Y1, Y3
+    VMAXPS Y4, Y1, Y4
     KMOVW R8, K1
     ADDQ $8, SI
     CMPQ SI, DI
@@ -263,19 +266,70 @@ loopAVX512:
 
     VZEROUPPER
     JMP test
+    PCALIGN $32
+initSSE2:
+    INCQ SI
+    MOVQ DX, R11
+    SUBQ SI, R11
+    CMPQ R11, $4
+    JB test
+    ANDQ $-4, R11
+    ADDQ SI, R11
+    SHUFPS $0, X3, X3
+    MOVAPS X3, X4
+    PCALIGN $16
+loopSSE2:
+    MOVL (CX)(SI*4), DI
+    MOVL 4(CX)(SI*4), R8
+    MOVL 8(CX)(SI*4), R9
+    MOVL 12(CX)(SI*4), R10
+    CMPL DI, BX
+    JAE indexOutOfBounds
+    CMPL R8, BX
+    JAE indexOutOfBounds
+    CMPL R9, BX
+    JAE indexOutOfBounds
+    CMPL R10, BX
+    JAE indexOutOfBounds
+    MOVSS (AX)(DI*4), X1
+    MOVSS (AX)(R8*4), X2
+    UNPCKLPS X2, X1
+    MOVSS (AX)(R9*4), X5
+    MOVSS (AX)(R10*4), X6
+    UNPCKLPS X6, X5
+    MOVLHPS X5, X1
+    MOVAPS X1, X2
+    // Keep non-NaN accumulators in SRC2 so NaN lanes preserve X3 and X4.
+    MINPS X3, X1
+    MAXPS X4, X2
+    MOVAPS X1, X3
+    MOVAPS X2, X4
+    ADDQ $4, SI
+    CMPQ SI, R11
+    JNE loopSSE2
+
+    MOVHLPS X3, X1
+    MOVHLPS X4, X2
+    MINPS X1, X3
+    MAXPS X2, X4
+    PSHUFD $1, X3, X1
+    PSHUFD $1, X4, X2
+    MINSS X1, X3
+    MAXSS X2, X4
+    JMP test
+indexOutOfBounds:
+    MOVQ $errnoIndexOutOfBounds, R12
+    JMP return
 loop:
     MOVL (CX)(SI*4), DI
     CMPL DI, BX
     JAE indexOutOfBounds
     MOVSS (AX)(DI*4), X1
-    UCOMISS X3, X1
-    JAE skipAssignMin
+    MOVAPS X1, X2
+    MINSS X3, X1
+    MAXSS X4, X2
     MOVAPS X1, X3
-skipAssignMin:
-    UCOMISS X4, X1
-    JBE skipAssignMax
-    MOVAPS X1, X4
-skipAssignMax:
+    MOVAPS X2, X4
     INCQ SI
 test:
     CMPQ SI, DX
@@ -285,9 +339,26 @@ return:
     MOVSS X4, max+52(FP)
     MOVQ R12, err+56(FP)
     RET
-indexOutOfBounds:
-    MOVQ $errnoIndexOutOfBounds, R12
-    JMP return
+findNonNaN:
+    INCQ SI
+    CMPQ SI, DX
+    JE return
+    MOVL (CX)(SI*4), DI
+    CMPL DI, BX
+    JAE indexOutOfBounds
+    MOVSS (AX)(DI*4), X1
+    UCOMISS X1, X1
+    JP findNonNaN
+    MOVAPS X1, X3
+    MOVAPS X1, X4
+    CMPB ·hasAVX512VL(SB), $0
+    JE initSSE2
+    MOVQ DX, DI
+    ANDQ $-8, DI
+    CMPQ SI, DI
+    JAE initSSE2
+    ANDQ $-8, SI
+    JMP initAVX512
 
 // func dictionaryBoundsFloat64(dict []float64, indexes []int32) (min, max float64, err errno)
 TEXT ·dictionaryBoundsFloat64(SB), NOSPLIT, $0-72
@@ -309,18 +380,20 @@ TEXT ·dictionaryBoundsFloat64(SB), NOSPLIT, $0-72
     CMPL DI, BX
     JAE indexOutOfBounds
     MOVSD (AX)(DI*8), X3
-    MOVAPS X3, X4
+    MOVAPD X3, X4
+
+    UCOMISD X3, X3
+    JP findNonNaN
 
     CMPQ DX, $8
-    JB test
+    JB initSSE2
 
     CMPB ·hasAVX512VL(SB), $0
-    JE test
+    JE initSSE2
 
     MOVQ DX, DI
-    SHRQ $3, DI
-    SHLQ $3, DI
-
+    ANDQ $-8, DI
+initAVX512:
     MOVQ $0xFFFF, R8
     KMOVW R8, K1
 
@@ -334,8 +407,9 @@ loopAVX512:
     CMPB R9, $0xFF
     JNE indexOutOfBounds
     VPGATHERDQ (AX)(Y0*8), K1, Z1
-    VMINPD Z1, Z3, Z3
-    VMAXPD Z1, Z4, Z4
+    // Keep non-NaN accumulators in SRC2 so NaN lanes preserve Z3 and Z4.
+    VMINPD Z3, Z1, Z3
+    VMAXPD Z4, Z1, Z4
     KMOVW R8, K1
     ADDQ $8, SI
     CMPQ SI, DI
@@ -358,19 +432,72 @@ loopAVX512:
 
     VZEROUPPER
     JMP test
+    PCALIGN $32
+initSSE2:
+    INCQ SI
+    MOVQ DX, R11
+    SUBQ SI, R11
+    CMPQ R11, $4
+    JB test
+    ANDQ $-4, R11
+    ADDQ SI, R11
+    UNPCKLPD X3, X3
+    MOVAPD X3, X4
+    MOVAPD X3, X5
+    MOVAPD X3, X6
+    PCALIGN $16
+loopSSE2:
+    MOVL (CX)(SI*4), DI
+    MOVL 4(CX)(SI*4), R8
+    MOVL 8(CX)(SI*4), R9
+    MOVL 12(CX)(SI*4), R10
+    CMPL DI, BX
+    JAE indexOutOfBounds
+    CMPL R8, BX
+    JAE indexOutOfBounds
+    CMPL R9, BX
+    JAE indexOutOfBounds
+    CMPL R10, BX
+    JAE indexOutOfBounds
+    MOVSD (AX)(DI*8), X1
+    MOVHPD (AX)(R8*8), X1
+    MOVSD (AX)(R9*8), X7
+    MOVHPD (AX)(R10*8), X7
+    MOVAPD X1, X2
+    MOVAPD X7, X0
+    // Keep non-NaN accumulators in SRC2 so NaN lanes preserve X3..X6.
+    MINPD X3, X1
+    MAXPD X4, X2
+    MINPD X5, X7
+    MAXPD X6, X0
+    MOVAPD X1, X3
+    MOVAPD X2, X4
+    MOVAPD X7, X5
+    MOVAPD X0, X6
+    ADDQ $4, SI
+    CMPQ SI, R11
+    JNE loopSSE2
+
+    MINPD X5, X3
+    MAXPD X6, X4
+    MOVHLPS X3, X1
+    MOVHLPS X4, X2
+    MINSD X1, X3
+    MAXSD X2, X4
+    JMP test
+indexOutOfBounds:
+    MOVQ $errnoIndexOutOfBounds, R12
+    JMP return
 loop:
     MOVL (CX)(SI*4), DI
     CMPL DI, BX
     JAE indexOutOfBounds
     MOVSD (AX)(DI*8), X1
-    UCOMISD X3, X1
-    JAE skipAssignMin
+    MOVAPD X1, X2
+    MINSD X3, X1
+    MAXSD X4, X2
     MOVAPD X1, X3
-skipAssignMin:
-    UCOMISD X4, X1
-    JBE skipAssignMax
-    MOVAPD X1, X4
-skipAssignMax:
+    MOVAPD X2, X4
     INCQ SI
 test:
     CMPQ SI, DX
@@ -380,9 +507,26 @@ return:
     MOVSD X4, max+56(FP)
     MOVQ R12, err+64(FP)
     RET
-indexOutOfBounds:
-    MOVQ $errnoIndexOutOfBounds, R12
-    JMP return
+findNonNaN:
+    INCQ SI
+    CMPQ SI, DX
+    JE return
+    MOVL (CX)(SI*4), DI
+    CMPL DI, BX
+    JAE indexOutOfBounds
+    MOVSD (AX)(DI*8), X1
+    UCOMISD X1, X1
+    JP findNonNaN
+    MOVAPD X1, X3
+    MOVAPD X1, X4
+    CMPB ·hasAVX512VL(SB), $0
+    JE initSSE2
+    MOVQ DX, DI
+    ANDQ $-8, DI
+    CMPQ SI, DI
+    JAE initSSE2
+    ANDQ $-8, SI
+    JMP initAVX512
 
 // func dictionaryBoundsUint32(dict []uint32, indexes []int32) (min, max uint32, err errno)
 TEXT ·dictionaryBoundsUint32(SB), NOSPLIT, $0-64

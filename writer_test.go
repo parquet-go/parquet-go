@@ -26,6 +26,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/bloom"
 	"github.com/parquet-go/parquet-go/compress"
+	"github.com/parquet-go/parquet-go/compress/lz4"
 	"github.com/parquet-go/parquet-go/compress/zstd"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
@@ -36,6 +37,36 @@ const (
 	v1 = 1
 	v2 = 2
 )
+
+func TestLZ4RoundTrip(t *testing.T) {
+	type row struct {
+		Value []byte
+	}
+	// Modest compression makes LZ4's output size estimate exceed the page buffer.
+	value := make([]byte, 64<<10)
+	rand.New(rand.NewSource(0)).Read(value[:48<<10])
+	copy(value[48<<10:], value[:16<<10])
+	rows := []row{{Value: value}}
+
+	for _, version := range []int{v1, v2} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := parquet.Write(&buf, rows,
+				parquet.Compression(&lz4.Codec{Level: lz4.Level1}),
+				parquet.DataPageVersion(version),
+			); err != nil {
+				t.Fatal(err)
+			}
+			got, err := parquet.Read[row](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || !bytes.Equal(got[0].Value, value) {
+				t.Fatal("rows differ after LZ4 round trip")
+			}
+		})
+	}
+}
 
 func BenchmarkGenericWriter(b *testing.B) {
 	benchmarkGenericWriter[benchmarkRowType](b)
@@ -118,6 +149,64 @@ func benchmarkGenericWriter[Row generator[Row]](b *testing.B) {
 			})
 		})
 	})
+}
+
+type compressionBenchmarkRow struct {
+	ID       int64
+	Count    int64
+	Price    float64
+	Name     string
+	Category string `parquet:",dict"`
+	Parent   *int64 `parquet:",optional"`
+}
+
+func (row compressionBenchmarkRow) generate(prng *rand.Rand) compressionBenchmarkRow {
+	categories := [...]string{"alpha", "beta", "gamma", "delta"}
+	row.ID = prng.Int63n(1 << 20)
+	row.Count = prng.Int63n(1000)
+	row.Price = float64(prng.Intn(100_000)) / 100
+	row.Name = fmt.Sprintf("name-%06d", prng.Intn(1_000_000))
+	row.Category = categories[prng.Intn(len(categories))]
+	if prng.Intn(3) != 0 {
+		parent := prng.Int63n(1 << 20)
+		row.Parent = &parent
+	}
+	return row
+}
+
+func BenchmarkGenericWriterCompression(b *testing.B) {
+	prng := rand.New(rand.NewSource(0))
+	rows := make([]compressionBenchmarkRow, benchmarkNumRows)
+	for i := range rows {
+		rows[i] = rows[i].generate(prng)
+	}
+
+	for _, codec := range []compress.Codec{
+		&parquet.Uncompressed,
+		&parquet.Snappy,
+		&parquet.Gzip,
+		&parquet.Zstd,
+		&parquet.Lz4Raw,
+	} {
+		b.Run(codec.String(), func(b *testing.B) {
+			buf := new(bytes.Buffer)
+			writer := parquet.NewGenericWriter[compressionBenchmarkRow](buf, parquet.Compression(codec))
+			b.ReportAllocs()
+			benchmarkRowsPerSecond(b, func() int {
+				buf.Reset()
+				writer.Reset(buf)
+				n, err := writer.Write(rows)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					b.Fatal(err)
+				}
+				return n
+			})
+			b.ReportMetric(float64(buf.Len()), "file-bytes")
+		})
+	}
 }
 
 // TestIssue176DataPageV1WithDecimal tests the bug reported in issue #176
@@ -383,9 +472,7 @@ func testWriteRowsColumns[T any](t *testing.T) {
 					wg        sync.WaitGroup
 				)
 				for i, col := range vals {
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
+					wg.Go(func() {
 						num, err := w.ColumnWriters()[i].WriteRowValues(col)
 						if err != nil {
 							mu.Lock()
@@ -399,7 +486,7 @@ func testWriteRowsColumns[T any](t *testing.T) {
 						mu.Lock()
 						rowCounts = append(rowCounts, num)
 						mu.Unlock()
-					}()
+					})
 				}
 				wg.Wait()
 				for i, n := range rowCounts[1:] {
@@ -1693,14 +1780,19 @@ func parquetCLI(cmd, path string) ([]byte, error) {
 		return output, err
 	}
 
-	// parquet-cli has trailing spaces on some lines.
+	// parquet-cli has trailing spaces on some lines. Parallel Java processes
+	// also race for the same hsperfdata file and print a warning on stdout.
 	lines := bytes.Split(output, []byte("\n"))
-
-	for i, line := range lines {
-		lines[i] = bytes.TrimRight(line, " ")
+	filtered := lines[:0]
+	for _, line := range lines {
+		line = bytes.TrimRight(line, " ")
+		if bytes.Contains(line, []byte("hsperfdata_")) {
+			continue
+		}
+		filtered = append(filtered, line)
 	}
 
-	return bytes.Join(lines, []byte("\n")), nil
+	return bytes.Join(filtered, []byte("\n")), nil
 }
 
 func TestWriterGenerateBloomFilters(t *testing.T) {
@@ -1929,6 +2021,51 @@ func TestWriterResetWithBloomFilters(t *testing.T) {
 
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWriterResetPreservesColumnMetadata(t *testing.T) {
+	type Record struct {
+		RecordType string `parquet:"record_type"`
+	}
+	type Event struct {
+		ID     int64  `parquet:"id"`
+		Record Record `parquet:"record"`
+		Name   string `parquet:"name"`
+	}
+
+	wantPaths := [][]string{{"id"}, {"record", "record_type"}, {"name"}}
+	wantSorting := []format.SortingColumn{{ColumnIdx: 2}, {ColumnIdx: 0}}
+
+	writer := parquet.NewGenericWriter[Event](nil, parquet.SortingWriterConfig(
+		parquet.SortingColumns(parquet.Ascending("name"), parquet.Ascending("id")),
+	))
+
+	for i := range 3 {
+		output := new(bytes.Buffer)
+		writer.Reset(output)
+
+		if _, err := writer.Write([]Event{{}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		f, err := parquet.OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rowGroup := f.Metadata().RowGroups[0]
+		for j, column := range rowGroup.Columns {
+			if got := []string(column.MetaData.PathInSchema); !slices.Equal(got, wantPaths[j]) {
+				t.Errorf("file %d: column %d: path_in_schema = %q, want %q", i, j, got, wantPaths[j])
+			}
+		}
+		if !slices.Equal(rowGroup.SortingColumns, wantSorting) {
+			t.Errorf("file %d: sorting columns = %+v, want %+v", i, rowGroup.SortingColumns, wantSorting)
+		}
 	}
 }
 

@@ -60,6 +60,33 @@ func TestSortingWriter(t *testing.T) {
 	assertRowsEqual(t, rows, read)
 }
 
+func TestSortingWriterOptionalListElements(t *testing.T) {
+	type Row struct {
+		K int32   `parquet:"k"`
+		X []int32 `parquet:"x,list" parquet-element:",optional"`
+	}
+
+	rows := []Row{
+		{K: 1, X: []int32{7, 0, 9}},
+	}
+
+	var output bytes.Buffer
+	w := parquet.NewSortingWriter[Row](&output, 10,
+		parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("k"))))
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := parquet.Read[Row](bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRowsEqual(t, rows, read)
+}
+
 // TestSortingWriterMultipleFlush verifies that calling Flush() multiple times
 // still produces a globally sorted output with a single row group.
 // This tests the fix for the issue where multiple Flush() calls would create

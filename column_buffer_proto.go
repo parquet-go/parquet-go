@@ -178,9 +178,9 @@ func makeNestedMap(path string, value any) any {
 	}
 
 	result := value
-	for i := len(components) - 1; i >= 0; i-- {
+	for _, component := range slices.Backward(components) {
 		result = map[string]any{
-			components[i]: result,
+			component: result,
 		}
 	}
 	return result

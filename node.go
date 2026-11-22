@@ -386,19 +386,19 @@ func goTypeOfLeaf(node Node) reflect.Type {
 	case Boolean:
 		return reflect.TypeOf(false)
 	case Int32:
-		return reflect.TypeOf(int32(0))
+		return reflect.TypeFor[int32]()
 	case Int64:
-		return reflect.TypeOf(int64(0))
+		return reflect.TypeFor[int64]()
 	case Int96:
-		return reflect.TypeOf(deprecated.Int96{})
+		return reflect.TypeFor[deprecated.Int96]()
 	case Float:
-		return reflect.TypeOf(float32(0))
+		return reflect.TypeFor[float32]()
 	case Double:
-		return reflect.TypeOf(float64(0))
+		return reflect.TypeFor[float64]()
 	case ByteArray:
-		return reflect.TypeOf(([]byte)(nil))
+		return reflect.TypeFor[[]byte]()
 	case FixedLenByteArray:
-		return reflect.ArrayOf(t.Length(), reflect.TypeOf(byte(0)))
+		return reflect.ArrayOf(t.Length(), reflect.TypeFor[byte]())
 	default:
 		panic("BUG: parquet type returned an unsupported kind")
 	}
@@ -503,25 +503,15 @@ func numLeafColumns(node Node, columnIndex int) int {
 }
 
 func listElementOf(node Node) Node {
-	if !node.Leaf() {
-		// The spec says the outer group should be named "list" and the inner
-		// element should be named "element", but many implementations use
-		// different names (e.g. "bag"/"array_element", "list"/"item").
-		// Per the spec's backward compatibility rules, we should not enforce
-		// specific names when reading.
-		//
-		// A LIST node should have exactly one child (the repeated group),
-		// and that group should have exactly one child (the element).
-		if fields := node.Fields(); len(fields) == 1 {
-			repeatedGroup := fields[0]
-			if !repeatedGroup.Leaf() && repeatedGroup.Repeated() {
-				if elems := repeatedGroup.Fields(); len(elems) == 1 {
-					return elems[0]
-				}
-			}
-		}
+	name := ""
+	if field, ok := node.(Field); ok {
+		name = field.Name()
 	}
-	panic("node with logical type LIST is not composed of a repeated group with a single element")
+	elem, _, ok := listLogicalElement(node, name)
+	if !ok {
+		panic("node with logical type LIST does not match a supported list shape")
+	}
+	return elem
 }
 
 func mapKeyValueOf(node Node) Node {
@@ -541,6 +531,11 @@ func mapKeyValueOf(node Node) Node {
 
 func encodingOf(node Node, defaultEncodings map[Kind]encoding.Encoding) encoding.Encoding {
 	encoding := node.Encoding()
+	// ALP is decode-only, so a column that reports it needs a writable
+	// encoding for new pages.
+	if encoding != nil && encoding.Encoding() == format.ALP {
+		encoding = nil
+	}
 	kind := node.Type().Kind()
 	if encoding == nil && defaultEncodings != nil {
 		encoding = defaultEncodings[kind]

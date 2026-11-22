@@ -192,10 +192,13 @@ func (col *repeatedColumnBuffer) Less(i, j int) bool {
 	definitionLevels := col.definitionLevels.Slice()
 	row1Length := repeatedRowLength(repetitionLevels[row1.offset:])
 	row2Length := repeatedRowLength(repetitionLevels[row2.offset:])
+	// Value cursors walk the base column. They start at each row and advance
+	// inside the loop; reloading the base offset on every element compares
+	// the first value over and over.
+	x := int(row1.baseOffset)
+	y := int(row2.baseOffset)
 
 	for k := 0; k < row1Length && k < row2Length; k++ {
-		x := int(row1.baseOffset)
-		y := int(row2.baseOffset)
 		definitionLevel1 := definitionLevels[int(row1.offset)+k]
 		definitionLevel2 := definitionLevels[int(row2.offset)+k]
 		switch {
@@ -203,6 +206,14 @@ func (col *repeatedColumnBuffer) Less(i, j int) bool {
 			return true
 		case less(col.base, y, x, col.maxDefinitionLevel, definitionLevel2, definitionLevel1):
 			return false
+		}
+		// Nulls are omitted from the base column, so the next stored value
+		// is only one slot ahead when this element was actually written.
+		if definitionLevel1 == col.maxDefinitionLevel {
+			x++
+		}
+		if definitionLevel2 == col.maxDefinitionLevel {
+			y++
 		}
 	}
 
@@ -294,6 +305,11 @@ func (col *repeatedColumnBuffer) writeValues(levels columnLevels, row sparse.Arr
 	if row.Len() == 0 {
 		col.repetitionLevels.AppendValue(levels.repetitionLevel)
 		col.definitionLevels.AppendValue(levels.definitionLevel)
+		// The level says a value is present. Leave a physical zero in the base
+		// column, as writeNull does, or every later value shifts up a row.
+		if levels.definitionLevel == col.maxDefinitionLevel {
+			col.base.writeNull(levels)
+		}
 		return
 	}
 
@@ -366,7 +382,12 @@ func (col *repeatedColumnBuffer) writeByteArray(levels columnLevels, value []byt
 }
 
 func (col *repeatedColumnBuffer) writeNull(levels columnLevels) {
-	col.writeLevel(levels)
+	// At the max definition level the value cannot be null (e.g. a null
+	// element in a list of required values), so the base column must still
+	// hold a value for it, otherwise all the values after it are shifted.
+	if col.writeLevel(levels) {
+		col.base.writeNull(levels)
+	}
 }
 
 func (col *repeatedColumnBuffer) ReadValuesAt(values []Value, offset int64) (int, error) {

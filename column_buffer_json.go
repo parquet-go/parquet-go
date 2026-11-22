@@ -77,6 +77,30 @@ func writeJSONToGroup(columns []ColumnBuffer, levels columnLevels, val *jsonlite
 	}
 }
 
+// writeJSONToMap writes a JSON object as map entries. Null and an empty
+// object write no entries. The elem struct's first field is the string key
+// and its second field is the *jsonlite.Value.
+func writeJSONToMap(columns []ColumnBuffer, levels columnLevels, val *jsonlite.Value, writeValue writeValueFunc, zero, elem reflect.Value) {
+	if val == nil || val.Kind() == jsonlite.Null || (val.Kind() == jsonlite.Object && val.Len() == 0) {
+		writeValue(columns, levels, zero)
+		return
+	}
+	if val.Kind() != jsonlite.Object {
+		panic(fmt.Errorf("cannot write JSON value to map column"))
+	}
+
+	key := elem.Field(0)
+	value := elem.Field(1)
+	levels.repetitionDepth++
+	levels.definitionLevel++
+	for k, v := range val.Object {
+		key.SetString(k)
+		value.Set(reflect.ValueOf(v))
+		writeValue(columns, levels, elem)
+		levels.repetitionLevel = levels.repetitionDepth
+	}
+}
+
 func writeJSONToRepeated(columns []ColumnBuffer, levels columnLevels, val *jsonlite.Value, elementWriter writeValueFunc) {
 	if val.Kind() == jsonlite.Array {
 		if val.Len() == 0 {

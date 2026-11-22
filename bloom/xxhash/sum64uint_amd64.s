@@ -240,7 +240,7 @@ GLOBL vpermi2qodd<>(SB), RODATA|NOPTR, $64
     VPXORQ tmp, acc, acc
 
 // func MultiSum64Uint8(h []uint64, v []uint8) int
-TEXT ·MultiSum64Uint8(SB), NOSPLIT, $0-54
+TEXT ·MultiSum64Uint8(SB), NOSPLIT, $0-56
     MOVQ $PRIME1, prime1
     MOVQ $PRIME2, prime2
     MOVQ $PRIME3, prime3
@@ -329,7 +329,7 @@ done:
     RET
 
 // func MultiSum64Uint16(h []uint64, v []uint16) int
-TEXT ·MultiSum64Uint16(SB), NOSPLIT, $0-54
+TEXT ·MultiSum64Uint16(SB), NOSPLIT, $0-56
     MOVQ $PRIME1, prime1
     MOVQ $PRIME2, prime2
     MOVQ $PRIME3, prime3
@@ -429,7 +429,7 @@ done:
     RET
 
 // func MultiSum64Uint32(h []uint64, v []uint32) int
-TEXT ·MultiSum64Uint32(SB), NOSPLIT, $0-54
+TEXT ·MultiSum64Uint32(SB), NOSPLIT, $0-56
     MOVQ $PRIME1, prime1
     MOVQ $PRIME2, prime2
     MOVQ $PRIME3, prime3
@@ -521,7 +521,7 @@ done:
     RET
 
 // func MultiSum64Uint64(h []uint64, v []uint64) int
-TEXT ·MultiSum64Uint64(SB), NOSPLIT, $0-54
+TEXT ·MultiSum64Uint64(SB), NOSPLIT, $0-56
     MOVQ $PRIME1, prime1
     MOVQ $PRIME2, prime2
     MOVQ $PRIME3, prime3
@@ -621,7 +621,7 @@ done:
     RET
 
 // func MultiSum64Uint128(h []uint64, v [][16]byte) int
-TEXT ·MultiSum64Uint128(SB), NOSPLIT, $0-54
+TEXT ·MultiSum64Uint128(SB), NOSPLIT, $0-56
     MOVQ $PRIME1, prime1
     MOVQ $PRIME2, prime2
     MOVQ $PRIME3, prime3

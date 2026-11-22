@@ -258,8 +258,14 @@ func (buf *Buffer) configure(schema *Schema) {
 		}
 
 		sortingIndex := searchSortingColumn(sortingColumns, leaf.path)
-		if sortingIndex < len(sortingColumns) && sortingColumns[sortingIndex].NullsFirst() {
-			nullOrdering = nullsGoFirst
+		if sortingIndex < len(sortingColumns) {
+			sortingColumn := sortingColumns[sortingIndex]
+			// reversedColumnBuffer inverts Less for optional and repeated
+			// leaves, which also flips null ordering. Compensate first so
+			// Descending keeps the configured NullsFirst placement.
+			if sortingColumn.NullsFirst() != sortingColumn.Descending() {
+				nullOrdering = nullsGoFirst
+			}
 		}
 
 		column := columnType.NewColumnBuffer(columnIndex, bufferCap)

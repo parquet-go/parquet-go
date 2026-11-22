@@ -207,16 +207,18 @@ func TestColumnBufferInt96WriteMultipleValues(t *testing.T) {
 	}
 }
 
-// TestInt96ColumnBufferWriteNull tests that writeNull still panics
+// TestColumnBufferInt96WriteNull stores a zero so a nil required group does
+// not drop the value.
 func TestColumnBufferInt96WriteNull(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for writeNull")
-		}
-	}()
-
 	col := newInt96ColumnBuffer(Int96Type, 0, 10)
 	col.writeNull(columnLevels{})
+
+	if col.Len() != 1 {
+		t.Fatalf("expected 1 value, got %d", col.Len())
+	}
+	if col.values[0] != (deprecated.Int96{}) {
+		t.Fatalf("expected zero INT96, got %v", col.values[0])
+	}
 }
 
 // TestInt96ColumnBufferPrecisionLoss documents precision loss for large values

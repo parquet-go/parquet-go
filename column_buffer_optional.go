@@ -114,9 +114,9 @@ func (col *optionalColumnBuffer) Page() Page {
 
 		rows := col.rows.Slice()
 		i := 0
-		for _, r := range rows {
+		for j, r := range rows {
 			if r >= 0 {
-				rows[i] = int32(i)
+				rows[j] = int32(i)
 				i++
 			}
 		}
@@ -220,8 +220,7 @@ func (col *optionalColumnBuffer) writeValues(levels columnLevels, rows sparse.Ar
 	// we still need to output a row to the buffer to record the definition
 	// level.
 	if rows.Len() == 0 {
-		col.definitionLevels.AppendValue(levels.definitionLevel)
-		col.rows.AppendValue(-1)
+		col.writeNull(levels)
 		return
 	}
 
@@ -313,6 +312,14 @@ func (col *optionalColumnBuffer) writeByteArray(levels columnLevels, value []byt
 }
 
 func (col *optionalColumnBuffer) writeNull(levels columnLevels) {
+	if levels.definitionLevel == col.maxDefinitionLevel {
+		// The value cannot be null at the max definition level (e.g. a null
+		// required field of an optional group), write it to the base column
+		// like the other write methods do.
+		col.base.writeNull(levels)
+		col.writeLevel()
+		return
+	}
 	col.definitionLevels.AppendValue(levels.definitionLevel)
 	col.rows.AppendValue(-1)
 }

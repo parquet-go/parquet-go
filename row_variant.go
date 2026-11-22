@@ -60,7 +60,7 @@ func extractRawVariantStruct(value reflect.Value) (metadata, val []byte, ok bool
 	if !hasMetadata || !hasValue {
 		return nil, nil, false
 	}
-	byteSliceType := reflect.TypeOf([]byte(nil))
+	byteSliceType := reflect.TypeFor[[]byte]()
 	if metaField.Type != byteSliceType || valField.Type != byteSliceType {
 		return nil, nil, false
 	}
@@ -352,7 +352,7 @@ func setRawVariantStruct(value reflect.Value, metadata, val []byte) bool {
 		return false
 	}
 	t := v.Type()
-	byteSliceType := reflect.TypeOf([]byte(nil))
+	byteSliceType := reflect.TypeFor[[]byte]()
 	metaField, hasMetadata := t.FieldByName("Metadata")
 	valField, hasValue := t.FieldByName("Value")
 	if !hasMetadata || !hasValue || metaField.Type != byteSliceType || valField.Type != byteSliceType {
@@ -395,7 +395,7 @@ func isRawVariantStructTarget(value reflect.Value) bool {
 	if t.Kind() != reflect.Struct {
 		return false
 	}
-	byteSliceType := reflect.TypeOf([]byte(nil))
+	byteSliceType := reflect.TypeFor[[]byte]()
 	metaField, hasMetadata := t.FieldByName("Metadata")
 	valField, hasValue := t.FieldByName("Value")
 	return hasMetadata && hasValue &&

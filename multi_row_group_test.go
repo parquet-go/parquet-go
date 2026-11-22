@@ -186,7 +186,7 @@ func TestMultiBloomFilterCheck(t *testing.T) {
 	multiFilter := multiRG.ColumnChunks()[0].BloomFilter()
 
 	// Test values that were written to first row group
-	for i := int64(0); i < 10; i++ {
+	for i := range int64(10) {
 		if ok, err := multiFilter.Check(parquet.ValueOf(i)); err != nil {
 			t.Errorf("Check(%d) unexpected error: %v", i, err)
 		} else if !ok {
@@ -341,7 +341,7 @@ func TestMultiColumnIndexOrdering(t *testing.T) {
 		writer := parquet.NewWriter(buf, parquet.SchemaOf(&Record{}))
 
 		// First row group: 0-9
-		for i := int64(0); i < 10; i++ {
+		for i := range int64(10) {
 			writer.Write(&Record{ID: i})
 		}
 		writer.Flush()
@@ -394,7 +394,7 @@ func TestMultiColumnIndexOrdering(t *testing.T) {
 		writer.Flush()
 
 		// Second row group: low values
-		for i := int64(0); i < 10; i++ {
+		for i := range int64(10) {
 			writer.Write(&Record{ID: i})
 		}
 		writer.Flush()
@@ -476,7 +476,7 @@ func TestMultiColumnIndexErrors(t *testing.T) {
 
 	buf := new(bytes.Buffer)
 	writer := parquet.NewWriter(buf, parquet.SchemaOf(&Record{}))
-	for i := int64(0); i < 10; i++ {
+	for i := range int64(10) {
 		writer.Write(&Record{ID: i})
 	}
 	writer.Close()
@@ -505,7 +505,7 @@ func TestMultiOffsetIndexErrors(t *testing.T) {
 
 	buf := new(bytes.Buffer)
 	writer := parquet.NewWriter(buf, parquet.SchemaOf(&Record{}))
-	for i := int64(0); i < 10; i++ {
+	for i := range int64(10) {
 		writer.Write(&Record{ID: i})
 	}
 	writer.Close()

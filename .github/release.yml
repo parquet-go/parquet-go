@@ -1,23 +1,33 @@
+# A pull request is filed under the first matching category.
+# Dependency bumps also carry `type: maintenance`, so `dependencies` comes first.
 changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
   categories:
     - title: Breaking changes
       labels:
         - breaking change
     - title: New features
       labels:
-        - enhancement
+        - "type: feature"
+    - title: Performance
+      labels:
+        - "type: performance"
     - title: Bug fixes
       labels:
-        - bug
+        - "type: bug"
     - title: Documentation
       labels:
-        - documentation
+        - "type: docs"
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Maintenance
+      labels:
+        - "type: maintenance"
     - title: Other changes
       labels:
         - "*"
-      exclude:
-        labels:
-          - internal
-    - title: Internal
-      labels:
-        - internal

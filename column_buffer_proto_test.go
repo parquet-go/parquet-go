@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -2109,4 +2110,161 @@ func TestProtoStructValueDereferenced(t *testing.T) {
 	if !bytes.Equal(readRecords[1].Data, []byte("null")) {
 		t.Errorf("expected nil data for second record, got: %s", string(readRecords[1].Data))
 	}
+}
+
+// A set optional field holding a zero value must not be written as null when
+// the writer cannot use the schema of its Go type.
+func TestProtoOptionalZeroValue(t *testing.T) {
+	type Msg = descriptorpb.FieldDescriptorProto
+	zero, seven, unset := &Msg{Number: proto.Int32(0)}, &Msg{Number: proto.Int32(7)}, &Msg{}
+
+	t.Run("subset schema", func(t *testing.T) {
+		schema := NewSchema("subset", Group{"number": Optional(Int(32))})
+		testProtoOptionalZeroValue(t, schema, []*Msg{zero, seven, unset})
+	})
+	t.Run("interface type", func(t *testing.T) {
+		testProtoOptionalZeroValue(t, SchemaOf(new(Msg)), []any{zero, seven, unset})
+	})
+}
+
+func testProtoOptionalZeroValue[T any](t *testing.T, schema *Schema, rows []T) {
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[T](buf, schema)
+	if _, err := writer.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	read := make([]Row, len(rows))
+	n, err := NewReader(bytes.NewReader(buf.Bytes())).ReadRows(read)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+
+	leaf, _ := schema.Lookup("number")
+	var got []string
+	for _, row := range read[:n] {
+		for _, v := range row {
+			if v.Column() == leaf.ColumnIndex {
+				got = append(got, v.String())
+			}
+		}
+	}
+	if want := []string{"0", "7", "<null>"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// Zero scalars other than int32 take the same isNullValue path: a present
+// zero must stay present, including an empty byte slice, which is not a null.
+func TestProtoOptionalZeroScalars(t *testing.T) {
+	type fieldMsg = descriptorpb.FieldDescriptorProto
+	type optionMsg = descriptorpb.UninterpretedOption
+	zeroLabel := descriptorpb.FieldDescriptorProto_Label(0)
+
+	t.Run("field", func(t *testing.T) {
+		zero := &fieldMsg{
+			Name:           new(""),
+			Label:          &zeroLabel,
+			Proto3Optional: new(false),
+		}
+		set := &fieldMsg{
+			Name:           new("id"),
+			Label:          descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Proto3Optional: new(true),
+		}
+		schema := NewSchema("subset", Group{
+			"label":           Optional(Int(32)),
+			"name":            Optional(String()),
+			"proto3_optional": Optional(Leaf(BooleanType)),
+		})
+		got := writtenColumnStrings(t, schema, []*fieldMsg{zero, set, {}})
+		want := map[string][]string{
+			"label":           {"0", "1", "<null>"},
+			"name":            {"", "id", "<null>"},
+			"proto3_optional": {"false", "true", "<null>"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("option", func(t *testing.T) {
+		zero := &optionMsg{
+			IdentifierValue:  new(""),
+			PositiveIntValue: proto.Uint64(0),
+			NegativeIntValue: proto.Int64(0),
+			DoubleValue:      proto.Float64(0),
+			StringValue:      []byte{},
+		}
+		set := &optionMsg{
+			IdentifierValue:  new("speed"),
+			PositiveIntValue: proto.Uint64(7),
+			NegativeIntValue: proto.Int64(-3),
+			DoubleValue:      new(1.5),
+			StringValue:      []byte("x"),
+		}
+		schema := NewSchema("subset", Group{
+			"double_value":       Optional(Leaf(DoubleType)),
+			"identifier_value":   Optional(String()),
+			"negative_int_value": Optional(Int(64)),
+			"positive_int_value": Optional(Int(64)),
+			"string_value":       Optional(Leaf(ByteArrayType)),
+		})
+		got := writtenColumnStrings(t, schema, []*optionMsg{zero, set, {}})
+		want := map[string][]string{
+			"double_value":       {"0", "1.5", "<null>"},
+			"identifier_value":   {"", "speed", "<null>"},
+			"negative_int_value": {"0", "-3", "<null>"},
+			"positive_int_value": {"0", "7", "<null>"},
+			"string_value":       {"", "x", "<null>"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %#v, want %#v", got, want)
+		}
+	})
+}
+
+func writtenColumnStrings[T any](t *testing.T, schema *Schema, rows []T) map[string][]string {
+	t.Helper()
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[T](buf, schema)
+	if _, err := writer.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	read := make([]Row, len(rows))
+	n, err := NewReader(bytes.NewReader(buf.Bytes())).ReadRows(read)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != len(rows) {
+		t.Fatalf("read %d rows, want %d", n, len(rows))
+	}
+
+	got := make(map[string][]string, len(schema.Columns()))
+	for _, row := range read[:n] {
+		have := make(map[int]string, len(row))
+		for _, v := range row {
+			have[v.Column()] = v.String()
+		}
+		for _, path := range schema.Columns() {
+			leaf, ok := schema.Lookup(path...)
+			if !ok {
+				t.Fatalf("missing column %q", path)
+			}
+			value, ok := have[leaf.ColumnIndex]
+			if !ok {
+				t.Fatalf("column %q missing from row", path)
+			}
+			name := path[len(path)-1]
+			got[name] = append(got[name], value)
+		}
+	}
+	return got
 }

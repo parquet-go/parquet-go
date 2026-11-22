@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/bloom"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 type dictionaryFallbackRow struct {
@@ -145,5 +147,113 @@ func assertDictionaryFallbackFileComplete(t *testing.T, data []byte, want []dict
 		if got[i] != want[i] {
 			t.Fatalf("row %d mismatch: got %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// TestDictionaryFallbackBloomFilter checks that the bloom filter of a column
+// that falls back from dictionary to PLAIN encoding is the filter of the values
+// written on both sides of the fallback, and nothing else.
+func TestDictionaryFallbackBloomFilter(t *testing.T) {
+	type row struct {
+		S string `parquet:"s,dict"`
+	}
+	filterColumn := parquet.SplitBlockFilter(10, "s")
+	key := bytes.Repeat([]byte{42}, 16)
+
+	tests := []struct {
+		name       string
+		version    int
+		encrypted  bool
+		rowGroup   bool // WriteRowGroup knows the number of values before the first page
+		pageSize   int  // 0 keeps one page
+		rows       int
+		distinct   int
+		plainPages bool
+	}{
+		{name: "Write", version: 1, pageSize: 256, rows: 4000, distinct: 4000, plainPages: true},
+		{name: "Write v2", version: 2, pageSize: 256, rows: 4000, distinct: 4000, plainPages: true},
+		{name: "Write encrypted", version: 1, encrypted: true, pageSize: 256, rows: 4000, distinct: 4000, plainPages: true},
+		{name: "WriteRowGroup", version: 1, rowGroup: true, pageSize: 256, rows: 4000, distinct: 4000, plainPages: true},
+		{name: "fallback on the last page", version: 1, rows: 2000, distinct: 100},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rows := make([]row, test.rows)
+			for i := range rows {
+				rows[i] = row{fmt.Sprintf("value-%06d", i%test.distinct)}
+			}
+			options := []parquet.WriterOption{
+				parquet.DictionaryMaxBytes(64),
+				parquet.DataPageVersion(test.version),
+				parquet.BloomFilters(filterColumn),
+			}
+			if test.pageSize > 0 {
+				options = append(options, parquet.PageBufferSize(test.pageSize))
+			}
+			var readOptions []parquet.FileOption
+			if test.encrypted {
+				options = append(options, parquet.WithEncryption(&parquet.EncryptionConfig{FooterKey: key, EncryptedFooter: true}))
+				readOptions = append(readOptions, parquet.WithDecryption(&staticKeyRetriever{footerKey: key}))
+			}
+			var output bytes.Buffer
+			w := parquet.NewGenericWriter[row](&output, options...)
+			if test.rowGroup {
+				buffer := parquet.NewGenericBuffer[row]()
+				if _, err := buffer.Write(rows); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := w.WriteRowGroup(buffer); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				for i := 0; i < len(rows); i += 10 {
+					if _, err := w.Write(rows[i : i+10]); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			f, err := parquet.OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()), readOptions...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dataPages := map[format.Encoding]int32{}
+			for _, stats := range f.Metadata().RowGroups[0].Columns[0].MetaData.EncodingStats {
+				if stats.PageType != format.DictionaryPage {
+					dataPages[stats.Encoding] += stats.Count
+				}
+			}
+			if dataPages[format.RLEDictionary] == 0 || (dataPages[format.Plain] > 0) != test.plainPages {
+				t.Fatalf("data page encodings %v, want RLE_DICTIONARY and PLAIN pages: %t", dataPages, test.plainPages)
+			}
+
+			filter := f.RowGroups()[0].ColumnChunks()[0].BloomFilter()
+			if filter == nil {
+				t.Fatal("no bloom filter")
+			}
+			// PLAIN pages are not known to hold distinct values, so the filter
+			// is sized for every value written, and otherwise for the dictionary.
+			sized := test.distinct
+			if test.plainPages {
+				sized = test.rows
+			}
+			want := bloom.MakeSplitBlockFilter(make([]byte, filterColumn.Size(int64(sized))))
+			for _, r := range rows[:test.distinct] {
+				want.Insert(bloom.XXH64{}.Sum64([]byte(r.S)))
+			}
+			if size := filter.Size(); size != int64(len(want.Bytes())) {
+				t.Fatalf("bloom filter of %d bytes, want %d for %d values", size, len(want.Bytes()), sized)
+			}
+			got := make([]byte, filter.Size())
+			if _, err := filter.ReadAt(got, 0); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want.Bytes()) {
+				t.Errorf("bloom filter differs from the filter of the %d distinct values written", test.distinct)
+			}
+		})
 	}
 }

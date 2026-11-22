@@ -37,6 +37,7 @@ import (
 // This handles various types that can represent null including:
 // - Invalid reflect values
 // - Nil pointers/interfaces/slices/maps
+// - Interfaces holding a nil pointer
 // - json.RawMessage containing "null"
 // - *jsonlite.Value with Kind == jsonlite.Null
 // - *structpb.Value with NullValue kind
@@ -46,9 +47,14 @@ func isNullValue(value reflect.Value) bool {
 	case reflect.Invalid:
 		return true
 
-	case reflect.Pointer, reflect.Interface:
+	case reflect.Pointer:
 		if value.IsNil() {
 			return true
+		}
+		if value.Kind() == reflect.Interface {
+			if e := value.Elem(); e.Kind() == reflect.Pointer && e.IsNil() {
+				return true
+			}
 		}
 		switch v := value.Interface().(type) {
 		case *jsonlite.Value:
@@ -58,6 +64,40 @@ func isNullValue(value reflect.Value) bool {
 			return isNull
 		}
 		return false
+
+	case reflect.Interface:
+		if value.IsNil() {
+			return true
+		}
+		// A typed nil pointer is null. This has to happen before the type
+		// switch: (*jsonlite.Value)(nil) matches that case and Kind panics.
+		elem := value.Elem()
+		if elem.Kind() == reflect.Pointer && elem.IsNil() {
+			return true
+		}
+		switch v := value.Interface().(type) {
+		case *jsonlite.Value:
+			return v.Kind() == jsonlite.Null
+		case *structpb.Value:
+			_, isNull := v.GetKind().(*structpb.Value_NullValue)
+			return isNull
+		}
+		// map[string]any stores a nil slice as a non-nil interface. The slice
+		// itself is still null. json.RawMessage is a slice too: nil and the
+		// text "null" are null, same as a RawMessage field.
+		switch elem.Kind() {
+		case reflect.Map, reflect.Pointer:
+			return elem.IsNil()
+		case reflect.Slice:
+			if elem.Type() == reflect.TypeFor[json.RawMessage]() {
+				return isNullValue(elem)
+			}
+			return elem.IsNil()
+		case reflect.Interface:
+			return isNullValue(elem)
+		default:
+			return false
+		}
 
 	case reflect.Slice:
 		if value.IsNil() {
@@ -342,7 +382,10 @@ func writeValueFuncOfOptional(columnIndex uint16, node Node) (uint16, writeValue
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, Required(node))
 	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, value reflect.Value) {
 		if isNullValue(value) {
-			writeValue(columns, levels, value)
+			// An invalid value makes every writer below write a null at this
+			// level, which some of them do not do for the values isNullValue
+			// accepts.
+			writeValue(columns, levels, reflect.Value{})
 		} else {
 			levels.definitionLevel++
 			writeValue(columns, levels, value)
@@ -504,24 +547,40 @@ func writeValueFuncOfMap(columnIndex uint16, node Node) (uint16, writeValueFunc)
 	nextColumnIndex, writeValue := writeValueFuncOf(columnIndex, schemaOf(keyValueElem))
 	zeroKeyValue := reflect.Zero(keyValueElem)
 
-	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, mapValue reflect.Value) {
-		if mapValue.Kind() == reflect.Pointer {
-			// Return early in the nil case to avoid dealing later with a zero value returned by Elem()
-			if mapValue.IsNil() {
-				writeValue(columns, levels, zeroKeyValue)
-				return
-			}
-			mapValue = mapValue.Elem()
-		}
+	// JSON objects are not Go maps. The key-value writer reads whatever the
+	// struct fields hold, so the value field can be a *jsonlite.Value.
+	jsonKey := keyValueElem.Field(0)
+	jsonValue := keyValueElem.Field(1)
+	jsonElem := reflect.New(reflect.StructOf([]reflect.StructField{
+		{Name: jsonKey.Name, Type: reflect.TypeFor[string](), Tag: jsonKey.Tag},
+		{Name: jsonValue.Name, Type: reflect.TypeFor[*jsonlite.Value](), Tag: jsonValue.Tag},
+	})).Elem()
 
-		// Check for invalid or nil map first to avoid panic on Interface() or Len()
-		if !mapValue.IsValid() || mapValue.IsNil() {
+	return nextColumnIndex, func(columns []ColumnBuffer, levels columnLevels, mapValue reflect.Value) {
+		// A map stored in an interface, or a pointer to a map stored there,
+		// has no Len until it is unwrapped. json.RawMessage is handled below.
+		mapValue = unwrapMapValue(mapValue)
+		if !mapValue.IsValid() {
 			writeValue(columns, levels, zeroKeyValue)
 			return
 		}
 
 		switch m := mapValue.Interface().(type) {
+		case json.RawMessage:
+			val, err := jsonParse(m)
+			if err != nil {
+				panic(fmt.Errorf("failed to parse JSON: %w", err))
+			}
+			writeJSONToMap(columns, levels, val, writeValue, zeroKeyValue, jsonElem)
+			return
+		case *jsonlite.Value:
+			writeJSONToMap(columns, levels, m, writeValue, zeroKeyValue, jsonElem)
+			return
 		case protoreflect.Map:
+			if m == nil {
+				writeValue(columns, levels, zeroKeyValue)
+				return
+			}
 			n := m.Len()
 			if n == 0 {
 				writeValue(columns, levels, zeroKeyValue)
@@ -555,7 +614,10 @@ func writeValueFuncOfMap(columnIndex uint16, node Node) (uint16, writeValueFunc)
 			return
 		}
 
-		if mapValue.Len() == 0 {
+		if mapValue.Kind() != reflect.Map {
+			panic(fmt.Sprintf("cannot write value of type %s to map column", mapValue.Type()))
+		}
+		if mapValue.IsNil() || mapValue.Len() == 0 {
 			writeValue(columns, levels, zeroKeyValue)
 			return
 		}
@@ -574,15 +636,64 @@ func writeValueFuncOfMap(columnIndex uint16, node Node) (uint16, writeValueFunc)
 		for it := mapValue.MapRange(); it.Next(); {
 			mapKey.SetIterKey(it)
 			mapElem.SetIterValue(it)
-			k.Set(mapKey.Convert(k.Type()))
-			v.Set(mapElem.Convert(v.Type()))
+			// Interface and pointer entries are stored in map[string]any.
+			// Convert does not unwrap them.
+			k.Set(mapValueForDeconstruct(mapKey, k.Type()))
+			v.Set(mapValueForDeconstruct(mapElem, v.Type()))
 			writeValue(columns, levels, elem)
 			levels.repetitionLevel = levels.repetitionDepth
 		}
 	}
 }
 
+// unwrapMapValue exposes the map or JSON value stored in an interface or
+// pointer. A nil interface or pointer is invalid. *jsonlite.Value and
+// protoreflect.Map stay as they are: a proto map is a pointer, and
+// dereferencing it drops the interface the writer type-switches on.
+func unwrapMapValue(value reflect.Value) reflect.Value {
+	for value.IsValid() {
+		if value.CanInterface() {
+			if _, ok := reflect.TypeAssert[*jsonlite.Value](value); ok {
+				return value
+			}
+			if _, ok := reflect.TypeAssert[json.RawMessage](value); ok {
+				return value
+			}
+			// A proto map is *impl.mapReflect. Dereferencing it drops the
+			// interface the writer type-switches on.
+			if _, ok := reflect.TypeAssert[protoreflect.Map](value); ok {
+				return value
+			}
+		}
+		switch value.Kind() {
+		case reflect.Interface, reflect.Pointer:
+			if value.IsNil() {
+				return reflect.Value{}
+			}
+			value = value.Elem()
+		default:
+			return value
+		}
+	}
+	return value
+}
+
 var structFieldsCache atomic.Value // map[reflect.Type]map[string][]int
+
+// writeAdaptedSingleField writes value as the only field of a group when the
+// value is that field rather than the group struct. This is how a Go slice is
+// stored in List(Repeated(T)).
+func writeAdaptedSingleField(columns []ColumnBuffer, levels columnLevels, fields []Field, writers []fieldWriter, value reflect.Value) bool {
+	if len(fields) != 1 || len(writers) != 1 || !value.IsValid() {
+		return false
+	}
+	adapted, ok := adaptSingleFieldValue(fields[0].GoType(), value)
+	if !ok {
+		return false
+	}
+	writers[0].writeValue(columns, levels, adapted)
+	return true
+}
 
 func writeValueFuncOfGroup(columnIndex uint16, node Node) (uint16, writeValueFunc) {
 	fields := node.Fields()
@@ -703,12 +814,18 @@ func writeValueFuncOfGroup(columnIndex uint16, node Node) (uint16, writeValueFun
 					panic(fmt.Errorf("failed to parse JSON: %w", err))
 				}
 				writeJSONToGroup(columns, levels, val, node, writers)
-			} else {
-				value = reflect.Value{}
-				goto writeGroupValue
+				return
 			}
+			if writeAdaptedSingleField(columns, levels, fields, writers, value) {
+				return
+			}
+			value = reflect.Value{}
+			goto writeGroupValue
 
 		default:
+			if writeAdaptedSingleField(columns, levels, fields, writers, value) {
+				return
+			}
 			value = reflect.Value{}
 			goto writeGroupValue
 		}

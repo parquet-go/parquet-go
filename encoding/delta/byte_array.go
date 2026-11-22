@@ -174,12 +174,21 @@ func (e *ByteArrayEncoding) DecodeFixedLenByteArray(dst []byte, src []byte, size
 }
 
 func (e *ByteArrayEncoding) EstimateDecodeByteArraySize(src []byte) int {
-	length := getInt32Buffer()
-	defer putInt32Buffer(length)
-	src, _ = length.decode(src)
-	sum := int(length.sum())
-	length.decode(src)
-	return sum + int(length.sum())
+	prefix := getInt32Buffer()
+	defer putInt32Buffer(prefix)
+	rest, err := prefix.decode(src)
+	if err != nil {
+		return 0
+	}
+	suffix := getInt32Buffer()
+	defer putInt32Buffer(suffix)
+	// The bytes left after both length lists are the suffix payload. Decode
+	// bounds suffix lengths against that, not against the whole page.
+	payload, err := suffix.decode(rest)
+	if err != nil {
+		return 0
+	}
+	return reconstructedByteArraySize(prefix.values, suffix.values, len(payload))
 }
 
 func (e *ByteArrayEncoding) wrap(err error) error {

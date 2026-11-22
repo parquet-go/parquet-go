@@ -31,26 +31,20 @@ DATA salt+24(SB)/4, $salt6
 DATA salt+28(SB)/4, $salt7
 GLOBL salt(SB), RODATA|NOPTR, $32
 
+// asmdecl treats a trailing D as an 8-byte operand. VPBROADCASTL is
+// VPBROADCASTD, so a 4-byte stack slot still type-checks.
+#define VPBROADCASTL(src, dst) VPBROADCASTD src, dst
+
 // This initial block is a SIMD implementation of the mask function declared in
 // block_default.go and block_optimized.go. For each of the 8 x 32 bits words of
 // the bloom filter block, the operation performed is:
 //
 //      block[i] = 1 << ((x * salt[i]) >> 27)
 //
-// Arguments
-// ---------
+// The caller has broadcast x into tmp and loaded ones into dst.
+// tmp is overwritten with intermediary results. dst receives the mask.
 //
-// * src is a memory location where the value to use when computing the mask is
-//   located. The memory location is not modified.
-//
-// * tmp is a YMM register used as scratch space to hold intermediary results in
-//   the algorithm.
-//
-// * dst is a YMM register where the final mask is written.
-//
-#define generateMask(src, tmp, dst) \
-    VMOVDQA ones(SB), dst \
-    VPBROADCASTD src, tmp \
+#define generateMask(tmp, dst) \
     VPMULLD salt(SB), tmp, tmp \
     VPSRLD $27, tmp, tmp \
     VPSLLVD tmp, dst, dst
@@ -72,12 +66,14 @@ GLOBL salt(SB), RODATA|NOPTR, $32
     JAE notfound
 
 // func blockInsert(b *Block, x uint32)
-TEXT ·blockInsert(SB), NOSPLIT, $0-16
+TEXT ·blockInsert(SB), NOSPLIT, $0-12
     MOVQ b+0(FP), AX
     CMPB ·hasAVX2(SB), $0
     JE fallback
 avx2:
-    generateMask(x+8(FP), Y1, Y0)
+    VMOVDQA ones(SB), Y0
+    VPBROADCASTL(x+8(FP), Y1)
+    generateMask(Y1, Y0)
     // Set all 1 bits of the mask in the bloom filter block.
     VPOR (AX), Y0, Y0
     VMOVDQU Y0, (AX)
@@ -101,7 +97,9 @@ TEXT ·blockCheck(SB), NOSPLIT, $0-17
     CMPB ·hasAVX2(SB), $0
     JE fallback
 avx2:
-    generateMask(x+8(FP), Y1, Y0)
+    VMOVDQA ones(SB), Y0
+    VPBROADCASTL(x+8(FP), Y1)
+    generateMask(Y1, Y0)
     // Compare the 1 bits of the mask with the bloom filter block, then compare
     // the result with the mask, expecting equality if the value `x` was present
     // in the block.

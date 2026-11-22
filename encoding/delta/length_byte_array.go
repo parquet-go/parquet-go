@@ -65,8 +65,13 @@ func (e *LengthByteArrayEncoding) DecodeByteArray(dst []byte, src []byte, offset
 func (e *LengthByteArrayEncoding) EstimateDecodeByteArraySize(src []byte) int {
 	length := getInt32Buffer()
 	defer putInt32Buffer(length)
-	length.decode(src)
-	return int(length.sum())
+	payload, err := length.decode(src)
+	if err != nil {
+		return 0
+	}
+	// Values are the payload after the length list. A sum that fits in the
+	// whole page can still be larger than those bytes.
+	return sumNonNegative(length.values, len(payload))
 }
 
 func (e *LengthByteArrayEncoding) CanDecodeInPlace() bool {
