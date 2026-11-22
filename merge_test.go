@@ -41,6 +41,31 @@ func (r *wrappedRows) Close() error {
 	return r.Rows.Close()
 }
 
+func TestMergeRowGroupsRepeatedPrefix(t *testing.T) {
+	type row struct{ Key []int64 }
+	options := []parquet.RowGroupOption{
+		parquet.SortingRowGroupConfig(parquet.SortingColumns(parquet.Descending("Key"))),
+	}
+	merged, err := parquet.MergeRowGroups([]parquet.RowGroup{
+		sortedRowGroup(options, row{Key: []int64{0}}, row{Key: []int64{0, 0}}),
+		sortedRowGroup(options, row{Key: []int64{0, 0, 0}}),
+	}, options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := parquet.NewGenericRowGroupReader[row](merged)
+	defer reader.Close()
+	got := make([]row, 3)
+	n, err := reader.Read(got)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	want := []row{{Key: []int64{0, 0, 0}}, {Key: []int64{0, 0}}, {Key: []int64{0}}}
+	if n != len(want) || !slices.EqualFunc(got, want, func(a, b row) bool { return slices.Equal(a.Key, b.Key) }) {
+		t.Errorf("merged repeated prefixes: got %v (%d rows), want %v", got, n, want)
+	}
+}
+
 func TestMergeRowGroups(t *testing.T) {
 	tests := []struct {
 		scenario string

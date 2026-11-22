@@ -359,8 +359,30 @@ func (col *indexedColumnBuffer) writeByteArray(_ columnLevels, value []byte) {
 	col.values = append(col.values, col.typ.dict.insertByteArray(value))
 }
 
-func (col *indexedColumnBuffer) writeNull(_ columnLevels) {
-	panic("cannot write null to indexed column")
+// writeNull stores the zero value. A required column cannot be null, so a nil
+// required group still has to leave a physical value. Dropping it shifts every
+// later row. The zero is inserted in the dictionary, same as writing it.
+func (col *indexedColumnBuffer) writeNull(levels columnLevels) {
+	switch col.typ.Kind() {
+	case Boolean:
+		col.writeBoolean(levels, false)
+	case Int32:
+		col.writeInt32(levels, 0)
+	case Int64:
+		col.writeInt64(levels, 0)
+	case Int96:
+		col.writeInt96(levels, deprecated.Int96{})
+	case Float:
+		col.writeFloat(levels, 0)
+	case Double:
+		col.writeDouble(levels, 0)
+	case ByteArray:
+		col.writeByteArray(levels, nil)
+	case FixedLenByteArray:
+		col.writeByteArray(levels, make([]byte, col.typ.Length()))
+	default:
+		panic("cannot write null to indexed column")
+	}
 }
 
 func (col *indexedColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {

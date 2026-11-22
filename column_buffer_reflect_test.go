@@ -2,10 +2,13 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/parquet-go/jsonlite"
 )
 
 // TestWriteValueFuncOfPrimitives tests writing primitive types
@@ -92,7 +95,7 @@ func TestWriteValueFuncOfOptional(t *testing.T) {
 		},
 		{
 			name:       "valid pointer",
-			value:      ptrTo(int32(42)),
+			value:      new(int32(42)),
 			expectNull: false,
 			expected:   int32(42),
 		},
@@ -109,7 +112,7 @@ func TestWriteValueFuncOfOptional(t *testing.T) {
 		},
 		{
 			name:       "pointer to zero value",
-			value:      ptrTo(int32(0)),
+			value:      new(int32(0)),
 			expectNull: false,
 			expected:   int32(0),
 		},
@@ -700,8 +703,9 @@ func TestWriteValueFuncOfMapWithSliceValues(t *testing.T) {
 
 // Helper functions
 
+//go:fix inline
 func intPtr(v int32) *int32 {
-	return &v
+	return new(v)
 }
 
 // makeColumnBuffersForSchema creates column buffers for all leaf columns in a schema
@@ -749,8 +753,9 @@ func makeColumnBuffer(node Node, columnIndex int16, bufferCap int) ColumnBuffer 
 	}
 }
 
+//go:fix inline
 func ptrTo[T any](v T) *T {
-	return &v
+	return new(v)
 }
 
 func checkValue(t *testing.T, got Value, expected any) {
@@ -1930,7 +1935,7 @@ func TestGenericWriterAnyPointerVsOptionalTag(t *testing.T) {
 			}{}),
 			data: struct {
 				V *string `parquet:"v"`
-			}{V: ptr("hello")},
+			}{V: new("hello")},
 		},
 		{
 			name: "int32_nil",
@@ -1948,7 +1953,7 @@ func TestGenericWriterAnyPointerVsOptionalTag(t *testing.T) {
 			}{}),
 			data: struct {
 				V *int32 `parquet:"v"`
-			}{V: ptr(int32(42))},
+			}{V: new(int32(42))},
 		},
 		{
 			name: "map_nil",
@@ -2065,7 +2070,7 @@ func TestWriteOptionalZeroValues(t *testing.T) {
 		{
 			name:       "pointer to zero is not null",
 			schema:     Optional(Leaf(Int32Type)),
-			value:      ptr(int32(0)),
+			value:      new(int32(0)),
 			expectNull: false,
 			expected:   int32(0),
 		},
@@ -2163,12 +2168,12 @@ func TestGenericWriterStructOptionalZeroValues(t *testing.T) {
 	buf2 := new(bytes.Buffer)
 	writer2 := NewGenericWriter[PtrRecord](buf2)
 	if _, err := writer2.Write([]PtrRecord{{
-		Bool:    ptr(false),
-		Int32:   ptr(int32(0)),
-		Int64:   ptr(int64(0)),
-		Float32: ptr(float32(0)),
-		Float64: ptr(float64(0)),
-		String:  ptr(""),
+		Bool:    new(false),
+		Int32:   new(int32(0)),
+		Int64:   new(int64(0)),
+		Float32: new(float32(0)),
+		Float64: new(float64(0)),
+		String:  new(""),
 	}}); err != nil {
 		t.Fatalf("error writing PtrRecord: %v", err)
 	}
@@ -2289,6 +2294,218 @@ func TestGenericWriterMapStringAnyOptionalZeroValues(t *testing.T) {
 	}
 }
 
+func readRawRows(t *testing.T, buf *bytes.Buffer, n int) []Row {
+	t.Helper()
+	reader := NewReader(bytes.NewReader(buf.Bytes()))
+	defer reader.Close()
+	rows := make([]Row, n+1)
+	got, err := reader.ReadRows(rows)
+	if err != nil && err != io.EOF {
+		t.Fatalf("read rows: %v", err)
+	}
+	for i := range rows[:got] {
+		rows[i] = rows[i].Clone()
+	}
+	return rows[:got]
+}
+
+func TestGenericWriterMapStringAnyListOptionalNilPointer(t *testing.T) {
+	schema := NewSchema("row", Group{"x": List(Optional(Int(32)))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[map[string]any](buf, schema)
+	if _, err := writer.Write([]map[string]any{{"x": []any{ptr(int32(7)), (*int32)(nil), ptr(int32(0))}}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := []Row{{
+		Int32Value(7).Level(0, 2, 0),
+		NullValue().Level(1, 1, 0),
+		Int32Value(0).Level(1, 2, 0),
+	}}
+	got := readRawRows(t, buf, len(want))
+	if len(got) != len(want) || !got[0].Equal(want[0]) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterAnyFieldOptionalNilPointer(t *testing.T) {
+	type Record struct {
+		X any `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(Int(32))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: (*int32)(nil)}, {X: ptr(int32(5))}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := []Row{
+		{NullValue().Level(0, 0, 0)},
+		{Int32Value(5).Level(0, 1, 0)},
+	}
+	got := readRawRows(t, buf, len(want))
+	if len(got) != len(want) {
+		t.Fatalf("got %d rows, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if !got[i].Equal(want[i]) {
+			t.Errorf("row %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDeconstructInterfaceValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  Value
+	}{
+		{"optional zero", int32(0), Int32Value(0).Level(0, 1, 0)},
+		{"optional nil pointer", (*int32)(nil), NullValue().Level(0, 0, 0)},
+	}
+	schema := NewSchema("row", Group{"x": Optional(Int(32))})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := schema.Deconstruct(nil, map[string]any{"x": tt.value})
+			if want := (Row{tt.want}); !got.Equal(want) {
+				t.Errorf("got %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestGenericWriterNilFieldOptionalShreddedVariant(t *testing.T) {
+	type Record struct {
+		X any `parquet:"x"`
+	}
+	shredded, err := ShreddedVariant(Int(32))
+	if err != nil {
+		t.Fatalf("shredded variant: %v", err)
+	}
+	schema := NewSchema("row", Group{"x": Optional(shredded)})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+		NullValue().Level(0, 0, 1),
+		NullValue().Level(0, 0, 2),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterRawMessageNullOptionalList(t *testing.T) {
+	type Record struct {
+		X json.RawMessage `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(List(Int(32)))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: json.RawMessage("null")}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterRawMessageNullOptionalMap(t *testing.T) {
+	type Record struct {
+		X json.RawMessage `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(Map(String(), Int(32)))})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: json.RawMessage("null")}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+		NullValue().Level(0, 0, 1),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterAnyFieldOptionalShreddedVariantNilPointer(t *testing.T) {
+	type Record struct {
+		X any `parquet:"x"`
+	}
+	shredded, err := ShreddedVariant(Int(32))
+	if err != nil {
+		t.Fatalf("shredded variant: %v", err)
+	}
+	schema := NewSchema("row", Group{"x": Optional(shredded)})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: (*int32)(nil)}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{
+		NullValue().Level(0, 0, 0),
+		NullValue().Level(0, 0, 1),
+		NullValue().Level(0, 0, 2),
+	}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestGenericWriterAnyFieldOptionalJSONNilPointer(t *testing.T) {
+	type Record struct {
+		X any `parquet:"x"`
+	}
+	schema := NewSchema("row", Group{"x": Optional(JSON())})
+	buf := new(bytes.Buffer)
+	writer := NewGenericWriter[Record](buf, schema)
+	if _, err := writer.Write([]Record{{X: (*jsonlite.Value)(nil)}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	want := Row{NullValue().Level(0, 0, 0)}
+	got := readRawRows(t, buf, 1)
+	if len(got) != 1 || !got[0].Equal(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
 // TestGenericWriterMapStringStringOptionalMissingKeys tests that map[string]string
 // values written to optional string columns follow the same nullability rule as
 // value-typed struct fields: both missing keys and present empty strings produce
@@ -2385,10 +2602,10 @@ func TestDeconstructOptionalZeroValues(t *testing.T) {
 
 	ptrSchema := SchemaOf(PtrRecord{})
 	ptrDeconstructed := ptrSchema.Deconstruct(make([]Value, 0, 4), PtrRecord{
-		Bool:    ptr(false),
-		Int32:   ptr(int32(0)),
-		Float64: ptr(float64(0)),
-		String:  ptr(""),
+		Bool:    new(false),
+		Int32:   new(int32(0)),
+		Float64: new(float64(0)),
+		String:  new(""),
 	})
 	if len(ptrDeconstructed) != 4 {
 		t.Fatalf("expected 4 values, got %d", len(ptrDeconstructed))
@@ -2412,8 +2629,62 @@ func TestDeconstructOptionalZeroValues(t *testing.T) {
 	}
 }
 
+func TestDeconstructOptionalListElements(t *testing.T) {
+	tests := []struct {
+		name  string
+		elem  Node
+		value any
+		want  Row
+	}{
+		{
+			name:  "leaf",
+			elem:  Optional(Int(32)),
+			value: []int32{7, 0, 9},
+			want: Row{
+				Int32Value(7).Level(0, 2, 0),
+				NullValue().Level(1, 1, 0),
+				Int32Value(9).Level(1, 2, 0),
+			},
+		},
+		{
+			name:  "group",
+			elem:  Optional(Group{"a": Int(32), "b": String()}),
+			value: []map[string]any{{"a": int32(1), "b": "x"}, nil, {"a": int32(3), "b": "z"}},
+			want: Row{
+				Int32Value(1).Level(0, 2, 0),
+				NullValue().Level(1, 1, 0),
+				Int32Value(3).Level(1, 2, 0),
+				ByteArrayValue([]byte("x")).Level(0, 2, 1),
+				NullValue().Level(1, 1, 1),
+				ByteArrayValue([]byte("z")).Level(1, 2, 1),
+			},
+		},
+		{
+			name:  "list",
+			elem:  Optional(List(Int(32))),
+			value: [][]int32{{1, 2}, nil, {3}},
+			want: Row{
+				Int32Value(1).Level(0, 3, 0),
+				Int32Value(2).Level(2, 3, 0),
+				NullValue().Level(1, 1, 0),
+				Int32Value(3).Level(1, 3, 0),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := NewSchema("row", Group{"x": List(tt.elem)})
+			got := schema.Deconstruct(nil, map[string]any{"x": tt.value})
+			if !got.Equal(tt.want) {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+//go:fix inline
 func ptr[T any](v T) *T {
-	return &v
+	return new(v)
 }
 
 // TestOptionalZeroValueIsNullValueType locks in the v0.27.0 contract: when an

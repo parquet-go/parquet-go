@@ -169,8 +169,7 @@ func validateColumns(t reflect.Type) (string, bool) {
 
 	columns := make(map[string]struct{}, t.NumField())
 
-	for i := range t.NumField() {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		if !f.IsExported() {
 			continue
 		}
@@ -1332,6 +1331,9 @@ func (w *writer) writeFileFooter() error {
 	for i, columnIndexes := range w.columnIndexes {
 		rowGroup := &w.rowGroups[i]
 		for j := range columnIndexes {
+			if len(columnIndexes[j].NullPages) == 0 {
+				continue
+			}
 			column := &rowGroup.Columns[j]
 			column.ColumnIndexOffset = w.writer.offset
 			if key := pageIndexKey(column); key != nil {
@@ -1544,12 +1546,14 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 
 	for i, c := range rg.columns {
 		if c.copied != nil {
-			// Column copied verbatim: use the source's column index and size
-			// statistics, and stream the dictionary and data page bytes straight
-			// from the source file into the output (no intermediate buffer).
+			// Column copied verbatim: use the source's column index, size
+			// statistics, and geospatial statistics, and stream the dictionary
+			// and data page bytes straight from the source file into the output
+			// (no intermediate buffer).
 			cc := c.copied
 			rg.columnIndex[i] = cc.columnIndex
 			c.columnChunk.MetaData.SizeStatistics = cc.sizeStats
+			c.columnChunk.MetaData.GeospatialStatistics = cc.geospatial
 
 			if cc.dictLength > 0 {
 				c.columnChunk.MetaData.DictionaryPageOffset = w.writer.offset
@@ -1572,8 +1576,10 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		}
 
 		rg.columnIndex[i] = c.columnIndex.ColumnIndex()
-		rg.columnIndex[i].RepetitionLevelHistogram = append(rg.columnIndex[i].RepetitionLevelHistogram[:0], c.pageRepetitionLevelHistograms...)
-		rg.columnIndex[i].DefinitionLevelHistogram = append(rg.columnIndex[i].DefinitionLevelHistogram[:0], c.pageDefinitionLevelHistograms...)
+		if len(rg.columnIndex[i].NullPages) > 0 {
+			rg.columnIndex[i].RepetitionLevelHistogram = append(rg.columnIndex[i].RepetitionLevelHistogram[:0], c.pageRepetitionLevelHistograms...)
+			rg.columnIndex[i].DefinitionLevelHistogram = append(rg.columnIndex[i].DefinitionLevelHistogram[:0], c.pageDefinitionLevelHistograms...)
+		}
 
 		c.columnChunk.MetaData.SizeStatistics = format.SizeStatistics{
 			UnencodedByteArrayDataBytes: c.totalUnencodedByteArrayBytes,
@@ -2008,6 +2014,9 @@ type ColumnWriter struct {
 	hasSwitchedToPlain bool  // Tracks if dictionary encoding was switched to PLAIN
 	dictionaryMaxBytes int64 // Per-column dictionary size limit
 
+	// Number of pages that were written when the column fell back to PLAIN.
+	pagesBeforeFallback int
+
 	// Set when this column is being copied verbatim from a source file for the
 	// current row group (see writer_copy.go). nil for the regular re-encode path.
 	copied *copiedChunk
@@ -2133,14 +2142,23 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 		return nil
 	}
 
-	// If there is a dictionary, it contains all the values that we need to
-	// write to the filter.
+	// If there is a dictionary, it contains the values of the dictionary
+	// encoded pages. Pages written after a fallback to PLAIN hold the rest.
 	if dict := c.dictionary; dict != nil {
-		// Need to always attempt to resize the filter, as the writer might
-		// be reused after resetting which would have reset the length of
-		// the filter to 0.
-		c.resizeBloomFilter(int64(dict.Len()))
-		return c.writePageToFilter(dict.Page())
+		if !c.hasPlainPages() {
+			// Need to always attempt to resize the filter, as the writer might
+			// be reused after resetting which would have reset the length of
+			// the filter to 0.
+			c.resizeBloomFilter(int64(dict.Len()))
+			return c.writePageToFilter(dict.Page())
+		}
+		// The dictionary is hashed last because resizeBloomFilter below
+		// clears the filter.
+		defer func() {
+			if err == nil {
+				err = c.writePageToFilter(dict.Page())
+			}
+		}()
 	}
 
 	// When the filter was already allocated, pages have been written to it as
@@ -2218,12 +2236,14 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 			if err != nil {
 				return err
 			}
+			if dictionaryEncodedPage(header) {
+				continue
+			}
 			if pbuf != nil {
 				pbuf.unref()
 			}
 			pbuf = buffers.get(len(bodyPlain))
 			copy(pbuf.data.Slice(), bodyPlain)
-			pbuf.ref()
 
 			var page Page
 			switch header.Type {
@@ -2259,6 +2279,9 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 			return err
 		}
 
+		if dictionaryEncodedPage(header) {
+			continue
+		}
 		var page Page
 
 		switch header.Type {
@@ -2277,6 +2300,24 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 	}
 
 	return nil
+}
+
+// dictionaryEncodedPage reports whether a data page holds dictionary indexes,
+// whose values flushFilterPages takes from the dictionary instead.
+func dictionaryEncodedPage(header *format.PageHeader) bool {
+	switch header.Type {
+	case format.DataPage:
+		return isDictionaryFormat(header.DataPageHeader.V.Encoding)
+	case format.DataPageV2:
+		return isDictionaryFormat(header.DataPageHeaderV2.V.Encoding)
+	}
+	return false
+}
+
+// hasPlainPages reports whether pages were written after the column fell back
+// from dictionary to PLAIN encoding.
+func (c *ColumnWriter) hasPlainPages() bool {
+	return c.hasSwitchedToPlain && c.numPages > c.pagesBeforeFallback
 }
 
 func (c *ColumnWriter) resizeBloomFilter(numValues int64) {
@@ -2421,10 +2462,14 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 	defer dataPageBuffers.Put(buf)
 
 	if c.maxRepetitionLevel > 0 {
-		buf.encodeRepetitionLevels(page, c.maxRepetitionLevel)
+		if err := buf.encodeRepetitionLevels(page, c.maxRepetitionLevel); err != nil {
+			return 0, fmt.Errorf("encoding repetition levels: %w", err)
+		}
 	}
 	if c.maxDefinitionLevel > 0 {
-		buf.encodeDefinitionLevels(page, c.maxDefinitionLevel)
+		if err := buf.encodeDefinitionLevels(page, c.maxDefinitionLevel); err != nil {
+			return 0, fmt.Errorf("encoding definition levels: %w", err)
+		}
 	}
 
 	if err := buf.encode(page, c.encoding); err != nil {
@@ -2726,6 +2771,7 @@ func (c *ColumnWriter) fallbackDictionaryToPlain() error {
 	// - The dictionary page will still be written at row group flush
 	// - Mixed encodings in the same column chunk are valid per Parquet spec
 	c.hasSwitchedToPlain = true
+	c.pagesBeforeFallback = c.numPages
 	return nil
 }
 

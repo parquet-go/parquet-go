@@ -468,7 +468,9 @@ func (s *Schema) Lookup(path ...string) (LeafColumn, bool) {
 func (s *Schema) Columns() [][]string { return s.lazyLoadState().columns }
 
 // Comparator constructs a comparator function which orders rows according to
-// the list of sorting columns passed as arguments.
+// the list of sorting columns passed as arguments. Repeated values are compared
+// lexicographically: a shorter equal prefix sorts first ascending and last
+// descending.
 func (s *Schema) Comparator(sortingColumns ...SortingColumn) func(Row, Row) int {
 	return compareRowsFuncOf(s, sortingColumns)
 }
@@ -548,7 +550,7 @@ func appendStructFields(path []string, t reflect.Type, fields []reflect.StructFi
 			}
 		}
 
-		fieldIndex := index[:len(index):len(index)]
+		fieldIndex := slices.Clip(index)
 		fieldIndex = append(fieldIndex, i)
 
 		f.Offset += offset
@@ -783,10 +785,10 @@ func nodeOf(path []string, t reflect.Type, tags parquetTags, tagReplacements []S
 }
 
 func split(s string) (head, tail string) {
-	if i := strings.IndexByte(s, ','); i < 0 {
+	if before, after, ok := strings.Cut(s, ","); !ok {
 		head = s
 	} else {
-		head, tail = s[:i], s[i+1:]
+		head, tail = before, after
 	}
 	return
 }
@@ -1291,7 +1293,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 
 			case "interval":
 				switch {
-				case t == reflect.TypeOf(Interval{}):
+				case t == reflect.TypeFor[Interval]():
 					setNode(IntervalNode())
 				case t.Kind() == reflect.Array && t.Elem().Kind() == reflect.Uint8 && t.Len() == 12:
 					setNode(IntervalNode())

@@ -117,7 +117,7 @@ var conversionTests = [...]struct {
 		from: struct {
 			FirstName *string
 			LastName  string
-		}{FirstName: newString("Luke"), LastName: "Skywalker"},
+		}{FirstName: new("Luke"), LastName: "Skywalker"},
 		to: struct{ LastName string }{LastName: "Skywalker"},
 	},
 
@@ -230,7 +230,7 @@ var conversionTests = [...]struct {
 	{
 		scenario: "required to optional leaf",
 		from:     struct{ Name string }{Name: "Luke"},
-		to:       struct{ Name *string }{Name: newString("Luke")},
+		to:       struct{ Name *string }{Name: new("Luke")},
 	},
 
 	{
@@ -241,13 +241,13 @@ var conversionTests = [...]struct {
 
 	{
 		scenario: "optional to required leaf",
-		from:     struct{ Name *string }{Name: newString("Luke")},
+		from:     struct{ Name *string }{Name: new("Luke")},
 		to:       struct{ Name string }{Name: "Luke"},
 	},
 
 	{
 		scenario: "optional to repeated leaf",
-		from:     struct{ Name *string }{Name: newString("Luke")},
+		from:     struct{ Name *string }{Name: new("Luke")},
 		to:       struct{ Name []string }{Name: []string{"Luke"}},
 	},
 
@@ -266,7 +266,7 @@ var conversionTests = [...]struct {
 	{
 		scenario: "repeated to optional leaf",
 		from:     struct{ Name []string }{Name: []string{"Luke", "Han", "Leia"}},
-		to:       struct{ Name *string }{Name: newString("Luke")},
+		to:       struct{ Name *string }{Name: new("Luke")},
 	},
 
 	{
@@ -483,8 +483,11 @@ func TestConvert(t *testing.T) {
 	}
 }
 
-func newInt64(i int64) *int64    { return &i }
-func newString(s string) *string { return &s }
+//go:fix inline
+func newInt64(i int64) *int64 { return new(i) }
+
+//go:fix inline
+func newString(s string) *string { return new(s) }
 
 func TestConvertValue(t *testing.T) {
 	now := time.Unix(42, 0)

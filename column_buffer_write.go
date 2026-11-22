@@ -365,13 +365,13 @@ func writeRowsFuncOfOptional(t reflect.Type, schema *Schema, path columnPath, wr
 			}
 
 			if y != 0 {
-				if b := nulls.bits[x] >> uint(y); b == (1<<uint64(y))-1 {
-					x++
-					y = 0
-				} else {
-					y += bits.TrailingZeros64(^b)
-					goto writeNonNulls
-				}
+				// b is bits[y:] of this word. The next zero bit is the
+				// next null, which ends this non-null run. A word with
+				// no null left ends at bit 64; the next iteration then
+				// scans whole words.
+				b := nulls.bits[x] >> uint(y)
+				y += bits.TrailingZeros64(^b)
+				goto writeNonNulls
 			}
 
 			for x < len(nulls.bits) && nulls.bits[x] == ^uint64(0) {
@@ -470,7 +470,9 @@ func writeRowsFuncOfPointer(t reflect.Type, schema *Schema, path columnPath, tag
 // writeRowsFuncOfPointerValue writes values of a pointer type. A nil pointer is
 // a null; a non-nil pointer writes the value writeRows produces. When the
 // schema node is optional, a non-nil pointer increments the definition level.
-// An empty path is a pointer to the row value, which does not change levels.
+// A nil pointer on a required leaf (or repeated element) writes a physical
+// zero, because a required value cannot be null. An empty path is a pointer to
+// the row value, which does not change levels.
 func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path columnPath, writeRows writeRowsFunc) writeRowsFunc {
 	elemSize := uintptr(elemType.Size())
 
@@ -508,6 +510,16 @@ func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path col
 	// read back as a present zero UUID.
 	nilDropsDefinitionLevel := node != nil && node.Repeated() && !isOptional &&
 		node.Leaf() && node.Type().Kind() == FixedLenByteArray
+	// A required leaf or repeated element has no definition level of its own,
+	// so a nil pointer cannot be written as null. Write one zero value so both
+	// plain and dictionary columns stay aligned with the definition levels.
+	// Repeated fixed-length byte arrays keep the definition-level drop above so
+	// nil stays distinct from a zero value. The zero lives for the writer and
+	// is only read.
+	var zero reflect.Value
+	if node != nil && !isOptional && !nilDropsDefinitionLevel && (node.Repeated() || node.Leaf()) {
+		zero = reflect.New(elemType)
+	}
 
 	return func(columns []ColumnBuffer, levels columnLevels, rows sparse.Array) {
 		if rows.Len() == 0 {
@@ -526,6 +538,8 @@ func writeRowsFuncOfPointerValue(elemType reflect.Type, schema *Schema, path col
 				}
 			} else if nilDropsDefinitionLevel && elemLevels.definitionLevel > 0 {
 				elemLevels.definitionLevel--
+			} else if zero.IsValid() {
+				a = makeArray(zero.UnsafePointer(), 1, elemSize)
 			}
 			writeRows(columns, elemLevels, a)
 		}

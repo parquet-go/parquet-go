@@ -50,6 +50,7 @@ type copiedChunk struct {
 	columnIndex   format.ColumnIndex
 	sizeStats     format.SizeStatistics
 	statistics    format.Statistics
+	geospatial    format.GeospatialStatistics
 	encodingStats []format.PageEncodingStats
 	numValues     int64
 	numRows       int64
@@ -369,6 +370,7 @@ func (c *ColumnWriter) loadCopiedChunk(src *FileColumnChunk) error {
 		columnIndex:           cloneColumnIndex(ci.(*FileColumnIndex).index),
 		sizeStats:             cloneSizeStatistics(meta.SizeStatistics),
 		statistics:            cloneStatistics(meta.Statistics),
+		geospatial:            cloneGeospatialStatistics(meta.GeospatialStatistics),
 		encodingStats:         slices.Clone(meta.EncodingStats),
 		numValues:             meta.NumValues,
 		numRows:               src.rowGroup.NumRows,
@@ -396,6 +398,7 @@ func (c *ColumnWriter) loadCopiedChunk(src *FileColumnChunk) error {
 	c.columnChunk.MetaData.TotalUncompressedSize = cc.totalUncompressedSize
 	c.columnChunk.MetaData.TotalCompressedSize = cc.totalCompressedSize
 	c.columnChunk.MetaData.Statistics = cc.statistics
+	c.columnChunk.MetaData.GeospatialStatistics = cc.geospatial
 	c.columnChunk.MetaData.EncodingStats = append(c.columnChunk.MetaData.EncodingStats[:0], cc.encodingStats...)
 	return nil
 }
@@ -411,6 +414,11 @@ func cloneStatistics(s format.Statistics) format.Statistics {
 func cloneSizeStatistics(s format.SizeStatistics) format.SizeStatistics {
 	s.RepetitionLevelHistogram = slices.Clone(s.RepetitionLevelHistogram)
 	s.DefinitionLevelHistogram = slices.Clone(s.DefinitionLevelHistogram)
+	return s
+}
+
+func cloneGeospatialStatistics(s format.GeospatialStatistics) format.GeospatialStatistics {
+	s.GeoSpatialTypes = slices.Clone(s.GeoSpatialTypes)
 	return s
 }
 

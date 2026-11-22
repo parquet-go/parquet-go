@@ -267,7 +267,7 @@ func makeValue(k Kind, lt *format.LogicalType, v reflect.Value) Value {
 	}
 
 	switch v.Type() {
-	case reflect.TypeOf(time.Time{}):
+	case reflect.TypeFor[time.Time]():
 		unit := Nanosecond.TimeUnit()
 		if ts, ok := logicalTypeOf[*format.TimestampType](lt); ok {
 			unit = ts.Unit
@@ -308,7 +308,7 @@ func makeValue(k Kind, lt *format.LogicalType, v reflect.Value) Value {
 
 	case Int96:
 		switch v.Type() {
-		case reflect.TypeOf(deprecated.Int96{}):
+		case reflect.TypeFor[deprecated.Int96]():
 			return makeValueInt96(v.Interface().(deprecated.Int96))
 		}
 
@@ -355,7 +355,7 @@ func makeValue(k Kind, lt *format.LogicalType, v reflect.Value) Value {
 				return makeValueBytes(k, v.Bytes())
 			}
 		case reflect.Struct:
-			if v.Type() == reflect.TypeOf(Interval{}) {
+			if v.Type() == reflect.TypeFor[Interval]() {
 				iv := v.Interface().(Interval)
 				buf := make([]byte, 12)
 				binary.LittleEndian.PutUint32(buf[0:4], iv.Months)

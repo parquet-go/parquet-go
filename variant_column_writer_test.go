@@ -321,14 +321,14 @@ func TestVariantColumnWriterEvents(t *testing.T) {
 	}
 
 	want := []*variant.Value{
-		ptrTo(variant.MakeObject([]variant.Field{
+		new(variant.MakeObject([]variant.Field{
 			{Name: "name", Value: variant.String("alice")},
 			{Name: "extra", Value: variant.MakeObject([]variant.Field{{Name: "x", Value: variant.Int64(1)}})},
 			{Name: "age", Value: variant.Int64(30)},
 			{Name: "tags", Value: variant.MakeArray([]variant.Value{variant.String("a"), variant.String("b")})},
 		})),
-		ptrTo(variant.Int32(42)),
-		ptrTo(variant.MakeObject([]variant.Field{
+		new(variant.Int32(42)),
+		new(variant.MakeObject([]variant.Field{
 			{Name: "age", Value: variant.String("not a number")},
 			{Name: "tags", Value: variant.MakeArray([]variant.Value{variant.String("ok"), variant.Int64(7), variant.Null()})},
 		})),
@@ -367,7 +367,7 @@ func TestVariantColumnWriterFieldCopiesName(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	want := []*variant.Value{ptrTo(variant.MakeObject([]variant.Field{
+	want := []*variant.Value{new(variant.MakeObject([]variant.Field{
 		{Name: "extra", Value: variant.String("residual")},
 		{Name: "age", Value: variant.Int64(1)},
 	}))}
@@ -401,7 +401,7 @@ func TestVariantColumnWriterDeepNesting(t *testing.T) {
 
 	values := []*variant.Value{
 		// Everything matches: bool, double, and a list of typed objects.
-		ptrTo(obj(
+		new(obj(
 			field("ok", variant.Bool(true)),
 			field("score", variant.Double(0.5)),
 			field("items", arr(item(1), item(2))),
@@ -409,7 +409,7 @@ func TestVariantColumnWriterDeepNesting(t *testing.T) {
 		// Conflicts at each level: int where bool is shredded, string where
 		// double is shredded, and a list mixing typed objects, a scalar
 		// conflict, and an object with a residual field.
-		ptrTo(obj(
+		new(obj(
 			field("ok", variant.Int64(1)),
 			field("score", variant.String("high")),
 			field("items", arr(
@@ -419,7 +419,7 @@ func TestVariantColumnWriterDeepNesting(t *testing.T) {
 			)),
 		)),
 		// Empty list and false/zero values (not Go zero-value confusables).
-		ptrTo(obj(
+		new(obj(
 			field("ok", variant.Bool(false)),
 			field("score", variant.Double(0)),
 			field("items", arr()),
@@ -439,7 +439,7 @@ func TestVariantColumnWriterDeepNesting(t *testing.T) {
 func TestVariantColumnWriterMetadataInterned(t *testing.T) {
 	shred := parquet.Group{"name": parquet.String(), "age": parquet.Int(64)}
 	values := []*variant.Value{
-		ptrTo(variant.MakeObject([]variant.Field{
+		new(variant.MakeObject([]variant.Field{
 			{Name: "name", Value: variant.String("alice")},
 			{Name: "age", Value: variant.Int64(30)},
 			{Name: "extra", Value: variant.String("residual")}, // not shredded
@@ -461,7 +461,8 @@ func TestVariantColumnWriterMetadataInterned(t *testing.T) {
 	}
 }
 
-func ptrTo[T any](v T) *T { return &v }
+//go:fix inline
+func ptrTo[T any](v T) *T { return new(v) }
 
 // TestVariantColumnWriterFieldRef writes the same rows through Field and
 // through pre-resolved FieldByRef refs and asserts the two files are
@@ -613,8 +614,8 @@ func TestVariantColumnWriterMetadataPersistent(t *testing.T) {
 	field := func(name string, v variant.Value) variant.Field { return variant.Field{Name: name, Value: v} }
 	shred := parquet.Group{"name": parquet.String(), "age": parquet.Int(64)}
 	values := []*variant.Value{
-		ptrTo(obj(field("name", variant.String("alice")), field("age", variant.Int64(30)))),
-		ptrTo(obj(field("age", variant.Int64(31)), field("name", variant.String("bob")))),
+		new(obj(field("name", variant.String("alice")), field("age", variant.Int64(30)))),
+		new(obj(field("age", variant.Int64(31)), field("name", variant.String("bob")))),
 	}
 	data := buildVariantFileStreaming(t, shred, values)
 
@@ -642,7 +643,7 @@ func TestVariantColumnWriterMetadataPersistent(t *testing.T) {
 	churn := make([]*variant.Value, rows)
 	for i := range rows {
 		uniq := fmt.Sprintf("field_with_a_rather_long_unique_name_%0150d", i)
-		churn[i] = ptrTo(obj(
+		churn[i] = new(obj(
 			field("name", variant.String("alice")),
 			field(uniq, variant.Int64(int64(i))),
 		))
@@ -742,12 +743,12 @@ func TestVariantColumnWriterNestedEmptyList(t *testing.T) {
 	}
 
 	want := []*variant.Value{
-		ptrTo(variant.MakeArray([]variant.Value{
+		new(variant.MakeArray([]variant.Value{
 			variant.MakeArray([]variant.Value{variant.Int64(1), variant.Int64(2)}),
 			variant.MakeArray(nil),
 			variant.String("conflict"),
 		})),
-		ptrTo(variant.MakeArray(nil)),
+		new(variant.MakeArray(nil)),
 	}
 	assertVariantFile(t, buf.Bytes(), want, "nested empty list")
 }

@@ -15,7 +15,7 @@ import (
 func TestMinMaxBE128SIMD(t *testing.T) {
 	prng := rand.New(rand.NewSource(3))
 	for _, n := range []int{1, 7, 8, 9, 15, 16, 17, 100, 1000} {
-		for trial := 0; trial < 10; trial++ {
+		for trial := range 10 {
 			data := make([][16]byte, n)
 			for i := range data {
 				prng.Read(data[i][:])

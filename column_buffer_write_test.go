@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/parquet-go/jsonlite"
+	"github.com/parquet-go/parquet-go/deprecated"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -1057,5 +1058,570 @@ func assertRowsEqual[T any](t *testing.T, want, got []T) {
 	t.Helper()
 	if !reflect.DeepEqual(want, got) {
 		t.Errorf("rows mismatch:\nwant: %+v\ngot:  %+v", want, got)
+	}
+}
+
+// TestOptionalColumnBufferWriteValuesNilAtMaxDefinitionLevel verifies that an
+// empty writeValues call at maxDefinitionLevel (such as a nil pointer for a
+// required field inside an optional group, or a nil required group) writes a
+// physical zero to the base column instead of dropping the value and shifting
+// subsequent rows.
+func TestOptionalColumnBufferWriteValuesNilAtMaxDefinitionLevel(t *testing.T) {
+	t.Run("int32", func(t *testing.T) {
+		type writeInner struct {
+			V *int32 `parquet:"v"`
+		}
+		type writeOuter struct {
+			Sub *writeInner `parquet:"sub,optional"`
+		}
+		type readInner struct {
+			V int32 `parquet:"v"`
+		}
+		type readOuter struct {
+			Sub *readInner `parquet:"sub,optional"`
+		}
+
+		schema := NewSchema("outer", Group{
+			"sub": Optional(Group{
+				"v": Int(32),
+			}),
+		})
+
+		seven := int32(7)
+		gbuf := NewGenericBuffer[writeOuter](schema)
+		if _, err := gbuf.Write([]writeOuter{
+			{Sub: &writeInner{V: nil}},
+			{Sub: nil},
+			{Sub: &writeInner{V: &seven}},
+		}); err != nil {
+			t.Fatalf("write buffer: %v", err)
+		}
+
+		buf := new(bytes.Buffer)
+		w := NewGenericWriter[writeOuter](buf, schema)
+		if _, err := w.WriteRowGroup(gbuf); err != nil {
+			t.Fatalf("write row group: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close writer: %v", err)
+		}
+
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("open file: %v", err)
+		}
+		pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+		defer pages.Close()
+		pg, err := pages.ReadPage()
+		if err != nil {
+			t.Fatalf("read page: %v", err)
+		}
+		data := pg.Data()
+		if pg.NumValues() != 3 || pg.NumNulls() != 1 || len(data.Int32()) != 2 {
+			t.Fatalf("short or misaligned page: NumValues=%d NumNulls=%d len(Int32)=%d values=%v",
+				pg.NumValues(), pg.NumNulls(), len(data.Int32()), data.Int32())
+		}
+
+		got, err := Read[readOuter](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+		want := []readOuter{
+			{Sub: &readInner{V: 0}},
+			{Sub: nil},
+			{Sub: &readInner{V: 7}},
+		}
+		assertRowsEqual(t, want, got)
+	})
+
+	t.Run("dictionary", func(t *testing.T) {
+		type writeInner struct {
+			V *int32 `parquet:"v"`
+		}
+		type writeOuter struct {
+			Sub *writeInner `parquet:"sub,optional"`
+		}
+		type readInner struct {
+			V int32 `parquet:"v"`
+		}
+		type readOuter struct {
+			Sub *readInner `parquet:"sub,optional"`
+		}
+
+		schema := NewSchema("outer", Group{
+			"sub": Optional(Group{
+				"v": Encoded(Int(32), &RLEDictionary),
+			}),
+		})
+
+		seven := int32(7)
+		gbuf := NewGenericBuffer[writeOuter](schema)
+		if _, err := gbuf.Write([]writeOuter{
+			{Sub: &writeInner{V: nil}},
+			{Sub: nil},
+			{Sub: &writeInner{V: &seven}},
+		}); err != nil {
+			t.Fatalf("write buffer: %v", err)
+		}
+
+		buf := new(bytes.Buffer)
+		w := NewGenericWriter[writeOuter](buf, schema)
+		if _, err := w.WriteRowGroup(gbuf); err != nil {
+			t.Fatalf("write row group: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close writer: %v", err)
+		}
+
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("open file: %v", err)
+		}
+		pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+		defer pages.Close()
+		pg, err := pages.ReadPage()
+		if err != nil {
+			t.Fatalf("read page: %v", err)
+		}
+		data := pg.Data()
+		if pg.NumValues() != 3 || pg.NumNulls() != 1 || len(data.Int32()) != 2 {
+			t.Fatalf("short or misaligned page: NumValues=%d NumNulls=%d stored=%d indices=%v",
+				pg.NumValues(), pg.NumNulls(), len(data.Int32()), data.Int32())
+		}
+
+		got, err := Read[readOuter](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+		want := []readOuter{
+			{Sub: &readInner{V: 0}},
+			{Sub: nil},
+			{Sub: &readInner{V: 7}},
+		}
+		assertRowsEqual(t, want, got)
+	})
+
+	t.Run("string", func(t *testing.T) {
+		type writeInner struct {
+			S *string `parquet:"s"`
+		}
+		type writeOuter struct {
+			Sub *writeInner `parquet:"sub,optional"`
+		}
+		type readInner struct {
+			S string `parquet:"s"`
+		}
+		type readOuter struct {
+			Sub *readInner `parquet:"sub,optional"`
+		}
+
+		schema := NewSchema("outer", Group{
+			"sub": Optional(Group{
+				"s": String(),
+			}),
+		})
+
+		hello := "hello"
+		gbuf := NewGenericBuffer[writeOuter](schema)
+		if _, err := gbuf.Write([]writeOuter{
+			{Sub: &writeInner{S: nil}},
+			{Sub: nil},
+			{Sub: &writeInner{S: &hello}},
+		}); err != nil {
+			t.Fatalf("write buffer: %v", err)
+		}
+
+		buf := new(bytes.Buffer)
+		w := NewGenericWriter[writeOuter](buf, schema)
+		if _, err := w.WriteRowGroup(gbuf); err != nil {
+			t.Fatalf("write row group: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close writer: %v", err)
+		}
+
+		got, err := Read[readOuter](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+		want := []readOuter{
+			{Sub: &readInner{S: ""}},
+			{Sub: nil},
+			{Sub: &readInner{S: "hello"}},
+		}
+		assertRowsEqual(t, want, got)
+	})
+
+	t.Run("optional-field-remains-null", func(t *testing.T) {
+		type inner struct {
+			V *int32 `parquet:"v,optional"`
+		}
+		type outer struct {
+			Sub *inner `parquet:"sub,optional"`
+		}
+
+		schema := NewSchema("outer", Group{
+			"sub": Optional(Group{
+				"v": Optional(Int(32)),
+			}),
+		})
+
+		seven := int32(7)
+		gbuf := NewGenericBuffer[outer](schema)
+		if _, err := gbuf.Write([]outer{
+			{Sub: &inner{V: nil}},
+			{Sub: nil},
+			{Sub: &inner{V: &seven}},
+		}); err != nil {
+			t.Fatalf("write buffer: %v", err)
+		}
+
+		buf := new(bytes.Buffer)
+		w := NewGenericWriter[outer](buf, schema)
+		if _, err := w.WriteRowGroup(gbuf); err != nil {
+			t.Fatalf("write row group: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close writer: %v", err)
+		}
+
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("open file: %v", err)
+		}
+		pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+		defer pages.Close()
+		pg, err := pages.ReadPage()
+		if err != nil {
+			t.Fatalf("read page: %v", err)
+		}
+		data := pg.Data()
+		if pg.NumValues() != 3 || pg.NumNulls() != 2 || len(data.Int32()) != 1 {
+			t.Fatalf("unexpected page: NumValues=%d NumNulls=%d len(Int32)=%d values=%v",
+				pg.NumValues(), pg.NumNulls(), len(data.Int32()), data.Int32())
+		}
+
+		got, err := Read[outer](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+		want := []outer{
+			{Sub: &inner{V: nil}},
+			{Sub: nil},
+			{Sub: &inner{V: &seven}},
+		}
+		assertRowsEqual(t, want, got)
+	})
+
+	// A nil required group forwards an empty writeValues at the definition
+	// level of the present optional parent. Plain encoding stores a zero.
+	t.Run("plain-group", func(t *testing.T) {
+		type child struct {
+			V int32 `parquet:"v"`
+		}
+		type writeMid struct {
+			Child *child `parquet:"child"`
+		}
+		type writeOuter struct {
+			Sub *writeMid `parquet:"sub,optional"`
+		}
+		type readChild struct {
+			V int32 `parquet:"v"`
+		}
+		type readMid struct {
+			Child readChild `parquet:"child"`
+		}
+		type readOuter struct {
+			Sub *readMid `parquet:"sub,optional"`
+		}
+
+		schema := NewSchema("outer", Group{
+			"sub": Optional(Group{
+				"child": Group{
+					"v": Int(32),
+				},
+			}),
+		})
+
+		gbuf := NewGenericBuffer[writeOuter](schema)
+		if _, err := gbuf.Write([]writeOuter{
+			{Sub: &writeMid{Child: nil}},
+			{Sub: nil},
+			{Sub: &writeMid{Child: &child{V: 7}}},
+		}); err != nil {
+			t.Fatalf("write buffer: %v", err)
+		}
+
+		buf := new(bytes.Buffer)
+		w := NewGenericWriter[writeOuter](buf, schema)
+		if _, err := w.WriteRowGroup(gbuf); err != nil {
+			t.Fatalf("write row group: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close writer: %v", err)
+		}
+
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("open file: %v", err)
+		}
+		pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+		defer pages.Close()
+		pg, err := pages.ReadPage()
+		if err != nil {
+			t.Fatalf("read page: %v", err)
+		}
+		data := pg.Data()
+		if pg.NumValues() != 3 || pg.NumNulls() != 1 || len(data.Int32()) != 2 || data.Int32()[0] != 0 || data.Int32()[1] != 7 {
+			t.Fatalf("short or misaligned page: NumValues=%d NumNulls=%d values=%v",
+				pg.NumValues(), pg.NumNulls(), data.Int32())
+		}
+
+		got, err := Read[readOuter](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+		want := []readOuter{
+			{Sub: &readMid{Child: readChild{V: 0}}},
+			{Sub: nil},
+			{Sub: &readMid{Child: readChild{V: 7}}},
+		}
+		assertRowsEqual(t, want, got)
+	})
+
+	t.Run("dictionary-group", func(t *testing.T) {
+		type child struct {
+			V int32 `parquet:"v"`
+		}
+		type writeMid struct {
+			Child *child `parquet:"child"`
+		}
+		type writeOuter struct {
+			Sub *writeMid `parquet:"sub,optional"`
+		}
+		type readChild struct {
+			V int32 `parquet:"v"`
+		}
+		type readMid struct {
+			Child readChild `parquet:"child"`
+		}
+		type readOuter struct {
+			Sub *readMid `parquet:"sub,optional"`
+		}
+
+		schema := NewSchema("outer", Group{
+			"sub": Optional(Group{
+				"child": Group{
+					"v": Encoded(Int(32), &RLEDictionary),
+				},
+			}),
+		})
+
+		gbuf := NewGenericBuffer[writeOuter](schema)
+		if _, err := gbuf.Write([]writeOuter{
+			{Sub: &writeMid{Child: nil}},
+			{Sub: nil},
+			{Sub: &writeMid{Child: &child{V: 7}}},
+		}); err != nil {
+			t.Fatalf("write buffer: %v", err)
+		}
+
+		buf := new(bytes.Buffer)
+		w := NewGenericWriter[writeOuter](buf, schema)
+		if _, err := w.WriteRowGroup(gbuf); err != nil {
+			t.Fatalf("write row group: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close writer: %v", err)
+		}
+
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("open file: %v", err)
+		}
+		pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+		defer pages.Close()
+		pg, err := pages.ReadPage()
+		if err != nil {
+			t.Fatalf("read page: %v", err)
+		}
+		data := pg.Data()
+		if pg.NumValues() != 3 || pg.NumNulls() != 1 || len(data.Int32()) != 2 {
+			t.Fatalf("short or misaligned page: NumValues=%d NumNulls=%d stored=%d indices=%v",
+				pg.NumValues(), pg.NumNulls(), len(data.Int32()), data.Int32())
+		}
+
+		got, err := Read[readOuter](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+		want := []readOuter{
+			{Sub: &readMid{Child: readChild{V: 0}}},
+			{Sub: nil},
+			{Sub: &readMid{Child: readChild{V: 7}}},
+		}
+		assertRowsEqual(t, want, got)
+	})
+
+	t.Run("int96-group", func(t *testing.T) {
+		type child struct {
+			V deprecated.Int96 `parquet:"v"`
+		}
+		type writeMid struct {
+			Child *child `parquet:"child"`
+		}
+		type writeOuter struct {
+			Sub *writeMid `parquet:"sub,optional"`
+		}
+		type readChild struct {
+			V deprecated.Int96 `parquet:"v"`
+		}
+		type readMid struct {
+			Child readChild `parquet:"child"`
+		}
+		type readOuter struct {
+			Sub *readMid `parquet:"sub,optional"`
+		}
+
+		schema := NewSchema("outer", Group{
+			"sub": Optional(Group{
+				"child": Group{
+					"v": Leaf(Int96Type),
+				},
+			}),
+		})
+
+		gbuf := NewGenericBuffer[writeOuter](schema)
+		if _, err := gbuf.Write([]writeOuter{
+			{Sub: &writeMid{Child: nil}},
+			{Sub: nil},
+			{Sub: &writeMid{Child: &child{V: deprecated.Int96{7, 0, 0}}}},
+		}); err != nil {
+			t.Fatalf("write buffer: %v", err)
+		}
+
+		buf := new(bytes.Buffer)
+		w := NewGenericWriter[writeOuter](buf, schema)
+		if _, err := w.WriteRowGroup(gbuf); err != nil {
+			t.Fatalf("write row group: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close writer: %v", err)
+		}
+
+		f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("open file: %v", err)
+		}
+		pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
+		defer pages.Close()
+		pg, err := pages.ReadPage()
+		if err != nil {
+			t.Fatalf("read page: %v", err)
+		}
+		data := pg.Data()
+		values := data.Int96()
+		if pg.NumValues() != 3 || pg.NumNulls() != 1 || len(values) != 2 || values[0] != (deprecated.Int96{}) || values[1] != (deprecated.Int96{7, 0, 0}) {
+			t.Fatalf("short or misaligned page: NumValues=%d NumNulls=%d values=%v",
+				pg.NumValues(), pg.NumNulls(), values)
+		}
+
+		got, err := Read[readOuter](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+		want := []readOuter{
+			{Sub: &readMid{Child: readChild{V: deprecated.Int96{}}}},
+			{Sub: nil},
+			{Sub: &readMid{Child: readChild{V: deprecated.Int96{7, 0, 0}}}},
+		}
+		assertRowsEqual(t, want, got)
+	})
+
+	// An optional leaf under the nil required group stays null. Only the
+	// required dictionary leaf is a present zero.
+	t.Run("dictionary-group-optional-sibling", func(t *testing.T) {
+		type child struct {
+			V int32  `parquet:"v"`
+			O *int32 `parquet:"o,optional"`
+		}
+		type writeMid struct {
+			Child *child `parquet:"child"`
+		}
+		type writeOuter struct {
+			Sub *writeMid `parquet:"sub,optional"`
+		}
+
+		schema := NewSchema("outer", Group{
+			"sub": Optional(Group{
+				"child": Group{
+					"o": Optional(Int(32)),
+					"v": Encoded(Int(32), &RLEDictionary),
+				},
+			}),
+		})
+
+		seven := int32(7)
+		three := int32(3)
+		gbuf := NewGenericBuffer[writeOuter](schema)
+		if _, err := gbuf.Write([]writeOuter{
+			{Sub: &writeMid{Child: nil}},
+			{Sub: nil},
+			{Sub: &writeMid{Child: &child{V: seven, O: &three}}},
+		}); err != nil {
+			t.Fatalf("write buffer: %v", err)
+		}
+
+		buf := new(bytes.Buffer)
+		w := NewGenericWriter[writeOuter](buf, schema)
+		if _, err := w.WriteRowGroup(gbuf); err != nil {
+			t.Fatalf("write row group: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close writer: %v", err)
+		}
+
+		got, err := Read[writeOuter](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+		want := []writeOuter{
+			{Sub: &writeMid{Child: &child{V: 0, O: nil}}},
+			{Sub: nil},
+			{Sub: &writeMid{Child: &child{V: seven, O: &three}}},
+		}
+		assertRowsEqual(t, want, got)
+	})
+}
+
+func TestIndexedColumnBufferWriteNullStoresZero(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  Type
+		zero Value
+	}{
+		{name: "boolean", typ: BooleanType, zero: BooleanValue(false)},
+		{name: "int32", typ: Int32Type, zero: Int32Value(0)},
+		{name: "int64", typ: Int64Type, zero: Int64Value(0)},
+		{name: "int96", typ: Int96Type, zero: Int96Value(deprecated.Int96{})},
+		{name: "float", typ: FloatType, zero: FloatValue(0)},
+		{name: "double", typ: DoubleType, zero: DoubleValue(0)},
+		{name: "byte-array", typ: ByteArrayType, zero: ByteArrayValue(nil)},
+		{name: "fixed", typ: FixedLenByteArrayType(4), zero: FixedLenByteArrayValue(make([]byte, 4))},
+		{name: "be128", typ: FixedLenByteArrayType(16), zero: FixedLenByteArrayValue(make([]byte, 16))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dict := tc.typ.NewDictionary(0, 0, tc.typ.NewValues(nil, nil))
+			col := dict.Type().NewColumnBuffer(0, 4).(*indexedColumnBuffer)
+			col.writeNull(columnLevels{})
+			if col.Len() != 1 {
+				t.Fatalf("expected 1 value, got %d", col.Len())
+			}
+			got := dict.Index(col.values[0])
+			if tc.typ.Compare(got, tc.zero) != 0 {
+				t.Fatalf("stored %+v, want zero %+v", got, tc.zero)
+			}
+		})
 	}
 }

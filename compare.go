@@ -424,13 +424,15 @@ var columnPool memory.Pool[[][2]int32]
 func compareRowsFuncOfColumnValues(leafColumns []leafColumn, sortingColumns []SortingColumn) func(Row, Row) int {
 	highestColumnIndex := uint16(0)
 	columnIndexes := make([]uint16, len(sortingColumns))
+	descending := make([]bool, len(sortingColumns))
 	compareFuncs := make([]func(Value, Value) int, len(sortingColumns))
 
 	for sortingIndex, sortingColumn := range sortingColumns {
 		leaf := leafColumns[sortingIndex]
 		compare := leaf.node.Type().Compare
 
-		if sortingColumn.Descending() {
+		descending[sortingIndex] = sortingColumn.Descending()
+		if descending[sortingIndex] {
 			compare = CompareDescending(compare)
 		}
 
@@ -495,9 +497,15 @@ func compareRowsFuncOfColumnValues(leafColumns []leafColumn, sortingColumns []So
 			}
 
 			if i1 < len(values1) {
+				if descending[i] {
+					return -1
+				}
 				return +1
 			}
 			if i2 < len(values2) {
+				if descending[i] {
+					return +1
+				}
 				return -1
 			}
 		}
