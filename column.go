@@ -451,7 +451,14 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 				// a data page encoding, so it must not be reported as the
 				// column encoding (it would make schemas derived from
 				// this file unwritable).
-				if encoding == format.BitPacked {
+				//
+				// Same for anything canEncode rejects for this type. RLE is
+				// also listed for levels, but only counts for BOOLEAN
+				// (canEncode accepts it for INT32 for dictionary indexes).
+				// ALP can't encode but is still the column encoding.
+				kind := c.typ.Kind()
+				if (encoding == format.RLE && kind != Boolean) ||
+					(encoding != format.ALP && !canEncode(LookupEncoding(encoding), kind)) {
 					continue
 				}
 				if c.encoding == nil {

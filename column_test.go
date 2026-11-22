@@ -2,15 +2,18 @@ package parquet_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -650,5 +653,120 @@ func TestOpenFileColumnEncodingSkipsBitPacked(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// withChunkEncodings rewrites the footer of a parquet file so that the first
+// column chunk lists the given encodings, in order, in its metadata. Only the
+// footer changes, so page and index offsets stay valid.
+func withChunkEncodings(t *testing.T, file []byte, encodings ...format.Encoding) []byte {
+	t.Helper()
+
+	// file layout is [pages][page index][footer][footer length (4)]["PAR1" (4)]
+	n := len(file)
+	footerSize := int(binary.LittleEndian.Uint32(file[n-8 : n-4]))
+	footerStart := n - 8 - footerSize
+
+	// decode the footer based on the thrift compact protocol
+	var proto thrift.CompactProtocol
+	var meta format.FileMetaData
+	if err := thrift.Unmarshal(&proto, file[footerStart:n-8], &meta); err != nil {
+		t.Fatal(err)
+	}
+
+	// doing the actual edit; overwriting the encodings of the first column chunk
+	meta.RowGroups[0].Columns[0].MetaData.Encoding = encodings
+
+	// keep everything before the footer as is, then append the new footer
+	var out bytes.Buffer
+	out.Write(file[:footerStart])
+	start := out.Len()
+	if err := thrift.NewEncoder(proto.NewWriter(&out)).Encode(&meta); err != nil {
+		t.Fatal(err)
+	}
+
+	// the footer length may have changed, so write a fresh trailer
+	var trailer [8]byte
+	binary.LittleEndian.PutUint32(trailer[:4], uint32(out.Len()-start))
+	copy(trailer[4:], "PAR1")
+	out.Write(trailer[:])
+	return out.Bytes()
+}
+
+// TestOpenFileColumnEncodingRLE checks that RLE in a chunk's encodings list is
+// not reported as the column encoding, except for BOOLEAN where it is a real
+// value encoding. Writers list RLE for rep/def levels next to the value
+// encoding (e.g. [RLE, PLAIN]). INT32 and DATE are covered because
+// rle.Encoding implements EncodeInt32 for dictionary indexes, so canEncode
+// alone accepts it there.
+func TestOpenFileColumnEncodingRLE(t *testing.T) {
+	type testCase struct {
+		name  string
+		node  parquet.Node
+		value any
+		// rleFirst rewrites the chunk's encodings to [RLE, PLAIN].
+		rleFirst bool
+		want     format.Encoding
+	}
+
+	tests := []testCase{
+		{
+			name:     "int64",
+			node:     parquet.Leaf(parquet.Int64Type),
+			value:    int64(1),
+			rleFirst: true,
+			want:     format.Plain,
+		},
+		{
+			name:     "int32",
+			node:     parquet.Leaf(parquet.Int32Type),
+			value:    int32(1),
+			rleFirst: true,
+			want:     format.Plain,
+		},
+		{
+			name:     "date",
+			node:     parquet.Date(),
+			value:    int32(1),
+			rleFirst: true,
+			want:     format.Plain,
+		},
+		{
+			// Written with RLE as its value encoding, so no rewrite needed.
+			name:  "boolean",
+			node:  parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLE),
+			value: true,
+			want:  format.RLE,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			schema := parquet.NewSchema("t", parquet.Group{"v": test.node})
+			var buf bytes.Buffer
+			w := parquet.NewGenericWriter[map[string]any](&buf, schema)
+			if _, err := w.Write([]map[string]any{{"v": test.value}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			data := buf.Bytes()
+			if test.rleFirst {
+				data = withChunkEncodings(t, data, format.RLE, format.Plain)
+			}
+
+			pf, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Without RLE in the metadata the test asserts nothing.
+			if !slices.Contains(pf.Metadata().RowGroups[0].Columns[0].MetaData.Encoding, format.RLE) {
+				t.Fatal("chunk metadata does not list RLE")
+			}
+			if got := pf.Root().Column("v").Encoding(); got == nil || got.Encoding() != test.want {
+				t.Errorf("column encoding = %v, want %s", got, test.want)
+			}
+		})
 	}
 }
