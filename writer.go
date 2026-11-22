@@ -73,8 +73,6 @@ type GenericWriter[T any] struct {
 	// the NewGenericWriter function based on the type T and the underlying
 	// schema of the parquet file.
 	write writeFunc[T]
-	// This field is used to leverage the optimized writeRowsFunc algorithms.
-	columns []ColumnBuffer
 }
 
 // NewGenericWriter is like NewWriter but returns a GenericWriter[T] suited to
@@ -127,7 +125,7 @@ func NewGenericWriter[T any](output io.Writer, options ...WriterOption) *Generic
 	var writeFn writeFunc[T]
 	switch {
 	case genWriteErr != nil:
-		writeFn = func(*GenericWriter[T], []T) (int, error) { return 0, genWriteErr }
+		writeFn = func(*ConcurrentRowGroupWriter, []T) (int, error) { return 0, genWriteErr }
 	case schemaFromType == config.Schema || (schemaFromType != nil && EqualNodes(config.Schema, schemaFromType)):
 		// The schema matches the type T, we can use the optimized
 		// writeRowsFunc algorithms mapping Go values directly to
@@ -195,21 +193,24 @@ func validateColumns(t reflect.Type) (string, bool) {
 	return "", true
 }
 
-type writeFunc[T any] func(*GenericWriter[T], []T) (int, error)
+type writeFunc[T any] func(*ConcurrentRowGroupWriter, []T) (int, error)
 
 func makeWriteFunc[T any](t reflect.Type, writeRows writeRowsFunc) writeFunc[T] {
-	return func(w *GenericWriter[T], rows []T) (n int, err error) {
-		if w.columns == nil {
-			w.columns = make([]ColumnBuffer, len(w.base.writer.currentRowGroup.columns))
-			for i, c := range w.base.writer.currentRowGroup.columns {
+	return func(rg *ConcurrentRowGroupWriter, rows []T) (n int, err error) {
+		if rg.columnBuffers == nil {
+			rg.columnBuffers = make([]ColumnBuffer, len(rg.columns))
+			for i, c := range rg.columns {
 				// These fields are usually lazily initialized when writing rows,
-				// we need them to exist now tho.
-				c.columnBuffer = c.newColumnBuffer()
-				// Record the original buffer so the dictionary-encoded buffer is
-				// restored when the row group is flushed after a fallback to PLAIN
-				// switched the column to a different buffer.
-				c.originalColumnBuffer = c.columnBuffer
-				w.columns[i] = c.columnBuffer
+				// we need them to exist now tho. Keep any that WriteRows already
+				// created, or the rows it buffered would be dropped.
+				if c.columnBuffer == nil {
+					c.columnBuffer = c.newColumnBuffer()
+					// Record the original buffer so the dictionary-encoded buffer is
+					// restored when the row group is flushed after a fallback to PLAIN
+					// switched the column to a different buffer.
+					c.originalColumnBuffer = c.columnBuffer
+				}
+				rg.columnBuffers[i] = c.columnBuffer
 			}
 		} else {
 			// The column buffers may have been replaced since the previous call:
@@ -217,11 +218,11 @@ func makeWriteFunc[T any](t reflect.Type, writeRows writeRowsFunc) writeFunc[T] 
 			// swapped for a PLAIN-encoded one (fallbackDictionaryToPlain), and
 			// flushing a row group restores the original buffer. Re-resolve the
 			// cached references so rows are not written into abandoned buffers.
-			for i, c := range w.base.writer.currentRowGroup.columns {
-				w.columns[i] = c.columnBuffer
+			for i, c := range rg.columns {
+				rg.columnBuffers[i] = c.columnBuffer
 			}
 		}
-		writeRows(w.columns, columnLevels{}, makeArrayFromSlice(rows))
+		writeRows(rg.columnBuffers, columnLevels{}, makeArrayFromSlice(rows))
 		return len(rows), nil
 	}
 }
@@ -252,7 +253,7 @@ func (w *GenericWriter[T]) Write(rows []T) (written int, err error) {
 	currentRowGroup := w.base.writer.currentRowGroup
 	for len(rows) > 0 {
 		n, err = currentRowGroup.writeRows(len(rows), func(i, j int) (int, error) {
-			n, err := w.write(w, rows[i:j:j])
+			n, err := w.write(currentRowGroup, rows[i:j:j])
 			if err != nil {
 				return n, err
 			}
@@ -342,6 +343,11 @@ type ConcurrentRowGroupWriter struct {
 	columnChunk []format.ColumnChunk
 	columnIndex []format.ColumnIndex
 	offsetIndex []format.OffsetIndex
+
+	// Holds the column buffers that the typed write path writes into. It belongs
+	// to the row group rather than the writer so that two goroutines writing two
+	// row groups never share it.
+	columnBuffers []ColumnBuffer
 }
 
 // BeginRowGroup returns a new ConcurrentRowGroupWriter that can be written to in parallel with
@@ -371,6 +377,51 @@ type ConcurrentRowGroupWriter struct {
 //	return writer.Close()
 func (w *GenericWriter[T]) BeginRowGroup() *ConcurrentRowGroupWriter {
 	return newConcurrentRowGroupWriter(w.base.writer, w.base.config)
+}
+
+// GenericConcurrentRowGroupWriter is a ConcurrentRowGroupWriter that also
+// accepts rows of type T, mapping their fields directly to parquet columns the
+// way GenericWriter[T].Write does. The embedded ConcurrentRowGroupWriter
+// supplies the rest of the row group API, including Commit.
+type GenericConcurrentRowGroupWriter[T any] struct {
+	*ConcurrentRowGroupWriter
+	base *GenericWriter[T]
+}
+
+// BeginGenericRowGroup returns a new GenericConcurrentRowGroupWriter that can
+// be written to in parallel with other row groups. It behaves like
+// BeginRowGroup, except that the row group it returns also accepts rows of
+// type T.
+func (w *GenericWriter[T]) BeginGenericRowGroup() *GenericConcurrentRowGroupWriter[T] {
+	return &GenericConcurrentRowGroupWriter[T]{
+		ConcurrentRowGroupWriter: w.BeginRowGroup(),
+		base:                     w,
+	}
+}
+
+// Write writes rows of type T to the row group, returning the number of rows
+// written.
+//
+// The row group belongs to the caller, so unlike GenericWriter.Write this does
+// not flush the writer and open a new row group when the row limit is reached;
+// it returns ErrTooManyRowGroups, as ConcurrentRowGroupWriter.WriteRows does.
+func (rg *GenericConcurrentRowGroupWriter[T]) Write(rows []T) (int, error) {
+	return rg.writeRows(len(rows), func(i, j int) (int, error) {
+		n, err := rg.base.write(rg.ConcurrentRowGroupWriter, rows[i:j:j])
+		if err != nil {
+			return n, err
+		}
+
+		for _, c := range rg.columns {
+			if c.columnBuffer != nil && c.columnBuffer.Size() >= int64(c.bufferSize) {
+				if err := c.Flush(); err != nil {
+					return n, err
+				}
+			}
+		}
+
+		return n, nil
+	})
 }
 
 var (
@@ -2548,14 +2599,10 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 	}
 
 	plainHeaderLen := int32(c.header.buffer.Len())
+	plainBodyLen := c.header.page.CompressedPageSize
 
 	if c.encKey != nil {
 		pageOrd := int16(c.numPages)
-		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrd)
-		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
-		if err != nil {
-			return 0, fmt.Errorf("encrypting data page header: %w", err)
-		}
 		body := make([]byte, 0, len(buf.repetitions)+len(buf.definitions)+len(buf.page))
 		body = append(body, buf.repetitions...)
 		body = append(body, buf.definitions...)
@@ -2564,6 +2611,20 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 		encBody, err := encryptModule(c.encKey, bodyAAD, body)
 		if err != nil {
 			return 0, fmt.Errorf("encrypting data page body: %w", err)
+		}
+		// Readers take compressed_page_size bytes after the header module and
+		// decrypt that buffer. It is the encrypted body, and the CRC covers
+		// those bytes (encryption.md / PageHeader: CRC is after encryption).
+		c.header.page.CompressedPageSize = int32(len(encBody))
+		c.header.page.CRC = int32(crc32.ChecksumIEEE(encBody))
+		c.header.buffer.Reset()
+		if err := c.header.encoder.Encode(&c.header.page); err != nil {
+			return 0, err
+		}
+		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrd)
+		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
+		if err != nil {
+			return 0, fmt.Errorf("encrypting data page header: %w", err)
 		}
 		encSize := int64(len(encHdr) + len(encBody))
 		err = c.writePageTo(encSize, func(output io.Writer) (int64, error) {
@@ -2574,8 +2635,9 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
+		c.header.page.CompressedPageSize = plainBodyLen
 		c.recordPageStats(plainHeaderLen, &c.header.page, page, minValue, maxValue, pageHasBounds)
-		c.patchEncryptedCompressedSize(encSize, plainHeaderLen, c.header.page.CompressedPageSize)
+		c.patchEncryptedCompressedSize(encSize, plainHeaderLen, plainBodyLen)
 		return numValues, nil
 	}
 
@@ -2643,15 +2705,23 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	}
 
 	if c.encKey != nil {
-		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, 0)
-		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
-		if err != nil {
-			return fmt.Errorf("encrypting dictionary page header: %w", err)
-		}
-		bodyAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageBodyModule, c.rowGroupOrdinal, c.columnOrdinal, 0)
+		plainHeaderLen := int32(c.header.buffer.Len())
+		plainBodyLen := c.header.dict.CompressedPageSize
+		bodyAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageBodyModule, c.rowGroupOrdinal, c.columnOrdinal)
 		encBody, err := encryptModule(c.encKey, bodyAAD, buf.page)
 		if err != nil {
 			return fmt.Errorf("encrypting dictionary page body: %w", err)
+		}
+		c.header.dict.CompressedPageSize = int32(len(encBody))
+		c.header.dict.CRC = int32(crc32.ChecksumIEEE(encBody))
+		c.header.buffer.Reset()
+		if err := c.header.encoder.Encode(&c.header.dict); err != nil {
+			return err
+		}
+		hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dictPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal)
+		encHdr, err := encryptModule(c.encKey, hdrAAD, c.header.buffer.Bytes())
+		if err != nil {
+			return fmt.Errorf("encrypting dictionary page header: %w", err)
 		}
 		if _, err := output.Write(encHdr); err != nil {
 			return err
@@ -2659,9 +2729,9 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 		if _, err := output.Write(encBody); err != nil {
 			return err
 		}
-		plainHeaderLen := int32(c.header.buffer.Len())
+		c.header.dict.CompressedPageSize = plainBodyLen
 		c.recordPageStats(plainHeaderLen, &c.header.dict, nil, Value{}, Value{}, false)
-		c.patchEncryptedCompressedSize(int64(len(encHdr)+len(encBody)), plainHeaderLen, c.header.dict.CompressedPageSize)
+		c.patchEncryptedCompressedSize(int64(len(encHdr)+len(encBody)), plainHeaderLen, plainBodyLen)
 		return nil
 	}
 

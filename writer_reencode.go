@@ -1,7 +1,9 @@
 package parquet
 
 import (
+	"errors"
 	"io"
+	"slices"
 	"sync/atomic"
 )
 
@@ -219,6 +221,23 @@ func copyColumnValues(dst *ColumnWriter, src ColumnChunk, buf []Value) error {
 	reader := NewColumnChunkValueReader(src)
 	defer reader.Close()
 
+	// On flat columns every value is a row, so a batch can never split one.
+	if dst.maxRepetitionLevel == 0 {
+		return copyFlatColumnValues(dst, reader, buf)
+	}
+
+	// Values held back across reads can outlive their source page, so detach
+	// byte array data to avoid corruption when the page's buffer is reused.
+	switch src.Type().Kind() {
+	case ByteArray, FixedLenByteArray:
+		if r, ok := reader.(*columnChunkValueReader); ok {
+			r.detach = true
+		}
+	}
+	return copyRepeatedColumnValues(dst, reader, buf)
+}
+
+func copyFlatColumnValues(dst *ColumnWriter, reader ValueReader, buf []Value) error {
 	for {
 		n, err := reader.ReadValues(buf)
 		if n > 0 {
@@ -233,4 +252,61 @@ func copyColumnValues(dst *ColumnWriter, src ColumnChunk, buf []Value) error {
 			return err
 		}
 	}
+}
+
+// copyRepeatedColumnValues trims each batch to the last row boundary and holds
+// the remainder for the next read, so WriteRowValues never sees a row split
+// across calls.
+func copyRepeatedColumnValues(dst *ColumnWriter, reader ValueReader, buf []Value) error {
+	var pending []Value
+
+	for {
+		n, readErr := reader.ReadValues(buf)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
+		}
+
+		atEOF := errors.Is(readErr, io.EOF)
+		if n > 0 {
+			pending = append(pending, buf[:n]...)
+		}
+
+		toWrite, remainder := rowAlignedPrefix(pending, atEOF)
+		if len(toWrite) > 0 {
+			if _, werr := dst.WriteRowValues(toWrite); werr != nil {
+				return werr
+			}
+		}
+
+		// remainder aliases pending's backing array; the shift is safe since append copies.
+		pending = append(pending[:0], remainder...)
+
+		if atEOF {
+			return nil
+		}
+	}
+}
+
+// rowAlignedPrefix splits values at the last row boundary: everything before it
+// is safe to write, the rest is carried forward. At EOF, everything is returned.
+func rowAlignedPrefix(values []Value, atEOF bool) ([]Value, []Value) {
+	if atEOF {
+		return values, nil
+	}
+
+	cut := -1
+
+	for i, v := range slices.Backward(values) {
+		if v.RepetitionLevel() == 0 {
+			cut = i
+			break
+		}
+	}
+
+	if cut <= 0 {
+		// No completed row boundary yet; the whole slice is still one growing row.
+		return nil, values
+	}
+
+	return values[:cut], values[cut:]
 }

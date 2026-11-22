@@ -34,18 +34,8 @@ func (t *geographyType) ColumnOrder() *format.ColumnOrder { return byteArrayType
 func (t *geographyType) PhysicalType() *format.Type { return byteArrayType{}.PhysicalType() }
 
 func (t *geographyType) LogicalType() *format.LogicalType {
-	g := format.GeographyType{
-		CRS:       t.CRS,
-		Algorithm: t.Algorithm,
-	}
-	if g.CRS == "" {
-		g.CRS = format.GeometryDefaultCRS
-	}
-	if t.Algorithm != 0 {
-		g.Algorithm = t.Algorithm
-	}
-
-	return &format.LogicalType{Value: &g}
+	annotation := format.GeographyType(*t)
+	return &format.LogicalType{Value: &annotation}
 }
 
 func (t *geographyType) ConvertedType() *deprecated.ConvertedType {
@@ -120,18 +110,15 @@ func (t *geographyType) AssignValue(dst reflect.Value, src Value) error {
 func (t *geographyType) ConvertValue(val Value, typ Type) (Value, error) {
 	switch src := typ.(type) {
 	case *geographyType:
-		srcGeography, _ := logicalTypeOf[*format.GeographyType](src.LogicalType())
-		dstGeography, _ := logicalTypeOf[*format.GeographyType](t.LogicalType())
-		if srcGeography.CRS != t.CRS {
+		if effectiveCRS(src.CRS) != effectiveCRS(t.CRS) {
 			return Value{}, errors.New("cannot convert between geography types with different CRS")
 		}
-		if srcGeography.Algorithm != dstGeography.Algorithm {
+		if src.Algorithm != t.Algorithm {
 			return Value{}, errors.New("cannot convert between geography types with different Algorithm")
 		}
 		return val, nil
 	case *geometryType:
-		srcGeometry, _ := logicalTypeOf[*format.GeometryType](src.LogicalType())
-		if srcGeometry.CRS != t.CRS {
+		if effectiveCRS(src.CRS) != effectiveCRS(t.CRS) {
 			return Value{}, errors.New("cannot convert between geography and geometry types with different CRS")
 		}
 		return val, nil

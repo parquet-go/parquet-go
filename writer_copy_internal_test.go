@@ -669,6 +669,99 @@ func TestWriteRowGroupReencodeMatchesRowPath(t *testing.T) {
 	}
 }
 
+type copyTestRepeatedRow struct {
+	Tags []string `parquet:"tags,plain"`
+	ID   int64    `parquet:"id"`
+}
+
+func makeCopyTestRepeatedRows(n int) []copyTestRepeatedRow {
+	rows := make([]copyTestRepeatedRow, n)
+	for i := range rows {
+		// Varying list length (1-7 values) makes row boundaries drift against
+		// the fixed-size read batches.
+		tags := make([]string, 1+i%7)
+
+		for j := range tags {
+			tags[j] = fmt.Sprintf("tag-%d-%d", i, j)
+		}
+
+		rows[i] = copyTestRepeatedRow{ID: int64(i), Tags: tags}
+	}
+
+	return rows
+}
+
+// TestWriteRowGroupReencodeRepeatedColumnRowAlignment checks that the L3
+// re-encode keeps repeated columns row-aligned. Source pages hold more values
+// than the read batch, so a batch can end in the middle of a row, and the
+// destination page buffer is small so every write ends in a page flush.
+func TestWriteRowGroupReencodeRepeatedColumnRowAlignment(t *testing.T) {
+	// 5000 rows hold 19995 tag values in total, which is not a multiple of the
+	// 1024-value read batch, so batch boundaries drift across row boundaries.
+	rows := makeCopyTestRepeatedRows(5000)
+
+	var srcBuf bytes.Buffer
+
+	sw := NewGenericWriter[copyTestRepeatedRow](&srcBuf, Compression(&Snappy))
+	if _, err := sw.Write(rows); err != nil {
+		t.Fatalf("writing source rows: %v", err)
+	}
+
+	if err := sw.Close(); err != nil {
+		t.Fatalf("closing source writer: %v", err)
+	}
+
+	src, err := OpenFile(bytes.NewReader(srcBuf.Bytes()), int64(srcBuf.Len()))
+	if err != nil {
+		t.Fatalf("opening source file: %v", err)
+	}
+
+	// A batch can only end mid-row if a source page is larger than a read batch.
+	// Otherwise this test would pass without the fix.
+	tags, _ := src.Schema().Lookup("tags")
+	pages := src.RowGroups()[0].ColumnChunks()[tags.ColumnIndex].Pages()
+	defer pages.Close()
+
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatalf("reading first source page: %v", err)
+	}
+	defer Release(page)
+
+	if n := page.NumValues(); n <= reencodeValueBufferSize {
+		t.Fatalf("first source page has %d values, want more than %d", n, reencodeValueBufferSize)
+	}
+
+	var dst bytes.Buffer
+
+	// Codec differs from source (Snappy -> Zstd) so L0 cannot fire.
+	w := NewGenericWriter[copyTestRepeatedRow](&dst, Compression(&Zstd), PageBufferSize(512))
+	before := reencodePathCounter.Load()
+
+	for _, rg := range src.RowGroups() {
+		if _, writeErr := w.WriteRowGroup(rg); writeErr != nil {
+			t.Fatalf("WriteRowGroup: %v", writeErr)
+		}
+	}
+
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatalf("closing destination writer: %v", closeErr)
+	}
+
+	if reencodePathCounter.Load() == before {
+		t.Fatal("expected the L3 re-encode path to fire")
+	}
+
+	got, err := Read[copyTestRepeatedRow](bytes.NewReader(dst.Bytes()), int64(dst.Len()))
+	if err != nil {
+		t.Fatalf("reading re-encoded file: %v", err)
+	}
+
+	if !reflect.DeepEqual(got, rows) {
+		t.Fatal("L3 re-encoded output differs from source data")
+	}
+}
+
 // BenchmarkWriteRowGroupReencodePaths compares the L3 column-oriented re-encode
 // against the row-oriented fallback. The codec differs from the source (Snappy)
 // so L0 cannot fire. The "uncompressed" dest isolates the row round-trip cost

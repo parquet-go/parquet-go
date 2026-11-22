@@ -9,7 +9,6 @@ import (
 	"io"
 	"math"
 
-	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
@@ -37,7 +36,11 @@ func (e *Encoding) EncodeBoolean(dst []byte, src []byte) ([]byte, error) {
 }
 
 func (e *Encoding) EncodeInt96(dst []byte, src []deprecated.Int96) ([]byte, error) {
-	return append(dst[:0], unsafecast.Slice[byte](src)...), nil
+	dst = dst[:0]
+	for _, v := range src {
+		dst = AppendInt96(dst, v)
+	}
+	return dst, nil
 }
 
 func (e *Encoding) EncodeByteArray(dst []byte, src []byte, offsets []uint32) ([]byte, error) {
@@ -70,7 +73,21 @@ func (e *Encoding) DecodeInt96(dst []deprecated.Int96, src []byte) ([]deprecated
 	if (len(src) % 12) != 0 {
 		return dst, encoding.ErrDecodeInvalidInputSize(e, "INT96", len(src))
 	}
-	return append(dst[:0], unsafecast.Slice[deprecated.Int96](src)...), nil
+	n := len(src) / 12
+	if cap(dst) < n {
+		dst = make([]deprecated.Int96, n)
+	} else {
+		dst = dst[:n]
+	}
+	for i := range dst {
+		off := i * 12
+		dst[i] = deprecated.Int96{
+			binary.LittleEndian.Uint32(src[off : off+4]),
+			binary.LittleEndian.Uint32(src[off+4 : off+8]),
+			binary.LittleEndian.Uint32(src[off+8 : off+12]),
+		}
+	}
+	return dst, nil
 }
 
 func (e *Encoding) DecodeByteArray(dst []byte, src []byte, offsets []uint32) ([]byte, []uint32, error) {
