@@ -121,9 +121,11 @@ func (col *byteArrayColumnBuffer) Less(i, j int) bool {
 
 func (col *byteArrayColumnBuffer) Swap(i, j int) {
 	col.offsets.Swap(i, j)
-	col.lengths.Swap(i, j)
-	if i != j && (col.lengths.Slice()[i] == 0 || col.lengths.Slice()[j] == 0) {
-		col.swappedEmpty = true
+	lengths := col.lengths.Slice()
+	a, b := lengths[i], lengths[j]
+	lengths[i], lengths[j] = b, a
+	if !col.swappedEmpty && (a == 0 || b == 0) {
+		col.swappedEmpty = i != j
 	}
 }
 
@@ -274,7 +276,9 @@ func (col *byteArrayColumnBuffer) writeByteArray(levels columnLevels, value []by
 }
 
 func (col *byteArrayColumnBuffer) writeNull(levels columnLevels) {
-	col.offsets.AppendValue(uint32(col.values.Len()))
+	if col.offsets.Len() == col.lengths.Len() {
+		col.offsets.AppendValue(uint32(col.values.Len()))
+	}
 	col.lengths.AppendValue(0)
 }
 

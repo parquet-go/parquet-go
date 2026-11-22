@@ -243,6 +243,10 @@ func TestColumnBufferByteArrayAppendAfterPage(t *testing.T) {
 		{"plain", func(col *byteArrayColumnBuffer) {
 			col.WriteByteArrays(plain.AppendByteArray(plain.AppendByteArray(nil, []byte("longer")), []byte("x")))
 		}, []string{"longer", "x"}},
+		{"null", func(col *byteArrayColumnBuffer) {
+			col.writeNull(columnLevels{})
+			col.writeNull(columnLevels{})
+		}, []string{"", ""}},
 		{"boolean", func(col *byteArrayColumnBuffer) {
 			col.writeBoolean(columnLevels{}, true)
 			col.writeBoolean(columnLevels{}, false)
@@ -277,6 +281,9 @@ func TestColumnBufferByteArrayAppendAfterPage(t *testing.T) {
 			col := newByteArrayColumnBuffer(ByteArrayType, 0, 0)
 			col.Page()
 			test.write(col)
+			if col.offsets.Len() != col.lengths.Len() {
+				t.Errorf("offset count: got %d, want %d", col.offsets.Len(), col.lengths.Len())
+			}
 			want := slices.Clone(test.want)
 			col.Swap(0, col.Len()-1)
 			want[0], want[len(want)-1] = want[len(want)-1], want[0]
@@ -322,4 +329,40 @@ func TestColumnBufferByteArraySwapEmpty(t *testing.T) {
 			t.Errorf("value %d: got %q, want %q", i, got, want)
 		}
 	}
+}
+
+func BenchmarkByteArraySwap(b *testing.B) {
+	for _, self := range []bool{true, false} {
+		name := "SwapDistinct"
+		if self {
+			name = "SwapSelf"
+		}
+		b.Run(name, func(b *testing.B) {
+			col := newByteArrayColumnBuffer(ByteArrayType, 0, 0)
+			col.writeByteArray(columnLevels{}, []byte("a"))
+			col.writeByteArray(columnLevels{}, []byte("bc"))
+			j := 1
+			if self {
+				j = 0
+			}
+			for b.Loop() {
+				col.Swap(0, j)
+			}
+			col.Reset()
+		})
+	}
+}
+
+func BenchmarkByteArrayPageAfterUndo(b *testing.B) {
+	col := newByteArrayColumnBuffer(ByteArrayType, 0, 0)
+	for range 10000 {
+		col.writeByteArray(columnLevels{}, []byte("abcdefghij"))
+	}
+	col.Page()
+	for b.Loop() {
+		col.Swap(0, col.Len()-1)
+		col.Swap(0, col.Len()-1)
+		col.Page()
+	}
+	col.Reset()
 }
