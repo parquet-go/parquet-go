@@ -99,6 +99,38 @@ func TestGenericWriterDictionaryFallbackKeepsValues(t *testing.T) {
 		}
 		assertDictionaryFallbackFileComplete(t, buffer.Bytes(), rows)
 	})
+
+	t.Run("concurrent row group", func(t *testing.T) {
+		buffer := new(bytes.Buffer)
+		writer := parquet.NewGenericWriter[dictionaryFallbackRow](buffer,
+			parquet.DictionaryMaxBytes(dictionaryMaxBytes),
+			parquet.PageBufferSize(pageBufferSize),
+			parquet.MaxRowsPerRowGroup(rowsPerRowGroup),
+		)
+		// The dictionary overflows in row groups written through
+		// BeginGenericRowGroup, and the writer's own row groups follow them.
+		const concurrentRows = 3 * rowsPerRowGroup
+		for start := 0; start < concurrentRows; start += rowsPerRowGroup {
+			rowGroup := writer.BeginGenericRowGroup()
+			for i := start; i < start+rowsPerRowGroup; i += batchRows {
+				if _, err := rowGroup.Write(rows[i : i+batchRows]); err != nil {
+					t.Fatalf("writing rows %d..%d: %v", i, i+batchRows, err)
+				}
+			}
+			if _, err := rowGroup.Commit(); err != nil {
+				t.Fatalf("committing rows %d..%d: %v", start, start+rowsPerRowGroup, err)
+			}
+		}
+		for i := concurrentRows; i < totalRows; i += batchRows {
+			if _, err := writer.Write(rows[i : i+batchRows]); err != nil {
+				t.Fatalf("writing rows %d..%d: %v", i, i+batchRows, err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("closing writer: %v", err)
+		}
+		assertDictionaryFallbackFileComplete(t, buffer.Bytes(), rows)
+	})
 }
 
 func assertDictionaryFallbackFileComplete(t *testing.T, data []byte, want []dictionaryFallbackRow) {
