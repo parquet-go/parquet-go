@@ -285,6 +285,31 @@ func TestOpenColumnsMalformedNumChildren(t *testing.T) {
 				{Name: "a", Type: thrift.New(format.Int64)},
 			},
 		},
+		{
+			// A negative count passes an upper-bound check and panics in
+			// allocate, which slices the children slab at that index.
+			scenario: "root declares a negative number of children",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](-1)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
+		{
+			scenario: "root declares the smallest number of children",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](math.MinInt32)},
+			},
+		},
+		{
+			// The children slab is non-empty here: the negative count still
+			// has to be rejected on its own, not because the slab ran out.
+			scenario: "nested group declares a negative number of children",
+			schema: []format.SchemaElement{
+				{Name: "root", NumChildren: thrift.New[int32](1)},
+				{Name: "group", NumChildren: thrift.New[int32](-25)},
+				{Name: "a", Type: thrift.New(format.Int64)},
+			},
+		},
 	}
 
 	for _, test := range tests {
