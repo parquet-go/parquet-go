@@ -214,20 +214,50 @@ func (w *Writer) writeRowGroupByColumn(columns []ColumnChunk) error {
 const reencodeValueBufferSize = 1024
 
 // copyColumnValues reads every value of src in order and writes it to dst,
-// without materializing rows. Batches are trimmed to the last row boundary
-// so WriteRowValues never sees a row split across calls. It uses buf
-// synchronously and does not retain it, so callers may reuse buf after this
-// function returns but must not share it with a concurrent call.
+// without materializing rows. It uses buf synchronously and does not retain it,
+// so callers may reuse buf after this function returns but must not share it
+// with a concurrent call.
 func copyColumnValues(dst *ColumnWriter, src ColumnChunk, buf []Value) error {
 	reader := NewColumnChunkValueReader(src)
 	defer reader.Close()
 
-	// Pending values can outlive their source page, so detach byte/string
-	// data to avoid corruption when the page's buffer is reused.
-	if r, ok := reader.(*columnChunkValueReader); ok {
-		r.detach = true
+	// On flat columns every value is a row, so a batch can never split one.
+	if dst.maxRepetitionLevel == 0 {
+		return copyFlatColumnValues(dst, reader, buf)
 	}
 
+	// Values held back across reads can outlive their source page, so detach
+	// byte array data to avoid corruption when the page's buffer is reused.
+	switch src.Type().Kind() {
+	case ByteArray, FixedLenByteArray:
+		if r, ok := reader.(*columnChunkValueReader); ok {
+			r.detach = true
+		}
+	}
+	return copyRepeatedColumnValues(dst, reader, buf)
+}
+
+func copyFlatColumnValues(dst *ColumnWriter, reader ValueReader, buf []Value) error {
+	for {
+		n, err := reader.ReadValues(buf)
+		if n > 0 {
+			if _, werr := dst.WriteRowValues(buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+// copyRepeatedColumnValues trims each batch to the last row boundary and holds
+// the remainder for the next read, so WriteRowValues never sees a row split
+// across calls.
+func copyRepeatedColumnValues(dst *ColumnWriter, reader ValueReader, buf []Value) error {
 	var pending []Value
 
 	for {
