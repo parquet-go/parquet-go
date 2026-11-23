@@ -3,20 +3,30 @@ package parquet
 import (
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/internal/rle"
 )
 
-const dictionaryIndexWindowSize = 1024
+const (
+	dictionaryIndexWindowSize   = 1024
+	dictionaryRunsPerCheckpoint = 16
+)
 
-// Pages and their slices share the encoded bytes. Only Page.Data materializes
-// indexes; Values and Bounds consume runs directly.
+type dictionaryRunCheckpoint struct {
+	row    int64
+	offset int
+}
+
+// Pages and their slices share the encoded bytes and immutable run checkpoints.
+// Only Page.Data materializes indexes; Values and Bounds consume runs directly.
 type windowedIndexedPage struct {
 	indexedPage
 	first        rle.Int32Runs
-	count        int64
+	checkpoints  []dictionaryRunCheckpoint
+	start, count int64
 	once         sync.Once
 	materialized []int32
 }
@@ -38,7 +48,8 @@ func newWindowedIndexedPage(typ *indexedType, column, count int, data []byte) (P
 	if typ.dict != nil {
 		dictLen = typ.dict.Len()
 	}
-	if err := validateDictionaryRuns(first, width, count, dictLen); err != nil {
+	checkpoints, err := validateDictionaryRuns(first, width, count, dictLen)
+	if err != nil {
 		return nil, err
 	}
 	if typ.dict == nil {
@@ -46,34 +57,43 @@ func newWindowedIndexedPage(typ *indexedType, column, count int, data []byte) (P
 	}
 	return &windowedIndexedPage{
 		indexedPage: indexedPage{typ: typ, columnIndex: ^makeColumnIndex(column)},
-		first:       first, count: int64(count),
+		first:       first, checkpoints: checkpoints, count: int64(count),
 	}, nil
 }
 
 // Validate the whole encoded stream before publishing a page. Surplus indexes
 // are ignored but their run framing is still checked. Clean short streams are
 // zero-extended, just like newIndexedPage. A negative dictLen means no dictionary.
-func validateDictionaryRuns(c rle.Int32Runs, width uint, count, dictLen int) error {
+// Index runs during validation so slicing does not require another full scan.
+func validateDictionaryRuns(c rle.Int32Runs, width uint, count, dictLen int) ([]dictionaryRunCheckpoint, error) {
 	var window [dictionaryIndexWindowSize]int32
+	var checkpoints []dictionaryRunCheckpoint
 	var boundsErr error
 	coversPacked := width < 32 && dictLen > 0 && uint64(dictLen) >= uint64(1)<<width
-	left := count
+	left, runs := count, 0
 	for {
+		offset := c.NextOffset()
 		if err := c.Next(); err != nil {
 			if err != io.EOF {
-				return encoding.Error(&RLEDictionary, err)
+				return nil, encoding.Error(&RLEDictionary, err)
 			}
 			if dictLen == 0 && left > 0 {
 				// Eager validation checks the zero-filled tail first for an empty dictionary.
-				return checkDictionaryIndexBounds(nil, left, dictLen)
+				return nil, checkDictionaryIndexBounds(nil, left, dictLen)
 			}
-			return boundsErr
+			return checkpoints, boundsErr
 		}
 		n := int(min(int64(left), c.Remaining()))
+		row := count - left
 		left -= n
 		if n == 0 || dictLen < 0 || boundsErr != nil {
 			continue
 		}
+		// A long run is cheap to skip, so index by runs rather than rows.
+		if runs > 0 && runs%dictionaryRunsPerCheckpoint == 0 {
+			checkpoints = append(checkpoints, dictionaryRunCheckpoint{row: int64(row), offset: offset})
+		}
+		runs++
 		if id, repeated := c.Repeated(); repeated {
 			boundsErr = checkDictionaryIndexBounds([]int32{id}, 1, dictLen)
 		} else if !coversPacked {
@@ -112,20 +132,27 @@ func (p *windowedIndexedPage) Data() encoding.Values {
 	return encoding.Int32Values(p.materialized)
 }
 
-// Slice remembers its position for later reads. Separate slices of the same
-// page each scan from that page's starting position.
 func (p *windowedIndexedPage) Slice(i, j int64) Page {
 	if i < 0 || j < i || j > p.count {
 		panic("dictionary page slice out of bounds")
 	}
 	c := p.first
-	for skip := i; skip > 0 && loadDictionaryRun(&c); {
+	row, skip := p.start+i, i
+	if i > 0 && len(p.checkpoints) > 0 && row >= p.checkpoints[0].row {
+		n := sort.Search(len(p.checkpoints), func(n int) bool { return p.checkpoints[n].row > row })
+		checkpoint := p.checkpoints[n-1]
+		if checkpoint.row > p.start {
+			c.SeekRun(checkpoint.offset)
+			skip = row - checkpoint.row
+		}
+	}
+	for skip > 0 && loadDictionaryRun(&c) {
 		n := min(skip, c.Remaining())
 		c.Skip(n)
 		skip -= n
 	}
 	return &windowedIndexedPage{
-		indexedPage: p.indexedPage, first: c, count: j - i,
+		indexedPage: p.indexedPage, first: c, checkpoints: p.checkpoints, start: row, count: j - i,
 	}
 }
 

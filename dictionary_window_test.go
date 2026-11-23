@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -62,6 +63,58 @@ func TestWindowedDictionaryPage(t *testing.T) {
 		if got := data.Int32(); !slices.Equal(got, want) {
 			t.Fatalf("slice %v: Data indexes differ", span)
 		}
+	}
+}
+
+func TestWindowedDictionarySparseSlices(t *testing.T) {
+	const runs = 5*dictionaryRunsPerCheckpoint + 1
+	data := []byte{1} // one-bit IDs
+	var ids []int32
+	var wantCheckpoints []dictionaryRunCheckpoint
+	for run := range runs {
+		if run > 0 && run%dictionaryRunsPerCheckpoint == 0 {
+			wantCheckpoints = append(wantCheckpoints, dictionaryRunCheckpoint{row: int64(len(ids)), offset: len(data) - 1})
+			data = append(data, 0) // a zero-length run at the checkpoint
+		}
+		if run%3 == 0 {
+			data = append(data, 3, 0x55) // one group of eight alternating IDs
+			ids = append(ids, 1, 0, 1, 0, 1, 0, 1, 0)
+		} else {
+			id, n := run%2, run%9+1
+			data = binary.AppendUvarint(data, uint64(n*2))
+			data = append(data, byte(id))
+			for range n {
+				ids = append(ids, int32(id))
+			}
+		}
+	}
+	encodedRows := int64(len(ids))
+	ids = append(ids, 0, 0, 0) // clean short stream
+	page, err := newWindowedIndexedPage(newIndexedType(ByteArrayType, newTestByteArrayDictionary("a", "b")), 0, len(ids), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := page.(*windowedIndexedPage)
+	if !slices.Equal(p.checkpoints, wantCheckpoints) {
+		t.Fatalf("checkpoints = %v, want %v", p.checkpoints, wantCheckpoints)
+	}
+	check := func(page Page, start int64) {
+		t.Helper()
+		// Visit slices out of order; nested slices may start mid-run or beyond EOF.
+		for i := page.NumRows(); i >= 0; i-- {
+			j := min(i+13, page.NumRows())
+			data := page.Slice(i, j).Data()
+			if got, want := data.Int32(), ids[start+i:start+j]; !slices.Equal(got, want) {
+				t.Fatalf("slice [%d,%d) = %v, want %v", start+i, start+j, got, want)
+			}
+		}
+	}
+	check(p, 0)
+	for _, start := range []int64{1, p.checkpoints[2].row + 1, encodedRows - 1, encodedRows + 1} {
+		check(p.Slice(start, p.NumRows()), start)
+	}
+	if p.materialized != nil {
+		t.Fatal("slicing materialized the parent index array")
 	}
 }
 

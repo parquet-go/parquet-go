@@ -73,6 +73,14 @@ func (c *Int32Runs) Next() error {
 	return io.EOF
 }
 
+// NextOffset returns the byte offset where Next will look for the next run.
+func (c *Int32Runs) NextOffset() int { return c.next }
+
+// SeekRun positions the cursor before a run at an offset from NextOffset.
+func (c *Int32Runs) SeekRun(offset int) {
+	c.next, c.remaining = offset, 0
+}
+
 func (c *Int32Runs) Remaining() int64 { return c.remaining }
 
 func (c *Int32Runs) Repeated() (int32, bool) { return c.word, c.packed == nil }
