@@ -1108,7 +1108,11 @@ func dictionaryIndexOutOfRange(indexes []int32, dictLen int) (int32, bool) {
 	return 0, false
 }
 
-// check data buffer has enough capacity for the nubmer of values & value type
+// checkPageDataCapacity reports whether the decoded values contain enough
+// bytes for numValues. Length is the number of bytes the decoder wrote.
+// Capacity is often larger: the buffer comes from a pool sized for the
+// declared count, and bytes past the decoded length still hold an earlier
+// page. Slicing up to numValues would read those bytes back.
 func checkPageDataCapacity(kind Kind, typeLength, numValues int, values encoding.Values) error {
 	n := int64(numValues)
 	var need int64
@@ -1127,8 +1131,8 @@ func checkPageDataCapacity(kind Kind, typeLength, numValues int, values encoding
 		return nil
 	}
 	data, _ := values.Data()
-	if int64(cap(data)) < need {
-		return fmt.Errorf("page header declares %d values requiring %d bytes but decoded buffer holds only %d: %w", numValues, need, cap(data), ErrCorrupted)
+	if int64(len(data)) < need {
+		return fmt.Errorf("page header declares %d values requiring %d bytes but decoded buffer holds only %d: %w", numValues, need, len(data), ErrCorrupted)
 	}
 	return nil
 }
