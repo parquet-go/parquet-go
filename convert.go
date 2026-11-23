@@ -943,25 +943,19 @@ func (p missingPage) Slice(i, j int64) Page {
 		leafOptional:        p.leafOptional,
 	}
 	adjacentPages := p.adjacentPages
-	// Flat columns mirror per-row levels, so the slice has to start at the
-	// same row as the sibling. Seek the reader this page already holds.
-	// Opening another one would leave the original running (async page
-	// prefetch included) and would leak it if the seek failed. Repeated
-	// columns keep the historical slice, which shares the reader without
-	// seeking.
-	if p.mirrorSiblingLevels {
-		if adjacentPages == nil && p.adjacentChunk != nil {
-			opened := p.adjacentChunk.Pages()
-			if err := opened.SeekToRow(i); err != nil {
-				opened.Close()
-				adjacentPages = &errorPages{err: err}
-			} else {
-				adjacentPages = opened
-			}
-		} else if adjacentPages != nil {
-			if err := adjacentPages.SeekToRow(i); err != nil {
-				adjacentPages = &errorPages{err: err}
-			}
+	// Flat columns mirror per-row levels, so each slice needs its own sibling
+	// reader positioned at the slice start. Seeking the page's reader would
+	// move the original page and any other slice that shares it. The reader
+	// opened here is owned by the slice and closed if the seek fails; a
+	// successful one is closed by the slice value reader. Repeated columns
+	// keep the historical slice, which shares the reader without seeking.
+	if p.mirrorSiblingLevels && p.adjacentChunk != nil {
+		opened := p.adjacentChunk.Pages()
+		if err := opened.SeekToRow(i); err != nil {
+			opened.Close()
+			adjacentPages = &errorPages{err: err}
+		} else {
+			adjacentPages = opened
 		}
 	}
 	return missingPage{

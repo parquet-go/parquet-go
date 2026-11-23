@@ -544,8 +544,8 @@ func TestMissingColumnSliceSeekClosesOpenedSibling(t *testing.T) {
 		t.Fatal(err)
 	}
 	converted := parquet.ConvertRowGroup(accessRowGroup{RowGroup: src, columns: cols}, conv)
-	// The missing column opens the sibling once. Slice seeks that reader.
-	// A failed seek must not open a second reader and leave it running.
+	// The missing column opens the sibling once. Slice opens a second reader
+	// so it does not move the first. A failed seek closes that second reader.
 	pages := converted.ColumnChunks()[1].Pages()
 	defer pages.Close()
 	page, err := pages.ReadPage()
@@ -557,11 +557,74 @@ func TestMissingColumnSliceSeekClosesOpenedSibling(t *testing.T) {
 	if !errors.Is(err, errSiblingRead) {
 		t.Fatalf("slice read err = %v, want %v", err, errSiblingRead)
 	}
-	if len(sibling.opened) != 1 {
-		t.Fatalf("sibling Pages opened %d times, want 1", len(sibling.opened))
+	if len(sibling.opened) != 2 {
+		t.Fatalf("sibling Pages opened %d times, want 2", len(sibling.opened))
 	}
 	if sibling.opened[0].closed != 0 {
-		t.Fatalf("slice closed the caller's sibling reader %d times", sibling.opened[0].closed)
+		t.Fatalf("slice closed the original sibling reader %d times", sibling.opened[0].closed)
+	}
+	if sibling.opened[1].closed != 1 {
+		t.Fatalf("slice seek closed the dedicated reader %d times, want 1", sibling.opened[1].closed)
+	}
+}
+
+func TestMissingColumnSliceDoesNotMoveOriginal(t *testing.T) {
+	type Inner struct {
+		A int64 `parquet:"a"`
+	}
+	type Source struct {
+		G *Inner `parquet:"g,optional"`
+	}
+	first := Inner{A: 1}
+	third := Inner{A: 3}
+	src := parquet.NewGenericBuffer[Source]()
+	if _, err := src.Write([]Source{{G: &first}, {G: nil}, {G: &third}}); err != nil {
+		t.Fatal(err)
+	}
+	type InnerTarget struct {
+		A int64 `parquet:"a"`
+		B int64 `parquet:"b"`
+	}
+	type Target struct {
+		G *InnerTarget `parquet:"g,optional"`
+	}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Target)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(src, conv)
+	pages := converted.ColumnChunks()[1].Pages()
+	defer pages.Close()
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readDef := func(p parquet.Page, n int) []int {
+		t.Helper()
+		buf := make([]parquet.Value, n)
+		got, err := p.Values().ReadValues(buf)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if got != n {
+			t.Fatalf("read %d values, want %d", got, n)
+		}
+		defs := make([]int, n)
+		for i := range n {
+			defs[i] = buf[i].DefinitionLevel()
+		}
+		return defs
+	}
+
+	if defs := readDef(page.Slice(1, 3), 2); !reflect.DeepEqual(defs, []int{0, 1}) {
+		t.Fatalf("first slice defs = %v, want [0 1]", defs)
+	}
+	if defs := readDef(page.Slice(0, 1), 1); !reflect.DeepEqual(defs, []int{1}) {
+		t.Fatalf("second slice defs = %v, want [1]", defs)
+	}
+	if defs := readDef(page, 3); !reflect.DeepEqual(defs, []int{1, 0, 1}) {
+		t.Fatalf("original page defs = %v, want [1 0 1]", defs)
 	}
 }
 
