@@ -949,8 +949,16 @@ func (c *FileColumnChunk) Type() Type { return c.column.Type() }
 // Column returns the column index of this chunk in its parent row group.
 func (c *FileColumnChunk) Column() int { return int(c.column.Index()) }
 
-// Bounds returns the min and max values found in the column chunk.
-// It reports ok=false if either bound is missing or a floating-point bound is NaN.
+// Bounds returns the min and max values found in the column chunk. The values
+// are the footer statistics, decoded as stored.
+//
+// ok is false when either statistic is missing, when the column order is
+// undefined, or when a FLOAT or DOUBLE statistic is NaN.
+//
+// Footer statistics use the type-defined column order. Under that order a
+// minimum of +0 also admits -0, and a maximum of -0 also admits +0. Bounds
+// returns the stored endpoints with their signs unchanged, so callers that
+// need both zeros covered widen a +0 minimum to -0 and a -0 maximum to +0.
 func (c *FileColumnChunk) Bounds() (min, max Value, ok bool) {
 	if c.column.ignoreOrder {
 		return min, max, false
