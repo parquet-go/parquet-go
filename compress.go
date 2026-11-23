@@ -67,6 +67,15 @@ func LookupCompressionCodec(codec format.CompressionCodec) compress.Codec {
 	return &unsupported{codec}
 }
 
+// compressionCodecs returns the codecs set by FileCompressionCodecs for
+// the file, or nil when f is nil or has none.
+func (f *File) compressionCodecs() []compress.Codec {
+	if f == nil || f.config == nil {
+		return nil
+	}
+	return f.config.CompressionCodecs
+}
+
 // lookupCompressionCodec returns the codec of the given code from codecs,
 // the last one of that code when there are several, or the default codec
 // of LookupCompressionCodec when codecs has none.

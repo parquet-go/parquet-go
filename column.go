@@ -211,7 +211,15 @@ func (c *Column) forEachLeaf(do func(*Column)) {
 }
 
 func openColumns(file *File, metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex) (*Column, error) {
-	cl := columnLoader{}
+	return openColumnsWithCodecs(file, file.compressionCodecs(), metadata, columnIndexes, offsetIndexes)
+}
+
+// openColumnsWithCodecs is openColumns with the codecs the leaf columns are
+// given: each replaces the default codec of its kind (see
+// FileCompressionCodecs). It lets a column tree opened without its file
+// still use the file's codecs.
+func openColumnsWithCodecs(file *File, codecs []compress.Codec, metadata *format.FileMetaData, columnIndexes []format.ColumnIndex, offsetIndexes []format.OffsetIndex) (*Column, error) {
+	cl := columnLoader{codecs: codecs}
 	cl.reserve(metadata, columnIndexes, offsetIndexes)
 
 	c, err := cl.open(file, metadata, columnIndexes, offsetIndexes, nil)
@@ -285,6 +293,9 @@ type columnLoader struct {
 	schemaIndex         int
 	columnOrderIndex    int
 	rowGroupColumnIndex int
+
+	// codecs replace the default compression codecs of their kinds.
+	codecs []compress.Codec
 
 	// The shape of the column tree is fully determined by the schema, so its
 	// parts are allocated once here and handed out in slices as the tree is
@@ -473,11 +484,7 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 					break
 				}
 			}
-			var codecs []compress.Codec
-			if file != nil && file.config != nil {
-				codecs = file.config.CompressionCodecs
-			}
-			c.compression = lookupCompressionCodec(codecs, c.chunks[0].MetaData.Codec)
+			c.compression = lookupCompressionCodec(cl.codecs, c.chunks[0].MetaData.Codec)
 		}
 
 		return c, nil
