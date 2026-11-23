@@ -248,6 +248,11 @@ func decodeFuncSliceOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 			l.Type = BOOL
 		}
 
+		size := int(l.Size)
+		if err := checkCount(r, "list size", size, 1); err != nil {
+			return err
+		}
+
 		// TODO: implement type conversions?
 		if typ != l.Type {
 			if flags.Have(Strict) {
@@ -256,23 +261,46 @@ func decodeFuncSliceOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 			return skipListItems(r, l)
 		}
 
-		size := int(l.Size)
-		if v.IsNil() {
-			v.Set(reflect.MakeSlice(t, size, size))
-		} else if v.Cap() >= size {
-			v.SetLen(size)
-		} else {
-			v.Grow(size - v.Len())
-			v.SetLen(size)
-		}
 		flags = flags.Only(decodeFlags)
+		if size <= maxContainerPrealloc || v.Cap() >= size {
+			if v.IsNil() {
+				v.Set(reflect.MakeSlice(t, size, size))
+			} else if v.Cap() >= size {
+				v.SetLen(size)
+			} else {
+				v.Grow(size - v.Len())
+				v.SetLen(size)
+			}
+			for i := range size {
+				if err := dec(r, v.Index(i), flags); err != nil {
+					return with(dontExpectEOF(err), &decodeErrorList{cause: l, index: i})
+				}
+			}
+			return nil
+		}
 
-		for i := range size {
+		hint := maxContainerPrealloc
+		if v.Cap() > hint {
+			hint = v.Cap()
+		}
+		if v.IsNil() || v.Cap() < hint {
+			v.Set(reflect.MakeSlice(t, 0, hint))
+		} else {
+			v.SetLen(0)
+		}
+		for i := 0; i < size; i++ {
+			if v.Len() == v.Cap() {
+				extra := v.Cap()
+				if extra < 1 {
+					extra = 1
+				}
+				v.Grow(extra)
+			}
+			v.SetLen(v.Len() + 1)
 			if err := dec(r, v.Index(i), flags); err != nil {
 				return with(dontExpectEOF(err), &decodeErrorList{cause: l, index: i})
 			}
 		}
-
 		return nil
 	}
 }
@@ -297,9 +325,17 @@ func decodeFuncMapOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 			return err
 		}
 
-		v.Set(reflect.MakeMapWithSize(mapType, int(m.Size)))
+		size := int(m.Size)
+		if err := checkCount(r, "map size", size, 2); err != nil {
+			return err
+		}
+		hint := size
+		if hint > maxContainerPrealloc {
+			hint = maxContainerPrealloc
+		}
+		v.Set(reflect.MakeMapWithSize(mapType, hint))
 
-		if m.Size == 0 { // empty map
+		if size == 0 { // empty map
 			return nil
 		}
 
@@ -322,7 +358,7 @@ func decodeFuncMapOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		tmpElem := reflect.New(elem).Elem()
 		flags = flags.Only(decodeFlags)
 
-		for i := range int(m.Size) {
+		for i := range size {
 			if err := decodeKey(r, tmpKey, flags); err != nil {
 				return with(dontExpectEOF(err), &decodeErrorMap{cause: m, index: i})
 			}
@@ -358,9 +394,17 @@ func decodeFuncMapAsSetOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 			s.Type = BOOL
 		}
 
-		v.Set(reflect.MakeMapWithSize(t, int(s.Size)))
+		size := int(s.Size)
+		if err := checkCount(r, "set size", size, 1); err != nil {
+			return err
+		}
+		hint := size
+		if hint > maxContainerPrealloc {
+			hint = maxContainerPrealloc
+		}
+		v.Set(reflect.MakeMapWithSize(t, hint))
 
-		if s.Size == 0 {
+		if size == 0 {
 			return nil
 		}
 
@@ -375,7 +419,7 @@ func decodeFuncMapAsSetOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		tmp := reflect.New(key).Elem()
 		flags = flags.Only(decodeFlags)
 
-		for i := range int(s.Size) {
+		for i := range size {
 			if err := dec(r, tmp, flags); err != nil {
 				return with(dontExpectEOF(err), &decodeErrorSet{cause: s, index: i})
 			}
@@ -628,6 +672,9 @@ func readBinary(r Reader, f func(io.Reader) error) error {
 	if err != nil {
 		return err
 	}
+	if rem := remainingOf(r); rem >= 0 && n > rem {
+		return io.ErrUnexpectedEOF
+	}
 	return dontExpectEOF(f(io.LimitReader(r.Reader(), int64(n))))
 }
 
@@ -684,6 +731,9 @@ func skipBinary(r Reader) error {
 	}
 	if n == 0 {
 		return nil
+	}
+	if rem := remainingOf(r); rem >= 0 && n > rem {
+		return io.ErrUnexpectedEOF
 	}
 	_, err = discard(r, int(n))
 	return dontExpectEOF(err)
@@ -751,6 +801,9 @@ func skipItem(r Reader, t Type) error {
 // reader would desynchronize from the stream.
 
 func skipListItems(r Reader, l List) error {
+	if err := checkCount(r, "list size", int(l.Size), 1); err != nil {
+		return err
+	}
 	for i := range int(l.Size) {
 		if err := skipItem(r, l.Type); err != nil {
 			return with(dontExpectEOF(err), &decodeErrorList{cause: l, index: i})
@@ -760,6 +813,9 @@ func skipListItems(r Reader, l List) error {
 }
 
 func skipSetItems(r Reader, s Set) error {
+	if err := checkCount(r, "set size", int(s.Size), 1); err != nil {
+		return err
+	}
 	for i := range int(s.Size) {
 		if err := skipItem(r, s.Type); err != nil {
 			return with(dontExpectEOF(err), &decodeErrorSet{cause: s, index: i})
@@ -769,6 +825,9 @@ func skipSetItems(r Reader, s Set) error {
 }
 
 func skipMapItems(r Reader, m Map) error {
+	if err := checkCount(r, "map size", int(m.Size), 2); err != nil {
+		return err
+	}
 	for i := range int(m.Size) {
 		if err := skipItem(r, m.Key); err != nil {
 			return with(dontExpectEOF(err), &decodeErrorMap{cause: m, index: i})

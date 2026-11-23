@@ -62,7 +62,7 @@ func (r *binaryReader) ReadInt8() (int8, error) {
 
 func (r *binaryReader) ReadInt16() (int16, error) {
 	b, err := r.read(2)
-	if len(b) < 2 {
+	if err != nil {
 		return 0, err
 	}
 	return int16(binary.BigEndian.Uint16(b)), nil
@@ -70,7 +70,7 @@ func (r *binaryReader) ReadInt16() (int16, error) {
 
 func (r *binaryReader) ReadInt32() (int32, error) {
 	b, err := r.read(4)
-	if len(b) < 4 {
+	if err != nil {
 		return 0, err
 	}
 	return int32(binary.BigEndian.Uint32(b)), nil
@@ -78,7 +78,7 @@ func (r *binaryReader) ReadInt32() (int32, error) {
 
 func (r *binaryReader) ReadInt64() (int64, error) {
 	b, err := r.read(8)
-	if len(b) < 8 {
+	if err != nil {
 		return 0, err
 	}
 	return int64(binary.BigEndian.Uint64(b)), nil
@@ -86,7 +86,7 @@ func (r *binaryReader) ReadInt64() (int64, error) {
 
 func (r *binaryReader) ReadFloat64() (float64, error) {
 	b, err := r.read(8)
-	if len(b) < 8 {
+	if err != nil {
 		return 0, err
 	}
 	return math.Float64frombits(binary.BigEndian.Uint64(b)), nil
@@ -97,12 +97,12 @@ func (r *binaryReader) ReadBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := make([]byte, n)
-	_, err = io.ReadFull(r.r, b)
-	if err == nil {
-		r.n += n
+	b, err := readLengthBytes(r.r, n)
+	if err != nil {
+		return nil, err
 	}
-	return b, err
+	r.n += n
+	return b, nil
 }
 
 func (r *binaryReader) ReadString() (string, error) {
@@ -112,7 +112,7 @@ func (r *binaryReader) ReadString() (string, error) {
 
 func (r *binaryReader) ReadLength() (int, error) {
 	b, err := r.read(4)
-	if len(b) < 4 {
+	if err != nil {
 		return 0, err
 	}
 	n := binary.BigEndian.Uint32(b)
@@ -126,18 +126,20 @@ func (r *binaryReader) ReadMessage() (Message, error) {
 	m := Message{}
 
 	b, err := r.read(4)
-	if len(b) < 4 {
+	if err != nil {
 		return m, err
 	}
 
 	if (b[0] >> 7) == 0 { // non-strict
-		n := int(binary.BigEndian.Uint32(b))
-		s := make([]byte, n)
-		_, err := io.ReadFull(r.r, s)
+		n32 := binary.BigEndian.Uint32(b)
+		if n32 > math.MaxInt32 {
+			return m, fmt.Errorf("length out of range: %d", n32)
+		}
+		s, err := readLengthBytes(r.r, int(n32))
 		if err != nil {
 			return m, dontExpectEOF(err)
 		}
-		r.n += n
+		r.n += len(s)
 		m.Name = unsafecast.String(s)
 
 		t, err := r.ReadInt8()
@@ -477,11 +479,11 @@ func (r *binaryBytesReader) ReadBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.offset+n > len(r.data) {
-		return nil, io.ErrUnexpectedEOF
+	b, next, err := takeBytes(r.data, r.offset, n)
+	if err != nil {
+		return nil, err
 	}
-	b := r.data[r.offset : r.offset+n]
-	r.offset += n
+	r.offset = next
 	return b, nil
 }
 
@@ -490,16 +492,16 @@ func (r *binaryBytesReader) ReadString() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if r.offset+n > len(r.data) {
-		return "", io.ErrUnexpectedEOF
+	b, next, err := takeBytes(r.data, r.offset, n)
+	if err != nil {
+		return "", err
 	}
-	s := unsafecast.String(r.data[r.offset : r.offset+n])
-	r.offset += n
-	return s, nil
+	r.offset = next
+	return unsafecast.String(b), nil
 }
 
 func (r *binaryBytesReader) ReadLength() (int, error) {
-	if r.offset+4 > len(r.data) {
+	if r.offset > len(r.data) || len(r.data)-r.offset < 4 {
 		return 0, io.ErrUnexpectedEOF
 	}
 	n := binary.BigEndian.Uint32(r.data[r.offset:])
@@ -507,25 +509,33 @@ func (r *binaryBytesReader) ReadLength() (int, error) {
 	if n > math.MaxInt32 {
 		return 0, fmt.Errorf("length out of range: %d", n)
 	}
-	return int(n), nil
+	length := int(n)
+	if length > bytesRemain(r.offset, len(r.data)) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return length, nil
 }
 
 func (r *binaryBytesReader) ReadMessage() (Message, error) {
 	m := Message{}
 
-	if r.offset+4 > len(r.data) {
+	if r.offset > len(r.data) || len(r.data)-r.offset < 4 {
 		return m, io.ErrUnexpectedEOF
 	}
 	b := r.data[r.offset : r.offset+4]
 	r.offset += 4
 
 	if (b[0] >> 7) == 0 { // non-strict
-		n := int(binary.BigEndian.Uint32(b))
-		if r.offset+n > len(r.data) {
-			return m, io.ErrUnexpectedEOF
+		n32 := binary.BigEndian.Uint32(b)
+		if n32 > math.MaxInt32 {
+			return m, fmt.Errorf("length out of range: %d", n32)
 		}
-		m.Name = unsafecast.String(r.data[r.offset : r.offset+n])
-		r.offset += n
+		s, next, err := takeBytes(r.data, r.offset, int(n32))
+		if err != nil {
+			return m, err
+		}
+		m.Name = unsafecast.String(s)
+		r.offset = next
 
 		t, err := r.ReadInt8()
 		if err != nil {

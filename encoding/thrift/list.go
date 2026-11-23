@@ -65,6 +65,11 @@ func (l Slice[T]) DecodeFunc(cache DecodeFuncCache) DecodeFunc {
 			listHeader.Type = BOOL
 		}
 
+		size := int(listHeader.Size)
+		if err := checkCount(r, "list size", size, 1); err != nil {
+			return err
+		}
+
 		if elemType != listHeader.Type {
 			if flags.Have(Strict) {
 				return &TypeMismatch{item: "list item", Expect: elemType, Found: listHeader.Type}
@@ -72,21 +77,46 @@ func (l Slice[T]) DecodeFunc(cache DecodeFuncCache) DecodeFunc {
 			return skipListItems(r, listHeader)
 		}
 
-		size := int(listHeader.Size)
-
-		// Zero-alloc typed allocation via interface-to-pointer conversion
+		// Zero-alloc typed allocation via interface-to-pointer conversion.
+		// Sizes within the prealloc cap (or already backed by a large enough
+		// slice) are allocated once. Larger lists grow as elements are decoded
+		// so the declared count is not itself an allocation.
 		list := v.Addr().Interface().(*Slice[T])
-		if *list == nil {
-			*list = make(Slice[T], size)
-		} else if cap(*list) >= size {
-			*list = (*list)[:size]
-		} else {
-			*list = slices.Grow((*list)[:0], size)[:size]
+		flags = flags.Only(decodeFlags)
+		if size <= maxContainerPrealloc || cap(*list) >= size {
+			if *list == nil {
+				*list = make(Slice[T], size)
+			} else if cap(*list) >= size {
+				*list = (*list)[:size]
+			} else {
+				*list = slices.Grow((*list)[:0], size)[:size]
+			}
+			for i := range size {
+				if err := elemDec(r, v.Index(i), flags); err != nil {
+					return with(dontExpectEOF(err), &decodeErrorList{cause: listHeader, index: i})
+				}
+			}
+			return nil
 		}
 
-		// Decode elements
-		flags = flags.Only(decodeFlags)
-		for i := range size {
+		hint := maxContainerPrealloc
+		if cap(*list) > hint {
+			hint = cap(*list)
+		}
+		if *list == nil {
+			*list = make(Slice[T], 0, hint)
+		} else {
+			*list = slices.Grow((*list)[:0], hint)[:0]
+		}
+		for i := 0; i < size; i++ {
+			if len(*list) == cap(*list) {
+				extra := cap(*list)
+				if extra < 1 {
+					extra = 1
+				}
+				*list = slices.Grow(*list, extra)
+			}
+			*list = (*list)[:len(*list)+1]
 			if err := elemDec(r, v.Index(i), flags); err != nil {
 				return with(dontExpectEOF(err), &decodeErrorList{cause: listHeader, index: i})
 			}
