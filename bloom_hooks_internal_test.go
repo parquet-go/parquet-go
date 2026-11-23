@@ -64,8 +64,16 @@ func (f halvingBloomFilter) CanCopyBloomFilter(numValues int64, bitset []byte) b
 	if !f.canCopy {
 		return false
 	}
-	want := halveBloomFilter(make([]byte, f.Size(numValues)))
-	return len(bitset) == len(want)
+	return len(bitset) == f.finalSize(numValues)
+}
+
+// finalSize returns the size of the filter for numValues values once halved.
+func (f halvingBloomFilter) finalSize(numValues int64) int {
+	size := f.Size(numValues)
+	if n := size / bloom.BlockSize; n >= 2 && n%2 == 0 {
+		return size / 2
+	}
+	return size
 }
 
 func TestBloomFilterHooks(t *testing.T) {
@@ -87,6 +95,28 @@ func TestBloomFilterHooks(t *testing.T) {
 				t.Fatalf("bloom filter misses present value %v", v)
 			}
 		}
+	}
+
+	// rewrite copies the row groups of src to a new file whose writer uses
+	// filter, returning the file and the number of chunks copied verbatim.
+	rewrite := func(t *testing.T, src *File, filter halvingBloomFilter) (*File, int64) {
+		t.Helper()
+		before := copyPathCounter.Load()
+		var buf bytes.Buffer
+		w := NewGenericWriter[copyTestRow](&buf, BloomFilters(filter))
+		for _, rg := range src.RowGroups() {
+			if _, err := w.WriteRowGroup(rg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		out, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out, copyPathCounter.Load() - before
 	}
 
 	ids := []Value{ValueOf(int64(0)), ValueOf(int64(1)), ValueOf(int64(500)), ValueOf(int64(999))}
@@ -113,10 +143,31 @@ func TestBloomFilterHooks(t *testing.T) {
 		}
 
 		chunks := f.RowGroups()[0].ColumnChunks()
-		idSize := len(halveBloomFilter(make([]byte, id.Size(int64(len(rows))))))
-		checkFilter(t, chunks[0], int64(idSize), ids...)
+		checkFilter(t, chunks[0], int64(id.finalSize(int64(len(rows)))), ids...)
 		// DistinctSize doubles the size, which finalizing halves again.
 		checkFilter(t, chunks[1], int64(name.Size(10)), names...)
+	})
+
+	t.Run("finalize_scratch_buffer", func(t *testing.T) {
+		// The finalized bitset is copied back into the writer's buffer, so a
+		// scratch buffer reused across columns must not leak between them.
+		var scratch []byte
+		finalize := func(b []byte) []byte {
+			scratch = append(scratch[:0], halveBloomFilter(b)...)
+			return scratch
+		}
+		id, name := newHalvingBloomFilter("id"), newHalvingBloomFilter("name")
+		id.finalize, name.finalize = finalize, finalize
+		f := writeCopyTestFile(t, rows, BloomFilters(id, name))
+
+		want := writeCopyTestFile(t, rows, BloomFilters(newHalvingBloomFilter("id"), newHalvingBloomFilter("name")))
+		gotChunks, wantChunks := f.RowGroups()[0].ColumnChunks(), want.RowGroups()[0].ColumnChunks()
+		for i := range 2 { // id and name
+			got, want := bloomFilterBits(t, gotChunks[i]), bloomFilterBits(t, wantChunks[i])
+			if !bytes.Equal(got, want) {
+				t.Fatalf("bloom filter of column %d differs from the one finalized without a scratch buffer", i)
+			}
+		}
 	})
 
 	t.Run("invalid_finalize", func(t *testing.T) {
@@ -141,27 +192,8 @@ func TestBloomFilterHooks(t *testing.T) {
 		src := writeCopyTestFile(t, rows, BloomFilters(newHalvingBloomFilter("id")))
 		srcSize := src.RowGroups()[0].ColumnChunks()[0].BloomFilter().Size()
 
-		rewrite := func(filter halvingBloomFilter) (*File, int64) {
-			before := copyPathCounter.Load()
-			var buf bytes.Buffer
-			w := NewGenericWriter[copyTestRow](&buf, BloomFilters(filter))
-			for _, rg := range src.RowGroups() {
-				if _, err := w.WriteRowGroup(rg); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := w.Close(); err != nil {
-				t.Fatal(err)
-			}
-			out, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			return out, copyPathCounter.Load() - before
-		}
-
 		filter := newHalvingBloomFilter("id")
-		out, copied := rewrite(filter)
+		out, copied := rewrite(t, src, filter)
 		if filter.stats.copyChecks.Load() == 0 {
 			t.Fatal("copy checker was not called")
 		}
@@ -175,7 +207,7 @@ func TestBloomFilterHooks(t *testing.T) {
 
 		filter = newHalvingBloomFilter("id")
 		filter.canCopy = false
-		out, copied = rewrite(filter)
+		out, copied = rewrite(t, src, filter)
 		if copied != 0 {
 			t.Fatalf("expected no verbatim copy when the copy checker rejects the source filter, %d chunks copied", copied)
 		}
@@ -195,23 +227,28 @@ func TestBloomFilterHooks(t *testing.T) {
 		}
 
 		filter := newHalvingBloomFilter("id")
-		before := copyPathCounter.Load()
-		w := NewGenericWriter[copyTestRow](new(bytes.Buffer), BloomFilters(filter))
-		for _, rg := range src.RowGroups() {
-			if _, err := w.WriteRowGroup(rg); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := w.Close(); err != nil {
-			t.Fatal(err)
-		}
+		_, copied := rewrite(t, src, filter)
 		if n := filter.stats.copyChecks.Load(); n != 0 {
 			t.Fatalf("copy checker was called %d times for a bitset of partial blocks", n)
 		}
-		if n := copyPathCounter.Load() - before; n != 0 {
+		if n := copied; n != 0 {
 			t.Fatalf("expected no verbatim copy of a bitset of partial blocks, %d chunks copied", n)
 		}
 	})
+}
+
+// bloomFilterBits returns the bitset of the bloom filter of chunk.
+func bloomFilterBits(t *testing.T, chunk ColumnChunk) []byte {
+	t.Helper()
+	bf := chunk.BloomFilter()
+	if bf == nil {
+		t.Fatal("column has no bloom filter")
+	}
+	bits := make([]byte, bf.Size())
+	if _, err := bf.ReadAt(bits, 0); err != nil {
+		t.Fatal(err)
+	}
+	return bits
 }
 
 // oddSizeBloomFilter sizes filters one byte short of a whole number of blocks,

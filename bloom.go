@@ -76,6 +76,12 @@ func isXxHash(header *format.BloomFilterHeader) bool {
 	return ok
 }
 
+// bloomFilterSizeIsValid reports whether a split block bitset of size bytes is
+// made of whole blocks, and is neither empty nor larger than maxSize bytes.
+func bloomFilterSizeIsValid(size, maxSize int) bool {
+	return size > 0 && size%bloom.BlockSize == 0 && size <= maxSize
+}
+
 func newBloomFilter(file io.ReaderAt, offset int64, header *format.BloomFilterHeader) (*FileBloomFilter, error) {
 	if !isSplitBlockAlgorithm(header) || !isXxHash(header) {
 		return nil, nil
@@ -193,15 +199,12 @@ type BloomFilterColumn interface {
 // error otherwise. The method is not called for column chunks copied verbatim
 // from a source file.
 //
-// The writer keeps the returned slice and does not write it until the filters
-// of every column of the row group have been finalized, so it must remain valid
-// and unmodified until the row group is written. Return a subslice of filter or
-// a newly allocated slice; reusing a scratch buffer across calls would write
-// the same bitset for several columns. A BloomFilterColumn may be shared by
-// many columns and writers, so the method may be called concurrently.
-//
-// The writer reuses the returned slice for the next row group, so when it
-// shares the memory of filter, the capacity of filter is retained.
+// The writer copies the returned bitset back into filter as soon as the method
+// returns, and keeps the capacity of filter for the next row group. The
+// returned slice may therefore share the memory of filter, or of a scratch
+// buffer that the implementation reuses in later calls. A BloomFilterColumn may
+// be shared by many columns and writers, so the method may be called
+// concurrently, and such a buffer must not be shared between concurrent calls.
 type BloomFilterFinalizer interface {
 	FinalizeBloomFilter(filter []byte) []byte
 }
@@ -216,10 +219,9 @@ type BloomFilterFinalizer interface {
 // with Size. Size is also used when a filter does not implement this interface.
 //
 // Like Size, DistinctSize must return a positive multiple of bloom.BlockSize;
-// the writer does not validate the result. A filter sized with DistinctSize may
-// be larger than Size(numValues) for the chunk, in which case it is never
-// copied verbatim when the column has a BloomFilterCopyChecker (see below),
-// unless a BloomFilterFinalizer shrinks it to at most that size.
+// the writer does not validate the result. The result may exceed
+// Size(numValues), but such filters exceed the bound checked before calling a
+// BloomFilterCopyChecker, unless a BloomFilterFinalizer shrinks them.
 type BloomFilterDistinctSizer interface {
 	DistinctSize(numDistinctValues int64) int
 }

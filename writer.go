@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/parquet-go/parquet-go/bloom"
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/plain"
@@ -2396,17 +2395,19 @@ func (c *ColumnWriter) resizeBloomFilterTo(filterSize int) {
 
 // finalizeBloomFilter gives filters implementing BloomFilterFinalizer the
 // opportunity to transform the bitset once all values of the row group have
-// been written to it.
+// been written to it. The result is copied back into the writer's buffer, so
+// the buffer keeps its capacity for the next row group and the finalizer does
+// not need to keep the returned slice alive.
 func (c *ColumnWriter) finalizeBloomFilter() error {
 	f, ok := c.columnFilter.(BloomFilterFinalizer)
 	if !ok || len(c.filter) == 0 {
 		return nil
 	}
 	filter := f.FinalizeBloomFilter(c.filter)
-	if len(filter) == 0 || len(filter)%bloom.BlockSize != 0 || len(filter) > len(c.filter) {
+	if !bloomFilterSizeIsValid(len(filter), len(c.filter)) {
 		return fmt.Errorf("bloom filter of column %s finalized to an invalid size of %d bytes", c.columnPath, len(filter))
 	}
-	c.filter = filter
+	c.filter = c.filter[:copy(c.filter, filter)]
 	return nil
 }
 

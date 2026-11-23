@@ -6,7 +6,6 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"github.com/parquet-go/parquet-go/bloom"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
@@ -222,12 +221,6 @@ func columnChunkIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	if meta.Codec != dst.compression.CompressionCodec() {
 		return false
 	}
-	// A writer-requested bloom filter can only be satisfied by a verbatim copy
-	// when the source chunk carries a filter equivalent to the one the writer
-	// would build; otherwise the filter must be recomputed from decoded values.
-	if dst.columnFilter != nil && !bloomFilterIsCopyable(dst, src) {
-		return false
-	}
 	// We copy statistics and the page index from the source; require both to be
 	// present so the output honors the writer's statistics configuration.
 	if src.column.ignoreOrder || src.chunk.ColumnIndexOffset == 0 || src.chunk.OffsetIndexOffset == 0 {
@@ -236,6 +229,13 @@ func columnChunkIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	// All data pages must use the configured encoding and data page version, and
 	// dictionary presence must match the configured encoding.
 	if !encodingStatsMatch(meta.EncodingStats, dst) {
+		return false
+	}
+	// A writer-requested bloom filter can only be satisfied by a verbatim copy
+	// when the source chunk carries a filter equivalent to the one the writer
+	// would build; otherwise the filter must be recomputed from decoded values.
+	// This check reads from the source, so it runs after the metadata checks.
+	if dst.columnFilter != nil && !bloomFilterIsCopyable(dst, src) {
 		return false
 	}
 	return true
@@ -293,8 +293,7 @@ func encodingStatsMatch(stats []format.PageEncodingStats, dst *ColumnWriter) boo
 //   - the source bitset has exactly the size the destination filter would
 //     allocate for this chunk's value count, i.e. the same bits-per-value; or,
 //     when the destination filter implements BloomFilterCopyChecker, the
-//     source bitset is made of whole blocks, is no larger than that size, and
-//     the filter accepts it.
+//     checks documented on that interface pass.
 func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	meta := &src.chunk.MetaData
 	if meta.BloomFilterOffset == 0 || meta.BloomFilterLength <= 0 {
@@ -319,12 +318,12 @@ func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	if _, ok := header.Compression.Value.(*format.BloomFilterUncompressed); !ok {
 		return false
 	}
+	numBytes, size := int(header.NumBytes), dst.columnFilter.Size(meta.NumValues)
 	if checker, ok := dst.columnFilter.(BloomFilterCopyChecker); ok {
 		// Filters may be finalized to a smaller size than allocated, which also
 		// bounds the bitset read below. A bitset which isn't made of whole
 		// blocks is invalid, whatever the checker would say about it.
-		numBytes := int(header.NumBytes)
-		if numBytes <= 0 || numBytes%bloom.BlockSize != 0 || numBytes > dst.columnFilter.Size(meta.NumValues) {
+		if !bloomFilterSizeIsValid(numBytes, size) {
 			return false
 		}
 		bitset := make([]byte, numBytes)
@@ -333,7 +332,7 @@ func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 		}
 		return checker.CanCopyBloomFilter(meta.NumValues, bitset)
 	}
-	return int(header.NumBytes) == dst.columnFilter.Size(meta.NumValues)
+	return numBytes == size
 }
 
 // loadCopiedChunk prepares the destination ColumnWriter to emit a source column
