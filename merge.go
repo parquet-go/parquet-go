@@ -272,7 +272,7 @@ func rowGroupRangeOfSortedColumns(rg RowGroup, schema *Schema, sorting []Sorting
 		// A NaN endpoint does not bound the page. Ordering row groups on it
 		// compares equal to every key and can emit a finite value out of order.
 		switch columnChunk.Type().Kind() {
-		case Float, Double:
+		case Float, Double, FixedLenByteArray:
 			if columnIndexHasNaNBounds(columnIndex) {
 				return nil, nil, fmt.Errorf("NaN page bounds for sorting column %s", sortingColumnPath)
 			}

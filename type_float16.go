@@ -131,31 +131,6 @@ func compareFloat16Bytes(a, b []byte) int {
 	return compareFloat32(float16ToFloat32(a), float16ToFloat32(b))
 }
 
-func float16ColumnIndexHasNaN(typ Type, index *format.ColumnIndex) bool {
-	if index == nil {
-		return false
-	}
-	if _, ok := typ.(float16Type); !ok {
-		return false
-	}
-	n := len(index.MinValues)
-	if m := len(index.MaxValues); m > n {
-		n = m
-	}
-	for i := range n {
-		if i < len(index.NullPages) && index.NullPages[i] {
-			continue
-		}
-		if i < len(index.MinValues) && float16IsNaN(index.MinValues[i]) {
-			return true
-		}
-		if i < len(index.MaxValues) && float16IsNaN(index.MaxValues[i]) {
-			return true
-		}
-	}
-	return false
-}
-
 // float16Bounds reports the numeric minimum and maximum of a packed binary16
 // page. NaN values are skipped when any finite value exists, matching FLOAT
 // and DOUBLE. An all-NaN page reports NaN so readers can tell the page held

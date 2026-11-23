@@ -110,7 +110,7 @@ func makeFileColumnIndex(index *format.ColumnIndex, typ Type) FileColumnIndex {
 	return FileColumnIndex{
 		index:     index,
 		kind:      kind,
-		nanBounds: floatingPageBoundsAreNaN(kind, index) || float16ColumnIndexHasNaN(typ, index),
+		nanBounds: floatingPageBoundsAreNaN(kind, index),
 	}
 }
 
@@ -166,7 +166,7 @@ func isNullPage(j int, index *format.ColumnIndex) bool {
 }
 
 // columnIndexNaNBounds is implemented by column indexes that know whether any
-// non-null page stores a NaN FLOAT or DOUBLE endpoint.
+// non-null page stores a NaN FLOAT, DOUBLE, or FLOAT16 endpoint.
 type columnIndexNaNBounds interface {
 	hasNaNBounds() bool
 }
@@ -192,17 +192,19 @@ func valueIsNaN(v Value) bool {
 		return math.IsNaN(float64(v.float()))
 	case Double:
 		return math.IsNaN(v.double())
+	case FixedLenByteArray:
+		return encodedFloatIsNaN(FixedLenByteArray, v.byteArray())
 	default:
 		return false
 	}
 }
 
-// floatingPageBoundsAreNaN reports whether a type-defined FLOAT or DOUBLE
-// column index has a NaN endpoint on a page whose null_pages flag is false.
-// Those endpoints are not valid bounds: readers ignore them instead of
-// ordering on them.
+// floatingPageBoundsAreNaN reports whether a FLOAT, DOUBLE, or FLOAT16 column
+// index has a NaN endpoint on a page whose null_pages flag is false. Those
+// endpoints are not valid bounds: readers ignore them instead of ordering on
+// them. FLOAT16 is stored as a 2-byte fixed-length byte array.
 func floatingPageBoundsAreNaN(kind Kind, index *format.ColumnIndex) bool {
-	if index == nil || (kind != Float && kind != Double) {
+	if index == nil || (kind != Float && kind != Double && kind != FixedLenByteArray) {
 		return false
 	}
 	n := len(index.MinValues)
@@ -238,6 +240,14 @@ func encodedFloatIsNaN(kind Kind, b []byte) bool {
 			return false
 		}
 		return math.IsNaN(math.Float64frombits(binary.LittleEndian.Uint64(b)))
+	case FixedLenByteArray:
+		// IEEE binary16 NaN: exponent bits all set and a non-zero fraction.
+		// Infinity uses the same exponent with a zero fraction.
+		if len(b) != 2 {
+			return false
+		}
+		u := binary.LittleEndian.Uint16(b)
+		return u&0x7c00 == 0x7c00 && u&0x03ff != 0
 	default:
 		return false
 	}

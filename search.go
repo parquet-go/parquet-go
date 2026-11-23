@@ -29,9 +29,10 @@ func Search(index ColumnIndex, value Value, typ Type) int {
 // first page that may contain nulls (an all-null page, a page with a non-zero
 // NullCount, or a page whose optional NullCounts metadata is absent).
 func Find(index ColumnIndex, value Value, cmp func(Value, Value) int) int {
-	// A NaN FLOAT/DOUBLE endpoint is not a valid bound, even when null_pages
-	// is false. Binary search orders on those endpoints and can skip the page
-	// that holds the value, so an ascending index with one is scanned linearly.
+	// A NaN FLOAT, DOUBLE, or FLOAT16 endpoint is not a valid bound, even when
+	// null_pages is false. Binary search orders on those endpoints and can skip
+	// the page that holds the value, so an ascending index with one is scanned
+	// linearly.
 	switch {
 	case index.IsAscending() && !value.IsNull() && !ascendingIndexHasNaNBounds(index, value):
 		return binarySearch(index, value, cmp)

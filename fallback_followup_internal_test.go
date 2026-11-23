@@ -200,6 +200,171 @@ func TestFloat16Bits(t *testing.T) {
 	}
 }
 
+func TestFloat16NaNBoundsAreVisible(t *testing.T) {
+	nan := float16Bytes(0x7E00)
+	ten := float16Bytes(0x4900)    // 10
+	eleven := float16Bytes(0x4980) // 11
+	twelve := float16Bytes(0x4A00) // 12
+	hi := float16Bytes(0x4B40)     // 14.5
+
+	page := float16Type{}.NewPage(0, 1, float16Type{}.NewValues(nan, nil)).(float16Page)
+	bufferIndex := float16BufferColumnIndex{page: page}
+	if !columnIndexHasNaNBounds(bufferIndex) {
+		t.Fatal("in-memory FLOAT16 column index did not report NaN bounds")
+	}
+
+	formatIndex := &format.ColumnIndex{
+		NullPages:     []bool{false, false, false},
+		NullCounts:    []int64{0, 0, 0},
+		MinValues:     [][]byte{ten, twelve, nan},
+		MaxValues:     [][]byte{eleven, hi, nan},
+		BoundaryOrder: format.Ascending,
+	}
+	wrapped := NewColumnIndex(FixedLenByteArray, formatIndex)
+	if !columnIndexHasNaNBounds(wrapped) {
+		t.Fatal("NewColumnIndex did not report FLOAT16 NaN bounds")
+	}
+	// 0 is below every finite page. Binary search prunes the all-NaN page;
+	// a NaN endpoint is not a bound, so the page must still be found.
+	if got := Search(wrapped, FixedLenByteArrayValue(float16Bytes(0)), float16Type{}); got != 2 {
+		t.Fatalf("Search(0) = %d, want 2", got)
+	}
+
+	schema := NewSchema("s", Group{"v": Leaf(float16Type{})})
+	sorted := mergeFloat16Groups(t, schema, []float16Group{
+		{rows: [][]byte{float16Bytes(0x3C00), float16Bytes(0x4000), float16Bytes(0x4200), float16Bytes(0x4400), float16Bytes(0x5600)}, pages: [][2][]byte{{float16Bytes(0x3C00), float16Bytes(0x4000)}, {nan, nan}, {float16Bytes(0x4200), float16Bytes(0x4400)}}},
+		{rows: [][]byte{float16Bytes(0x5100), float16Bytes(0x5460)}, pages: [][2][]byte{{float16Bytes(0x5100), float16Bytes(0x5460)}}},
+	})
+	wantBits := []uint16{0x3C00, 0x4000, 0x4200, 0x4400, 0x5100, 0x5460, 0x5600}
+	if len(sorted) != len(wantBits) {
+		t.Fatalf("merged %d rows, want %d: %x", len(sorted), len(wantBits), sorted)
+	}
+	for i, bits := range wantBits {
+		if got := binary.LittleEndian.Uint16(sorted[i]); got != bits {
+			t.Fatalf("merged row %d = 0x%04X, want 0x%04X", i, got, bits)
+		}
+	}
+}
+
+type float16Group struct {
+	rows  [][]byte
+	pages [][2][]byte
+}
+
+func mergeFloat16Groups(t *testing.T, schema *Schema, groups []float16Group) [][]byte {
+	t.Helper()
+	rowGroups := make([]RowGroup, len(groups))
+	for i, group := range groups {
+		mins := make([][]byte, len(group.pages))
+		maxs := make([][]byte, len(group.pages))
+		nulls := make([]bool, len(group.pages))
+		counts := make([]int64, len(group.pages))
+		for j, page := range group.pages {
+			mins[j] = page[0]
+			maxs[j] = page[1]
+		}
+		rowGroups[i] = &float16NaNRowGroup{
+			schema: schema,
+			rows:   group.rows,
+			index: NewColumnIndex(FixedLenByteArray, &format.ColumnIndex{
+				NullPages:     nulls,
+				NullCounts:    counts,
+				MinValues:     mins,
+				MaxValues:     maxs,
+				BoundaryOrder: format.Ascending,
+			}),
+		}
+	}
+	merged, err := MergeRowGroups(rowGroups, SortingRowGroupConfig(SortingColumns(Ascending("v"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := merged.Rows()
+	defer rows.Close()
+	buf := make([]Row, 8)
+	var got [][]byte
+	for {
+		n, err := rows.ReadRows(buf)
+		for _, row := range buf[:n] {
+			got = append(got, append([]byte(nil), row[0].ByteArray()...))
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return got
+}
+
+type float16NaNRowGroup struct {
+	schema *Schema
+	rows   [][]byte
+	index  ColumnIndex
+}
+
+func (g *float16NaNRowGroup) NumRows() int64 { return int64(len(g.rows)) }
+func (g *float16NaNRowGroup) ColumnChunks() []ColumnChunk {
+	return []ColumnChunk{float16NaNChunk{rows: g.rows, index: g.index}}
+}
+func (g *float16NaNRowGroup) Schema() *Schema { return g.schema }
+func (g *float16NaNRowGroup) SortingColumns() []SortingColumn {
+	return []SortingColumn{Ascending("v")}
+}
+func (g *float16NaNRowGroup) Rows() Rows {
+	return &float16NaNRows{schema: g.schema, rows: g.rows}
+}
+
+type float16NaNChunk struct {
+	rows  [][]byte
+	index ColumnIndex
+}
+
+func (c float16NaNChunk) Type() Type   { return float16Type{} }
+func (c float16NaNChunk) Column() int  { return 0 }
+func (c float16NaNChunk) Pages() Pages { return nil }
+func (c float16NaNChunk) ColumnIndex() (ColumnIndex, error) {
+	return c.index, nil
+}
+func (c float16NaNChunk) OffsetIndex() (OffsetIndex, error) { return nil, ErrMissingOffsetIndex }
+func (c float16NaNChunk) BloomFilter() BloomFilter          { return nil }
+func (c float16NaNChunk) NumValues() int64                  { return int64(len(c.rows)) }
+
+type float16NaNRows struct {
+	schema *Schema
+	rows   [][]byte
+	i      int
+}
+
+func (r *float16NaNRows) Schema() *Schema { return r.schema }
+func (r *float16NaNRows) Close() error    { return nil }
+func (r *float16NaNRows) SeekToRow(i int64) error {
+	if i < 0 || i > int64(len(r.rows)) {
+		return ErrSeekOutOfRange
+	}
+	r.i = int(i)
+	return nil
+}
+func (r *float16NaNRows) ReadRows(buf []Row) (int, error) {
+	n := 0
+	for n < len(buf) && r.i < len(r.rows) {
+		value := FixedLenByteArrayValue(r.rows[r.i]).Level(0, 0, 0)
+		if cap(buf[n]) > 0 {
+			buf[n] = buf[n][:1]
+			buf[n][0] = value
+		} else {
+			buf[n] = Row{value}
+		}
+		r.i++
+		n++
+	}
+	if r.i >= len(r.rows) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
 func TestDecimalFixedLenByteArrayMissingTypeLength(t *testing.T) {
 	elem := format.SchemaElement{
 		Name:        "d",
