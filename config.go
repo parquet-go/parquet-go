@@ -147,6 +147,7 @@ func (c *FileConfig) ConfigureFile(config *FileConfig) {
 		SkipPageIndex:        c.SkipPageIndex,
 		SkipBloomFilters:     c.SkipBloomFilters,
 		PrefetchBloomFilters: c.PrefetchBloomFilters,
+		OptimisticRead:       c.OptimisticRead,
 		ReadBufferSize:       cmp.Or(c.ReadBufferSize, config.ReadBufferSize),
 		ReadMode:             ReadMode(cmp.Or(int(c.ReadMode), int(config.ReadMode))),
 		Schema:               cmp.Or(c.Schema, config.Schema),
