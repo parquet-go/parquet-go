@@ -770,3 +770,46 @@ func TestOpenFileColumnEncodingRLE(t *testing.T) {
 		})
 	}
 }
+
+// flba12_timestamp.parquet is an interoperability fixture from
+// apache/parquet-testing. Its timestamp columns use a 12-byte physical
+// representation that this reader does not interpret as a timestamp.
+func TestReadUnrecognizedTimestampRepresentation(t *testing.T) {
+	f, err := os.Open("testdata/flba12_timestamp.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := parquet.OpenFile(f, info.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, chunk := range file.RowGroups()[0].ColumnChunks() {
+		if _, _, ok := chunk.(*parquet.FileColumnChunk).Bounds(); ok {
+			t.Fatal("unsupported annotation provided ordered statistics")
+		}
+	}
+	rows := file.RowGroups()[0].Rows()
+	defer rows.Close()
+	values := make([]parquet.Row, 2)
+	n, err := rows.ReadRows(values)
+	if err != nil || n != len(values) {
+		t.Fatalf("ReadRows = (%d, %v)", n, err)
+	}
+	// The second row is one second after the Unix epoch in all three units.
+	want := []uint64{1000, 1000000, 1000000000}
+	if len(values[1]) != len(want) {
+		t.Fatalf("got %d values, want %d", len(values[1]), len(want))
+	}
+	for i, value := range values[1] {
+		var raw [12]byte
+		binary.LittleEndian.PutUint64(raw[:], want[i])
+		if value.Kind() != parquet.FixedLenByteArray || !bytes.Equal(value.ByteArray(), raw[:]) {
+			t.Fatalf("column %d: got %s %v, want %x", i, value.Kind(), value, raw)
+		}
+	}
+}

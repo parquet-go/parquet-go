@@ -526,7 +526,7 @@ func TestSchemaElementTypeIsCanonical(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.scenario, func(t *testing.T) {
-			decoded := schemaElementTypeOf(schemaElementOf(test.decoded))
+			decoded := annotatedSchemaElementType(schemaElementOf(test.decoded))
 
 			if decoded != test.constructed {
 				t.Fatalf("decoded type %p is not the canonical instance %p", decoded, test.constructed)
@@ -568,9 +568,34 @@ func TestSchemaElementTypePreservesUncanonicalValues(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.scenario, func(t *testing.T) {
-			decoded := schemaElementTypeOf(schemaElementOf(test.decoded))
+			decoded := annotatedSchemaElementType(schemaElementOf(test.decoded))
 			if got := decoded.LogicalType().String(); got != test.want {
 				t.Errorf("logical type = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSchemaElementTypeFallback(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		element     format.SchemaElement
+		want        Kind
+		ignoreOrder bool
+	}{
+		{"uuid on int32", format.SchemaElement{Type: thrift.New(format.Int32), LogicalType: format.LogicalType{Value: new(format.UUIDType)}}, Int32, true},
+		{"uuid of wrong length", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), TypeLength: thrift.New(int32(12)), LogicalType: format.LogicalType{Value: new(format.UUIDType)}}, FixedLenByteArray, true},
+		{"decimal on boolean", format.SchemaElement{Type: thrift.New(format.Boolean), LogicalType: format.LogicalType{Value: new(format.DecimalType)}}, Boolean, true},
+		{"legacy UTF8 on int32", format.SchemaElement{Type: thrift.New(format.Int32), ConvertedType: thrift.New(deprecated.UTF8)}, Int32, true},
+		{"supported UUID", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), TypeLength: thrift.New(int32(16)), LogicalType: format.LogicalType{Value: new(format.UUIDType)}}, FixedLenByteArray, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			typ, ignoreOrder := schemaElementTypeOf(&test.element)
+			if typ.Kind() != test.want || ignoreOrder != test.ignoreOrder {
+				t.Fatalf("got type %v, ignoreOrder %v", typ, ignoreOrder)
+			}
+			if test.ignoreOrder && typ != physicalSchemaElementType(&test.element) {
+				t.Fatalf("got %v, want underlying physical type", typ)
 			}
 		})
 	}
