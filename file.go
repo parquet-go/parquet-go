@@ -827,7 +827,7 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 		if chunk.CryptoMetadata.Value == nil || fileColumnChunks[i].decryptionKey != nil {
 			j := (int(rowGroup.Ordinal) * len(columns)) + i
 			if len(file.columnIndexes) > 0 && chunk.ColumnIndexOffset > 0 {
-				fileColumnIndexes[i] = FileColumnIndex{index: &file.columnIndexes[j], kind: columns[i].Type().Kind()}
+				fileColumnIndexes[i] = makeFileColumnIndex(&file.columnIndexes[j], columns[i].Type().Kind())
 				fileColumnChunks[i].columnIndex.Store(&fileColumnIndexes[i])
 			}
 			if len(file.offsetIndexes) > 0 && chunk.OffsetIndexOffset > 0 {
@@ -1133,7 +1133,8 @@ func (c *FileColumnChunk) readColumnIndexFrom(reader io.ReaderAt) (*FileColumnIn
 	if decErr != nil {
 		return nil, fmt.Errorf("decode column index: rowGroup=%d columnChunk=%d/%d: %w", c.rowGroup.Ordinal, c.Column(), len(c.rowGroup.Columns), decErr)
 	}
-	index := &FileColumnIndex{index: &columnIndex, kind: c.column.Type().Kind()}
+	index := new(FileColumnIndex)
+	*index = makeFileColumnIndex(&columnIndex, c.column.Type().Kind())
 	// We do a CAS (and Load on CAS failure) instead of a simple Store for
 	// the nice property that concurrent calling goroutines will only ever
 	// observe a single pointer value for the result.
