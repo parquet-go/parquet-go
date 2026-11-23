@@ -588,9 +588,14 @@ func TestSchemaElementTypeFallback(t *testing.T) {
 		{"decimal on boolean", format.SchemaElement{Type: thrift.New(format.Boolean), LogicalType: format.LogicalType{Value: new(format.DecimalType)}}, Boolean, true},
 		{"legacy UTF8 on int32", format.SchemaElement{Type: thrift.New(format.Int32), ConvertedType: thrift.New(deprecated.UTF8)}, Int32, true},
 		{"supported UUID", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), TypeLength: thrift.New(int32(16)), LogicalType: format.LogicalType{Value: new(format.UUIDType)}}, FixedLenByteArray, false},
+		{"UUID without type_length", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), LogicalType: format.LogicalType{Value: new(format.UUIDType)}}, FixedLenByteArray, false},
+		{"INTERVAL without type_length", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), ConvertedType: thrift.New(deprecated.Interval)}, FixedLenByteArray, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			typ, ignoreOrder := schemaElementTypeOf(&test.element)
+			typ, ignoreOrder, err := schemaElementTypeOf(&test.element)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if typ.Kind() != test.want || ignoreOrder != test.ignoreOrder {
 				t.Fatalf("got type %v, ignoreOrder %v", typ, ignoreOrder)
 			}
