@@ -661,7 +661,8 @@ func (r *readerFileView) OffsetIndexes() []format.OffsetIndex {
 
 func (r *readerFileView) Root() *Column {
 	if meta := r.Metadata(); meta != nil {
-		root, _ := openColumns(nil, meta, r.ColumnIndexes(), r.OffsetIndexes())
+		codecs := r.reader.file.compressionCodecs()
+		root, _ := openColumnsWithCodecs(nil, codecs, meta, r.ColumnIndexes(), r.OffsetIndexes())
 		return root
 	}
 	return nil

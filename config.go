@@ -106,6 +106,7 @@ type FileConfig struct {
 	ReadMode             ReadMode
 	Schema               *Schema
 	Decryption           *DecryptionConfig
+	CompressionCodecs    []compress.Codec
 }
 
 // DefaultFileConfig returns a new FileConfig value initialized with the
@@ -142,6 +143,10 @@ func (c *FileConfig) Apply(options ...FileOption) {
 
 // ConfigureFile applies configuration options from c to config.
 func (c *FileConfig) ConfigureFile(config *FileConfig) {
+	codecs := c.CompressionCodecs
+	if len(codecs) == 0 {
+		codecs = config.CompressionCodecs
+	}
 	*config = FileConfig{
 		SkipMagicBytes:       c.SkipMagicBytes,
 		SkipPageIndex:        c.SkipPageIndex,
@@ -151,6 +156,7 @@ func (c *FileConfig) ConfigureFile(config *FileConfig) {
 		ReadMode:             ReadMode(cmp.Or(int(c.ReadMode), int(config.ReadMode))),
 		Schema:               cmp.Or(c.Schema, config.Schema),
 		Decryption:           cmp.Or(c.Decryption, config.Decryption),
+		CompressionCodecs:    codecs,
 	}
 }
 
@@ -567,6 +573,32 @@ func ReadBufferSize(size int) FileOption {
 // Defaults to nil.
 func FileSchema(schema *Schema) FileOption {
 	return fileOption(func(config *FileConfig) { config.Schema = schema })
+}
+
+// FileCompressionCodecs sets the codecs that the pages of a file are
+// decompressed with. Each codec replaces, for this file only, the
+// default codec of the same kind (the one its CompressionCodec method
+// returns). Kinds that are not given use the codecs that
+// LookupCompressionCodec returns. When two codecs are of the same
+// kind, the last one is used.
+//
+// With no codecs, the file uses the default codecs, as when the option
+// is not given: FileCompressionCodecs() after another
+// FileCompressionCodecs undoes it. The option keeps a copy of codecs,
+// so changing the slice later does not change the file's codecs.
+//
+// This lets a program read files with codecs it configures itself,
+// as the Compression option does for a writer, without changing the
+// codecs that every other file of the process shares.
+//
+// Defaults to none.
+func FileCompressionCodecs(codecs ...compress.Codec) FileOption {
+	if len(codecs) == 0 {
+		codecs = nil
+	} else {
+		codecs = slices.Clone(codecs)
+	}
+	return fileOption(func(config *FileConfig) { config.CompressionCodecs = codecs })
 }
 
 // PageBufferSize configures the size of column page buffers on parquet writers.
