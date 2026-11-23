@@ -189,18 +189,37 @@ type BloomFilterColumn interface {
 // can shrink the filter to fit the values it contains.
 //
 // FinalizeBloomFilter returns the bitset to write, which must be a non-empty
-// multiple of bloom.BlockSize and no longer than filter. The returned slice may
-// share the memory of filter; the writer retains the capacity of filter to
-// reuse it for the next row group. The method is not called for column chunks
-// copied verbatim from a source file.
+// multiple of bloom.BlockSize and no longer than filter; the writer returns an
+// error otherwise. The method is not called for column chunks copied verbatim
+// from a source file.
+//
+// The writer keeps the returned slice and does not write it until the filters
+// of every column of the row group have been finalized, so it must remain valid
+// and unmodified until the row group is written. Return a subslice of filter or
+// a newly allocated slice; reusing a scratch buffer across calls would write
+// the same bitset for several columns. A BloomFilterColumn may be shared by
+// many columns and writers, so the method may be called concurrently.
+//
+// The writer reuses the returned slice for the next row group, so when it
+// shares the memory of filter, the capacity of filter is retained.
 type BloomFilterFinalizer interface {
 	FinalizeBloomFilter(filter []byte) []byte
 }
 
 // BloomFilterDistinctSizer may be implemented by a BloomFilterColumn to size
-// filters when all the values inserted into them are known to be distinct,
-// such as the values of a dictionary page. Size is used when a filter does not
-// implement this interface.
+// filters when all the values inserted into them are known to be distinct.
+//
+// DistinctSize is used only when every value of a column chunk is held in its
+// dictionary, and the filter is built from the dictionary values once the row
+// group is flushed. Filters which are allocated ahead of time, or which hold
+// values written after a fallback from dictionary to plain encoding, are sized
+// with Size. Size is also used when a filter does not implement this interface.
+//
+// Like Size, DistinctSize must return a positive multiple of bloom.BlockSize;
+// the writer does not validate the result. A filter sized with DistinctSize may
+// be larger than Size(numValues) for the chunk, in which case it is never
+// copied verbatim when the column has a BloomFilterCopyChecker (see below),
+// unless a BloomFilterFinalizer shrinks it to at most that size.
 type BloomFilterDistinctSizer interface {
 	DistinctSize(numDistinctValues int64) int
 }
@@ -211,6 +230,12 @@ type BloomFilterDistinctSizer interface {
 // split block filter hashed with xxhash, built for a chunk of numValues values,
 // and the method reports whether it is identical to the filter this column
 // would have produced for the same values.
+//
+// The method is only called for bitsets which are a non-empty multiple of
+// bloom.BlockSize and no longer than Size(numValues); other source filters are
+// never copied. Beyond these checks, the writer trusts the result and does not
+// validate the content of the bitset, which is copied as is when the method
+// returns true.
 //
 // When a filter does not implement this interface, the source filter is copied
 // only if its size equals Size(numValues).

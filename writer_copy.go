@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync/atomic"
 
+	"github.com/parquet-go/parquet-go/bloom"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
 )
@@ -292,7 +293,8 @@ func encodingStatsMatch(stats []format.PageEncodingStats, dst *ColumnWriter) boo
 //   - the source bitset has exactly the size the destination filter would
 //     allocate for this chunk's value count, i.e. the same bits-per-value; or,
 //     when the destination filter implements BloomFilterCopyChecker, the
-//     filter accepts the source bitset.
+//     source bitset is made of whole blocks, is no larger than that size, and
+//     the filter accepts it.
 func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	meta := &src.chunk.MetaData
 	if meta.BloomFilterOffset == 0 || meta.BloomFilterLength <= 0 {
@@ -319,11 +321,13 @@ func bloomFilterIsCopyable(dst *ColumnWriter, src *FileColumnChunk) bool {
 	}
 	if checker, ok := dst.columnFilter.(BloomFilterCopyChecker); ok {
 		// Filters may be finalized to a smaller size than allocated, which also
-		// bounds the bitset read below.
-		if header.NumBytes <= 0 || int(header.NumBytes) > dst.columnFilter.Size(meta.NumValues) {
+		// bounds the bitset read below. A bitset which isn't made of whole
+		// blocks is invalid, whatever the checker would say about it.
+		numBytes := int(header.NumBytes)
+		if numBytes <= 0 || numBytes%bloom.BlockSize != 0 || numBytes > dst.columnFilter.Size(meta.NumValues) {
 			return false
 		}
-		bitset := make([]byte, header.NumBytes)
+		bitset := make([]byte, numBytes)
 		if _, err := io.ReadFull(rbuf, bitset); err != nil {
 			return false
 		}

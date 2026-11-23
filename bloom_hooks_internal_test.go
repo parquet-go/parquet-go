@@ -184,4 +184,40 @@ func TestBloomFilterHooks(t *testing.T) {
 		}
 		checkFilter(t, out.RowGroups()[0].ColumnChunks()[0], srcSize, ids...)
 	})
+
+	t.Run("copy_checker_partial_block", func(t *testing.T) {
+		// The source filter is one byte short of a whole number of blocks;
+		// it must be rejected before the checker is asked about it.
+		src := writeCopyTestFile(t, rows, BloomFilters(oddSizeBloomFilter{SplitBlockFilter(10, "id")}))
+		srcSize := src.RowGroups()[0].ColumnChunks()[0].BloomFilter().Size()
+		if srcSize%bloom.BlockSize == 0 {
+			t.Fatalf("source bloom filter is made of whole blocks: size=%d", srcSize)
+		}
+
+		filter := newHalvingBloomFilter("id")
+		before := copyPathCounter.Load()
+		w := NewGenericWriter[copyTestRow](new(bytes.Buffer), BloomFilters(filter))
+		for _, rg := range src.RowGroups() {
+			if _, err := w.WriteRowGroup(rg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if n := filter.stats.copyChecks.Load(); n != 0 {
+			t.Fatalf("copy checker was called %d times for a bitset of partial blocks", n)
+		}
+		if n := copyPathCounter.Load() - before; n != 0 {
+			t.Fatalf("expected no verbatim copy of a bitset of partial blocks, %d chunks copied", n)
+		}
+	})
+}
+
+// oddSizeBloomFilter sizes filters one byte short of a whole number of blocks,
+// to produce source files with invalid bitsets.
+type oddSizeBloomFilter struct{ BloomFilterColumn }
+
+func (f oddSizeBloomFilter) Size(numValues int64) int {
+	return f.BloomFilterColumn.Size(numValues) - 1
 }
