@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -418,7 +419,7 @@ func TestFileColumnChunkBoundsNaN(t *testing.T) {
 				t.Fatal(err)
 			}
 			footerSize := int(binary.LittleEndian.Uint32(data[len(data)-8:]))
-			data = append(data[:len(data)-8-footerSize:len(data)-8-footerSize], footer...)
+			data = slices.Concat(data[:len(data)-8-footerSize:len(data)-8-footerSize], footer)
 			data = binary.LittleEndian.AppendUint32(data, uint32(len(footer)))
 			data = append(data, "PAR1"...)
 			file, err = parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
