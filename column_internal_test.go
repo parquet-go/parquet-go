@@ -589,6 +589,10 @@ func TestSchemaElementTypeFallback(t *testing.T) {
 		{"legacy UTF8 on int32", format.SchemaElement{Type: thrift.New(format.Int32), ConvertedType: thrift.New(deprecated.UTF8)}, Int32, true},
 		{"supported UUID", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), TypeLength: thrift.New(int32(16)), LogicalType: format.LogicalType{Value: new(format.UUIDType)}}, FixedLenByteArray, false},
 		{"UUID without type_length", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), LogicalType: format.LogicalType{Value: new(format.UUIDType)}}, FixedLenByteArray, false},
+		{"FLOAT16", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), TypeLength: thrift.New(int32(2)), LogicalType: format.LogicalType{Value: new(format.Float16Type)}}, FixedLenByteArray, false},
+		{"FLOAT16 without type_length", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), LogicalType: format.LogicalType{Value: new(format.Float16Type)}}, FixedLenByteArray, false},
+		{"FLOAT16 of wrong length", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), TypeLength: thrift.New(int32(4)), LogicalType: format.LogicalType{Value: new(format.Float16Type)}}, FixedLenByteArray, true},
+		{"FLOAT16 on int32", format.SchemaElement{Type: thrift.New(format.Int32), LogicalType: format.LogicalType{Value: new(format.Float16Type)}}, Int32, true},
 		{"INTERVAL without type_length", format.SchemaElement{Type: thrift.New(format.FixedLenByteArray), ConvertedType: thrift.New(deprecated.Interval)}, FixedLenByteArray, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

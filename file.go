@@ -827,7 +827,7 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 		if chunk.CryptoMetadata.Value == nil || fileColumnChunks[i].decryptionKey != nil {
 			j := (int(rowGroup.Ordinal) * len(columns)) + i
 			if len(file.columnIndexes) > 0 && chunk.ColumnIndexOffset > 0 {
-				fileColumnIndexes[i] = makeFileColumnIndex(&file.columnIndexes[j], columns[i].Type().Kind())
+				fileColumnIndexes[i] = makeFileColumnIndex(&file.columnIndexes[j], columns[i].Type())
 				fileColumnChunks[i].columnIndex.Store(&fileColumnIndexes[i])
 			}
 			if len(file.offsetIndexes) > 0 && chunk.OffsetIndexOffset > 0 {
@@ -980,6 +980,10 @@ func (c *FileColumnChunk) Bounds() (min, max Value, ok bool) {
 			ok = !math.IsNaN(float64(min.Float())) && !math.IsNaN(float64(max.Float()))
 		case Double:
 			ok = !math.IsNaN(min.Double()) && !math.IsNaN(max.Double())
+		case FixedLenByteArray:
+			if _, isFloat16 := c.column.Type().(float16Type); isFloat16 {
+				ok = !float16IsNaN(min.ByteArray()) && !float16IsNaN(max.ByteArray())
+			}
 		}
 	}
 	return min, max, ok
@@ -1134,7 +1138,7 @@ func (c *FileColumnChunk) readColumnIndexFrom(reader io.ReaderAt) (*FileColumnIn
 		return nil, fmt.Errorf("decode column index: rowGroup=%d columnChunk=%d/%d: %w", c.rowGroup.Ordinal, c.Column(), len(c.rowGroup.Columns), decErr)
 	}
 	index := new(FileColumnIndex)
-	*index = makeFileColumnIndex(&columnIndex, c.column.Type().Kind())
+	*index = makeFileColumnIndex(&columnIndex, c.column.Type())
 	// We do a CAS (and Load on CAS failure) instead of a simple Store for
 	// the nice property that concurrent calling goroutines will only ever
 	// observe a single pointer value for the result.

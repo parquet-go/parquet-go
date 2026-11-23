@@ -105,11 +105,12 @@ type FileColumnIndex struct {
 	nanBounds bool
 }
 
-func makeFileColumnIndex(index *format.ColumnIndex, kind Kind) FileColumnIndex {
+func makeFileColumnIndex(index *format.ColumnIndex, typ Type) FileColumnIndex {
+	kind := typ.Kind()
 	return FileColumnIndex{
 		index:     index,
 		kind:      kind,
-		nanBounds: floatingPageBoundsAreNaN(kind, index),
+		nanBounds: floatingPageBoundsAreNaN(kind, index) || float16ColumnIndexHasNaN(typ, index),
 	}
 }
 

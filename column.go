@@ -569,8 +569,8 @@ func isLeafSchemaElement(element *format.SchemaElement) bool {
 // schemaElementTypeOf returns the leaf type and whether the file's column
 // order must be ignored because the annotation is unsupported.
 //
-// A FIXED_LEN_BYTE_ARRAY annotation that names its own width (UUID, INTERVAL)
-// is kept when the schema element omits type_length. An annotation
+// A FIXED_LEN_BYTE_ARRAY annotation that names its own width (UUID, INTERVAL,
+// FLOAT16) is kept when the schema element omits type_length. An annotation
 // that does not determine a width, on a FIXED_LEN_BYTE_ARRAY element that also
 // omits type_length, is rejected: the physical type cannot be reconstructed,
 // and reporting it as NULL would drop the column's values.
@@ -660,6 +660,8 @@ func annotatedSchemaElementType(s *format.SchemaElement) Type {
 		return (*bsonType)(lt)
 	case *format.UUIDType:
 		return (*uuidType)(lt)
+	case *format.Float16Type:
+		return float16Type{}
 	case *format.GeometryType:
 		return (*geometryType)(lt)
 	case *format.GeographyType:
