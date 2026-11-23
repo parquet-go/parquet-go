@@ -198,6 +198,17 @@ func (i float16SearchIndex) hasNaNBounds() bool {
 	return float16ColumnIndexHasNaN(i.ColumnIndex)
 }
 
+// hasNullCount forwards the inner index. A null query uses this to tell a
+// missing NullCounts list from a page that is known to contain no nulls.
+// Without the forward, the wrapper hides the method and those pages are skipped.
+func (i float16SearchIndex) hasNullCount(page int) bool {
+	nc, ok := i.ColumnIndex.(columnIndexNullCounts)
+	if !ok {
+		return false
+	}
+	return nc.hasNullCount(page)
+}
+
 // float16Bounds reports the numeric minimum and maximum of a packed binary16
 // page. NaN values are skipped when any finite value exists, matching FLOAT
 // and DOUBLE. An all-NaN page reports NaN so readers can tell the page held

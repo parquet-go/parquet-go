@@ -229,6 +229,17 @@ func TestFloat16NaNBoundsAreVisible(t *testing.T) {
 	if got := Search(wrapped, FixedLenByteArrayValue(float16Bytes(0)), float16Type{}); got != 2 {
 		t.Fatalf("Search(0) = %d, want 2", got)
 	}
+	// NullCounts is absent, so a null may sit on the page. The FLOAT16 search
+	// wrapper has to preserve that fact.
+	optional := NewColumnIndex(FixedLenByteArray, &format.ColumnIndex{
+		NullPages:     []bool{false},
+		MinValues:     [][]byte{ten},
+		MaxValues:     [][]byte{eleven},
+		BoundaryOrder: format.Ascending,
+	})
+	if got := Search(optional, Value{}, float16Type{}); got != 0 {
+		t.Fatalf("null Search = %d, want 0", got)
+	}
 
 	schema := NewSchema("s", Group{"v": Leaf(float16Type{})})
 	sorted := mergeFloat16Groups(t, schema, []float16Group{
