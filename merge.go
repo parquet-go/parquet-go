@@ -272,8 +272,15 @@ func rowGroupRangeOfSortedColumns(rg RowGroup, schema *Schema, sorting []Sorting
 		// A NaN endpoint does not bound the page. Ordering row groups on it
 		// compares equal to every key and can emit a finite value out of order.
 		switch columnChunk.Type().Kind() {
-		case Float, Double, FixedLenByteArray:
+		case Float, Double:
 			if columnIndexHasNaNBounds(columnIndex) {
+				return nil, nil, fmt.Errorf("NaN page bounds for sorting column %s", sortingColumnPath)
+			}
+		default:
+			// FLOAT16 shares the FIXED_LEN_BYTE_ARRAY kind with decimal and
+			// plain fixed arrays. Only the logical type makes a 2-byte NaN
+			// pattern meaningless as an order bound.
+			if _, ok := columnChunk.Type().(float16Type); ok && float16ColumnIndexHasNaN(columnIndex) {
 				return nil, nil, fmt.Errorf("NaN page bounds for sorting column %s", sortingColumnPath)
 			}
 		}

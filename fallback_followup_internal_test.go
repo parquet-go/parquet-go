@@ -221,11 +221,11 @@ func TestFloat16NaNBoundsAreVisible(t *testing.T) {
 		BoundaryOrder: format.Ascending,
 	}
 	wrapped := NewColumnIndex(FixedLenByteArray, formatIndex)
-	if !columnIndexHasNaNBounds(wrapped) {
-		t.Fatal("NewColumnIndex did not report FLOAT16 NaN bounds")
+	if columnIndexHasNaNBounds(wrapped) {
+		t.Fatal("NewColumnIndex reported NaN bounds from the physical kind alone")
 	}
-	// 0 is below every finite page. Binary search prunes the all-NaN page;
-	// a NaN endpoint is not a bound, so the page must still be found.
+	// 0 is below every finite page. Binary search prunes the all-NaN page.
+	// Search is given the FLOAT16 type, so the page must still be found.
 	if got := Search(wrapped, FixedLenByteArrayValue(float16Bytes(0)), float16Type{}); got != 2 {
 		t.Fatalf("Search(0) = %d, want 2", got)
 	}
@@ -363,6 +363,30 @@ func (r *float16NaNRows) ReadRows(buf []Row) (int, error) {
 		return n, io.EOF
 	}
 	return n, nil
+}
+
+func TestPlainFixedLenByteArrayNaNBitsStayOrdered(t *testing.T) {
+	// 0x7e00 is a binary16 NaN and also a legal 2-byte fixed value. A value
+	// between the first page and those bytes is outside both pages.
+	nanBits := []byte{0x00, 0x7e}
+	lo := []byte{0x00, 0x01}
+	hi := []byte{0x00, 0x02}
+	needle := []byte{0x00, 0x10}
+	index := NewColumnIndex(FixedLenByteArray, &format.ColumnIndex{
+		NullPages:     []bool{false, false},
+		NullCounts:    []int64{0, 0},
+		MinValues:     [][]byte{lo, nanBits},
+		MaxValues:     [][]byte{hi, nanBits},
+		BoundaryOrder: format.Ascending,
+	})
+	if columnIndexHasNaNBounds(index) {
+		t.Fatal("plain FIXED_LEN_BYTE_ARRAY index reported NaN bounds")
+	}
+	for _, typ := range []Type{FixedLenByteArrayType(2), Decimal(0, 4, FixedLenByteArrayType(2)).Type()} {
+		if got := Search(index, FixedLenByteArrayValue(needle), typ); got != 2 {
+			t.Fatalf("%s Search = %d, want 2", typ, got)
+		}
+	}
 }
 
 func TestDecimalFixedLenByteArrayMissingTypeLength(t *testing.T) {

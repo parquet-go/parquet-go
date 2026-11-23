@@ -131,6 +131,73 @@ func compareFloat16Bytes(a, b []byte) int {
 	return compareFloat32(float16ToFloat32(a), float16ToFloat32(b))
 }
 
+// binary16NaN reports whether b is an IEEE binary16 NaN. The value is two
+// little-endian bytes with every exponent bit set and a non-zero fraction.
+// Infinity uses that exponent with a zero fraction, and any other length is
+// a different fixed-width type.
+func binary16NaN(b []byte) bool {
+	if len(b) != 2 {
+		return false
+	}
+	u := binary.LittleEndian.Uint16(b)
+	return u&0x7c00 == 0x7c00 && u&0x03ff != 0
+}
+
+// float16FormatIndexHasNaN reports whether a FLOAT16 column's stored index
+// has a NaN endpoint. Other fixed-length types reuse the same physical kind,
+// so the caller passes the column type.
+func float16FormatIndexHasNaN(typ Type, index *format.ColumnIndex) bool {
+	if _, ok := typ.(float16Type); !ok || index == nil {
+		return false
+	}
+	n := len(index.MinValues)
+	if m := len(index.MaxValues); m > n {
+		n = m
+	}
+	if m := len(index.NullPages); m > n {
+		n = m
+	}
+	for i := range n {
+		if i < len(index.NullPages) && index.NullPages[i] {
+			continue
+		}
+		if i < len(index.MinValues) && binary16NaN(index.MinValues[i]) {
+			return true
+		}
+		if i < len(index.MaxValues) && binary16NaN(index.MaxValues[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// float16ColumnIndexHasNaN reports whether index has a binary16 NaN endpoint.
+// An index that already recorded the fact answers from that flag. An index
+// built from the physical kind alone is scanned, because that kind does not
+// identify FLOAT16.
+func float16ColumnIndexHasNaN(index ColumnIndex) bool {
+	if n, ok := index.(columnIndexNaNBounds); ok && n.hasNaNBounds() {
+		return true
+	}
+	for i := range index.NumPages() {
+		if index.NullPage(i) {
+			continue
+		}
+		if binary16NaN(index.MinValue(i).ByteArray()) || binary16NaN(index.MaxValue(i).ByteArray()) {
+			return true
+		}
+	}
+	return false
+}
+
+// float16SearchIndex makes Find treat binary16 NaN endpoints as missing bounds
+// when the caller searched with the FLOAT16 type.
+type float16SearchIndex struct{ ColumnIndex }
+
+func (i float16SearchIndex) hasNaNBounds() bool {
+	return float16ColumnIndexHasNaN(i.ColumnIndex)
+}
+
 // float16Bounds reports the numeric minimum and maximum of a packed binary16
 // page. NaN values are skipped when any finite value exists, matching FLOAT
 // and DOUBLE. An all-NaN page reports NaN so readers can tell the page held
@@ -229,6 +296,13 @@ func (i float16BufferColumnIndex) MaxValue(int) Value {
 }
 func (i float16BufferColumnIndex) IsAscending() bool  { return false }
 func (i float16BufferColumnIndex) IsDescending() bool { return false }
+func (i float16BufferColumnIndex) hasNaNBounds() bool {
+	min, max, ok := i.page.Bounds()
+	if !ok {
+		return false
+	}
+	return binary16NaN(min.ByteArray()) || binary16NaN(max.ByteArray())
+}
 
 type float16Dictionary struct {
 	*fixedLenByteArrayDictionary

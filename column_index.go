@@ -110,7 +110,7 @@ func makeFileColumnIndex(index *format.ColumnIndex, typ Type) FileColumnIndex {
 	return FileColumnIndex{
 		index:     index,
 		kind:      kind,
-		nanBounds: floatingPageBoundsAreNaN(kind, index),
+		nanBounds: floatingPageBoundsAreNaN(kind, index) || float16FormatIndexHasNaN(typ, index),
 	}
 }
 
@@ -166,7 +166,9 @@ func isNullPage(j int, index *format.ColumnIndex) bool {
 }
 
 // columnIndexNaNBounds is implemented by column indexes that know whether any
-// non-null page stores a NaN FLOAT, DOUBLE, or FLOAT16 endpoint.
+// non-null page stores a NaN FLOAT or DOUBLE endpoint. FLOAT16 indexes report
+// the same fact from their own type, because their physical kind is shared
+// with every other fixed-length byte array.
 type columnIndexNaNBounds interface {
 	hasNaNBounds() bool
 }
@@ -192,19 +194,17 @@ func valueIsNaN(v Value) bool {
 		return math.IsNaN(float64(v.float()))
 	case Double:
 		return math.IsNaN(v.double())
-	case FixedLenByteArray:
-		return encodedFloatIsNaN(FixedLenByteArray, v.byteArray())
 	default:
 		return false
 	}
 }
 
-// floatingPageBoundsAreNaN reports whether a FLOAT, DOUBLE, or FLOAT16 column
-// index has a NaN endpoint on a page whose null_pages flag is false. Those
-// endpoints are not valid bounds: readers ignore them instead of ordering on
-// them. FLOAT16 is stored as a 2-byte fixed-length byte array.
+// floatingPageBoundsAreNaN reports whether a type-defined FLOAT or DOUBLE
+// column index has a NaN endpoint on a page whose null_pages flag is false.
+// Those endpoints are not valid bounds: readers ignore them instead of
+// ordering on them.
 func floatingPageBoundsAreNaN(kind Kind, index *format.ColumnIndex) bool {
-	if index == nil || (kind != Float && kind != Double && kind != FixedLenByteArray) {
+	if index == nil || (kind != Float && kind != Double) {
 		return false
 	}
 	n := len(index.MinValues)
@@ -240,14 +240,6 @@ func encodedFloatIsNaN(kind Kind, b []byte) bool {
 			return false
 		}
 		return math.IsNaN(math.Float64frombits(binary.LittleEndian.Uint64(b)))
-	case FixedLenByteArray:
-		// IEEE binary16 NaN: exponent bits all set and a non-zero fraction.
-		// Infinity uses the same exponent with a zero fraction.
-		if len(b) != 2 {
-			return false
-		}
-		u := binary.LittleEndian.Uint16(b)
-		return u&0x7c00 == 0x7c00 && u&0x03ff != 0
 	default:
 		return false
 	}
