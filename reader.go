@@ -16,6 +16,9 @@ import (
 type GenericReader[T any] struct {
 	base Reader
 	read readFunc[T]
+	// iterHold retains rows Iter has already pulled and not yet yielded.
+	// It is nil unless an iteration stopped in the middle of a batch.
+	iterHold *iterHold[T]
 }
 
 // NewGenericReader is like NewReader but returns GenericReader[T] suited to write
@@ -103,6 +106,7 @@ func NewGenericRowGroupReader[T any](rowGroup RowGroup, options ...ReaderOption)
 }
 
 func (r *GenericReader[T]) Reset() {
+	r.iterHold = nil
 	r.base.Reset()
 }
 
@@ -113,14 +117,30 @@ func (r *GenericReader[T]) Reset() {
 //
 // The method returns the number of rows read and io.EOF when no more rows
 // can be read from the reader.
+//
+// Rows buffered by an interrupted Iter are returned before any further read.
 func (r *GenericReader[T]) Read(rows []T) (int, error) {
 	if r.base.openErr != nil {
 		return 0, r.base.openErr
 	}
-	return r.read(r, rows)
+	if r.iterHold == nil {
+		return r.read(r, rows)
+	}
+	return r.readWithHold(rows)
 }
 
+// ReadRows reads raw rows from the underlying row reader.
+//
+// Rows buffered by an interrupted Iter are not visible here. ReadRows returns
+// an error until those rows are consumed by Read or Iter, or discarded by
+// SeekToRow, Reset, or Close.
 func (r *GenericReader[T]) ReadRows(rows []Row) (int, error) {
+	if r.base.openErr != nil {
+		return 0, r.base.openErr
+	}
+	if r.iterHold != nil {
+		return 0, errIterRowsBuffered
+	}
 	return r.base.ReadRows(rows)
 }
 
@@ -133,10 +153,17 @@ func (r *GenericReader[T]) NumRows() int64 {
 }
 
 func (r *GenericReader[T]) SeekToRow(rowIndex int64) error {
-	return r.base.SeekToRow(rowIndex)
+	if err := r.base.SeekToRow(rowIndex); err != nil {
+		return err
+	}
+	// The caller chose a new position. Drop rows buffered at the old one
+	// only after the seek succeeds, so a failed seek leaves them readable.
+	r.iterHold = nil
+	return nil
 }
 
 func (r *GenericReader[T]) Close() error {
+	r.iterHold = nil
 	return r.base.Close()
 }
 
