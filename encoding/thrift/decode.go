@@ -288,12 +288,9 @@ func decodeFuncSliceOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		} else {
 			v.SetLen(0)
 		}
-		for i := 0; i < size; i++ {
+		for i := range size {
 			if v.Len() == v.Cap() {
-				extra := v.Cap()
-				if extra < 1 {
-					extra = 1
-				}
+				extra := max(v.Cap(), 1)
 				v.Grow(extra)
 			}
 			v.SetLen(v.Len() + 1)
@@ -329,10 +326,7 @@ func decodeFuncMapOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		if err := checkCount(r, "map size", size, 2); err != nil {
 			return err
 		}
-		hint := size
-		if hint > maxContainerPrealloc {
-			hint = maxContainerPrealloc
-		}
+		hint := min(size, maxContainerPrealloc)
 		v.Set(reflect.MakeMapWithSize(mapType, hint))
 
 		if size == 0 { // empty map
@@ -398,10 +392,7 @@ func decodeFuncMapAsSetOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		if err := checkCount(r, "set size", size, 1); err != nil {
 			return err
 		}
-		hint := size
-		if hint > maxContainerPrealloc {
-			hint = maxContainerPrealloc
-		}
+		hint := min(size, maxContainerPrealloc)
 		v.Set(reflect.MakeMapWithSize(t, hint))
 
 		if size == 0 {

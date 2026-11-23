@@ -99,21 +99,15 @@ func (l Slice[T]) DecodeFunc(cache DecodeFuncCache) DecodeFunc {
 			return nil
 		}
 
-		hint := maxContainerPrealloc
-		if cap(*list) > hint {
-			hint = cap(*list)
-		}
+		hint := max(cap(*list), maxContainerPrealloc)
 		if *list == nil {
 			*list = make(Slice[T], 0, hint)
 		} else {
 			*list = slices.Grow((*list)[:0], hint)[:0]
 		}
-		for i := 0; i < size; i++ {
+		for i := range size {
 			if len(*list) == cap(*list) {
-				extra := cap(*list)
-				if extra < 1 {
-					extra = 1
-				}
+				extra := max(cap(*list), 1)
 				*list = slices.Grow(*list, extra)
 			}
 			*list = (*list)[:len(*list)+1]

@@ -131,10 +131,7 @@ func readLengthBytes(r io.Reader, n int) ([]byte, error) {
 	b := make([]byte, 0, maxContainerPrealloc)
 	var buf [maxContainerPrealloc]byte
 	for n > 0 {
-		want := maxContainerPrealloc
-		if want > n {
-			want = n
-		}
+		want := min(maxContainerPrealloc, n)
 		nr, err := io.ReadFull(r, buf[:want])
 		b = append(b, buf[:nr]...)
 		n -= nr
