@@ -266,6 +266,7 @@ func mergeFloat16Groups(t *testing.T, schema *Schema, groups []float16Group) [][
 		rowGroups[i] = &float16NaNRowGroup{
 			schema: schema,
 			rows:   group.rows,
+			typ:    float16Type{},
 			index: NewColumnIndex(FixedLenByteArray, &format.ColumnIndex{
 				NullPages:     nulls,
 				NullCounts:    counts,
@@ -301,12 +302,13 @@ func mergeFloat16Groups(t *testing.T, schema *Schema, groups []float16Group) [][
 type float16NaNRowGroup struct {
 	schema *Schema
 	rows   [][]byte
+	typ    Type
 	index  ColumnIndex
 }
 
 func (g *float16NaNRowGroup) NumRows() int64 { return int64(len(g.rows)) }
 func (g *float16NaNRowGroup) ColumnChunks() []ColumnChunk {
-	return []ColumnChunk{float16NaNChunk{rows: g.rows, index: g.index}}
+	return []ColumnChunk{float16NaNChunk{typ: g.typ, rows: g.rows, index: g.index}}
 }
 func (g *float16NaNRowGroup) Schema() *Schema { return g.schema }
 func (g *float16NaNRowGroup) SortingColumns() []SortingColumn {
@@ -317,11 +319,12 @@ func (g *float16NaNRowGroup) Rows() Rows {
 }
 
 type float16NaNChunk struct {
+	typ   Type
 	rows  [][]byte
 	index ColumnIndex
 }
 
-func (c float16NaNChunk) Type() Type   { return float16Type{} }
+func (c float16NaNChunk) Type() Type   { return c.typ }
 func (c float16NaNChunk) Column() int  { return 0 }
 func (c float16NaNChunk) Pages() Pages { return nil }
 func (c float16NaNChunk) ColumnIndex() (ColumnIndex, error) {
@@ -365,28 +368,109 @@ func (r *float16NaNRows) ReadRows(buf []Row) (int, error) {
 	return n, nil
 }
 
-func TestPlainFixedLenByteArrayNaNBitsStayOrdered(t *testing.T) {
+func TestFixedLenByteArrayNaNBitPatternKeepsBounds(t *testing.T) {
 	// 0x7e00 is a binary16 NaN and also a legal 2-byte fixed value. A value
-	// between the first page and those bytes is outside both pages.
+	// between the low page and those bytes sits in neither page.
 	nanBits := []byte{0x00, 0x7e}
 	lo := []byte{0x00, 0x01}
 	hi := []byte{0x00, 0x02}
 	needle := []byte{0x00, 0x10}
-	index := NewColumnIndex(FixedLenByteArray, &format.ColumnIndex{
-		NullPages:     []bool{false, false},
-		NullCounts:    []int64{0, 0},
-		MinValues:     [][]byte{lo, nanBits},
-		MaxValues:     [][]byte{hi, nanBits},
-		BoundaryOrder: format.Ascending,
-	})
-	if columnIndexHasNaNBounds(index) {
-		t.Fatal("plain FIXED_LEN_BYTE_ARRAY index reported NaN bounds")
+	for _, tc := range []struct {
+		name string
+		node Node
+	}{
+		{"plain", Leaf(FixedLenByteArrayType(2))},
+		{"decimal", Decimal(0, 4, FixedLenByteArrayType(2))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			index := NewColumnIndex(FixedLenByteArray, &format.ColumnIndex{
+				NullPages:     []bool{false, false},
+				NullCounts:    []int64{0, 0},
+				MinValues:     [][]byte{lo, nanBits},
+				MaxValues:     [][]byte{hi, nanBits},
+				BoundaryOrder: format.Ascending,
+			})
+			if columnIndexHasNaNBounds(index) {
+				t.Fatal("column index reported NaN bounds")
+			}
+			if !bytes.Equal(index.MinValue(1).ByteArray(), nanBits) || !bytes.Equal(index.MaxValue(1).ByteArray(), nanBits) {
+				t.Fatalf("column index endpoint = %x/%x", index.MinValue(1).ByteArray(), index.MaxValue(1).ByteArray())
+			}
+			if got := Search(index, FixedLenByteArrayValue(needle), tc.node.Type()); got != 2 {
+				t.Fatalf("Search = %d, want 2", got)
+			}
+
+			schema := NewSchema("s", Group{"v": tc.node})
+			fileIndex := writtenFileColumnIndex(t, schema, nanBits)
+			if columnIndexHasNaNBounds(fileIndex) {
+				t.Fatal("file column index reported NaN bounds")
+			}
+			if !bytes.Equal(fileIndex.MinValue(0).ByteArray(), nanBits) || !bytes.Equal(fileIndex.MaxValue(0).ByteArray(), nanBits) {
+				t.Fatalf("file endpoint = %x/%x", fileIndex.MinValue(0).ByteArray(), fileIndex.MaxValue(0).ByteArray())
+			}
+
+			// The high value sorts after the low one and the ranges do not
+			// overlap, so the merge keeps two segments. Treating the high
+			// bytes as NaN drops the bounds and collapses the merge.
+			merged := mergeFixedGroups(t, schema, tc.node.Type(), []float16Group{
+				{rows: [][]byte{nanBits}, pages: [][2][]byte{{nanBits, nanBits}}},
+				{rows: [][]byte{lo}, pages: [][2][]byte{{lo, lo}}},
+			})
+			segs, ok := merged.(orderedRowGroupSegments)
+			if !ok {
+				t.Fatal("merged row group has no segments")
+			}
+			if n := len(segs.rowGroupSegments()); n != 2 {
+				t.Fatalf("segments = %d, want 2", n)
+			}
+		})
 	}
-	for _, typ := range []Type{FixedLenByteArrayType(2), Decimal(0, 4, FixedLenByteArrayType(2)).Type()} {
-		if got := Search(index, FixedLenByteArrayValue(needle), typ); got != 2 {
-			t.Fatalf("%s Search = %d, want 2", typ, got)
+}
+
+func writtenFileColumnIndex(t *testing.T, schema *Schema, value []byte) ColumnIndex {
+	t.Helper()
+	raw := writeFloat16Bytes(t, schema, [][]byte{value})
+	f, err := OpenFile(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := f.RowGroups()[0].ColumnChunks()[0].ColumnIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return index
+}
+
+func mergeFixedGroups(t *testing.T, schema *Schema, typ Type, groups []float16Group) RowGroup {
+	t.Helper()
+	rowGroups := make([]RowGroup, len(groups))
+	for i, group := range groups {
+		mins := make([][]byte, len(group.pages))
+		maxs := make([][]byte, len(group.pages))
+		nulls := make([]bool, len(group.pages))
+		counts := make([]int64, len(group.pages))
+		for j, page := range group.pages {
+			mins[j] = page[0]
+			maxs[j] = page[1]
+		}
+		rowGroups[i] = &float16NaNRowGroup{
+			schema: schema,
+			rows:   group.rows,
+			typ:    typ,
+			index: NewColumnIndex(FixedLenByteArray, &format.ColumnIndex{
+				NullPages:     nulls,
+				NullCounts:    counts,
+				MinValues:     mins,
+				MaxValues:     maxs,
+				BoundaryOrder: format.Ascending,
+			}),
 		}
 	}
+	merged, err := MergeRowGroups(rowGroups, SortingRowGroupConfig(SortingColumns(Ascending("v"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return merged
 }
 
 func TestDecimalFixedLenByteArrayMissingTypeLength(t *testing.T) {
