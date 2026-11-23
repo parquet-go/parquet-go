@@ -944,12 +944,24 @@ func (p missingPage) Slice(i, j int64) Page {
 	}
 	adjacentPages := p.adjacentPages
 	// Flat columns mirror per-row levels, so the slice has to start at the
-	// same row as the sibling. Repeated columns keep the historical slice,
-	// which shares the sibling reader without seeking.
-	if p.mirrorSiblingLevels && p.adjacentChunk != nil {
-		adjacentPages = p.adjacentChunk.Pages()
-		if err := adjacentPages.SeekToRow(i); err != nil {
-			adjacentPages = &errorPages{err: err}
+	// same row as the sibling. Seek the reader this page already holds.
+	// Opening another one would leave the original running (async page
+	// prefetch included) and would leak it if the seek failed. Repeated
+	// columns keep the historical slice, which shares the reader without
+	// seeking.
+	if p.mirrorSiblingLevels {
+		if adjacentPages == nil && p.adjacentChunk != nil {
+			opened := p.adjacentChunk.Pages()
+			if err := opened.SeekToRow(i); err != nil {
+				opened.Close()
+				adjacentPages = &errorPages{err: err}
+			} else {
+				adjacentPages = opened
+			}
+		} else if adjacentPages != nil {
+			if err := adjacentPages.SeekToRow(i); err != nil {
+				adjacentPages = &errorPages{err: err}
+			}
 		}
 	}
 	return missingPage{
@@ -1042,6 +1054,21 @@ func (r *missingPageValues) readWithoutAdjacent(values []Value, typ Type, column
 	return len(values), nil
 }
 
+// adjacentReadBuf returns a prefix of the sibling buffer no longer than
+// remaining. ReadValues may be given a destination larger than the buffer.
+func (r *missingPageValues) adjacentReadBuf(remaining []Value) []Value {
+	buf := r.adjacentBuffer
+	if len(buf) == 0 {
+		n := min(len(remaining), 1024)
+		r.adjacentBuffer = make([]Value, n)
+		buf = r.adjacentBuffer
+	}
+	if len(remaining) < len(buf) {
+		return buf[:len(remaining)]
+	}
+	return buf
+}
+
 // readMirroringSibling copies repetition and definition levels from the sibling
 // column using the same rules as Convert: required leaves keep the sibling
 // levels and become zeros, optional leaves become null and step the definition
@@ -1068,11 +1095,12 @@ func (r *missingPageValues) readMirroringSibling(values []Value, typ Type, colum
 		}
 
 		remaining := values[totalRead:]
-		n, err := r.adjacentReader.ReadValues(r.adjacentBuffer[:len(remaining)])
+		buf := r.adjacentReadBuf(remaining)
+		n, err := r.adjacentReader.ReadValues(buf)
 
 		for i := range n {
-			def := r.adjacentBuffer[i].definitionLevel
-			rep := r.adjacentBuffer[i].repetitionLevel
+			def := buf[i].definitionLevel
+			rep := buf[i].repetitionLevel
 			var value Value
 			if leafOptional {
 				if def == maxDef {
@@ -1126,13 +1154,15 @@ func (r *missingPageValues) readWithAdjacent(values []Value, typ Type, columnInd
 			r.adjacentReader = adjacentPage.Values()
 		}
 
-		// Read values from adjacent column to get its levels
+		// Read values from adjacent column to get its levels.
+		// The destination may be larger than the sibling buffer.
 		remaining := values[totalRead:]
-		n, err := r.adjacentReader.ReadValues(r.adjacentBuffer[:len(remaining)])
+		buf := r.adjacentReadBuf(remaining)
+		n, err := r.adjacentReader.ReadValues(buf)
 
 		for i := range n {
-			repLevel := r.adjacentBuffer[i].repetitionLevel
-			adjacentDefLevel := r.adjacentBuffer[i].definitionLevel
+			repLevel := buf[i].repetitionLevel
+			adjacentDefLevel := buf[i].definitionLevel
 
 			var defLevel byte
 			var value Value

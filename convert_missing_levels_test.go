@@ -439,6 +439,132 @@ func assertOptionalGroupSibling(t *testing.T, src parquet.RowGroup, target *parq
 	}
 }
 
+func TestMissingColumnUnderOptionalGroupLargeRead(t *testing.T) {
+	type Inner struct {
+		A int64 `parquet:"a"`
+	}
+	type Source struct {
+		G *Inner `parquet:"g,optional"`
+	}
+	const n = 1100
+	rowsIn := make([]Source, n)
+	for i := range rowsIn {
+		if i%2 == 0 {
+			rowsIn[i].G = &Inner{A: int64(i)}
+		}
+	}
+	src := parquet.NewGenericBuffer[Source]()
+	if _, err := src.Write(rowsIn); err != nil {
+		t.Fatal(err)
+	}
+	type InnerTarget struct {
+		A int64 `parquet:"a"`
+		B int64 `parquet:"b"`
+	}
+	type Target struct {
+		G *InnerTarget `parquet:"g,optional"`
+	}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Target)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(src, conv)
+	pages := converted.ColumnChunks()[1].Pages()
+	defer pages.Close()
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]parquet.Value, n+50)
+	got, err := page.Values().ReadValues(buf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if got != n {
+		t.Fatalf("read %d values, want %d", got, n)
+	}
+	for i := range n {
+		wantDef := 0
+		if i%2 == 0 {
+			wantDef = 1
+		}
+		if buf[i].RepetitionLevel() != 0 || buf[i].DefinitionLevel() != wantDef || buf[i].IsNull() {
+			t.Errorf("value %d: rep=%d def=%d null=%v, want rep=0 def=%d null=false",
+				i, buf[i].RepetitionLevel(), buf[i].DefinitionLevel(), buf[i].IsNull(), wantDef)
+		}
+	}
+}
+
+type seekFailPages struct {
+	closed int
+}
+
+func (p *seekFailPages) ReadPage() (parquet.Page, error) { return nil, errSiblingRead }
+func (p *seekFailPages) SeekToRow(int64) error           { return errSiblingRead }
+func (p *seekFailPages) Close() error {
+	p.closed++
+	return nil
+}
+
+type seekFailChunk struct {
+	parquet.ColumnChunk
+	opened []*seekFailPages
+}
+
+func (c *seekFailChunk) Pages() parquet.Pages {
+	p := &seekFailPages{}
+	c.opened = append(c.opened, p)
+	return p
+}
+
+func TestMissingColumnSliceSeekClosesOpenedSibling(t *testing.T) {
+	type Inner struct {
+		A int64 `parquet:"a"`
+	}
+	type Source struct {
+		G *Inner `parquet:"g,optional"`
+	}
+	present := Inner{A: 1}
+	src := parquet.NewGenericBuffer[Source]()
+	if _, err := src.Write([]Source{{G: &present}, {G: nil}, {G: &present}}); err != nil {
+		t.Fatal(err)
+	}
+	type InnerTarget struct {
+		A int64 `parquet:"a"`
+		B int64 `parquet:"b"`
+	}
+	type Target struct {
+		G *InnerTarget `parquet:"g,optional"`
+	}
+	orig := src.ColumnChunks()
+	sibling := &seekFailChunk{ColumnChunk: orig[0]}
+	cols := []parquet.ColumnChunk{sibling}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Target)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(accessRowGroup{RowGroup: src, columns: cols}, conv)
+	// The missing column opens the sibling once. Slice seeks that reader.
+	// A failed seek must not open a second reader and leave it running.
+	pages := converted.ColumnChunks()[1].Pages()
+	defer pages.Close()
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sliced := page.Slice(1, 3)
+	_, err = sliced.Values().ReadValues(make([]parquet.Value, 2))
+	if !errors.Is(err, errSiblingRead) {
+		t.Fatalf("slice read err = %v, want %v", err, errSiblingRead)
+	}
+	if len(sibling.opened) != 1 {
+		t.Fatalf("sibling Pages opened %d times, want 1", len(sibling.opened))
+	}
+	if sibling.opened[0].closed != 0 {
+		t.Fatalf("slice closed the caller's sibling reader %d times", sibling.opened[0].closed)
+	}
+}
+
 func TestMissingColumnUnderRepeatedGroupReadsSibling(t *testing.T) {
 	type Item struct {
 		X int32 `parquet:"x"`
