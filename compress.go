@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/compress/brotli"
@@ -80,8 +81,8 @@ func (f *File) compressionCodecs() []compress.Codec {
 // the last one of that code when there are several, or the default codec
 // of LookupCompressionCodec when codecs has none.
 func lookupCompressionCodec(codecs []compress.Codec, codec format.CompressionCodec) compress.Codec {
-	for i := len(codecs) - 1; i >= 0; i-- {
-		if c := codecs[i]; c != nil && c.CompressionCodec() == codec {
+	for _, c := range slices.Backward(codecs) {
+		if c != nil && c.CompressionCodec() == codec {
 			return c
 		}
 	}
