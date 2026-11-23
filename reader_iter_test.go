@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"reflect"
 	"testing"
 
@@ -57,9 +58,7 @@ func snapshotIterRow(row iterRow) iterRow {
 	row.Tags = append([]string(nil), row.Tags...)
 	if row.Attrs != nil {
 		attrs := make(map[string]int, len(row.Attrs))
-		for k, v := range row.Attrs {
-			attrs[k] = v
-		}
+		maps.Copy(attrs, row.Attrs)
 		row.Attrs = attrs
 	}
 	return row
