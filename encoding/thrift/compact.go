@@ -73,7 +73,7 @@ func (r *compactReader) ReadInt64() (int64, error) {
 
 func (r *compactReader) ReadFloat64() (float64, error) {
 	b, err := r.binary.read(8)
-	if len(b) < 8 {
+	if err != nil {
 		return 0, err
 	}
 	return math.Float64frombits(binary.LittleEndian.Uint64(b)), nil
@@ -84,12 +84,12 @@ func (r *compactReader) ReadBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := make([]byte, n)
-	_, err = io.ReadFull(r.Reader(), b)
-	if err == nil {
-		r.binary.n += n
+	b, err := readLengthBytes(r.Reader(), n)
+	if err != nil {
+		return nil, err
 	}
-	return b, err
+	r.binary.n += n
+	return b, nil
 }
 
 func (r *compactReader) ReadString() (string, error) {
@@ -436,11 +436,11 @@ func (r *compactBytesReader) ReadBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.offset+n > len(r.data) {
-		return nil, io.ErrUnexpectedEOF
+	b, next, err := takeBytes(r.data, r.offset, n)
+	if err != nil {
+		return nil, err
 	}
-	b := r.data[r.offset : r.offset+n]
-	r.offset += n
+	r.offset = next
 	return b, nil
 }
 
@@ -449,17 +449,24 @@ func (r *compactBytesReader) ReadString() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if r.offset+n > len(r.data) {
-		return "", io.ErrUnexpectedEOF
+	b, next, err := takeBytes(r.data, r.offset, n)
+	if err != nil {
+		return "", err
 	}
-	s := unsafecast.String(r.data[r.offset : r.offset+n])
-	r.offset += n
-	return s, nil
+	r.offset = next
+	return unsafecast.String(b), nil
 }
 
 func (r *compactBytesReader) ReadLength() (int, error) {
 	n, err := r.readUvarint("length", math.MaxInt32)
-	return int(n), err
+	if err != nil {
+		return 0, err
+	}
+	length := int(n)
+	if length > bytesRemain(r.offset, len(r.data)) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return length, nil
 }
 
 func (r *compactBytesReader) ReadMessage() (Message, error) {

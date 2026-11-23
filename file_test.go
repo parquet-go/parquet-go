@@ -1850,3 +1850,78 @@ func TestBloomFilterCustomColumnWritesAlgorithm(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenFileHugeSchemaList(t *testing.T) {
+	var buf bytes.Buffer
+	w := new(thrift.CompactProtocol).NewWriter(&buf)
+	// Field 2 is FileMetaData.Schema. The compact field id is also the delta
+	// from zero when this is the first field on the wire.
+	if err := w.WriteField(thrift.Field{ID: 2, Type: thrift.LIST}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteList(thrift.List{Size: math.MaxInt32, Type: thrift.STRUCT}); err != nil {
+		t.Fatal(err)
+	}
+	footer := append([]byte(nil), buf.Bytes()...)
+	file := make([]byte, 0, 4+len(footer)+8)
+	file = append(file, "PAR1"...)
+	file = append(file, footer...)
+	trailer := make([]byte, 8)
+	binary.LittleEndian.PutUint32(trailer[:4], uint32(len(footer)))
+	copy(trailer[4:], "PAR1")
+	file = append(file, trailer...)
+
+	warm, err := os.ReadFile(filepath.Join("testdata", "list_columns.parquet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parquet.OpenFile(bytes.NewReader(warm), int64(len(warm))); err != nil {
+		t.Fatal(err)
+	}
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err = parquet.OpenFile(bytes.NewReader(file), int64(len(file)))
+	runtime.ReadMemStats(&after)
+	if err == nil {
+		t.Fatal("OpenFile succeeded")
+	}
+	if !strings.Contains(err.Error(), "exceeds remaining input") {
+		t.Fatalf("OpenFile error = %v", err)
+	}
+	if delta := after.TotalAlloc - before.TotalAlloc; delta > 1<<20 {
+		t.Fatalf("OpenFile allocated %d bytes", delta)
+	}
+}
+
+func BenchmarkOpenFile(b *testing.B) {
+	files := []string{
+		"list_columns.parquet",
+		"alltypes_tiny_pages_plain.parquet",
+		"nested_structs.rust.parquet",
+		"trace.snappy.parquet",
+	}
+	for _, name := range files {
+		b.Run(name, func(b *testing.B) {
+			data, err := os.ReadFile(filepath.Join("testdata", name))
+			if err != nil {
+				b.Fatal(err)
+			}
+			r := bytes.NewReader(data)
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				r.Reset(data)
+				f, err := parquet.OpenFile(r, int64(len(data)))
+				if err != nil {
+					b.Fatal(err)
+				}
+				if f.NumRows() < 0 {
+					b.Fatal(f.NumRows())
+				}
+			}
+		})
+	}
+}
