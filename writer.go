@@ -1588,6 +1588,9 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		if err := c.flushFilterPages(); err != nil {
 			return 0, err
 		}
+		if err := c.finalizeBloomFilter(); err != nil {
+			return 0, err
+		}
 	}
 
 	if err := w.writeFileHeader(); err != nil {
@@ -2200,7 +2203,11 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 			// Need to always attempt to resize the filter, as the writer might
 			// be reused after resetting which would have reset the length of
 			// the filter to 0.
-			c.resizeBloomFilter(int64(dict.Len()))
+			if s, ok := c.columnFilter.(BloomFilterDistinctSizer); ok {
+				c.resizeBloomFilterTo(s.DistinctSize(int64(dict.Len())))
+			} else {
+				c.resizeBloomFilter(int64(dict.Len()))
+			}
 			return c.writePageToFilter(dict.Page())
 		}
 		// The dictionary is hashed last because resizeBloomFilter below
@@ -2372,7 +2379,10 @@ func (c *ColumnWriter) hasPlainPages() bool {
 }
 
 func (c *ColumnWriter) resizeBloomFilter(numValues int64) {
-	filterSize := c.columnFilter.Size(numValues)
+	c.resizeBloomFilterTo(c.columnFilter.Size(numValues))
+}
+
+func (c *ColumnWriter) resizeBloomFilterTo(filterSize int) {
 	if cap(c.filter) < filterSize {
 		c.filter = make([]byte, filterSize)
 	} else {
@@ -2381,6 +2391,24 @@ func (c *ColumnWriter) resizeBloomFilter(numValues int64) {
 			c.filter[i] = 0
 		}
 	}
+}
+
+// finalizeBloomFilter gives filters implementing BloomFilterFinalizer the
+// opportunity to transform the bitset once all values of the row group have
+// been written to it. The result is copied back into the writer's buffer, so
+// the buffer keeps its capacity for the next row group and the finalizer does
+// not need to keep the returned slice alive.
+func (c *ColumnWriter) finalizeBloomFilter() error {
+	f, ok := c.columnFilter.(BloomFilterFinalizer)
+	if !ok || len(c.filter) == 0 {
+		return nil
+	}
+	filter := f.FinalizeBloomFilter(c.filter)
+	if !bloomFilterSizeIsValid(len(filter), len(c.filter)) {
+		return fmt.Errorf("bloom filter of column %s finalized to an invalid size of %d bytes", c.columnPath, len(filter))
+	}
+	c.filter = c.filter[:copy(c.filter, filter)]
+	return nil
 }
 
 func (c *ColumnWriter) newColumnBuffer() ColumnBuffer {
