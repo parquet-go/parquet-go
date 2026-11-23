@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -949,6 +950,7 @@ func (c *FileColumnChunk) Type() Type { return c.column.Type() }
 func (c *FileColumnChunk) Column() int { return int(c.column.Index()) }
 
 // Bounds returns the min and max values found in the column chunk.
+// It reports ok=false if either bound is missing or a floating-point bound is NaN.
 func (c *FileColumnChunk) Bounds() (min, max Value, ok bool) {
 	if c.column.ignoreOrder {
 		return min, max, false
@@ -963,7 +965,16 @@ func (c *FileColumnChunk) Bounds() (min, max Value, ok bool) {
 	if hasMaxValue {
 		max = columnKind.Value(stats.MaxValue)
 	}
-	return min, max, hasMinValue && hasMaxValue
+	ok = hasMinValue && hasMaxValue
+	if ok {
+		switch columnKind {
+		case Float:
+			ok = !math.IsNaN(float64(min.Float())) && !math.IsNaN(float64(max.Float()))
+		case Double:
+			ok = !math.IsNaN(min.Double()) && !math.IsNaN(max.Double())
+		}
+	}
+	return min, max, ok
 }
 
 // Pages returns a page reader for the column chunk.
