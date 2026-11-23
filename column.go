@@ -403,7 +403,11 @@ func (cl *columnLoader) open(file *File, metadata *format.FileMetaData, columnIn
 	}
 
 	if isLeafSchemaElement(c.schema) {
-		c.typ, c.ignoreOrder = schemaElementTypeOf(c.schema)
+		var err error
+		c.typ, c.ignoreOrder, err = schemaElementTypeOf(c.schema)
+		if err != nil {
+			return nil, err
+		}
 
 		if cl.columnOrderIndex < len(metadata.ColumnOrders) {
 			if !c.ignoreOrder {
@@ -564,19 +568,42 @@ func isLeafSchemaElement(element *format.SchemaElement) bool {
 
 // schemaElementTypeOf returns the leaf type and whether the file's column
 // order must be ignored because the annotation is unsupported.
-func schemaElementTypeOf(s *format.SchemaElement) (Type, bool) {
+//
+// A FIXED_LEN_BYTE_ARRAY annotation that names its own width (UUID, INTERVAL,
+// FLOAT16) is kept when the schema element omits type_length. An annotation
+// that does not determine a width, on a FIXED_LEN_BYTE_ARRAY element that also
+// omits type_length, is rejected: the physical type cannot be reconstructed,
+// and reporting it as NULL would drop the column's values.
+func schemaElementTypeOf(s *format.SchemaElement) (Type, bool, error) {
 	if t := annotatedSchemaElementType(s); t != nil {
 		// UNKNOWN represents an all-null column regardless of physical type.
 		if _, ok := t.(*nullType); ok {
-			return t, false
+			return t, false, nil
 		}
 		if physical := t.PhysicalType(); physical != nil && *physical == s.Type.V {
-			if *physical != format.FixedLenByteArray || (s.TypeLength.Valid && t.Length() == int(s.TypeLength.V)) {
-				return t, false
+			if *physical != format.FixedLenByteArray || fixedLenByteArrayAnnotationAccepted(s, t) {
+				return t, false, nil
 			}
 		}
 	}
-	return physicalSchemaElementType(s), s.LogicalType.Value != nil || s.ConvertedType.Valid
+	phys := physicalSchemaElementType(s)
+	ignore := s.LogicalType.Value != nil || s.ConvertedType.Valid
+	if ignore && s.Type.Valid && s.Type.V == format.FixedLenByteArray && !s.TypeLength.Valid {
+		if _, isNull := phys.(*nullType); isNull {
+			return nil, false, fmt.Errorf("FIXED_LEN_BYTE_ARRAY column %q is missing type_length: %w", s.Name, ErrCorrupted)
+		}
+	}
+	return phys, ignore, nil
+}
+
+// fixedLenByteArrayAnnotationAccepted reports whether an annotation whose
+// physical type is FIXED_LEN_BYTE_ARRAY agrees with the schema element. A
+// missing type_length is accepted when the annotation itself fixes the width.
+func fixedLenByteArrayAnnotationAccepted(s *format.SchemaElement, t Type) bool {
+	if s.TypeLength.Valid {
+		return t.Length() == int(s.TypeLength.V)
+	}
+	return t.Length() > 0
 }
 
 func annotatedSchemaElementType(s *format.SchemaElement) Type {
@@ -633,6 +660,8 @@ func annotatedSchemaElementType(s *format.SchemaElement) Type {
 		return (*bsonType)(lt)
 	case *format.UUIDType:
 		return (*uuidType)(lt)
+	case *format.Float16Type:
+		return float16Type{}
 	case *format.GeometryType:
 		return (*geometryType)(lt)
 	case *format.GeographyType:

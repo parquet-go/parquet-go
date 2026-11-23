@@ -105,11 +105,12 @@ type FileColumnIndex struct {
 	nanBounds bool
 }
 
-func makeFileColumnIndex(index *format.ColumnIndex, kind Kind) FileColumnIndex {
+func makeFileColumnIndex(index *format.ColumnIndex, typ Type) FileColumnIndex {
+	kind := typ.Kind()
 	return FileColumnIndex{
 		index:     index,
 		kind:      kind,
-		nanBounds: floatingPageBoundsAreNaN(kind, index),
+		nanBounds: floatingPageBoundsAreNaN(kind, index) || float16FormatIndexHasNaN(typ, index),
 	}
 }
 
@@ -165,7 +166,9 @@ func isNullPage(j int, index *format.ColumnIndex) bool {
 }
 
 // columnIndexNaNBounds is implemented by column indexes that know whether any
-// non-null page stores a NaN FLOAT or DOUBLE endpoint.
+// non-null page stores a NaN FLOAT or DOUBLE endpoint. FLOAT16 indexes report
+// the same fact from their own type, because their physical kind is shared
+// with every other fixed-length byte array.
 type columnIndexNaNBounds interface {
 	hasNaNBounds() bool
 }

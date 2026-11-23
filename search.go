@@ -4,6 +4,12 @@ package parquet
 // and Find are scoped to a given ColumnChunk and find the pages within a
 // ColumnChunk which might contain the result.  See Find for more details.
 func Search(index ColumnIndex, value Value, typ Type) int {
+	// NewColumnIndex only sees the physical kind. FLOAT16 shares that kind
+	// with every other fixed-length byte array, so the NaN flag is applied
+	// here, where the logical type is known.
+	if _, ok := typ.(float16Type); ok {
+		index = float16SearchIndex{ColumnIndex: index}
+	}
 	return Find(index, value, CompareNullsLast(typ.Compare))
 }
 
@@ -29,9 +35,10 @@ func Search(index ColumnIndex, value Value, typ Type) int {
 // first page that may contain nulls (an all-null page, a page with a non-zero
 // NullCount, or a page whose optional NullCounts metadata is absent).
 func Find(index ColumnIndex, value Value, cmp func(Value, Value) int) int {
-	// A NaN FLOAT/DOUBLE endpoint is not a valid bound, even when null_pages
+	// A NaN FLOAT or DOUBLE endpoint is not a valid bound, even when null_pages
 	// is false. Binary search orders on those endpoints and can skip the page
 	// that holds the value, so an ascending index with one is scanned linearly.
+	// Search applies the same rule to FLOAT16 before calling Find.
 	switch {
 	case index.IsAscending() && !value.IsNull() && !ascendingIndexHasNaNBounds(index, value):
 		return binarySearch(index, value, cmp)
