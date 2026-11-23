@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"slices"
 
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/compress"
@@ -751,7 +752,8 @@ func schemaRepetitionTypeOf(s *format.SchemaElement) format.FieldRepetitionType 
 }
 
 func (c *Column) decompress(compressedPageData []byte, uncompressedPageSize int32) (page *buffer[byte], err error) {
-	page = buffers.get(int(uncompressedPageSize))
+	// The exported page decoders do not know the decompressed size.
+	page = buffers.get(max(0, int(uncompressedPageSize)))
 	decoded, err := c.compression.Decode(page.data.Slice(), compressedPageData)
 	switch {
 	case err != nil:
@@ -768,7 +770,14 @@ func (c *Column) decompress(compressedPageData []byte, uncompressedPageSize int3
 // DecodeDataPageV1 decodes a data page from the header, compressed data, and
 // optional dictionary passed as arguments.
 func (c *Column) DecodeDataPageV1(header DataPageHeaderV1, page []byte, dict Dictionary) (Page, error) {
-	return c.decodeDataPageV1(header, newBuffer(page), dict, -1)
+	// Encoded dictionary pages retain their input unless it is decompressed
+	// into a separate buffer. Do not retain the caller's memory.
+	if c.usesEncodedDictionaryPage() && isDictionaryEncoding(LookupEncoding(header.Encoding())) && !isCompressed(c.compression) {
+		page = slices.Clone(page)
+	}
+	buffer := newBuffer(page)
+	defer buffer.unref()
+	return c.decodeDataPageV1(header, buffer, dict, -1)
 }
 
 func (c *Column) decodeDataPageV1(header DataPageHeaderV1, page *buffer[byte], dict Dictionary, size int32) (Page, error) {
@@ -819,7 +828,13 @@ func (c *Column) decodeDataPageV1(header DataPageHeaderV1, page *buffer[byte], d
 // DecodeDataPageV2 decodes a data page from the header, compressed data, and
 // optional dictionary passed as arguments.
 func (c *Column) DecodeDataPageV2(header DataPageHeaderV2, page []byte, dict Dictionary) (Page, error) {
-	return c.decodeDataPageV2(header, newBuffer(page), dict, -1)
+	// See DecodeDataPageV1.
+	if c.usesEncodedDictionaryPage() && isDictionaryEncoding(LookupEncoding(header.Encoding())) && !(isCompressed(c.compression) && header.IsCompressed()) {
+		page = slices.Clone(page)
+	}
+	buffer := newBuffer(page)
+	defer buffer.unref()
+	return c.decodeDataPageV2(header, buffer, dict, -1)
 }
 
 func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], dict Dictionary, size int32) (Page, error) {
@@ -883,6 +898,10 @@ func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], d
 	return c.decodeDataPage(header, numValues, repetitionLevels, definitionLevels, page, pageData, dict)
 }
 
+func (c *Column) usesEncodedDictionaryPage() bool {
+	return c.maxRepetitionLevel == 0 && c.maxDefinitionLevel == 0 && c.Type().Kind() == ByteArray
+}
+
 func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetitionLevels, definitionLevels, page *buffer[byte], data []byte, dict Dictionary) (Page, error) {
 	pageEncoding := LookupEncoding(header.Encoding())
 	pageType := c.Type()
@@ -894,7 +913,15 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 		// the dictionary page, but the page is still encoded using the RLE
 		// encoding in this case, so we convert it to RLE_DICTIONARY.
 		pageEncoding = &RLEDictionary
-		pageType = indexedPageType{newIndexedType(pageType, dict)}
+		indexed := newIndexedType(pageType, dict)
+		if c.usesEncodedDictionaryPage() {
+			p, err := newWindowedIndexedPage(indexed, c.Index(), numValues, data)
+			if err != nil {
+				return nil, fmt.Errorf("decoding indexes of dictionary-encoded data page: %w", err)
+			}
+			return newBufferedPage(p, nil, page, nil, nil), nil
+		}
+		pageType = indexedPageType{indexed}
 	}
 
 	var obuf *buffer[uint32]

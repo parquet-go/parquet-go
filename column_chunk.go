@@ -82,10 +82,11 @@ func NewColumnChunkValueReader(column ColumnChunk) ColumnChunkValueReader {
 }
 
 type columnChunkValueReader struct {
-	pages  Pages
-	page   Page
-	values ValueReader
-	detach bool
+	pages       Pages
+	page        Page
+	values      ValueReader
+	detach      bool
+	indexWindow []int32
 }
 
 func (r *columnChunkValueReader) clear() {
@@ -117,6 +118,7 @@ func (r *columnChunkValueReader) Close() error {
 		r.pages = nil
 	}
 	r.clear()
+	r.indexWindow = nil
 	return err
 }
 
@@ -133,6 +135,11 @@ func (r *columnChunkValueReader) ReadValues(values []Value) (int, error) {
 			}
 			r.page = p
 			r.values = p.Values()
+			if v, ok := r.values.(*windowedIndexedPageValues); ok {
+				// The column reader owns this window across page transitions.
+				// Returned values reference the dictionary, never these IDs.
+				v.window = &r.indexWindow
+			}
 		}
 
 		n, err := r.values.ReadValues(values)
