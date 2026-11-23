@@ -240,6 +240,12 @@ func TestFloat16NaNBoundsAreVisible(t *testing.T) {
 	if got := Search(optional, Value{}, float16Type{}); got != 0 {
 		t.Fatalf("null Search = %d, want 0", got)
 	}
+	// An in-memory page reports NullCount 0 and does not implement
+	// hasNullCount. A null query must not treat that zero as unknown.
+	finite := float16Type{}.NewPage(0, 1, float16Type{}.NewValues(ten, nil)).(float16Page)
+	if got := Search(float16BufferColumnIndex{page: finite}, Value{}, float16Type{}); got != 1 {
+		t.Fatalf("null Search on non-null buffer page = %d, want 1", got)
+	}
 
 	schema := NewSchema("s", Group{"v": Leaf(float16Type{})})
 	sorted := mergeFloat16Groups(t, schema, []float16Group{

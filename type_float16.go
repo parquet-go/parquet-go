@@ -200,11 +200,12 @@ func (i float16SearchIndex) hasNaNBounds() bool {
 
 // hasNullCount forwards the inner index. A null query uses this to tell a
 // missing NullCounts list from a page that is known to contain no nulls.
-// Without the forward, the wrapper hides the method and those pages are skipped.
+// An inner index with no such method reports counts through NullCount, the
+// same way multiColumnIndex does, so a known zero is not treated as unknown.
 func (i float16SearchIndex) hasNullCount(page int) bool {
 	nc, ok := i.ColumnIndex.(columnIndexNullCounts)
 	if !ok {
-		return false
+		return true
 	}
 	return nc.hasNullCount(page)
 }
