@@ -29,11 +29,28 @@ func Search(index ColumnIndex, value Value, typ Type) int {
 // first page that may contain nulls (an all-null page, a page with a non-zero
 // NullCount, or a page whose optional NullCounts metadata is absent).
 func Find(index ColumnIndex, value Value, cmp func(Value, Value) int) int {
+	// A NaN FLOAT/DOUBLE endpoint is not a valid bound, even when null_pages
+	// is false. Binary search orders on those endpoints and can skip the page
+	// that holds the value, so an ascending index with one is scanned linearly.
 	switch {
-	case index.IsAscending() && !value.IsNull():
+	case index.IsAscending() && !value.IsNull() && !ascendingIndexHasNaNBounds(index, value):
 		return binarySearch(index, value, cmp)
 	default:
 		return linearSearch(index, value, cmp)
+	}
+}
+
+func ascendingIndexHasNaNBounds(index ColumnIndex, value Value) bool {
+	switch value.Kind() {
+	case Float, Double:
+		return columnIndexHasNaNBounds(index)
+	default:
+		// A float index records the NaN flag up front. Checking it keeps an
+		// ascending search off endpoints the value kind would otherwise skip.
+		if n, ok := index.(columnIndexNaNBounds); ok {
+			return n.hasNaNBounds()
+		}
+		return false
 	}
 }
 
@@ -91,6 +108,22 @@ func linearSearch(index ColumnIndex, value Value, cmp func(Value, Value) int) in
 		}
 		min := index.MinValue(i)
 		max := index.MaxValue(i)
+		// Ignore a NaN endpoint. The other endpoint, when it is finite, still
+		// bounds the page.
+		switch {
+		case valueIsNaN(min) && valueIsNaN(max):
+			return i
+		case valueIsNaN(min):
+			if cmp(value, max) <= 0 {
+				return i
+			}
+			continue
+		case valueIsNaN(max):
+			if cmp(min, value) <= 0 {
+				return i
+			}
+			continue
+		}
 
 		if cmp(min, value) <= 0 && cmp(value, max) <= 0 {
 			return i

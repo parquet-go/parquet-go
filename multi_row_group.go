@@ -368,6 +368,10 @@ func (m *multiColumnIndex) MaxValue(pageIndex int) Value {
 	return m.indexes[chunkIndex].MaxValue(localIndex)
 }
 
+func (m *multiColumnIndex) hasNaNBounds() bool {
+	return slices.ContainsFunc(m.indexes, columnIndexHasNaNBounds)
+}
+
 func (m *multiColumnIndex) IsAscending() bool {
 	if len(m.indexes) == 0 {
 		return false

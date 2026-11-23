@@ -1,6 +1,9 @@
 package parquet
 
 import (
+	"encoding/binary"
+	"math"
+
 	"github.com/parquet-go/bitpack/unsafecast"
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding/plain"
@@ -41,14 +44,16 @@ type columnIndexNullCounts interface {
 // format column index. The kind argument configures the type of values
 func NewColumnIndex(kind Kind, index *format.ColumnIndex) ColumnIndex {
 	return &formatColumnIndex{
-		kind:  kind,
-		index: index,
+		kind:      kind,
+		index:     index,
+		nanBounds: floatingPageBoundsAreNaN(kind, index),
 	}
 }
 
 type formatColumnIndex struct {
-	kind  Kind
-	index *format.ColumnIndex
+	kind      Kind
+	index     *format.ColumnIndex
+	nanBounds bool
 }
 
 func (f *formatColumnIndex) NumPages() int {
@@ -92,9 +97,20 @@ func (f *formatColumnIndex) IsDescending() bool {
 	return f.index.BoundaryOrder == format.Descending
 }
 
+func (f *formatColumnIndex) hasNaNBounds() bool { return f.nanBounds }
+
 type FileColumnIndex struct {
-	index *format.ColumnIndex
-	kind  Kind
+	index     *format.ColumnIndex
+	kind      Kind
+	nanBounds bool
+}
+
+func makeFileColumnIndex(index *format.ColumnIndex, kind Kind) FileColumnIndex {
+	return FileColumnIndex{
+		index:     index,
+		kind:      kind,
+		nanBounds: floatingPageBoundsAreNaN(kind, index),
+	}
 }
 
 func (i *FileColumnIndex) NumPages() int {
@@ -138,12 +154,92 @@ func (i *FileColumnIndex) IsDescending() bool {
 	return i.index.BoundaryOrder == format.Descending
 }
 
+func (i *FileColumnIndex) hasNaNBounds() bool { return i.nanBounds }
+
 func (i *FileColumnIndex) makeValue(b []byte) Value {
 	return i.kind.Value(b)
 }
 
 func isNullPage(j int, index *format.ColumnIndex) bool {
 	return len(index.NullPages) > 0 && index.NullPages[j]
+}
+
+// columnIndexNaNBounds is implemented by column indexes that know whether any
+// non-null page stores a NaN FLOAT or DOUBLE endpoint.
+type columnIndexNaNBounds interface {
+	hasNaNBounds() bool
+}
+
+func columnIndexHasNaNBounds(index ColumnIndex) bool {
+	if n, ok := index.(columnIndexNaNBounds); ok {
+		return n.hasNaNBounds()
+	}
+	for i := range index.NumPages() {
+		if index.NullPage(i) {
+			continue
+		}
+		if valueIsNaN(index.MinValue(i)) || valueIsNaN(index.MaxValue(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+func valueIsNaN(v Value) bool {
+	switch v.Kind() {
+	case Float:
+		return math.IsNaN(float64(v.float()))
+	case Double:
+		return math.IsNaN(v.double())
+	default:
+		return false
+	}
+}
+
+// floatingPageBoundsAreNaN reports whether a type-defined FLOAT or DOUBLE
+// column index has a NaN endpoint on a page whose null_pages flag is false.
+// Those endpoints are not valid bounds: readers ignore them instead of
+// ordering on them.
+func floatingPageBoundsAreNaN(kind Kind, index *format.ColumnIndex) bool {
+	if index == nil || (kind != Float && kind != Double) {
+		return false
+	}
+	n := len(index.MinValues)
+	if m := len(index.MaxValues); m > n {
+		n = m
+	}
+	if m := len(index.NullPages); m > n {
+		n = m
+	}
+	for i := range n {
+		if i < len(index.NullPages) && index.NullPages[i] {
+			continue
+		}
+		if i < len(index.MinValues) && encodedFloatIsNaN(kind, index.MinValues[i]) {
+			return true
+		}
+		if i < len(index.MaxValues) && encodedFloatIsNaN(kind, index.MaxValues[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+func encodedFloatIsNaN(kind Kind, b []byte) bool {
+	switch kind {
+	case Float:
+		if len(b) != 4 {
+			return false
+		}
+		return math.IsNaN(float64(math.Float32frombits(binary.LittleEndian.Uint32(b))))
+	case Double:
+		if len(b) != 8 {
+			return false
+		}
+		return math.IsNaN(math.Float64frombits(binary.LittleEndian.Uint64(b)))
+	default:
+		return false
+	}
 }
 
 type emptyColumnIndex struct{}

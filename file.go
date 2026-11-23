@@ -827,7 +827,7 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 		if chunk.CryptoMetadata.Value == nil || fileColumnChunks[i].decryptionKey != nil {
 			j := (int(rowGroup.Ordinal) * len(columns)) + i
 			if len(file.columnIndexes) > 0 && chunk.ColumnIndexOffset > 0 {
-				fileColumnIndexes[i] = FileColumnIndex{index: &file.columnIndexes[j], kind: columns[i].Type().Kind()}
+				fileColumnIndexes[i] = makeFileColumnIndex(&file.columnIndexes[j], columns[i].Type().Kind())
 				fileColumnChunks[i].columnIndex.Store(&fileColumnIndexes[i])
 			}
 			if len(file.offsetIndexes) > 0 && chunk.OffsetIndexOffset > 0 {
@@ -949,8 +949,16 @@ func (c *FileColumnChunk) Type() Type { return c.column.Type() }
 // Column returns the column index of this chunk in its parent row group.
 func (c *FileColumnChunk) Column() int { return int(c.column.Index()) }
 
-// Bounds returns the min and max values found in the column chunk.
-// It reports ok=false if either bound is missing or a floating-point bound is NaN.
+// Bounds returns the min and max values found in the column chunk. The values
+// are the footer statistics, decoded as stored.
+//
+// ok is false when either statistic is missing, when the column order is
+// undefined, or when a FLOAT or DOUBLE statistic is NaN.
+//
+// Footer statistics use the type-defined column order. Under that order a
+// minimum of +0 also admits -0, and a maximum of -0 also admits +0. Bounds
+// returns the stored endpoints with their signs unchanged, so callers that
+// need both zeros covered widen a +0 minimum to -0 and a -0 maximum to +0.
 func (c *FileColumnChunk) Bounds() (min, max Value, ok bool) {
 	if c.column.ignoreOrder {
 		return min, max, false
@@ -1125,7 +1133,8 @@ func (c *FileColumnChunk) readColumnIndexFrom(reader io.ReaderAt) (*FileColumnIn
 	if decErr != nil {
 		return nil, fmt.Errorf("decode column index: rowGroup=%d columnChunk=%d/%d: %w", c.rowGroup.Ordinal, c.Column(), len(c.rowGroup.Columns), decErr)
 	}
-	index := &FileColumnIndex{index: &columnIndex, kind: c.column.Type().Kind()}
+	index := new(FileColumnIndex)
+	*index = makeFileColumnIndex(&columnIndex, c.column.Type().Kind())
 	// We do a CAS (and Load on CAS failure) instead of a simple Store for
 	// the nice property that concurrent calling goroutines will only ever
 	// observe a single pointer value for the result.
