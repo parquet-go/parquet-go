@@ -369,12 +369,7 @@ func (m *multiColumnIndex) MaxValue(pageIndex int) Value {
 }
 
 func (m *multiColumnIndex) hasNaNBounds() bool {
-	for _, index := range m.indexes {
-		if columnIndexHasNaNBounds(index) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(m.indexes, columnIndexHasNaNBounds)
 }
 
 func (m *multiColumnIndex) IsAscending() bool {
