@@ -1008,11 +1008,10 @@ func reconstructFuncOfMap(columnIndex uint16, node Node) (uint16, reconstructFun
 			}
 		}
 
-		if value.IsNil() {
-			m := reflect.MakeMapWithSize(t, n)
-			value.Set(m)
-			value = m // track map instead of any for read[any]()
-		}
+		// Do not modify maps retained from earlier reads.
+		m := reflect.MakeMapWithSize(t, n)
+		value.Set(m)
+		value = m // track map instead of any for read[any]()
 
 		actualVal := v
 		if valueIsList || v.Kind() == reflect.Interface {
