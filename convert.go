@@ -1828,9 +1828,23 @@ func convertStringToTimeNanos(v Value, tz *time.Location) (Value, error) {
 }
 
 func convertDateToTimestamp(v Value, u format.TimeUnit, tz *time.Location) (Value, error) {
-	t := unixEpoch.AddDate(0, 0, int(v.int32()))
-	d := timeUnitDuration(u)
-	return v.convertToInt64(int64(t.In(tz).Sub(unixEpoch) / d)), nil
+	days := int(v.int32())
+	t := unixEpoch.AddDate(0, 0, days)
+	unit := timeUnitDuration(u)
+	// A date within about 292 years of the epoch still fits in a Duration.
+	// Dividing that duration keeps the previous result, including its
+	// truncation. Farther dates are an exact number of days in UTC.
+	instant := t.In(tz)
+	delta := instant.Sub(unixEpoch)
+	if unixEpoch.Add(delta).Equal(instant) {
+		return v.convertToInt64(int64(delta / unit)), nil
+	}
+	perDay := int64((24 * time.Hour) / unit)
+	scaled, ok := scaleInt64(int64(days), perDay)
+	if !ok {
+		return v, invalidUnitConversion(v, "DATE", "TIMESTAMP")
+	}
+	return v.convertToInt64(scaled), nil
 }
 
 func convertDateToString(v Value) (Value, error) {
@@ -1858,9 +1872,11 @@ func convertTimeNanosToString(v Value, tz *time.Location) (Value, error) {
 }
 
 func convertTimestampToDate(v Value, u format.TimeUnit, tz *time.Location) (Value, error) {
-	t := timestamp(v, u, tz)
-	d := daysSinceUnixEpoch(t)
-	return v.convertToInt32(int32(d)), nil
+	day, ok := epochDay(timestamp(v, u, tz))
+	if !ok {
+		return v, invalidUnitConversion(v, "TIMESTAMP", "DATE")
+	}
+	return v.convertToInt32(int32(day)), nil
 }
 
 func convertTimestampToTimeMillis(v Value, u format.TimeUnit, sourceZone, targetZone *time.Location) (Value, error) {
@@ -1885,16 +1901,66 @@ func convertTimestampToTimeNanos(v Value, u format.TimeUnit, sourceZone, targetZ
 }
 
 func convertTimestampToTimestamp(v Value, sourceUnit, targetUnit format.TimeUnit) (Value, error) {
-	sourceScale := timeUnitDuration(sourceUnit).Nanoseconds()
-	targetScale := timeUnitDuration(targetUnit).Nanoseconds()
-	targetValue := (v.int64() * sourceScale) / targetScale
-	return v.convertToInt64(targetValue), nil
+	target, ok := convertTimestampUnit(v.int64(), timeUnitDuration(sourceUnit), timeUnitDuration(targetUnit))
+	if !ok {
+		return v, invalidUnitConversion(v, "TIMESTAMP", "TIMESTAMP")
+	}
+	return v.convertToInt64(target), nil
+}
+
+// invalidUnitConversion formats an overflow. It stays out of line so the
+// success path of a unit conversion can still be inlined.
+//
+//go:noinline
+func invalidUnitConversion(v Value, from, to string) error {
+	return invalidConversion(v, from, to)
 }
 
 const nanosecondsPerDay = 24 * 60 * 60 * 1e9
 
+const secondsPerDay = 24 * 60 * 60
+
+// epochDay reports days from the Unix epoch to t.
+//
+// Instants within a time.Duration of the epoch keep the historical count,
+// int(duration.Hours())/24. That count truncates toward zero, so some
+// instants before the epoch do not land on their calendar day; those results
+// already ship and stay as they are. Instants past the Duration limits use
+// the calendar day when it fits in an int32. ok is false otherwise.
+func epochDay(t time.Time) (day int64, ok bool) {
+	sec := t.Unix()
+	// One second inside the largest Duration, so the subtraction below cannot
+	// saturate and the historical count is the one callers already observe.
+	const limit = int64(math.MaxInt64/int64(time.Second)) - 1
+	if sec > -limit && sec < limit {
+		return int64(int(t.Sub(unixEpoch).Hours()) / 24), true
+	}
+	d := t.Sub(unixEpoch)
+	if unixEpoch.Add(d).Equal(t) {
+		return int64(int(d.Hours()) / 24), true
+	}
+	day = floorDivInt64(sec, secondsPerDay)
+	if day > math.MaxInt32 || day < math.MinInt32 {
+		return 0, false
+	}
+	return day, true
+}
+
 func daysSinceUnixEpoch(t time.Time) int {
+	if day, ok := epochDay(t); ok {
+		return int(day)
+	}
+	// DATE cannot represent the day. Writes have no error to return, so keep
+	// the saturated Duration count they produced before.
 	return int(t.Sub(unixEpoch).Hours()) / 24
+}
+
+func floorDivInt64(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && a < 0 {
+		q--
+	}
+	return q
 }
 
 func nearestMidnightLessThan(t time.Time) time.Time {
@@ -1903,7 +1969,62 @@ func nearestMidnightLessThan(t time.Time) time.Time {
 }
 
 func timestamp(v Value, u format.TimeUnit, tz *time.Location) time.Time {
-	return unixEpoch.In(tz).Add(time.Duration(v.int64()) * timeUnitDuration(u))
+	n := v.int64()
+	var t time.Time
+	switch u.Value.(type) {
+	case *format.MilliSeconds:
+		t = time.UnixMilli(n)
+	case *format.MicroSeconds:
+		t = time.UnixMicro(n)
+	default:
+		t = time.Unix(0, n)
+	}
+	return t.In(tz)
+}
+
+// convertTimestampUnit scales v from one timestamp unit to another.
+// Fractions left by a coarser target are truncated toward zero.
+// ok is false when the units are empty or the scaled value does not fit in an int64.
+func convertTimestampUnit(v int64, from, to time.Duration) (int64, bool) {
+	fromScale := int64(from)
+	toScale := int64(to)
+	switch {
+	case fromScale <= 0 || toScale <= 0:
+		return 0, false
+	case fromScale == toScale:
+		return v, true
+	case fromScale > toScale && fromScale%toScale == 0:
+		return scaleInt64(v, fromScale/toScale)
+	case toScale%fromScale == 0:
+		return v / (toScale / fromScale), true
+	default:
+		return 0, false
+	}
+}
+
+// scaleInt64 returns v*factor. ok is false when factor is not positive or the
+// product does not fit in an int64. The common timestamp ratios are spelled
+// out so the overflow limits are constant comparisons.
+func scaleInt64(v, factor int64) (int64, bool) {
+	switch factor {
+	case 1:
+		return v, true
+	case 1_000:
+		if v > math.MaxInt64/1_000 || v < math.MinInt64/1_000 {
+			return 0, false
+		}
+		return v * 1_000, true
+	case 1_000_000:
+		if v > math.MaxInt64/1_000_000 || v < math.MinInt64/1_000_000 {
+			return 0, false
+		}
+		return v * 1_000_000, true
+	default:
+		if factor <= 0 || v > math.MaxInt64/factor || v < math.MinInt64/factor {
+			return 0, false
+		}
+		return v * factor, true
+	}
 }
 
 // timeUnitDuration returns the precision of unit, defaulting to nanoseconds
