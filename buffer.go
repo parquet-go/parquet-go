@@ -105,6 +105,8 @@ func (buf *GenericBuffer[T]) ColumnBuffers() []ColumnBuffer {
 	return buf.base.ColumnBuffers()
 }
 
+// SortingColumns returns the sorting columns that the buffer's rows are ordered
+// by. See Buffer.SortingColumns.
 func (buf *GenericBuffer[T]) SortingColumns() []SortingColumn {
 	return buf.base.SortingColumns()
 }
@@ -129,7 +131,15 @@ func (buf *GenericBuffer[T]) Write(rows []T) (int, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}
-	return buf.write(buf, rows)
+	n, err := buf.write(buf, rows)
+	if err != nil {
+		buf.base.order.clear()
+		return n, err
+	}
+	if n > 0 && (buf.base.order.inOrder || buf.base.order.sortStarted) {
+		buf.base.order.breakOnAppend(n, buf.base.length())
+	}
+	return n, nil
 }
 
 func (buf *GenericBuffer[T]) WriteRows(rows []Row) (int, error) {
@@ -195,6 +205,7 @@ type Buffer struct {
 	chunks  []ColumnChunk
 	columns []ColumnBuffer
 	sorted  []ColumnBuffer
+	order   rowOrder
 }
 
 // NewBuffer constructs a new buffer, using the given list of buffer options
@@ -329,21 +340,48 @@ func (buf *Buffer) ColumnBuffers() []ColumnBuffer { return buf.columns }
 // constructing the buffer, or lazily discovered when the first row is written.
 func (buf *Buffer) Schema() *Schema { return buf.schema }
 
-// SortingColumns returns the list of columns by which the buffer will be
-// sorted.
+// SortingColumns returns the sorting columns that the rows in the buffer are
+// ordered by.
 //
-// The sorting order is configured by passing a SortingColumns option when
-// constructing the buffer.
-func (buf *Buffer) SortingColumns() []SortingColumn { return buf.config.Sorting.SortingColumns }
+// The order is configured with SortingColumns when the buffer is created. The
+// configured columns are reported when the buffer is empty, holds a single
+// row, or the rows were ordered by sort.Sort or sort.Stable and have not been
+// modified since. Appending rows, or swapping rows outside of those sorts,
+// drops the reported order. Values written through ColumnBuffers are not
+// tracked. A buffer that was given sorting columns but whose rows are not in
+// that order reports none, so writers and merges do not describe unsorted
+// rows as sorted.
+func (buf *Buffer) SortingColumns() []SortingColumn {
+	cols := buf.config.Sorting.SortingColumns
+	if len(cols) == 0 {
+		return nil
+	}
+	if buf.length() <= 1 {
+		return cols
+	}
+	buf.order.observe(buf)
+	if !buf.order.inOrder {
+		return nil
+	}
+	return cols
+}
 
 // Len returns the number of rows written to the buffer.
 func (buf *Buffer) Len() int {
+	n := buf.length()
+	// No configured order to record. Skip the sort.Sort frame check.
+	if len(buf.config.Sorting.SortingColumns) > 0 {
+		buf.order.noteLen(n)
+	}
+	return n
+}
+
+func (buf *Buffer) length() int {
 	if len(buf.columns) == 0 {
 		return 0
-	} else {
-		// All columns have the same number of rows.
-		return buf.columns[0].Len()
 	}
+	// All columns have the same number of rows.
+	return buf.columns[0].Len()
 }
 
 // Less returns true if row[i] < row[j] in the buffer.
@@ -361,6 +399,7 @@ func (buf *Buffer) Less(i, j int) bool {
 
 // Swap exchanges the rows at indexes i and j.
 func (buf *Buffer) Swap(i, j int) {
+	buf.order.noteSwap()
 	for _, col := range buf.columns {
 		col.Swap(i, j)
 	}
@@ -371,6 +410,7 @@ func (buf *Buffer) Reset() {
 	for _, col := range buf.columns {
 		col.Reset()
 	}
+	buf.order.clear()
 }
 
 // Write writes a row held in a Go value to the buffer.
@@ -413,10 +453,14 @@ func (buf *Buffer) WriteRows(rows []Row) (int, error) {
 			// state since the row was partially written. Applications are not
 			// expected to continue using the buffer after getting an error,
 			// maybe we can enforce it?
+			buf.order.clear()
 			return 0, err
 		}
 	}
 
+	if len(rows) > 0 && (buf.order.inOrder || buf.order.sortStarted) {
+		buf.order.breakOnAppend(len(rows), buf.length())
+	}
 	return len(rows), nil
 }
 
@@ -431,14 +475,30 @@ func (buf *Buffer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 	case !EqualNodes(buf.schema, rowGroupSchema):
 		return 0, ErrRowGroupSchemaMismatch
 	}
-	if !sortingColumnsHavePrefix(rowGroup.SortingColumns(), buf.SortingColumns()) {
+	// The buffer keeps its configured columns even when SortingColumns withholds
+	// them because the rows are not in order yet. The source still has to be
+	// sorted by at least those columns.
+	configured := buf.config.Sorting.SortingColumns
+	if !sortingColumnsHavePrefix(rowGroup.SortingColumns(), configured) {
 		return 0, ErrRowGroupSortingColumnsMismatch
 	}
+	wasEmpty := buf.length() == 0
 	n := buf.NumRows()
 	r := rowGroup.Rows()
 	defer r.Close()
 	_, err := CopyRows(bufferWriter{buf}, r)
-	return buf.NumRows() - n, err
+	if err != nil {
+		buf.order.clear()
+		return buf.NumRows() - n, err
+	}
+	// Rows copied into an empty buffer stay in the source order.
+	if wasEmpty && len(configured) > 0 && sortingColumnsHavePrefix(rowGroup.SortingColumns(), configured) {
+		buf.order.inOrder = true
+		buf.order.sortStarted = false
+	} else if buf.length() > 1 {
+		buf.order.clear()
+	}
+	return buf.NumRows() - n, nil
 }
 
 // Rows returns a reader exposing the current content of the buffer.
@@ -478,6 +538,71 @@ var (
 	_ PageWriter  = (*bufferWriter)(nil)
 	_ ValueWriter = (*bufferWriter)(nil)
 )
+
+// rowOrder records whether a buffer's rows follow its configured sorting
+// columns. Empty and single-row buffers are ordered without this flag.
+//
+// sort.Sort and sort.Stable call Len before they reorder. Swaps, including
+// the ones those sorts perform, clear inOrder. The next SortingColumns call
+// confirms the finished sort once via sort.IsSorted and caches the result so
+// later calls do not walk the rows. Appending rows clears the record.
+type rowOrder struct {
+	inOrder     bool
+	sortStarted bool
+}
+
+func (o *rowOrder) noteLen(n int) {
+	if n <= 1 || o.sortStarted {
+		return
+	}
+	if sortEntryOnStack() {
+		o.sortStarted = true
+	}
+}
+
+func (o *rowOrder) noteSwap() {
+	if o.inOrder {
+		o.inOrder = false
+	}
+}
+
+// breakOnAppend clears a previously established order. Callers skip it unless
+// inOrder or sortStarted is set, so the extra length read stays off the
+// unsorted write path. One row written into an empty buffer stays ordered.
+func (o *rowOrder) breakOnAppend(n, lenAfter int) {
+	if n > 1 || (n > 0 && lenAfter > n) {
+		o.clear()
+	}
+}
+
+func (o *rowOrder) observe(data sort.Interface) {
+	if !o.sortStarted {
+		return
+	}
+	if !o.inOrder {
+		o.inOrder = sort.IsSorted(data)
+	}
+	o.sortStarted = false
+}
+
+func (o *rowOrder) clear() { *o = rowOrder{} }
+
+// sortEntryOnStack reports whether Len was reached from sort.Sort or sort.Stable.
+func sortEntryOnStack() bool {
+	var pcs [8]uintptr
+	n := runtime.Callers(1, pcs[:])
+	for i := range n {
+		fn := runtime.FuncForPC(pcs[i])
+		if fn == nil {
+			continue
+		}
+		switch fn.Name() {
+		case "sort.Sort", "sort.Stable":
+			return true
+		}
+	}
+	return false
+}
 
 type buffer[T memory.Datum] struct {
 	data  memory.SliceBuffer[T]

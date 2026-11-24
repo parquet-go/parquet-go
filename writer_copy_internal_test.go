@@ -1682,6 +1682,9 @@ func TestWriteRowGroupSortingColumns(t *testing.T) {
 							if _, err := rowBuffer.Write(rows); err != nil {
 								t.Fatal(err)
 							}
+							// The rows were copied already sorted. SortingColumns
+							// reports that order only after a sort of this buffer.
+							sort.Sort(rowBuffer)
 							input = rowBuffer
 						} else if source == "copy" || source == "split" {
 							input = writeCopyTestFile(t, rows, SortingWriterConfig(SortingColumns(test.columns...))).RowGroups()[0]
