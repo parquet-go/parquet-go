@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -200,6 +201,74 @@ func TestWriterEncryptionFollowsSpec(t *testing.T) {
 	ef := openSchemeBytes(t, enc.Bytes(), schemeKeys{footer: footerKey})
 	if n := encryptedFooterPadding(t, enc.Bytes(), footerKey, ef.aadPrefix, ef.fileUnique); n != 0 {
 		t.Fatalf("encrypted footer plaintext has %d trailing bytes", n)
+	}
+}
+
+func TestEncryptionPlaintextFooterMetadataReuse(t *testing.T) {
+	keys := schemeKeys{
+		footer:  bytes.Repeat([]byte{0x31}, 16),
+		columns: map[string][]byte{"name": bytes.Repeat([]byte{0x32}, 16)},
+	}
+	var buf bytes.Buffer
+	w := NewGenericWriter[schemeRow](&buf,
+		WithEncryption(&EncryptionConfig{
+			FooterKey:  keys.footer,
+			ColumnKeys: keys.columns,
+		}),
+		Compression(&Gzip),
+	)
+	rows := []schemeRow{{Name: "alpha", Value: 1}, {Name: "beta", Value: 2}}
+	for file := range 3 {
+		if file > 0 {
+			buf.Reset()
+			w.Reset(&buf)
+		}
+		if _, err := w.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(rows[:1]); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		plain, _ := plaintextFooterAndSignature(t, buf.Bytes())
+		var footer format.FileMetaData
+		if err := thrift.Unmarshal(&thrift.CompactProtocol{}, plain, &footer); err != nil {
+			t.Fatal(err)
+		}
+		for i, rg := range footer.RowGroups {
+			for j, c := range rg.Columns {
+				if !reflect.DeepEqual(c.MetaData, format.ColumnMetaData{}) || len(c.EncryptedColumnMetadata) == 0 {
+					t.Errorf("file %d row group %d column %d: plaintext metadata not hidden", file, i, j)
+				}
+			}
+		}
+
+		f := openSchemeBytes(t, buf.Bytes(), keys)
+		if len(f.Metadata().RowGroups) != 2 {
+			t.Fatalf("row groups = %d, want 2", len(f.Metadata().RowGroups))
+		}
+		for i, rg := range f.Metadata().RowGroups {
+			for j, want := range []struct {
+				typ      format.Type
+				path     []string
+				encoding []format.Encoding
+			}{
+				{format.ByteArray, []string{"name"}, []format.Encoding{format.Plain, format.RLEDictionary}},
+				{format.Int64, []string{"value"}, []format.Encoding{format.Plain}},
+			} {
+				m := rg.Columns[j].MetaData
+				if m.Type != want.typ || m.Codec != format.Gzip || !slices.Equal(m.PathInSchema, want.path) || !slices.Equal(m.Encoding, want.encoding) {
+					t.Errorf("file %d row group %d column %d: metadata Type=%v Codec=%v PathInSchema=%v Encoding=%v, want %v GZIP %v %v",
+						file, i, j, m.Type, m.Codec, m.PathInSchema, m.Encoding, want.typ, want.path, want.encoding)
+				}
+			}
+		}
 	}
 }
 
