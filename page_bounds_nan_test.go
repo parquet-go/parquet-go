@@ -313,6 +313,78 @@ func TestWriterStatisticsAllNaN(t *testing.T) {
 	}
 }
 
+// TestWriterStatisticsExcludeNaNPages verifies that a page holding only NaN
+// values does not hide the bounds of the other pages in the column chunk.
+func TestWriterStatisticsExcludeNaNPages(t *testing.T) {
+	type Record struct {
+		FloatVal      float32 `parquet:"float_val"`
+		DoubleVal     float64 `parquet:"double_val"`
+		DictDoubleVal float64 `parquet:"dict_double_val,dict"`
+	}
+
+	nan := math.NaN()
+	tests := []struct {
+		name  string
+		pages [][]float64
+	}{
+		{name: "nan_page_first", pages: [][]float64{{nan, nan, nan, nan}, {3, 1, 2, 4}}},
+		{name: "nan_page_first_then_narrower", pages: [][]float64{{nan, nan, nan, nan}, {1, 4, 1, 4}, {2, 3, 3, 2}}},
+		{name: "nan_page_between", pages: [][]float64{{3, 2, 2, 3}, {nan, nan, nan, nan}, {1, 4, 1, 4}}},
+		{name: "nan_page_last", pages: [][]float64{{3, 1, 2, 4}, {nan, nan, nan, nan}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			w := NewGenericWriter[Record](buf, PageBufferSize(16))
+			for _, page := range test.pages {
+				records := make([]Record, len(page))
+				for i, v := range page {
+					records[i] = Record{FloatVal: float32(v), DoubleVal: v, DictDoubleVal: v}
+				}
+				if _, err := w.Write(records); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for i, col := range f.Metadata().RowGroups[0].Columns {
+				name := col.MetaData.PathInSchema[len(col.MetaData.PathInSchema)-1]
+				offsetIndex, err := f.RowGroups()[0].ColumnChunks()[i].OffsetIndex()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n := offsetIndex.NumPages(); n != len(test.pages) {
+					t.Fatalf("%s: wrote %d pages, want %d", name, n, len(test.pages))
+				}
+
+				stats := col.MetaData.Statistics
+				if stats.MinValue == nil || stats.MaxValue == nil {
+					t.Fatalf("%s: expected non-nil min/max statistics", name)
+				}
+				var minVal, maxVal float64
+				if name == "float_val" {
+					minVal = float64(Float.Value(stats.MinValue).Float())
+					maxVal = float64(Float.Value(stats.MaxValue).Float())
+				} else {
+					minVal = Double.Value(stats.MinValue).Double()
+					maxVal = Double.Value(stats.MaxValue).Double()
+				}
+				if minVal != 1 || maxVal != 4 {
+					t.Errorf("%s: min/max = %v/%v, want 1/4", name, minVal, maxVal)
+				}
+			}
+		})
+	}
+}
+
 func TestWriterDictionaryStatisticsExcludeNaN(t *testing.T) {
 	type Record struct {
 		FloatVal  float32 `parquet:"float_val,dict"`

@@ -2863,7 +2863,8 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 				existingMinValue = c.columnType.Kind().Value(c.columnChunk.MetaData.Statistics.MinValue)
 			}
 
-			if existingMaxValue.isNull() || c.columnType.Compare(maxValue, existingMaxValue) > 0 {
+			// A NaN bound comes from an all-NaN page, so later pages may replace it.
+			if existingMaxValue.isNull() || isNaN(existingMaxValue) || c.columnType.Compare(maxValue, existingMaxValue) > 0 {
 				buf := c.columnChunk.MetaData.Statistics.MaxValue[:0]
 				// if maxValue is empty string, c.columnChunk.MetaData.Statistics.MaxValue should be []bytes{}, but nil
 				if buf == nil && maxValue.Kind() == ByteArray && len(maxValue.ByteArray()) == 0 {
@@ -2875,7 +2876,7 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 				}
 			}
 
-			if existingMinValue.isNull() || c.columnType.Compare(minValue, existingMinValue) < 0 {
+			if existingMinValue.isNull() || isNaN(existingMinValue) || c.columnType.Compare(minValue, existingMinValue) < 0 {
 				buf := c.columnChunk.MetaData.Statistics.MinValue[:0]
 				// same as above
 				if buf == nil && minValue.Kind() == ByteArray && len(minValue.ByteArray()) == 0 {
