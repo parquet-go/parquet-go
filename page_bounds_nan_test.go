@@ -385,6 +385,173 @@ func TestWriterStatisticsExcludeNaNPages(t *testing.T) {
 	}
 }
 
+// TestWriterStatisticsFloat16ExcludeNaNPages is the FLOAT16 form of
+// TestWriterStatisticsExcludeNaNPages. An all-NaN page still stores NaN page
+// bounds, and the FLOAT16 comparison reports those as unordered, so a NaN
+// page written first used to keep NaN column chunk bounds for the rest of
+// the chunk.
+func TestWriterStatisticsFloat16ExcludeNaNPages(t *testing.T) {
+	negNaN := float16Bytes(0xFE00) // negative NaN, stored as the page bound
+	sigNaN := float16Bytes(0x7C01) // signaling NaN
+	neg4 := float16Bytes(0xC400)   // -4
+	neg2 := float16Bytes(0xC000)   // -2
+	one := float16Bytes(0x3C00)    // 1
+	four := float16Bytes(0x4400)   // 4
+	posInf := float16Bytes(0x7C00) // +Inf
+
+	nanPage := [][]byte{negNaN, sigNaN, negNaN, sigNaN}
+	wide := [][]byte{neg4, one, four, neg2}
+	narrow := [][]byte{neg2, one, one, neg2}
+	infPage := [][]byte{posInf, posInf, posInf, posInf}
+
+	tests := []struct {
+		name    string
+		pages   [][][]byte
+		wantMin []byte
+		wantMax []byte
+		wantNaN bool
+	}{
+		{name: "nan_page_first", pages: [][][]byte{nanPage, wide}, wantMin: neg4, wantMax: four},
+		{name: "nan_page_first_then_narrower", pages: [][][]byte{nanPage, wide, narrow}, wantMin: neg4, wantMax: four},
+		{name: "nan_page_first_then_wider", pages: [][][]byte{nanPage, narrow, wide}, wantMin: neg4, wantMax: four},
+		{name: "nan_page_between", pages: [][][]byte{wide, nanPage, narrow}, wantMin: neg4, wantMax: four},
+		{name: "nan_page_last", pages: [][][]byte{wide, nanPage}, wantMin: neg4, wantMax: four},
+		{name: "inf_page_first", pages: [][][]byte{infPage, wide}, wantMin: neg4, wantMax: posInf},
+		{name: "all_nan_pages", pages: [][][]byte{nanPage, nanPage}, wantNaN: true},
+	}
+
+	dictEncoding := RLEDictionary
+	schemas := []struct {
+		name       string
+		schema     *Schema
+		bufferSize int
+	}{
+		{name: "plain", schema: NewSchema("row", Group{"v": Leaf(float16Type{})}), bufferSize: 8},
+		{name: "dict", schema: NewSchema("row", Group{"v": Encoded(Leaf(float16Type{}), &dictEncoding)}), bufferSize: 16},
+	}
+
+	for _, schema := range schemas {
+		t.Run(schema.name, func(t *testing.T) {
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					f := writePagedValues(t, schema.schema, schema.bufferSize, test.pages)
+					chunk := f.RowGroups()[0].ColumnChunks()[0]
+					offsetIndex, err := chunk.OffsetIndex()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if n := offsetIndex.NumPages(); n != len(test.pages) {
+						t.Fatalf("wrote %d pages, want %d", n, len(test.pages))
+					}
+
+					stats := f.Metadata().RowGroups[0].Columns[0].MetaData.Statistics
+					if stats.MinValue == nil || stats.MaxValue == nil {
+						t.Fatal("expected non-nil min/max statistics")
+					}
+					min, max, ok := chunk.(*FileColumnChunk).Bounds()
+					if test.wantNaN {
+						if ok {
+							t.Fatal("Bounds ok = true, want false for an all-NaN chunk")
+						}
+						if !binary16NaN(stats.MinValue) || !binary16NaN(stats.MaxValue) {
+							t.Fatalf("stats = %x/%x, want NaN bounds", stats.MinValue, stats.MaxValue)
+						}
+					} else if !ok || !bytes.Equal(stats.MinValue, test.wantMin) || !bytes.Equal(stats.MaxValue, test.wantMax) || !bytes.Equal(min.ByteArray(), test.wantMin) || !bytes.Equal(max.ByteArray(), test.wantMax) {
+						t.Fatalf("chunk bounds = stats %x/%x Bounds (%x, %x, %v), want %x/%x", stats.MinValue, stats.MaxValue, min.ByteArray(), max.ByteArray(), ok, test.wantMin, test.wantMax)
+					}
+
+					index, err := chunk.ColumnIndex()
+					if err != nil {
+						t.Fatal(err)
+					}
+					for i, page := range test.pages {
+						wantNaN := pageIsBinary16NaN(page)
+						gotNaN := binary16NaN(index.MinValue(i).ByteArray()) && binary16NaN(index.MaxValue(i).ByteArray())
+						if gotNaN != wantNaN {
+							t.Errorf("page %d NaN bounds = %v, want %v (%x/%x)", i, gotNaN, wantNaN, index.MinValue(i).ByteArray(), index.MaxValue(i).ByteArray())
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestWriterStatisticsFixedLenNaNBitPatternKeepsChunkBounds guards the
+// FLOAT16 NaN check from applying to every 2-byte fixed value. 0x7e00 is a
+// binary16 NaN and a legal FIXED_LEN_BYTE_ARRAY value; a later page must not
+// replace it unless the unsigned byte order says so.
+func TestWriterStatisticsFixedLenNaNBitPatternKeepsChunkBounds(t *testing.T) {
+	nanBits := []byte{0x00, 0x7e}
+	lo := []byte{0x00, 0x10}
+	hi := []byte{0x01, 0x00}
+	nanPage := [][]byte{nanBits, nanBits, nanBits, nanBits}
+	schema := NewSchema("row", Group{"v": Leaf(FixedLenByteArrayType(2))})
+
+	tests := []struct {
+		name    string
+		pages   [][][]byte
+		wantMin []byte
+		wantMax []byte
+	}{
+		{name: "later_page_below", pages: [][][]byte{nanPage, {lo, lo, lo, lo}}, wantMin: lo, wantMax: nanBits},
+		{name: "later_page_above", pages: [][][]byte{nanPage, {hi, hi, hi, hi}}, wantMin: nanBits, wantMax: hi},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := writePagedValues(t, schema, 8, test.pages)
+			chunk := f.RowGroups()[0].ColumnChunks()[0]
+			offsetIndex, err := chunk.OffsetIndex()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := offsetIndex.NumPages(); n != len(test.pages) {
+				t.Fatalf("wrote %d pages, want %d", n, len(test.pages))
+			}
+			stats := f.Metadata().RowGroups[0].Columns[0].MetaData.Statistics
+			min, max, ok := chunk.(*FileColumnChunk).Bounds()
+			if !ok || !bytes.Equal(stats.MinValue, test.wantMin) || !bytes.Equal(stats.MaxValue, test.wantMax) || !bytes.Equal(min.ByteArray(), test.wantMin) || !bytes.Equal(max.ByteArray(), test.wantMax) {
+				t.Fatalf("chunk bounds = stats %x/%x Bounds (%x, %x, %v), want %x/%x", stats.MinValue, stats.MaxValue, min.ByteArray(), max.ByteArray(), ok, test.wantMin, test.wantMax)
+			}
+		})
+	}
+}
+
+func pageIsBinary16NaN(page [][]byte) bool {
+	if len(page) == 0 {
+		return false
+	}
+	for _, v := range page {
+		if !binary16NaN(v) {
+			return false
+		}
+	}
+	return true
+}
+
+func writePagedValues(t *testing.T, schema *Schema, pageBufferSize int, pages [][][]byte) *File {
+	t.Helper()
+	var buf bytes.Buffer
+	w := NewWriter(&buf, schema, PageBufferSize(pageBufferSize))
+	for _, page := range pages {
+		rows := make([]Row, len(page))
+		for i, v := range page {
+			rows[i] = Row{FixedLenByteArrayValue(v).Level(0, 0, 0)}
+		}
+		if _, err := w.WriteRows(rows); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
 func TestWriterDictionaryStatisticsExcludeNaN(t *testing.T) {
 	type Record struct {
 		FloatVal  float32 `parquet:"float_val,dict"`
