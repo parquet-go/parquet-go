@@ -50,12 +50,7 @@ type filterRowWriter struct {
 }
 
 func (f *filterRowWriter) WriteRows(rows []Row) (n int, err error) {
-	defer func() {
-		clear := f.rows[:]
-		for i := range clear {
-			clearValues(clear[i])
-		}
-	}()
+	defer clear(f.rows[:])
 
 	for n < len(rows) {
 		i := 0
