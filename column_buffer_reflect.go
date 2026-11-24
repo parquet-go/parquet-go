@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -1073,7 +1074,30 @@ func writeInterval(col ColumnBuffer, levels columnLevels, iv Interval) {
 }
 
 func decimalValue(col ColumnBuffer, levels columnLevels, typ Type, value reflect.Value, scale int32) {
-	val := int64(math.Round(value.Float() * math.Pow10(int(scale))))
+	f := value.Float()
+	if typ.Kind() == FixedLenByteArray {
+		// Fixed-length columns scale with big.Float so integers wider than
+		// int64 keep their low digits. The int64 conversion below is unused
+		// on this path.
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			// SetFloat64 panics on NaN, and Float.Int returns nil for
+			// infinities. The int32, int64, and byte-array paths store
+			// floatToDecimalInt64 instead, which is MinInt64 for every
+			// non-finite input where that conversion yields the indefinite
+			// integer.
+			writeFixedWidthInt64(col, levels, typ.Length(), floatToDecimalInt64(f, scale))
+			return
+		}
+		s := borrowDecimalFloatScratch()
+		defer decimalFloatScratchPool.Put(s)
+		// A fresh Float has precision 0, and SetFloat64 then selects 53.
+		// Clear a reused scratch so it takes that same path.
+		s.input.SetPrec(0)
+		s.input.SetFloat64(f)
+		encodeBigFloat(col, levels, &s.input, typ, s)
+		return
+	}
+	val := floatToDecimalInt64(f, scale)
 	switch typ.Kind() {
 	case Int32:
 		col.writeInt32(levels, int32(val))
@@ -1081,9 +1105,11 @@ func decimalValue(col ColumnBuffer, levels columnLevels, typ Type, value reflect
 		col.writeInt64(levels, val)
 	case ByteArray:
 		col.writeByteArray(levels, numberToByteArray(val))
-	case FixedLenByteArray:
-		writeBigFloat(col, levels, new(big.Float).SetFloat64(value.Float()), typ)
 	}
+}
+
+func floatToDecimalInt64(f float64, scale int32) int64 {
+	return int64(math.Round(f * math.Pow10(int(scale))))
 }
 
 func numberToByteArray(data any) []byte {
@@ -1095,7 +1121,44 @@ func numberToByteArray(data any) []byte {
 	return buf.Bytes()
 }
 
+type decimalFloatScratch struct {
+	input    big.Float
+	scale    big.Float
+	scaled   big.Float
+	half     big.Float
+	ten      big.Int
+	exp      big.Int
+	pow      big.Int
+	unscaled big.Int
+	raw      []byte
+	fixed    []byte
+}
+
+var decimalFloatScratchPool sync.Pool
+
+func borrowDecimalFloatScratch() *decimalFloatScratch {
+	if v := decimalFloatScratchPool.Get(); v != nil {
+		return v.(*decimalFloatScratch)
+	}
+	return &decimalFloatScratch{}
+}
+
 func writeBigFloat(col ColumnBuffer, levels columnLevels, f *big.Float, typ Type) {
+	if typ.Kind() == FixedLenByteArray && f.IsInf() {
+		sign := 1
+		if f.Sign() < 0 {
+			sign = -1
+		}
+		// Same integer the float64 path stores for an infinity of this sign.
+		writeFixedWidthInt64(col, levels, typ.Length(), int64(math.Inf(sign)))
+		return
+	}
+	s := borrowDecimalFloatScratch()
+	defer decimalFloatScratchPool.Put(s)
+	encodeBigFloat(col, levels, f, typ, s)
+}
+
+func encodeBigFloat(col ColumnBuffer, levels columnLevels, f *big.Float, typ Type, s *decimalFloatScratch) {
 	decimal, ok := logicalTypeOf[*format.DecimalType](typ.LogicalType())
 	if !ok {
 		panic("writeBigFloat requires a decimal logical type")
@@ -1106,47 +1169,105 @@ func writeBigFloat(col ColumnBuffer, levels columnLevels, f *big.Float, typ Type
 	// We use precision * 4 + 64 for safety margin
 	minPrec := uint(decimal.Precision)*4 + 64
 	prec := max(f.Prec(), minPrec)
-	scaleFactor := new(big.Float).SetPrec(prec)
-	scaleFactor.SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil))
-	scaled := new(big.Float).SetPrec(prec).Mul(f, scaleFactor)
+	s.ten.SetInt64(10)
+	s.exp.SetInt64(int64(scale))
+	s.pow.Exp(&s.ten, &s.exp, nil)
+	s.scale.SetPrec(prec)
+	s.scale.SetInt(&s.pow)
+	s.scaled.SetPrec(prec)
+	s.scaled.Mul(f, &s.scale)
 	// Round to nearest integer (add 0.5 and truncate for positive, subtract 0.5 for negative)
-	half := new(big.Float).SetPrec(prec).SetFloat64(0.5)
-	if scaled.Sign() >= 0 {
-		scaled.Add(scaled, half)
+	s.half.SetPrec(prec)
+	s.half.SetFloat64(0.5)
+	if s.scaled.Sign() >= 0 {
+		s.scaled.Add(&s.scaled, &s.half)
 	} else {
-		scaled.Sub(scaled, half)
+		s.scaled.Sub(&s.scaled, &s.half)
 	}
-	unscaled, _ := scaled.Int(nil)
+	unscaled, _ := s.scaled.Int(&s.unscaled)
+	if unscaled == nil {
+		if typ.Kind() == FixedLenByteArray {
+			sign := 1
+			if s.scaled.Sign() < 0 {
+				sign = -1
+			}
+			writeFixedWidthInt64(col, levels, typ.Length(), int64(math.Inf(sign)))
+			return
+		}
+		panic("writeBigFloat: non-finite decimal value")
+	}
 
-	b := bigIntToByteArray(unscaled)
+	b := bigIntToByteArray(s.raw, unscaled)
+	s.raw = b
 	if typ.Kind() == FixedLenByteArray {
-		b = padToFixedLen(b, typ.Length(), unscaled.Sign() < 0)
+		out := padToFixedLen(s.fixed, b, typ.Length(), unscaled.Sign() < 0)
+		if len(b) != typ.Length() {
+			s.fixed = out
+		}
+		b = out
 	}
 	col.writeByteArray(levels, b)
 }
 
-func bigIntToByteArray(i *big.Int) []byte {
-	if i.Sign() >= 0 {
-		b := i.Bytes()
-		// Add leading zero byte if high bit is set to avoid being interpreted as negative
-		if len(b) > 0 && b[0]&0x80 != 0 {
-			b = append([]byte{0}, b...)
+// writeFixedWidthInt64 stores value as big-endian two's complement of exactly
+// width bytes. Wider columns are sign-extended. Narrower columns keep the low
+// bytes, matching int32(value) when width is 4.
+func writeFixedWidthInt64(col ColumnBuffer, levels columnLevels, width int, value int64) {
+	var stack [16]byte
+	var buf []byte
+	if width > len(stack) {
+		buf = make([]byte, width)
+	} else {
+		buf = stack[:width]
+	}
+	if width > 8 && value < 0 {
+		for i := range width - 8 {
+			buf[i] = 0xFF
 		}
-		return b
 	}
-	// Negative: convert to two's complement
-	// Get the absolute value bytes
-	abs := new(big.Int).Abs(i)
-	b := abs.Bytes()
-	// Add a leading zero byte to ensure we have room for sign
-	if len(b) == 0 || b[0]&0x80 != 0 {
-		b = append([]byte{0}, b...)
+	var tmp [8]byte
+	binary.BigEndian.PutUint64(tmp[:], uint64(value))
+	if width >= 8 {
+		copy(buf[width-8:], tmp[:])
+	} else {
+		copy(buf, tmp[8-width:])
 	}
-	// Invert all bits
+	col.writeByteArray(levels, buf)
+}
+
+func bigIntToByteArray(dst []byte, i *big.Int) []byte {
+	if i.Sign() >= 0 {
+		if i.BitLen() == 0 {
+			return dst[:0]
+		}
+		n := (i.BitLen() + 7) / 8
+		// A bit length that is a multiple of 8 means the high bit is set.
+		// A leading zero keeps the value from being read as negative.
+		extra := 0
+		if i.BitLen()%8 == 0 {
+			extra = 1
+		}
+		dst = growBytes(dst, n+extra)
+		i.FillBytes(dst[extra : extra+n])
+		if extra == 1 {
+			dst[0] = 0
+		}
+		return dst[:n+extra]
+	}
+	// Negative: two's complement of the absolute value. A leading zero is
+	// added when the high bit is set so the inverted form stays negative,
+	// except where padToFixedLen drops that byte as redundant sign extension.
+	n := (i.BitLen() + 7) / 8
+	dst = growBytes(dst, n+1)
+	i.FillBytes(dst[1 : 1+n])
+	b := dst[1 : 1+n]
+	if b[0]&0x80 != 0 {
+		dst[0] = 0
+		b = dst[:1+n]
+	}
 	for j := range b {
 		b[j] = ^b[j]
 	}
-	// Add 1
 	carry := byte(1)
 	for j := len(b) - 1; j >= 0 && carry > 0; j-- {
 		sum := b[j] + carry
@@ -1155,25 +1276,43 @@ func bigIntToByteArray(i *big.Int) []byte {
 			carry = 0
 		}
 	}
-	return b
+	if len(b) > 0 && &b[0] != &dst[0] {
+		copy(dst, b)
+	}
+	return dst[:len(b)]
 }
 
-func padToFixedLen(b []byte, length int, negative bool) []byte {
-	if len(b) == length {
-		return b
-	}
-	if len(b) > length {
+func padToFixedLen(dst, b []byte, length int, negative bool) []byte {
+	// Drop redundant sign extension before deciding the value does not fit.
+	// -2^(8*k-1) is encoded with an extra 0xFF, but its minimal form is k
+	// bytes starting with 0x80 and does fit a column of that width.
+	origLen := len(b)
+	for len(b) > length {
+		if len(b) > 1 && ((b[0] == 0xFF && b[1]&0x80 != 0) || (b[0] == 0x00 && b[1]&0x80 == 0)) {
+			b = b[1:]
+			continue
+		}
 		panic(fmt.Sprintf("decimal value requires %d bytes but fixed length is %d", len(b), length))
 	}
+	if len(b) == length && origLen == length {
+		return b
+	}
+	dst = growBytes(dst, length)
 	padByte := byte(0x00)
 	if negative {
 		padByte = 0xFF
 	}
-	result := make([]byte, length)
 	padding := length - len(b)
 	for i := range padding {
-		result[i] = padByte
+		dst[i] = padByte
 	}
-	copy(result[padding:], b)
-	return result
+	copy(dst[padding:], b)
+	return dst
+}
+
+func growBytes(b []byte, n int) []byte {
+	if cap(b) < n {
+		return make([]byte, n)
+	}
+	return b[:n]
 }
