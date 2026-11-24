@@ -55,7 +55,6 @@ func TestConvertTimestampToDateAndTime(t *testing.T) {
 		time.Date(2500, 6, 15, 12, 34, 56, 789_000_000, time.UTC),
 	}
 	for _, when := range cases {
-		when := when
 		ms := when.UnixMilli()
 		t.Run(when.Format(time.RFC3339Nano), func(t *testing.T) {
 			instant := time.UnixMilli(ms).UTC()
@@ -158,16 +157,9 @@ func TestConvertDateToTimestampRange(t *testing.T) {
 	days = append(days, year2500, math.MaxInt32)
 
 	for _, unit := range units {
-		unit := unit
 		perDay := int64((24 * time.Hour) / unit.Duration())
-		limit := int64(math.MaxInt64) / perDay
-		if limit > math.MaxInt32 {
-			limit = math.MaxInt32
-		}
-		floor := int64(math.MinInt64) / perDay
-		if floor < math.MinInt32 {
-			floor = math.MinInt32
-		}
+		limit := min(int64(math.MaxInt64)/perDay, math.MaxInt32)
+		floor := max(int64(math.MinInt64)/perDay, math.MinInt32)
 		days := append(append([]int32{}, days...), int32(limit), int32(floor))
 		if limit < math.MaxInt32 {
 			days = append(days, int32(limit)+1)
