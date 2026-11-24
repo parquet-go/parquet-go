@@ -309,13 +309,13 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 							return nil, fmt.Errorf("reading bloom filter data: %w", err)
 						}
 						// Create bloom filter using in-memory data.
-						bf, err := newBloomFilter(bytes.NewReader(bloomData), 0, &header)
+						bf, err := newBloomFilter(bytes.NewReader(bloomData), 0, &header, f.compressionCodecs())
 						if err != nil {
 							return nil, fmt.Errorf("reading bloom filter: %w", err)
 						}
 						cc.bloomFilter.Store(bf)
 					} else {
-						bf, err := newBloomFilter(f, offset, &header)
+						bf, err := newBloomFilter(f, offset, &header, f.compressionCodecs())
 						if err != nil {
 							return nil, fmt.Errorf("reading bloom filter: %w", err)
 						}
@@ -1226,7 +1226,7 @@ func (c *FileColumnChunk) readBloomFilter(reader io.ReaderAt) (*FileBloomFilter,
 		if err != nil {
 			return nil, fmt.Errorf("decrypting bloom filter bitset: %w", err)
 		}
-		filter = newBloomFilterFromBytes(&header, bitsPlain)
+		filter = newBloomFilterFromBytes(&header, bitsPlain, c.file.compressionCodecs())
 	} else {
 		compact := thrift.CompactProtocol{}
 		decoder := thrift.NewDecoder(compact.NewReader(rbuf))
@@ -1236,7 +1236,7 @@ func (c *FileColumnChunk) readBloomFilter(reader io.ReaderAt) (*FileBloomFilter,
 		sectionPos, _ := section.Seek(0, io.SeekCurrent)
 		dataOffset := offset + sectionPos - int64(rbuf.Buffered())
 		var err error
-		filter, err = newBloomFilter(reader, dataOffset, &header)
+		filter, err = newBloomFilter(reader, dataOffset, &header, c.file.compressionCodecs())
 		if err != nil {
 			return nil, fmt.Errorf("reading bloom filter: %w", err)
 		}

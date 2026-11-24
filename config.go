@@ -576,7 +576,8 @@ func FileSchema(schema *Schema) FileOption {
 }
 
 // FileCompressionCodecs sets the codecs that the pages of a file are
-// decompressed with. Each codec replaces, for this file only, the
+// decompressed with. Gzip-compressed bloom filters use the gzip codec
+// from this list. Each codec replaces, for this file only, the
 // default codec of the same kind (the one its CompressionCodec method
 // returns). Kinds that are not given use the codecs that
 // LookupCompressionCodec returns. When two codecs are of the same
