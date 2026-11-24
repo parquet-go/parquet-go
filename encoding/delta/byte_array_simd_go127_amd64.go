@@ -192,12 +192,6 @@ func storeUint8x16(v archsimd.Uint8x16, b []byte, i int) {
 	v.StoreArray((*[16]uint8)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(b)), i)))
 }
 
-// decodeByteArrayAVX2 is the assembly reconstruction. The archsimd copy
-// loop was slower on the prefix-heavy page.
-
-//go:noescape
-func decodeByteArrayAVX2(dst, src []byte, prefix, suffix []int32) int
-
 // decodeByteArray128SIMD is the specialization for fixed length 16 bytes
 // values: the previous value stays in a vector register across iterations.
 func decodeByteArray128SIMD(dst, src []byte, prefix, suffix []int32) int {
