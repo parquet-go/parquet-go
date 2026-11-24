@@ -3,6 +3,7 @@ package parquet_test
 import (
 	"bytes"
 	"io"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -380,6 +381,68 @@ func TestEqualTypes(t *testing.T) {
 					test.type2.Kind(), test.type2.Length(), test.type2.LogicalType())
 			}
 		})
+	}
+}
+
+func TestTimestampAssignValueRange(t *testing.T) {
+	for _, test := range []struct {
+		unit  parquet.TimeUnit
+		scale int64
+		want  func(int64) time.Time
+	}{
+		{parquet.Millisecond, int64(time.Millisecond), time.UnixMilli},
+		{parquet.Microsecond, int64(time.Microsecond), time.UnixMicro},
+		{parquet.Nanosecond, int64(time.Nanosecond), func(v int64) time.Time { return time.Unix(0, v) }},
+	} {
+		typ := parquet.Timestamp(test.unit).Type()
+		t.Run(typ.String(), func(t *testing.T) {
+			values := []int64{math.MinInt64, math.MinInt64 + 1, -1, 0, 1, math.MaxInt64 - 1, math.MaxInt64}
+			if test.scale > 1 {
+				values = append(values,
+					math.MinInt64/test.scale-1, math.MinInt64/test.scale, math.MinInt64/test.scale+1,
+					math.MaxInt64/test.scale-1, math.MaxInt64/test.scale, math.MaxInt64/test.scale+1,
+				)
+			}
+			for _, v := range values {
+				want := test.want(v).UTC()
+				var value time.Time
+				var pointer *time.Time
+				for _, dst := range []any{&value, &pointer} {
+					if err := typ.AssignValue(reflect.ValueOf(dst).Elem(), parquet.Int64Value(v)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if value != want || pointer == nil || *pointer != want {
+					t.Fatalf("timestamp %d: value=%v pointer=%v, want %v", v, value, pointer, want)
+				}
+			}
+		})
+	}
+}
+
+func TestTimestampRangeRoundTrip(t *testing.T) {
+	type Row struct {
+		Millis        time.Time  `parquet:"millis,timestamp(millisecond)"`
+		Micros        time.Time  `parquet:"micros,timestamp(microsecond)"`
+		MillisPointer *time.Time `parquet:"millis_pointer,timestamp(millisecond)"`
+		MicrosPointer *time.Time `parquet:"micros_pointer,timestamp(microsecond)"`
+	}
+	for _, year := range []int{1, 1500, 1970, 2500, 9999} {
+		date := time.Date(year, 1, 1, 0, 0, 0, 123456789, time.UTC)
+		rows := []Row{{date, date, &date, &date}}
+		var buf bytes.Buffer
+		if err := parquet.Write(&buf, rows); err != nil {
+			t.Fatal(err)
+		}
+		got, err := parquet.Read[Row](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		millis, micros := date.Truncate(time.Millisecond), date.Truncate(time.Microsecond)
+		want := []Row{{millis, micros, &millis, &micros}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("year %d: read timestamps = %v, want %v", year, got, want)
+		}
 	}
 }
 
