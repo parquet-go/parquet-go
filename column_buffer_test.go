@@ -31,6 +31,22 @@ func TestBroadcastRangeInt32(t *testing.T) {
 	}
 }
 
+// The AVX2 tail used to store base*(i+1). base==1 hides that, which is all
+// TestBroadcastRangeInt32 covers. Length 9 leaves one element for the tail.
+func TestBroadcastRangeInt32Tail(t *testing.T) {
+	for _, base := range []int32{-3, 0, 1, 42} {
+		for _, n := range []int{0, 1, 7, 8, 9, 17, 100} {
+			buf := make([]int32, n)
+			broadcastRangeInt32(buf, base)
+			for i, got := range buf {
+				if want := base + int32(i); got != want {
+					t.Fatalf("base=%d len=%d: buf[%d]=%d, want %d", base, n, i, got, want)
+				}
+			}
+		}
+	}
+}
+
 func BenchmarkBroadcastValueInt32(b *testing.B) {
 	buf := make([]int32, 1000)
 	for b.Loop() {
@@ -43,6 +59,14 @@ func BenchmarkBroadcastRangeInt32(b *testing.B) {
 	buf := make([]int32, 1000)
 	for b.Loop() {
 		broadcastRangeInt32(buf, 0)
+	}
+	b.SetBytes(4 * int64(len(buf)))
+}
+
+func BenchmarkBroadcastRangeInt32Tail(b *testing.B) {
+	buf := make([]int32, 1009)
+	for b.Loop() {
+		broadcastRangeInt32(buf, -3)
 	}
 	b.SetBytes(4 * int64(len(buf)))
 }
