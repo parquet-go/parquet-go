@@ -137,7 +137,7 @@ func MultiHashUint32Array(hashes []uintptr, values sparse.Uint32Array, seed uint
 			archsimd.ClearAVXUpperBits()
 		}
 	}
-	for ; i < len(hashes); i++ {
+	for ; i < n; i++ {
 		hashes[i] = hash32(values.Index(i), seed, k0, k1, k2)
 	}
 }
@@ -174,7 +174,7 @@ func MultiHashUint64Array(hashes []uintptr, values sparse.Uint64Array, seed uint
 			archsimd.ClearAVXUpperBits()
 		}
 	}
-	for ; i < len(hashes); i++ {
+	for ; i < n; i++ {
 		hashes[i] = hash64(values.Index(i), seed, k0, k1, k2)
 	}
 }
@@ -185,8 +185,9 @@ func MultiHashUint128Array(hashes []uintptr, values sparse.Uint128Array, seed ui
 	// Load the values directly from the strided array: going through the
 	// [16]byte copy that Index returns adds a stack round trip on every
 	// element, which defeats store forwarding.
+	n := min(len(hashes), values.Len())
 	a := values.UnsafeArray()
-	for i := range hashes {
+	for i := range n {
 		v := (*[16]uint8)(a.Index(i))
 		hashes[i] = hash128(archsimd.LoadUint8x16Slice(v[:]), scrambled)
 	}
