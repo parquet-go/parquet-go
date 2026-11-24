@@ -1008,6 +1008,7 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagRep
 	col, _ := schema.Lookup(path...)
 	unit := Nanosecond.TimeUnit()
 	lt := col.Node.Type().LogicalType()
+	_, isDate := logicalTypeOf[*format.DateType](lt)
 	if ts, ok := logicalTypeOf[*format.TimestampType](lt); ok {
 		unit = ts.Unit
 	}
@@ -1038,18 +1039,27 @@ func writeRowsFuncOfTime(_ reflect.Type, schema *Schema, path columnPath, tagRep
 		defer wideIntBufPool.Put(buf)
 
 		times := rows.TimeArray()
-		switch unit.Value.(type) {
-		case *format.MilliSeconds:
+		switch {
+		case isDate:
+			// DATE is a day count. Nanoseconds since the epoch do not fit in
+			// int32, and do not fit in int64 nanoseconds for distant dates.
 			for i := range n {
-				buf.values[i] = times.Index(i).UnixMilli()
-			}
-		case *format.MicroSeconds:
-			for i := range n {
-				buf.values[i] = times.Index(i).UnixMicro()
+				buf.values[i] = int64(daysSinceUnixEpoch(times.Index(i)))
 			}
 		default:
-			for i := range n {
-				buf.values[i] = times.Index(i).UnixNano()
+			switch unit.Value.(type) {
+			case *format.MilliSeconds:
+				for i := range n {
+					buf.values[i] = times.Index(i).UnixMilli()
+				}
+			case *format.MicroSeconds:
+				for i := range n {
+					buf.values[i] = times.Index(i).UnixMicro()
+				}
+			default:
+				for i := range n {
+					buf.values[i] = times.Index(i).UnixNano()
+				}
 			}
 		}
 

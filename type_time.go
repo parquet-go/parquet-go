@@ -270,10 +270,12 @@ func (t *timeType) EstimateDecodeSize(numValues int, src []byte, enc encoding.En
 }
 
 func (t *timeType) AssignValue(dst reflect.Value, src Value) error {
-	// Handle time.Duration specially to convert from the stored time unit to nanoseconds
+	// Handle time.Duration specially to convert from the stored time unit to nanoseconds.
 	if dst.Type() == reflect.TypeFor[time.Duration]() {
-		v := src.int64()
-		nanos := v * int64(timeUnitDuration(t.Unit))
+		nanos, ok := scaleInt64(src.int64(), int64(timeUnitDuration(t.Unit)))
+		if !ok {
+			return invalidUnitConversion(src, "TIME", "DURATION")
+		}
 		dst.SetInt(nanos)
 		return nil
 	}
