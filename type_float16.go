@@ -143,6 +143,27 @@ func binary16NaN(b []byte) bool {
 	return u&0x7c00 == 0x7c00 && u&0x03ff != 0
 }
 
+// float16ChunkBoundIsNaN reports whether v is a binary16 NaN stored as a
+// FLOAT16 column chunk bound. isNaN only recognizes FLOAT and DOUBLE, and
+// Compare returns 0 when either FLOAT16 value is NaN, so an all-NaN page
+// written first would otherwise keep NaN chunk bounds. Dictionary columns
+// wrap the same type. Other fixed-length types share the physical kind and
+// must keep ordering those bytes.
+func float16ChunkBoundIsNaN(typ Type, v Value) bool {
+	if v.Kind() != FixedLenByteArray {
+		return false
+	}
+	switch t := typ.(type) {
+	case float16Type:
+		return binary16NaN(v.ByteArray())
+	case *indexedType:
+		if _, ok := t.Type.(float16Type); ok {
+			return binary16NaN(v.ByteArray())
+		}
+	}
+	return false
+}
+
 // float16FormatIndexHasNaN reports whether a FLOAT16 column's stored index
 // has a NaN endpoint. Other fixed-length types reuse the same physical kind,
 // so the caller passes the column type.

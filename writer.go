@@ -2864,7 +2864,10 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 			}
 
 			// A NaN bound comes from an all-NaN page, so later pages may replace it.
-			if existingMaxValue.isNull() || isNaN(existingMaxValue) || c.columnType.Compare(maxValue, existingMaxValue) > 0 {
+			// isNaN covers FLOAT and DOUBLE. FLOAT16 compares NaN as unordered,
+			// so it needs its own check or the NaN bound stays for the rest of
+			// the chunk.
+			if existingMaxValue.isNull() || isNaN(existingMaxValue) || float16ChunkBoundIsNaN(c.columnType, existingMaxValue) || c.columnType.Compare(maxValue, existingMaxValue) > 0 {
 				buf := c.columnChunk.MetaData.Statistics.MaxValue[:0]
 				// if maxValue is empty string, c.columnChunk.MetaData.Statistics.MaxValue should be []bytes{}, but nil
 				if buf == nil && maxValue.Kind() == ByteArray && len(maxValue.ByteArray()) == 0 {
@@ -2876,7 +2879,7 @@ func (c *ColumnWriter) recordPageStats(headerSize int32, header *format.PageHead
 				}
 			}
 
-			if existingMinValue.isNull() || isNaN(existingMinValue) || c.columnType.Compare(minValue, existingMinValue) < 0 {
+			if existingMinValue.isNull() || isNaN(existingMinValue) || float16ChunkBoundIsNaN(c.columnType, existingMinValue) || c.columnType.Compare(minValue, existingMinValue) < 0 {
 				buf := c.columnChunk.MetaData.Statistics.MinValue[:0]
 				// same as above
 				if buf == nil && minValue.Kind() == ByteArray && len(minValue.ByteArray()) == 0 {
