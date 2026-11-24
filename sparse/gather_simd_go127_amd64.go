@@ -10,12 +10,14 @@ import (
 	"simd/archsimd"
 
 	"github.com/parquet-go/bitpack/unsafecast"
+
+	"golang.org/x/sys/cpu"
 )
 
-// Dense strides are a contiguous copy (or a vector compare + ToBits for
-// gatherBits). Strided gather32 and gatherBits use the VPGATHER assembly:
-// archsimd does not expose gathers, and those walks were slower than the
-// assembly. gather64's scalar walk still beats VPGATHERQQ, so it stays in Go.
+// Dense gatherBits is a vector compare. Strided gather32 and gatherBits use
+// the same VPGATHER dispatch as the assembly build. gather64 stays a scalar
+// walk, which still beats VPGATHERQQ. Dense gather64 and gather128 are a
+// contiguous copy.
 
 func gatherBitsDefault(dst []byte, src Uint8Array) {
 	n := src.Len() / 8
@@ -71,26 +73,15 @@ func gatherBits(dst []byte, src Uint8Array) int {
 			binary.LittleEndian.PutUint64(dst[i/8:], m)
 		}
 		archsimd.ClearAVXUpperBits()
-	} else if k := (n / 8) * 8; k > 0 && src.off >= 4 && archsimd.X86.AVX2() {
-		// VPGATHERDD needs 4 bytes of padding at each index. This is the
-		// strided case the scalar walk below loses to the assembly.
-		gatherBitsAVX2(dst, src.Slice(0, k))
-		i = k
 	}
-	if k := (n / 8) * 8; i < k {
-		base := src.index(i)
-		off := src.off
-		for j := 0; i+8 <= k; i += 8 {
-			p := unsafe.Add(base, uintptr(j)*off)
-			dst[i/8] = (*(*byte)(p) & 1) |
-				((*(*byte)(unsafe.Add(p, off)) & 1) << 1) |
-				((*(*byte)(unsafe.Add(p, 2*off)) & 1) << 2) |
-				((*(*byte)(unsafe.Add(p, 3*off)) & 1) << 3) |
-				((*(*byte)(unsafe.Add(p, 4*off)) & 1) << 4) |
-				((*(*byte)(unsafe.Add(p, 5*off)) & 1) << 5) |
-				((*(*byte)(unsafe.Add(p, 6*off)) & 1) << 6) |
-				((*(*byte)(unsafe.Add(p, 7*off)) & 1) << 7)
-			j += 8
+	// Strided input uses the same VPGATHER dispatch as the assembly build.
+	// VPGATHERDD needs 4 bytes of padding at each index.
+	if i == 0 && n >= 8 {
+		i = (n / 8) * 8
+		if src.off >= 4 && cpu.X86.HasAVX2 {
+			gatherBitsAVX2(dst, src.Slice(0, i))
+		} else {
+			gatherBitsDefault(dst, src.Slice(0, i))
 		}
 	}
 	for i < n {
@@ -105,34 +96,14 @@ func gatherBits(dst []byte, src Uint8Array) int {
 
 func gather32(dst []uint32, src Uint32Array) int {
 	n := min(len(dst), src.Len())
-	if n == 0 {
-		return 0
-	}
-	p := src.index(0)
-	off := src.off
-	if off == 4 {
-		copy(dst[:n], unsafe.Slice((*uint32)(p), n))
-		return n
-	}
-	if n >= 16 && archsimd.X86.AVX2() {
-		i := (n / 8) * 8
+	i := 0
+	if n >= 16 && cpu.X86.HasAVX2 {
+		i = (n / 8) * 8
 		gather32AVX2(dst[:i:i], src)
-		for ; i < n; i++ {
-			dst[i] = src.Index(i)
-		}
-		return n
 	}
-	c := unsafecast.Slice[[4]uint32](dst[:n])
-	for j := range c {
-		q := unsafe.Add(p, uintptr(4*j)*off)
-		d := &c[j]
-		d[0] = *(*uint32)(q)
-		d[1] = *(*uint32)(unsafe.Add(q, off))
-		d[2] = *(*uint32)(unsafe.Add(q, 2*off))
-		d[3] = *(*uint32)(unsafe.Add(q, 3*off))
-	}
-	for i := len(c) * 4; i < n; i++ {
-		dst[i] = *(*uint32)(unsafe.Add(p, uintptr(i)*off))
+	for i < n {
+		dst[i] = src.Index(i)
+		i++
 	}
 	return n
 }

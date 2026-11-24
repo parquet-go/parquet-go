@@ -83,6 +83,7 @@ func validatePrefixAndSuffixLengthValuesSIMD(prefix, suffix []int32, maxLength i
 var (
 	rotate1x8x32Delta = [8]uint32{7, 0, 1, 2, 3, 4, 5, 6}
 	lastLane8x32Delta = [8]uint32{7, 7, 7, 7, 7, 7, 7, 7}
+	laneIndexes       = [8]int32{0, 1, 2, 3, 4, 5, 6, 7}
 )
 
 // searchPrefixLengthSIMD returns the length of the longest common prefix of
@@ -110,8 +111,9 @@ func searchPrefixLengthSIMD(base, data []byte) int {
 
 func searchPrefixLength(base, data []byte) int {
 	// Below 128 bytes the word scan is faster. At 500 bytes the vector
-	// compare is about half the time.
-	if archsimd.X86.AVX2() && min(len(base), len(data)) >= 128 {
+	// compare is about half the time. The length test is first so a short
+	// input does not pay for the feature check.
+	if min(len(base), len(data)) >= 128 && archsimd.X86.AVX2() {
 		return searchPrefixLengthSIMD(base, data)
 	}
 	return wordSearchPrefixLength(base, data)
