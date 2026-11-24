@@ -21,6 +21,29 @@ func BenchmarkConvertTimestampMicrosToMillis(b *testing.B) {
 	benchmarkConvertTimestamp(b, parquet.Microsecond, parquet.Millisecond, 1_670_888_613_123_456)
 }
 
+func BenchmarkConvertTimeMicrosToMillis(b *testing.B) {
+	benchmarkConvertTime(b, parquet.Microsecond, parquet.Millisecond, int64(12*time.Hour/time.Microsecond))
+}
+
+func BenchmarkConvertTimeNanosToMillis(b *testing.B) {
+	benchmarkConvertTime(b, parquet.Nanosecond, parquet.Millisecond, int64(12*time.Hour))
+}
+
+func BenchmarkConvertTimeMillisToMicros(b *testing.B) {
+	benchmarkConvertTime(b, parquet.Millisecond, parquet.Microsecond, int64(12*time.Hour/time.Millisecond))
+}
+
+func BenchmarkConvertTimeMicrosToNanos(b *testing.B) {
+	benchmarkConvertTime(b, parquet.Microsecond, parquet.Nanosecond, int64(12*time.Hour/time.Microsecond))
+}
+
+func benchmarkConvertTime(b *testing.B, fromUnit, toUnit parquet.TimeUnit, seed int64) {
+	b.Helper()
+	from := parquet.Time(fromUnit).Type()
+	to := parquet.Time(toUnit).Type()
+	benchmarkConvertValues(b, to, from, timestampBenchValues(seed))
+}
+
 func BenchmarkConvertTimestampToDate(b *testing.B) {
 	from := parquet.Timestamp(parquet.Millisecond).Type()
 	to := parquet.Date().Type()
