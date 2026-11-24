@@ -40,9 +40,10 @@ type File struct {
 	config        *FileConfig
 
 	// Decryption state; non-nil when the file has encryption metadata.
-	decryption *DecryptionConfig
-	fileUnique []byte // AadFileUnique from encryption algorithm
-	aadPrefix  []byte // AadPrefix from encryption algorithm
+	decryption        *DecryptionConfig
+	footerKeyMetadata []byte // retrieval metadata retained independently of the footer buffer
+	fileUnique        []byte // AadFileUnique from encryption algorithm
+	aadPrefix         []byte // AadPrefix from encryption algorithm
 	// legacyModules is set when a module authenticates with the AAD parquet-go
 	// wrote before the spec module-type fix. Later modules then skip the spec attempt.
 	legacyModules atomic.Bool
@@ -175,6 +176,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 			return nil, fmt.Errorf("reading parquet file metadata from decrypted footer: %w", err)
 		}
 		f.decryption = c.Decryption
+		f.footerKeyMetadata = bytes.Clone(cryptoMeta.KeyMetadata)
 		f.fileUnique = fileUnique
 		f.aadPrefix = aadPrefix
 		f.ctrPages = ctrPages
@@ -216,6 +218,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 				f.legacyModules.Store(true)
 			}
 			f.decryption = c.Decryption
+			f.footerKeyMetadata = bytes.Clone(f.metadata.FooterSigningKeyMetadata)
 			f.fileUnique = fileUnique
 			f.aadPrefix = aadPrefix
 			f.ctrPages = ctrPages
@@ -458,7 +461,7 @@ func (f *File) ReadPageIndex() ([]format.ColumnIndex, []format.OffsetIndex, erro
 		}
 		switch crypto := c.CryptoMetadata.Value.(type) {
 		case *format.EncryptionWithFooterKey:
-			return f.decryption.Keys.FooterKey(nil)
+			return f.decryption.Keys.FooterKey(f.footerKeyMetadata)
 		case *format.EncryptionWithColumnKey:
 			return f.decryption.Keys.ColumnKey(crypto.PathInSchema, crypto.KeyMetadata)
 		default:
@@ -648,7 +651,7 @@ func (f *File) decryptAllColumnMetadata() error {
 			switch crypto := chunk.CryptoMetadata.Value.(type) {
 			case *format.EncryptionWithFooterKey:
 				var err error
-				key, err = f.decryption.Keys.FooterKey(nil)
+				key, err = f.decryption.Keys.FooterKey(f.footerKeyMetadata)
 				if err != nil {
 					return fmt.Errorf("resolving footer key for column metadata: %w", err)
 				}
@@ -800,7 +803,7 @@ func (g *FileRowGroup) init(file *File, columns []*Column, rowGroup *format.RowG
 		if file.decryption != nil {
 			switch crypto := chunk.CryptoMetadata.Value.(type) {
 			case *format.EncryptionWithFooterKey:
-				key, err := file.decryption.Keys.FooterKey(nil)
+				key, err := file.decryption.Keys.FooterKey(file.footerKeyMetadata)
 				if err != nil {
 					return fmt.Errorf("resolving footer key for column %q: %w", columnPathString(columns[i].Path()), err)
 				}
