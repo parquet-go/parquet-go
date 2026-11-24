@@ -673,6 +673,72 @@ func TestEncryptionPartialColumnKeysOpenFile(t *testing.T) {
 	}
 }
 
+func TestEncryptionPartialColumnKeysBloomFilter(t *testing.T) {
+	footerKey := aes128Key(0xA1)
+	for _, encryptedFooter := range []bool{false, true} {
+		var buf bytes.Buffer
+		w := parquet.NewGenericWriter[encryptionTestRow](&buf,
+			parquet.WithEncryption(&parquet.EncryptionConfig{
+				FooterKey:       footerKey,
+				ColumnKeys:      map[string][]byte{"name": aes128Key(0xA2)},
+				EncryptedFooter: encryptedFooter,
+			}),
+			parquet.BloomFilters(parquet.SplitBlockFilter(10, "name")),
+		)
+		if _, err := w.Write(testRows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, prefetch := range []bool{false, true} {
+			t.Run(fmt.Sprintf("encryptedFooter=%t/prefetch=%t", encryptedFooter, prefetch), func(t *testing.T) {
+				keys := &partialKeyRetriever{footerKey: footerKey}
+				f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()),
+					parquet.WithDecryption(keys), parquet.PrefetchBloomFilters(prefetch))
+				if err != nil {
+					t.Fatalf("OpenFile with partial keys should succeed, got: %v", err)
+				}
+
+				type projection struct {
+					Value int64 `parquet:"value"`
+				}
+				r := parquet.NewGenericReader[projection](f)
+				defer r.Close()
+				got := make([]projection, len(testRows))
+				n, err := r.Read(got)
+				if err != nil && err != io.EOF {
+					t.Fatalf("read accessible column: %v", err)
+				}
+				if n != len(testRows) {
+					t.Fatalf("read accessible column: got %d rows, want %d", n, len(testRows))
+				}
+				for i, row := range testRows {
+					if got[i].Value != row.Value {
+						t.Errorf("accessible column row %d: got %d, want %d", i, got[i].Value, row.Value)
+					}
+				}
+
+				name := f.RowGroups()[0].ColumnChunks()[0]
+				bf := name.BloomFilter()
+				if bf == nil {
+					t.Fatal("missing-key column: expected bloom filter")
+				}
+				if _, err := bf.Check(parquet.ValueOf(testRows[0].Name)); !errors.Is(err, parquet.ErrKeyNotFound) {
+					t.Errorf("missing-key bloom filter: got %v, want ErrKeyNotFound", err)
+				}
+				pages := name.Pages()
+				defer pages.Close()
+				if page, err := pages.ReadPage(); !errors.Is(err, parquet.ErrKeyNotFound) {
+					parquet.Release(page)
+					t.Errorf("missing-key pages: got %v, want ErrKeyNotFound", err)
+				}
+			})
+		}
+	}
+}
+
 // TestEncryptionRealColumnKeyErrorSurfaced verifies that a non-ErrKeyNotFound
 // error from ColumnKey is returned by OpenFile rather than silently swallowed.
 // The bug: all ColumnKey errors were treated as "key missing" and suppressed,
