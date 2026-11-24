@@ -9,21 +9,20 @@ import (
 	"simd/archsimd"
 
 	"github.com/parquet-go/bitpack/unsafecast"
+
+	"golang.org/x/sys/cpu"
 )
 
-// The functions in this file are simd/archsimd replacements for some of the
-// kernels dispatched through the function variables of rle_amd64.go (assembly
-// builds) or rle_purego.go (purego builds). The BMI2 bit-packing kernels have
-// no archsimd equivalent (PDEP/PEXT are not exposed) and keep their default
-// dispatch.
-//
-// The override is safe in both builds: package variable initializers run
-// before all init functions, and Go compiles the files of a package in file
-// name order, so this init runs after the one in rle_amd64.go.
+// The functions in this file are simd/archsimd replacements for the byte
+// bit-packing kernels. They need AVX-512 VBMI. Without VBMI, BMI2 PDEP/PEXT
+// stays installed. That assembly is faster than the scalar default.
 func init() {
-	if archsimd.X86.AVX512() && archsimd.X86.AVX512VBMI() {
+	switch {
+	case archsimd.X86.AVX512() && archsimd.X86.AVX512VBMI():
 		encodeBytesBitpack = encodeBytesBitpackSIMD
 		decodeBytesBitpack = decodeBytesBitpackSIMD
+	case cpu.X86.HasBMI2:
+		useBytesBitpackBMI2()
 	}
 }
 

@@ -12,11 +12,16 @@ func init() {
 	if archsimd.X86.AVX2() {
 		encodeInt32IndexEqual8Contiguous = encodeInt32IndexEqual8ContiguousAVX2
 		// The archsimd int32 packer is slower at every width the benchmark
-		// measures. The bytes packer stays in Go.
+		// measures.
 		encodeInt32Bitpack = encodeInt32BitpackAVX2
 	} else {
 		encodeInt32IndexEqual8Contiguous = encodeInt32IndexEqual8ContiguousSSE
 	}
+}
+
+func useBytesBitpackBMI2() {
+	encodeBytesBitpack = encodeBytesBitpackBMI2
+	decodeBytesBitpack = decodeBytesBitpackBMI2
 }
 
 func encodeInt32BitpackAVX2(dst []byte, src [][8]int32, bitWidth uint) int {
