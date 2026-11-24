@@ -109,7 +109,9 @@ func searchPrefixLengthSIMD(base, data []byte) int {
 }
 
 func searchPrefixLength(base, data []byte) int {
-	if archsimd.X86.AVX2() && min(len(base), len(data)) >= 32 {
+	// Below 128 bytes the word scan is faster. At 500 bytes the vector
+	// compare is about half the time.
+	if archsimd.X86.AVX2() && min(len(base), len(data)) >= 128 {
 		return searchPrefixLengthSIMD(base, data)
 	}
 	return wordSearchPrefixLength(base, data)
@@ -190,45 +192,11 @@ func storeUint8x16(v archsimd.Uint8x16, b []byte, i int) {
 	v.StoreArray((*[16]uint8)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(b)), i)))
 }
 
-// decodeByteArraySIMD reconstructs values by copying prefixes and suffixes
-// in unconditional 32 bytes chunks (over-copying into the padding the
-// callers reserve). The caller guarantees at least padding bytes of suffix
-// data remain in src past the region processed here, making the 32 bytes
-// source loads safe.
-//
-// The loop advances raw pointer cursors instead of byte indexes: deriving
-// each access from base+index costs an extra LEA per operation, which made
-// the generated loop ~1.7x the instruction count of the equivalent
-// hand-written assembly.
-func decodeByteArraySIMD(dst, src []byte, prefix, suffix []int32) int {
-	suffix = suffix[:len(prefix)]
-	pd := unsafe.Pointer(unsafe.SliceData(dst))
-	ps := unsafe.Pointer(unsafe.SliceData(src))
-	pl := pd
-	for k := range prefix {
-		p := uintptr(uint32(prefix[k]))
-		n := uintptr(uint32(suffix[k]))
-		valueOffset := pd
-		archsimd.LoadUint8x32Array((*[32]uint8)(pl)).StoreArray((*[32]uint8)(pd))
-		if p > 32 {
-			for m := uintptr(32); m < p; m += 32 {
-				archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(pl, m))).StoreArray((*[32]uint8)(unsafe.Add(pd, m)))
-			}
-		}
-		pd = unsafe.Add(pd, p)
-		archsimd.LoadUint8x32Array((*[32]uint8)(ps)).StoreArray((*[32]uint8)(pd))
-		if n > 32 {
-			for m := uintptr(32); m < n; m += 32 {
-				archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(ps, m))).StoreArray((*[32]uint8)(unsafe.Add(pd, m)))
-			}
-		}
-		pd = unsafe.Add(pd, n)
-		ps = unsafe.Add(ps, n)
-		pl = valueOffset
-	}
-	archsimd.ClearAVXUpperBits()
-	return int(uintptr(pd) - uintptr(unsafe.Pointer(unsafe.SliceData(dst))))
-}
+// decodeByteArrayAVX2 is the assembly reconstruction. The archsimd copy
+// loop was slower on the prefix-heavy page.
+
+//go:noescape
+func decodeByteArrayAVX2(dst, src []byte, prefix, suffix []int32) int
 
 // decodeByteArray128SIMD is the specialization for fixed length 16 bytes
 // values: the previous value stays in a vector register across iterations.
@@ -283,7 +251,7 @@ func decodeByteArray(dst, src []byte, prefix, suffix []int32, offsets []uint32) 
 		}
 
 		if k > 0 && n >= padding {
-			i = decodeByteArraySIMD(dst, src, prefix[:k], suffix[:k])
+			i = decodeByteArrayAVX2(dst, src, prefix[:k], suffix[:k])
 			j = len(src) - n
 			lastValue = dst[i-(int(prefix[k-1])+int(suffix[k-1])):]
 			prefix = prefix[k:]
@@ -333,7 +301,7 @@ func decodeFixedLenByteArray(dst, src []byte, size int, prefix, suffix []int32) 
 			if size == 16 {
 				i = decodeByteArray128SIMD(dst, src, prefix[:k], suffix[:k])
 			} else {
-				i = decodeByteArraySIMD(dst, src, prefix[:k], suffix[:k])
+				i = decodeByteArrayAVX2(dst, src, prefix[:k], suffix[:k])
 			}
 			j = len(src) - n
 			prefix = prefix[k:]

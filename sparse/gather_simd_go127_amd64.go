@@ -12,16 +12,10 @@ import (
 	"github.com/parquet-go/bitpack/unsafecast"
 )
 
-// GOEXPERIMENT=simd implies purego semantics: no assembly at all. The
-// gather kernels are tiered within pure Go — a dense stride is a
-// contiguous copy (or a vector compare + ToBits for gatherBits), and other
-// strides walk chunk pointers derived from the base 4 elements per
-// iteration (the prove pass cannot derive dst[i+3] from i+4 <= len, and
-// checkptr forbids advancing a pointer past the final element). The
-// assembly used VPGATHER, which archsimd does not expose; hardware gathers
-// beat these walks on cache resident strided data, which is the documented
-// cost of the no-assembly build — except gather64, where the scalar walk
-// beats VPGATHERQQ outright.
+// Dense strides are a contiguous copy (or a vector compare + ToBits for
+// gatherBits). Strided gather32 and gatherBits use the VPGATHER assembly:
+// archsimd does not expose gathers, and those walks were slower than the
+// assembly. gather64's scalar walk still beats VPGATHERQQ, so it stays in Go.
 
 func gatherBitsDefault(dst []byte, src Uint8Array) {
 	n := src.Len() / 8
@@ -77,6 +71,11 @@ func gatherBits(dst []byte, src Uint8Array) int {
 			binary.LittleEndian.PutUint64(dst[i/8:], m)
 		}
 		archsimd.ClearAVXUpperBits()
+	} else if k := (n / 8) * 8; k > 0 && src.off >= 4 && archsimd.X86.AVX2() {
+		// VPGATHERDD needs 4 bytes of padding at each index. This is the
+		// strided case the scalar walk below loses to the assembly.
+		gatherBitsAVX2(dst, src.Slice(0, k))
+		i = k
 	}
 	if k := (n / 8) * 8; i < k {
 		base := src.index(i)
@@ -113,6 +112,14 @@ func gather32(dst []uint32, src Uint32Array) int {
 	off := src.off
 	if off == 4 {
 		copy(dst[:n], unsafe.Slice((*uint32)(p), n))
+		return n
+	}
+	if n >= 16 && archsimd.X86.AVX2() {
+		i := (n / 8) * 8
+		gather32AVX2(dst[:i:i], src)
+		for ; i < n; i++ {
+			dst[i] = src.Index(i)
+		}
 		return n
 	}
 	c := unsafecast.Slice[[4]uint32](dst[:n])

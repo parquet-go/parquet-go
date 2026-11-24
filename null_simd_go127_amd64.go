@@ -95,6 +95,12 @@ func nullIndex32(bits *uint64, rows sparse.Array) {
 	off := uintptr(4)
 	if n > 1 {
 		off = uintptr(rows.Index(1)) - uintptr(rows.Index(0))
+		// VPGATHERDD beats the scalar walk on strided rows. The dense
+		// stride stays on the vector compare below.
+		if off != 4 {
+			nullIndexGather32(bits, rows)
+			return
+		}
 	}
 	i := 0
 	if off == 4 && archsimd.X86.AVX512() {
@@ -152,6 +158,13 @@ func nullIndex64(bits *uint64, rows sparse.Array) {
 	off := uintptr(8)
 	if n > 1 {
 		off = uintptr(rows.Index(1)) - uintptr(rows.Index(0))
+		// VPGATHERQQ beats the scalar walk on strided rows. string and
+		// slice headers call nullIndexGather64 directly. The dense stride
+		// stays on the vector compare below.
+		if off != 8 {
+			nullIndexGather64(bits, rows)
+			return
+		}
 	}
 	i := 0
 	if off == 8 && archsimd.X86.AVX512() {

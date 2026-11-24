@@ -741,8 +741,8 @@ Go 1.26 compiles the original `simd/archsimd` API (`LoadUint8x64Slice`,
 `ConcatShiftBytesRight`, `ConcatPermuteScalars` (formerly `SelectFromPair`),
 and the per-lane shifts, so the Go 1.27 kernels live in sibling files gated
 `go1.27`. Kernels that were slower than the assembly on Go 1.27 stay on that
-assembly; `broadcastRangeInt32` is the exception, because the assembly tail
-computes `base*(i+1)`. A build without `GOEXPERIMENT=simd` is unchanged.
+assembly, including `broadcastRangeInt32`. A build without `GOEXPERIMENT=simd`
+is unchanged.
 
 ## Maintenance
 

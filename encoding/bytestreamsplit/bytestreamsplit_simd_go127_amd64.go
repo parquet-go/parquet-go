@@ -55,16 +55,6 @@ var (
 		6, 14, 22, 30, 38, 46, 54, 62,
 		7, 15, 23, 31, 39, 47, 55, 63,
 	}
-	bssDecGroup8 = [64]uint8{
-		0, 8, 16, 24, 32, 40, 48, 56,
-		1, 9, 17, 25, 33, 41, 49, 57,
-		2, 10, 18, 26, 34, 42, 50, 58,
-		3, 11, 19, 27, 35, 43, 51, 59,
-		4, 12, 20, 28, 36, 44, 52, 60,
-		5, 13, 21, 29, 37, 45, 53, 61,
-		6, 14, 22, 30, 38, 46, 54, 62,
-		7, 15, 23, 31, 39, 47, 55, 63,
-	}
 	bssBlkLo4  = [16]uint32{0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23}
 	bssBlkHi4  = [16]uint32{8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31}
 	bssHalfLo4 = [16]uint32{0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23}
@@ -236,60 +226,6 @@ func encodeDouble(dst, src []byte) {
 			b5[j] = byte(v >> 40)
 			b6[j] = byte(v >> 48)
 			b7[j] = byte(v >> 56)
-		}
-	}
-}
-
-func decodeDouble(dst, src []byte) {
-	n := len(src) / 8
-	i := 0
-	if archsimd.X86.AVX512() && archsimd.X86.AVX512VBMI() && n >= 64 {
-		g := archsimd.LoadUint8x64(bssDecGroup8[:])
-		lo1 := archsimd.LoadUint64x8(bssQLo1[:])
-		hi1 := archsimd.LoadUint64x8(bssQHi1[:])
-		lo2 := archsimd.LoadUint64x8(bssQLo2[:])
-		hi2 := archsimd.LoadUint64x8(bssQHi2[:])
-		lo3 := archsimd.LoadUint64x8(bssQLo3[:])
-		hi3 := archsimd.LoadUint64x8(bssQHi3[:])
-		for ; i+64 <= n; i += 64 {
-			p0 := archsimd.LoadUint8x64(src[0*n+i : 0*n+i+64]).AsUint64x8()
-			p1 := archsimd.LoadUint8x64(src[1*n+i : 1*n+i+64]).AsUint64x8()
-			p2 := archsimd.LoadUint8x64(src[2*n+i : 2*n+i+64]).AsUint64x8()
-			p3 := archsimd.LoadUint8x64(src[3*n+i : 3*n+i+64]).AsUint64x8()
-			p4 := archsimd.LoadUint8x64(src[4*n+i : 4*n+i+64]).AsUint64x8()
-			p5 := archsimd.LoadUint8x64(src[5*n+i : 5*n+i+64]).AsUint64x8()
-			p6 := archsimd.LoadUint8x64(src[6*n+i : 6*n+i+64]).AsUint64x8()
-			p7 := archsimd.LoadUint8x64(src[7*n+i : 7*n+i+64]).AsUint64x8()
-			o0, o1, o2, o3, o4, o5, o6, o7 := transpose8x8Q(p0, p1, p2, p3, p4, p5, p6, p7, lo1, hi1, lo2, hi2, lo3, hi3)
-			o0.AsUint8x64().Permute(g).Store(dst[8*i+0 : 8*i+64])
-			o1.AsUint8x64().Permute(g).Store(dst[8*i+64 : 8*i+128])
-			o2.AsUint8x64().Permute(g).Store(dst[8*i+128 : 8*i+192])
-			o3.AsUint8x64().Permute(g).Store(dst[8*i+192 : 8*i+256])
-			o4.AsUint8x64().Permute(g).Store(dst[8*i+256 : 8*i+320])
-			o5.AsUint8x64().Permute(g).Store(dst[8*i+320 : 8*i+384])
-			o6.AsUint8x64().Permute(g).Store(dst[8*i+384 : 8*i+448])
-			o7.AsUint8x64().Permute(g).Store(dst[8*i+448 : 8*i+512])
-		}
-		archsimd.ClearAVXUpperBits()
-	}
-	if i < n {
-		b0 := src[0*n : 1*n]
-		b1 := src[1*n : 2*n]
-		b2 := src[2*n : 3*n]
-		b3 := src[3*n : 4*n]
-		b4 := src[4*n : 5*n]
-		b5 := src[5*n : 6*n]
-		b6 := src[6*n : 7*n]
-		b7 := src[7*n : 8*n]
-		for j := i; j < n; j++ {
-			binary.LittleEndian.PutUint64(dst[8*j:], uint64(b0[j])|
-				uint64(b1[j])<<8|
-				uint64(b2[j])<<16|
-				uint64(b3[j])<<24|
-				uint64(b4[j])<<32|
-				uint64(b5[j])<<40|
-				uint64(b6[j])<<48|
-				uint64(b7[j])<<56)
 		}
 	}
 }
