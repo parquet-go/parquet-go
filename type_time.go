@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"math"
 	"reflect"
 	"time"
 
@@ -293,6 +294,29 @@ func (t *timeType) ConvertValue(val Value, typ Type) (Value, error) {
 		} else {
 			return convertStringToTimeMillis(val, tz)
 		}
+	case *timeType:
+		if val.isNull() || reflect.TypeOf(src.Unit.Value) == reflect.TypeOf(t.Unit.Value) {
+			return val, nil
+		}
+		if val.int64() == 0 {
+			if t.useInt32() {
+				return val.convertToInt32(0), nil
+			}
+			return val.convertToInt64(0), nil
+		}
+		if (src.Unit.Value == nil && isNanos(t.Unit)) || (t.Unit.Value == nil && isNanos(src.Unit)) {
+			return val, nil
+		}
+		// Millisecond TIME is an INT32. A scaled int64 that does not fit is an
+		// invalid conversion, reported as TIME rather than TIMESTAMP.
+		scaled, ok := convertTimestampUnit(val.int64(), timeUnitDuration(src.Unit), timeUnitDuration(t.Unit))
+		if !ok || (t.useInt32() && (scaled > math.MaxInt32 || scaled < math.MinInt32)) {
+			return val, invalidUnitConversion(val, "TIME", "TIME")
+		}
+		if t.useInt32() {
+			return val.convertToInt32(int32(scaled)), nil
+		}
+		return val.convertToInt64(scaled), nil
 	case *timestampType:
 		tz := t.tz()
 		if isMicros(t.Unit) {

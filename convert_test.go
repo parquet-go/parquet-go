@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 type AddressBook1 struct {
@@ -1352,6 +1355,160 @@ func TestConvertValue(t *testing.T) {
 			want := test.toValue.Level(1, 2, 3)
 			if !parquet.DeepEqual(want, got) {
 				t.Errorf("converted value mismatch:\nwant = %+v\ngot  = %+v", want, got)
+			}
+		})
+	}
+}
+
+type unsetTimeUnit struct{}
+
+func (unsetTimeUnit) Duration() time.Duration   { return time.Nanosecond }
+func (unsetTimeUnit) TimeUnit() format.TimeUnit { return format.TimeUnit{} }
+
+func TestConvertTimeUnits(t *testing.T) {
+	units := []parquet.TimeUnit{parquet.Millisecond, parquet.Microsecond, parquet.Nanosecond, unsetTimeUnit{}}
+	for _, fromAdjusted := range []bool{false, true} {
+		for _, toAdjusted := range []bool{false, true} {
+			for _, from := range units {
+				for _, to := range units {
+					t.Run(fmt.Sprintf("%T/%T/adjusted=%t/%t", from, to, fromAdjusted, toAdjusted), func(t *testing.T) {
+						fromType := parquet.TimeAdjusted(from, fromAdjusted).Type()
+						toType := parquet.TimeAdjusted(to, toAdjusted).Type()
+						null := parquet.NullValue().Level(1, 0, 3)
+						got, err := toType.ConvertValue(null, fromType)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if !parquet.DeepEqual(got, null) {
+							t.Errorf("converting null: got %v (%s), want null with original levels", got, got.Kind())
+						}
+						for _, duration := range []time.Duration{
+							0, 1, time.Microsecond - 1, time.Microsecond, time.Microsecond + 1,
+							time.Millisecond - 1, time.Millisecond, time.Millisecond + 1,
+							12*time.Hour + 34*time.Minute + 56*time.Second + 789012345,
+							24*time.Hour - 1,
+						} {
+							count := int64(duration / from.Duration())
+							value := parquet.Int64Value(count)
+							if fromType.Kind() == parquet.Int32 {
+								value = parquet.Int32Value(int32(count))
+							}
+							wantCount := int64(duration.Truncate(from.Duration()) / to.Duration())
+							want := parquet.Int64Value(wantCount)
+							if toType.Kind() == parquet.Int32 {
+								want = parquet.Int32Value(int32(wantCount))
+							}
+							got, err := toType.ConvertValue(value.Level(1, 2, 3), fromType)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if !parquet.DeepEqual(got, want.Level(1, 2, 3)) {
+								t.Fatalf("converting %s: got %v (%s), want %v (%s)", duration, got, got.Kind(), want, want.Kind())
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestReadTimeUnitConversion(t *testing.T) {
+	type stored struct {
+		Time int32 `parquet:"time,time(millisecond)"`
+	}
+	type converted struct {
+		Time time.Duration `parquet:"time,time(microsecond)"`
+	}
+	var buf bytes.Buffer
+	if err := parquet.Write(&buf, []stored{{Time: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	original, err := parquet.Read[stored](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(original) != 1 || original[0].Time != 1 {
+		t.Fatalf("stored rows = %v, want [{1}]", original)
+	}
+	rows, err := parquet.Read[converted](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Time != time.Millisecond {
+		t.Fatalf("converted rows = %v, want [{1ms}]", rows)
+	}
+}
+
+func TestConvertTimeMillisInt32Range(t *testing.T) {
+	to := parquet.Time(parquet.Millisecond).Type()
+
+	// Counts that land on an int32 boundary stay bit-identical, including
+	// the truncated fraction just inside the bound.
+	fits := []struct {
+		name string
+		from parquet.TimeUnit
+		v    int64
+		want int32
+	}{
+		{name: "max int32", from: parquet.Microsecond, v: int64(math.MaxInt32) * 1000, want: math.MaxInt32},
+		{name: "min int32", from: parquet.Microsecond, v: int64(math.MinInt32) * 1000, want: math.MinInt32},
+		{name: "max int32 nanos", from: parquet.Nanosecond, v: int64(math.MaxInt32) * 1_000_000, want: math.MaxInt32},
+		{name: "min int32 nanos", from: parquet.Nanosecond, v: int64(math.MinInt32) * 1_000_000, want: math.MinInt32},
+		{name: "truncated max", from: parquet.Microsecond, v: (int64(math.MaxInt32)+1)*1000 - 1, want: math.MaxInt32},
+		{name: "truncated min", from: parquet.Microsecond, v: (int64(math.MinInt32)-1)*1000 + 1, want: math.MinInt32},
+	}
+	for _, tc := range fits {
+		t.Run(tc.name, func(t *testing.T) {
+			from := parquet.Time(tc.from).Type()
+			got, err := to.ConvertValue(parquet.Int64Value(tc.v).Level(1, 2, 3), from)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := parquet.Int32Value(tc.want).Level(1, 2, 3)
+			if !parquet.DeepEqual(want, got) {
+				t.Fatalf("got %#v, want %#v", got, want)
+			}
+		})
+	}
+
+	overflows := []struct {
+		name string
+		from parquet.TimeUnit
+		v    int64
+	}{
+		{name: "int32 boundary", from: parquet.Nanosecond, v: 3000000000000000},
+		{name: "max int32+1", from: parquet.Microsecond, v: (int64(math.MaxInt32) + 1) * 1000},
+		{name: "negative bound", from: parquet.Microsecond, v: (int64(math.MinInt32) - 1) * 1000},
+	}
+	for _, tc := range overflows {
+		t.Run(tc.name, func(t *testing.T) {
+			from := parquet.Time(tc.from).Type()
+			got, err := to.ConvertValue(parquet.Int64Value(tc.v).Level(1, 2, 3), from)
+			if err == nil {
+				t.Fatalf("got %v (%s), want ErrInvalidConversion", got, got.Kind())
+			}
+			if !errors.Is(err, parquet.ErrInvalidConversion) {
+				t.Fatalf("error = %v, want ErrInvalidConversion", err)
+			}
+			if !strings.HasPrefix(err.Error(), "TIME to TIME:") {
+				t.Fatalf("error = %q, want TIME to TIME", err)
+			}
+		})
+	}
+}
+
+func TestConvertTimeOverflowLabel(t *testing.T) {
+	from := parquet.Time(parquet.Microsecond).Type()
+	to := parquet.Time(parquet.Nanosecond).Type()
+	for _, v := range []int64{math.MaxInt64, math.MinInt64} {
+		t.Run(fmt.Sprintf("%d", v), func(t *testing.T) {
+			_, err := to.ConvertValue(parquet.Int64Value(v), from)
+			if !errors.Is(err, parquet.ErrInvalidConversion) {
+				t.Fatalf("error = %v, want ErrInvalidConversion", err)
+			}
+			if !strings.HasPrefix(err.Error(), "TIME to TIME:") {
+				t.Fatalf("error = %q, want TIME to TIME", err)
 			}
 		})
 	}
