@@ -272,6 +272,189 @@ func TestEncryptionPlaintextFooterMetadataReuse(t *testing.T) {
 	}
 }
 
+func TestPlaintextFooterDeferredBloomFilters(t *testing.T) {
+	footerKey := bytes.Repeat([]byte{0x41}, 16)
+	nameKey := bytes.Repeat([]byte{0x42}, 16)
+	keys := schemeKeys{footer: footerKey, columns: map[string][]byte{"name": nameKey}}
+	cfg := &EncryptionConfig{
+		FooterKey:       footerKey,
+		ColumnKeys:      keys.columns,
+		EncryptedFooter: false,
+		FileIdentifier:  []byte{1, 2, 3, 4, 5, 6, 7, 8},
+		AadPrefix:       []byte("bloom"),
+	}
+	// Each value is larger than the page buffer and rows are written one at a
+	// time, so each row becomes its own page. The row groups then record
+	// different encoding-stat counts. A metadata copy that still shares the
+	// column writer's slice fails the comparison with the reference file.
+	long := func(tag string, n int64) bloomSchemeRow {
+		return bloomSchemeRow{Name: strings.Repeat(tag, 40), Value: n}
+	}
+	groups := [][]bloomSchemeRow{
+		{long("a", 1), long("b", 2)},
+		{long("c", 3), long("d", 4), long("e", 5)},
+	}
+	columnKeys := [][]byte{nameKey, footerKey}
+	pageSize := PageBufferSize(32)
+
+	deferred := writeSchemeBloomFile(t, cfg, groups, pageSize, DeferBloomFiltersWithBuffers(NewBufferPool()))
+	reference := writeSchemeBloomFile(t, cfg, groups, pageSize)
+
+	deferredMeta := decryptPlaintextFooterColumnMetadata(t, deferred, cfg, columnKeys)
+	referenceMeta := decryptPlaintextFooterColumnMetadata(t, reference, cfg, columnKeys)
+	if len(deferredMeta) != len(groups) || len(referenceMeta) != len(groups) {
+		t.Fatalf("row groups: deferred %d reference %d, want %d", len(deferredMeta), len(referenceMeta), len(groups))
+	}
+
+	if slices.Equal(referenceMeta[0][0].EncodingStats, referenceMeta[1][0].EncodingStats) {
+		t.Fatalf("row groups recorded the same encoding stats: %+v", referenceMeta[0][0].EncodingStats)
+	}
+
+	var bloomEnd int64
+	for i, rg := range deferredMeta {
+		for j, meta := range rg {
+			ref := referenceMeta[i][j]
+			if meta.BloomFilterOffset == 0 || meta.BloomFilterLength <= 0 {
+				t.Errorf("row group %d column %d: decrypted bloom offset %d length %d", i, j, meta.BloomFilterOffset, meta.BloomFilterLength)
+			}
+			if meta.BloomFilterLength != ref.BloomFilterLength {
+				t.Errorf("row group %d column %d: bloom length %d, reference %d", i, j, meta.BloomFilterLength, ref.BloomFilterLength)
+			}
+			if bloomEnd == 0 {
+				bloomEnd = meta.BloomFilterOffset
+			}
+			if meta.BloomFilterOffset != bloomEnd {
+				t.Errorf("row group %d column %d: bloom offset %d, want %d", i, j, meta.BloomFilterOffset, bloomEnd)
+			}
+			bloomEnd = meta.BloomFilterOffset + int64(meta.BloomFilterLength)
+
+			if meta.Type != ref.Type || meta.Codec != ref.Codec || meta.NumValues != int64(len(groups[i])) ||
+				meta.TotalUncompressedSize != ref.TotalUncompressedSize ||
+				!slices.Equal(meta.PathInSchema, ref.PathInSchema) || !slices.Equal(meta.Encoding, ref.Encoding) ||
+				!slices.Equal(meta.EncodingStats, ref.EncodingStats) || meta.DataPageOffset == 0 ||
+				meta.DictionaryPageOffset != 0 ||
+				meta.Statistics.NullCount != ref.Statistics.NullCount ||
+				!bytes.Equal(meta.Statistics.Min, ref.Statistics.Min) || !bytes.Equal(meta.Statistics.Max, ref.Statistics.Max) ||
+				!bytes.Equal(meta.Statistics.MinValue, ref.Statistics.MinValue) || !bytes.Equal(meta.Statistics.MaxValue, ref.Statistics.MaxValue) {
+				t.Errorf("row group %d column %d: got type=%v codec=%v values=%d uncompressed=%d path=%v enc=%v stats=%+v min=%q max=%q; ref type=%v codec=%v values=%d uncompressed=%d path=%v enc=%v stats=%+v min=%q max=%q",
+					i, j,
+					meta.Type, meta.Codec, meta.NumValues, meta.TotalUncompressedSize, meta.PathInSchema, meta.Encoding, meta.EncodingStats, meta.Statistics.MinValue, meta.Statistics.MaxValue,
+					ref.Type, ref.Codec, ref.NumValues, ref.TotalUncompressedSize, ref.PathInSchema, ref.Encoding, ref.EncodingStats, ref.Statistics.MinValue, ref.Statistics.MaxValue)
+			}
+		}
+	}
+
+	f := openSchemeBytes(t, deferred, keys)
+	if len(f.Metadata().RowGroups) != len(groups) {
+		t.Fatalf("reader row groups = %d, want %d", len(f.Metadata().RowGroups), len(groups))
+	}
+	for i, rg := range f.Metadata().RowGroups {
+		for j := range rg.Columns {
+			got := rg.Columns[j].MetaData
+			want := deferredMeta[i][j]
+			if got.BloomFilterOffset != want.BloomFilterOffset || got.BloomFilterLength != want.BloomFilterLength {
+				t.Errorf("row group %d column %d: reader bloom offset %d length %d, decrypted blob %d %d",
+					i, j, got.BloomFilterOffset, got.BloomFilterLength, want.BloomFilterOffset, want.BloomFilterLength)
+			}
+		}
+		chunks := f.RowGroups()[i].ColumnChunks()
+		checks := []struct {
+			column int
+			value  Value
+			want   bool
+		}{
+			{0, ValueOf(groups[i][0].Name), true},
+			{0, ValueOf(groups[1-i][0].Name), false},
+			{1, ValueOf(groups[i][0].Value), true},
+			{1, ValueOf(groups[1-i][0].Value), false},
+		}
+		for _, check := range checks {
+			bf := chunks[check.column].BloomFilter()
+			if bf == nil {
+				t.Errorf("row group %d column %d: missing bloom filter", i, check.column)
+				continue
+			}
+			ok, err := bf.Check(check.value)
+			if err != nil {
+				t.Errorf("row group %d column %d: Check(%v): %v", i, check.column, check.value, err)
+				continue
+			}
+			if ok != check.want {
+				t.Errorf("row group %d column %d: Check(%v) = %v, want %v", i, check.column, check.value, ok, check.want)
+			}
+		}
+	}
+}
+
+type bloomSchemeRow struct {
+	Name  string `parquet:"name"`
+	Value int64  `parquet:"value"`
+}
+
+func writeSchemeBloomFile(t *testing.T, cfg *EncryptionConfig, groups [][]bloomSchemeRow, opts ...WriterOption) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	options := make([]WriterOption, 0, 2+len(opts))
+	options = append(options,
+		WithEncryption(cfg),
+		BloomFilters(SplitBlockFilter(10, "name"), SplitBlockFilter(10, "value")),
+	)
+	options = append(options, opts...)
+	w := NewGenericWriter[bloomSchemeRow](&buf, options...)
+	for i, rows := range groups {
+		for _, row := range rows {
+			if _, err := w.Write([]bloomSchemeRow{row}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if i+1 < len(groups) {
+			if err := w.Flush(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// decryptPlaintextFooterColumnMetadata reads column metadata from the encrypted
+// blobs only. Unmarshalling into a fresh value ignores plaintext fields that a
+// decode into the footer struct would leave in place.
+func decryptPlaintextFooterColumnMetadata(t *testing.T, data []byte, cfg *EncryptionConfig, columnKeys [][]byte) [][]format.ColumnMetaData {
+	t.Helper()
+	plain, _ := plaintextFooterAndSignature(t, data)
+	var footer format.FileMetaData
+	if err := thrift.Unmarshal(&thrift.CompactProtocol{}, plain, &footer); err != nil {
+		t.Fatal(err)
+	}
+	out := make([][]format.ColumnMetaData, len(footer.RowGroups))
+	for i, rg := range footer.RowGroups {
+		if rg.Ordinal != int16(i) {
+			t.Fatalf("row group %d ordinal = %d", i, rg.Ordinal)
+		}
+		if len(rg.Columns) != len(columnKeys) {
+			t.Fatalf("row group %d columns = %d, want %d", i, len(rg.Columns), len(columnKeys))
+		}
+		out[i] = make([]format.ColumnMetaData, len(rg.Columns))
+		for j, c := range rg.Columns {
+			if !reflect.DeepEqual(c.MetaData, format.ColumnMetaData{}) || len(c.EncryptedColumnMetadata) == 0 {
+				t.Fatalf("row group %d column %d: plaintext metadata %+v encrypted length %d", i, j, c.MetaData, len(c.EncryptedColumnMetadata))
+			}
+			aad := makeAAD(cfg.AadPrefix, cfg.FileIdentifier, columnMetaDataModule, rg.Ordinal, int16(j))
+			encoded, err := decryptModule(columnKeys[j], aad, c.EncryptedColumnMetadata)
+			if err != nil {
+				t.Fatalf("row group %d column %d: decrypt column metadata: %v", i, j, err)
+			}
+			if err := thrift.Unmarshal(&thrift.CompactProtocol{}, encoded, &out[i][j]); err != nil {
+				t.Fatalf("row group %d column %d: decode column metadata: %v", i, j, err)
+			}
+		}
+	}
+	return out
+}
+
 func encryptedFooterPadding(t *testing.T, data, key, prefix, unique []byte) int {
 	t.Helper()
 	footerSize := binary.LittleEndian.Uint32(data[len(data)-8 : len(data)-4])
