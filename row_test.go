@@ -1,6 +1,8 @@
 package parquet_test
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -600,6 +602,73 @@ func TestReconstructMapInInterface(t *testing.T) {
 	}
 	if len(reconstructedMap) != 0 {
 		t.Errorf("expected empty map, got %#v", reconstructedMap)
+	}
+}
+
+func TestReconstructMapReuse(t *testing.T) {
+	type record struct {
+		M map[string]int64
+	}
+	rows := []record{
+		{M: map[string]int64{"a": 1, "b": 2}},
+		{M: map[string]int64{"c": 3}},
+		{M: map[string]int64{}},
+	}
+	schema := parquet.SchemaOf(record{})
+	data := new(bytes.Buffer)
+	if err := parquet.Write(data, rows); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("typed", func(t *testing.T) {
+		testReconstructMapReuse(t, schema, data.Bytes(), rows)
+	})
+	t.Run("interface", func(t *testing.T) {
+		type dynamic struct{ M any }
+		want := make([]dynamic, len(rows))
+		for i, row := range rows {
+			m := make(map[string]any, len(row.M))
+			for k, v := range row.M {
+				m[k] = v
+			}
+			want[i].M = m
+		}
+		testReconstructMapReuse(t, schema, data.Bytes(), want)
+	})
+}
+
+func testReconstructMapReuse[T any](t *testing.T, schema *parquet.Schema, data []byte, want []T) {
+	t.Helper()
+	for _, entry := range []string{"Reconstruct", "Read"} {
+		t.Run(entry, func(t *testing.T) {
+			// A non-nil interface holding a map must also accept the next row.
+			defer func() {
+				if err := recover(); err != nil {
+					t.Errorf("map reconstruction panicked: %v", err)
+				}
+			}()
+			reader := parquet.NewGenericReader[T](bytes.NewReader(data), schema)
+			defer reader.Close()
+			batch := make([]T, 1)
+			var retained []T
+			for i := range want {
+				if entry == "Read" {
+					n, err := reader.Read(batch)
+					if n != 1 || (err != nil && !errors.Is(err, io.EOF)) {
+						t.Fatalf("read row %d: n=%d err=%v", i, n, err)
+					}
+				} else {
+					row := schema.Deconstruct(nil, want[i])
+					if err := schema.Reconstruct(&batch[0], row); err != nil {
+						t.Fatalf("reconstruct row %d: %v", i, err)
+					}
+				}
+				retained = append(retained, batch[0])
+				if !reflect.DeepEqual(retained, want[:i+1]) {
+					t.Errorf("reconstructed and retained rows: got %#v, want %#v", retained, want[:i+1])
+				}
+			}
+		})
 	}
 }
 
