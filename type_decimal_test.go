@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
+	"math/big"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/format"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // putBigEndianInt64 writes n as a big-endian two's-complement integer,
@@ -579,6 +582,118 @@ func TestDecimalSortingOrder(t *testing.T) {
 	for i, row := range rows {
 		if got := row[0].ByteArray(); !bytes.Equal(got, want[i]) {
 			t.Errorf("row %d = %X, want %X", i, got, want[i])
+		}
+	}
+}
+
+func TestFixedLenDecimalWriteFloat(t *testing.T) {
+	for _, size := range []int{4, 8, 16} {
+		for _, scale := range []int{0, 2} {
+			for _, optional := range []bool{false, true} {
+				for _, input := range []string{"float32", "float64", "interface", "structpb"} {
+					t.Run(fmt.Sprintf("size=%d/scale=%d/optional=%t/%s", size, scale, optional, input), func(t *testing.T) {
+						precision := map[int]int{4: 9, 8: 18, 16: 38}[size]
+						node := Decimal(scale, precision, FixedLenByteArrayType(size))
+						if optional {
+							node = Optional(node)
+						}
+						schema := NewSchema("row", Group{"amount": node})
+						type testCase struct {
+							value float64
+							want  [2]string
+						}
+						tests := []testCase{
+							{1.25, [2]string{"1", "1.25"}}, {-1.25, [2]string{"-1", "-1.25"}},
+							{0, [2]string{"0", "0.00"}},
+							{1.125, [2]string{"1", "1.13"}}, {-1.125, [2]string{"-1", "-1.13"}},
+							{128, [2]string{"128", "128.00"}}, {-128, [2]string{"-128", "-128.00"}},
+						}
+						if size == 16 {
+							tests = append(tests,
+								testCase{0x1p64, [2]string{"18446744073709551616", "18446744073709551616.00"}},
+								testCase{-0x1p64, [2]string{"-18446744073709551616", "-18446744073709551616.00"}})
+							if input != "float32" {
+								tests = append(tests, testCase{0x1.859cde9cc4762p+74, [2]string{"28748348356621485735936", "28748348356621485735936.00"}})
+							}
+						}
+						var rows []any
+						var want []string
+						for _, tt := range tests {
+							var value any = tt.value
+							if input == "float32" {
+								value = float32(tt.value)
+							}
+							if optional && tt.value == 0 {
+								if input == "float32" {
+									value = new(float32(0))
+								} else {
+									value = new(float64(0))
+								}
+							}
+							var row any = map[string]any{"amount": value}
+							switch input {
+							case "interface":
+								row = struct {
+									Amount any `parquet:"amount"`
+								}{value}
+							case "structpb":
+								row = &structpb.Struct{Fields: map[string]*structpb.Value{"amount": structpb.NewNumberValue(tt.value)}}
+							}
+							rows = append(rows, row)
+							want = append(want, tt.want[scale/2])
+							if optional {
+								var null any = map[string]any{"amount": nil}
+								switch input {
+								case "interface":
+									null = struct {
+										Amount any `parquet:"amount"`
+									}{}
+								case "structpb":
+									null = &structpb.Struct{Fields: map[string]*structpb.Value{"amount": structpb.NewNullValue()}}
+								}
+								rows = append(rows, null)
+								want = append(want, "null")
+							}
+						}
+						var buf bytes.Buffer
+						w := NewGenericWriter[any](&buf, schema)
+						if n, err := w.Write(rows); n != len(rows) || err != nil {
+							t.Fatalf("write rows: n=%d err=%v", n, err)
+						}
+						if err := w.Close(); err != nil {
+							t.Fatalf("close writer: %v", err)
+						}
+						f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if f.NumRows() != int64(len(rows)) {
+							t.Fatalf("row count: got %d, want %d", f.NumRows(), len(rows))
+						}
+						for _, rg := range f.RowGroups() {
+							if n := rg.ColumnChunks()[0].NumValues(); n != rg.NumRows() {
+								t.Fatalf("column value count: got %d, want %d", n, rg.NumRows())
+							}
+						}
+						r := NewGenericReader[any](f)
+						defer r.Close()
+						got := make([]any, len(rows))
+						if n, err := r.Read(got); n != len(rows) || (err != nil && err != io.EOF) {
+							t.Fatalf("read rows: n=%d err=%v", n, err)
+						}
+						for i, row := range got {
+							value := row.(map[string]any)["amount"]
+							text := "null"
+							if value != nil {
+								text = value.(*big.Float).Text('f', scale)
+							}
+							if text != want[i] {
+								t.Errorf("row %d: got %s, want %s", i, text, want[i])
+							}
+						}
+					})
+				}
+			}
 		}
 	}
 }
