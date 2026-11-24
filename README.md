@@ -735,13 +735,14 @@ branches and dead fallback paths entirely: in our benchmarks this improved the
 `GOEXPERIMENT=simd` bloom filter kernels by a further 12% on average, bringing
 them to overall parity with the assembly.
 
-Note that the `GOEXPERIMENT=simd` build is currently supported with **Go 1.26
-only**: the `simd/archsimd` package is experimental and Go 1.27 introduced
-breaking renames to its API (for example `LoadUint8x64Slice` became
-`LoadUint8x64`, `StoreSlice` became `Store`, and `SumAbsDiff` became
-`SumOf8AbsDiff`). Support for newer Go versions will follow as the API
-stabilizes. Builds without `GOEXPERIMENT=simd` are unaffected and continue to
-use the assembly kernels on all supported Go versions.
+The `simd/archsimd` kernels are compiled only with Go 1.26. Go 1.27 renamed
+that experimental API (`LoadUint8x64Slice` is now `LoadUint8x64`, `StoreSlice`
+is `Store`, `SumAbsDiff` is `SumOf8AbsDiff`, and several operations take
+different arguments), and the package is still expected to change before it
+leaves `GOEXPERIMENT`. On Go 1.27 and later, a build with `GOEXPERIMENT=simd`
+keeps compiling and uses the same assembly kernels as a build without the
+experiment. Builds without `GOEXPERIMENT=simd` are unchanged on every
+supported Go version.
 
 ## Maintenance
 

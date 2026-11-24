@@ -1,4 +1,4 @@
-//go:build purego || !amd64 || goexperiment.simd
+//go:build purego || !amd64 || (goexperiment.simd && !go1.27)
 
 package parquet
 
