@@ -1066,3 +1066,127 @@ func TestEncryptionPageIndexEncrypted(t *testing.T) {
 		}
 	}
 }
+
+// encryptionResetRow uses a dictionary-encoded string so the dictionary page
+// (written from writeRowGroup) and the data pages (flushed by ColumnWriter.Close
+// before that) can be encrypted under different row group ordinals.
+type encryptionResetRow struct {
+	Name  string `parquet:"name,dict"`
+	Value int64  `parquet:"value"`
+}
+
+// TestEncryptionResetRowGroupOrdinal writes a file with more than one row
+// group, then reuses the writer with Reset, Write, and Close and no explicit
+// Flush. Data pages of the second file are encrypted while the column is
+// closed, before writeRowGroup assigns row group 0. Both footer modes must
+// read back.
+func TestEncryptionResetRowGroupOrdinal(t *testing.T) {
+	first := []encryptionResetRow{
+		{Name: "alpha", Value: 1},
+		{Name: "beta", Value: 2},
+		{Name: "alpha", Value: 3},
+	}
+	second := []encryptionResetRow{
+		{Name: "gamma", Value: 10},
+		{Name: "delta", Value: 11},
+		{Name: "gamma", Value: 12},
+	}
+
+	for _, tc := range []struct {
+		name            string
+		encryptedFooter bool
+		pageBufferSize  int
+	}{
+		{name: "encrypted footer", encryptedFooter: true},
+		{name: "plaintext footer", encryptedFooter: false},
+		// A one-byte page buffer flushes a data page from Write, before Close
+		// stamps the ordinal. Reset has to clear it or that page stays wrong.
+		{name: "encrypted footer page flushed while writing", encryptedFooter: true, pageBufferSize: 1},
+		{name: "plaintext footer page flushed while writing", encryptedFooter: false, pageBufferSize: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			footerKey := aes128Key(0xE7)
+			cfg := &parquet.EncryptionConfig{
+				FooterKey:       footerKey,
+				EncryptedFooter: tc.encryptedFooter,
+				FileIdentifier:  []byte{8, 7, 6, 5, 4, 3, 2, 1},
+			}
+			opts := []parquet.WriterOption{parquet.WithEncryption(cfg)}
+			if tc.pageBufferSize > 0 {
+				opts = append(opts, parquet.PageBufferSize(tc.pageBufferSize))
+			}
+
+			var buf bytes.Buffer
+			w := parquet.NewGenericWriter[encryptionResetRow](&buf, opts...)
+			if _, err := w.Write(first); err != nil {
+				t.Fatalf("write first row group: %v", err)
+			}
+			if err := w.Flush(); err != nil {
+				t.Fatalf("flush first row group: %v", err)
+			}
+			if _, err := w.Write(first[:2]); err != nil {
+				t.Fatalf("write second row group: %v", err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatalf("close first file: %v", err)
+			}
+
+			keys := &staticKeyRetriever{footerKey: footerKey}
+			firstBytes := append([]byte(nil), buf.Bytes()...)
+			gotFirst := readEncryptionResetRows(t, firstBytes, keys)
+			wantFirst := make([]encryptionResetRow, 0, len(first)+2)
+			wantFirst = append(wantFirst, first...)
+			wantFirst = append(wantFirst, first[:2]...)
+			assertRowsEqual(t, wantFirst, gotFirst)
+			if groups := openEncryptionResetFile(t, firstBytes, keys).RowGroups(); len(groups) < 2 {
+				t.Fatalf("first file row groups = %d, want more than one", len(groups))
+			}
+
+			buf.Reset()
+			w.Reset(&buf)
+			if _, err := w.Write(second); err != nil {
+				t.Fatalf("write second file: %v", err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatalf("close second file: %v", err)
+			}
+
+			secondFile := openEncryptionResetFile(t, buf.Bytes(), keys)
+			if groups := secondFile.RowGroups(); len(groups) != 1 {
+				t.Fatalf("second file row groups = %d, want 1", len(groups))
+			}
+			gotSecond := readEncryptionResetRows(t, buf.Bytes(), keys)
+			assertRowsEqual(t, second, gotSecond)
+		})
+	}
+}
+
+func openEncryptionResetFile(t *testing.T, data []byte, keys parquet.KeyRetriever) *parquet.File {
+	t.Helper()
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)), parquet.WithDecryption(keys))
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	return f
+}
+
+func readEncryptionResetRows(t *testing.T, data []byte, keys parquet.KeyRetriever) []encryptionResetRow {
+	t.Helper()
+	f := openEncryptionResetFile(t, data, keys)
+	r := parquet.NewGenericReader[encryptionResetRow](f)
+	defer r.Close()
+
+	var out []encryptionResetRow
+	buf := make([]encryptionResetRow, 16)
+	for {
+		n, err := r.Read(buf)
+		out = append(out, buf[:n]...)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+	}
+	return out
+}

@@ -520,6 +520,15 @@ func (w *Writer) configure(schema *Schema) {
 // Close must be called after all values were produced to the writer in order to
 // flush all buffers and write the parquet footer.
 func (w *Writer) Close() error {
+	// ColumnWriter.Close encrypts buffered data pages before writeRowGroup
+	// records this row group's ordinal. Assign it first so the AAD matches
+	// the footer.
+	if w.writer != nil && w.writer.encryption != nil {
+		ordinal := int16(len(w.writer.rowGroups))
+		for _, c := range w.writer.currentRowGroup.columns {
+			c.rowGroupOrdinal = ordinal
+		}
+	}
 	for _, c := range w.ColumnWriters() {
 		if err := c.Close(); err != nil {
 			return err
@@ -2132,6 +2141,10 @@ func (c *ColumnWriter) reset() {
 		c.pageBuffer = nil
 	}
 	c.numPages = 0
+	// Cleared with the page counter. writeRowGroup installs the next ordinal
+	// after reset; Writer.Reset leaves it at 0 so the next file does not seal
+	// pages with the previous file's row group count.
+	c.rowGroupOrdinal = 0
 	c.copied = nil
 	// Bloom filters may change in size between row groups, but we retain the
 	// buffer to avoid reallocating large memory blocks.
