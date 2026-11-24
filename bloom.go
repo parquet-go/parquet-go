@@ -76,7 +76,12 @@ func isXxHash(header *format.BloomFilterHeader) bool {
 	return ok
 }
 
-func newBloomFilter(file io.ReaderAt, offset int64, header *format.BloomFilterHeader) (*FileBloomFilter, error) {
+// newBloomFilter reads a split-block bloom filter at offset in file.
+//
+// codecs are the file's compression codecs. A gzip-compressed filter is
+// decompressed with the gzip codec from that list, or with the shared gzip
+// codec when the list has none.
+func newBloomFilter(file io.ReaderAt, offset int64, header *format.BloomFilterHeader, codecs []compress.Codec) (*FileBloomFilter, error) {
 	if !isSplitBlockAlgorithm(header) || !isXxHash(header) {
 		return nil, nil
 	}
@@ -90,6 +95,7 @@ func newBloomFilter(file io.ReaderAt, offset int64, header *format.BloomFilterHe
 	case *format.BloomFilterGzip:
 		// Decompress lazily on the first Check call so that opening a file with
 		// PrefetchBloomFilters(false) does not perform any extra I/O at open time.
+		codec := lookupCompressionCodec(codecs, format.Gzip)
 		compressedSize := int64(header.NumBytes)
 		var (
 			once         sync.Once
@@ -103,7 +109,7 @@ func newBloomFilter(file io.ReaderAt, offset int64, header *format.BloomFilterHe
 					decompErr = fmt.Errorf("reading compressed bloom filter: %w", err)
 					return
 				}
-				decompressed, decompErr = LookupCompressionCodec(format.Gzip).Decode(nil, buf)
+				decompressed, decompErr = codec.Decode(nil, buf)
 				if decompErr != nil {
 					decompErr = fmt.Errorf("decompressing bloom filter: %w", decompErr)
 				}
@@ -127,11 +133,15 @@ func newBloomFilter(file io.ReaderAt, offset int64, header *format.BloomFilterHe
 // byte slice.  Used when the bloom filter was read from an encrypted column and
 // the raw bytes were decrypted before constructing the filter.
 //
+// codecs are the file's compression codecs. A gzip-compressed filter is
+// decompressed with the gzip codec from that list, or with the shared gzip
+// codec when the list has none.
+//
 // Bloom filters are an optimization: if the header advertises an algorithm,
 // hash, or compression codec we don't support, or if eager decompression
 // fails, we return nil so the read silently skips the filter rather than
 // failing the whole file open.
-func newBloomFilterFromBytes(header *format.BloomFilterHeader, bits []byte) *FileBloomFilter {
+func newBloomFilterFromBytes(header *format.BloomFilterHeader, bits []byte, codecs []compress.Codec) *FileBloomFilter {
 	if !isSplitBlockAlgorithm(header) || !isXxHash(header) {
 		return nil
 	}
@@ -144,7 +154,7 @@ func newBloomFilterFromBytes(header *format.BloomFilterHeader, bits []byte) *Fil
 			check:         bloom.CheckSplitBlock,
 		}
 	case *format.BloomFilterGzip:
-		decompressed, err := LookupCompressionCodec(format.Gzip).Decode(nil, bits)
+		decompressed, err := lookupCompressionCodec(codecs, format.Gzip).Decode(nil, bits)
 		if err != nil {
 			return nil
 		}
