@@ -398,9 +398,7 @@ func (col *repeatedColumnBuffer) ReadValuesAt(values []Value, offset int64) (int
 	if offset >= length {
 		return 0, io.EOF
 	}
-	if length -= offset; length < int64(len(values)) {
-		values = values[:length]
-	}
+	length = min(length-offset, int64(len(values)))
 
 	definitionLevelsSlice := col.definitionLevels.Slice()
 	repetitionLevelsSlice := col.repetitionLevels.Slice()
