@@ -36,10 +36,10 @@ test8x4:
     JMP test1x4
 
 loop1x4:
-    INCQ SI
     MOVL CX, DX
-    IMULL SI, DX
-    MOVL DX, -4(AX)(SI*4)
+    ADDL SI, DX
+    MOVL DX, (AX)(SI*4)
+    INCQ SI
 test1x4:
     CMPQ SI, BX
     JNE loop1x4
