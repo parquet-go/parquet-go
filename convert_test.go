@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1435,6 +1437,80 @@ func TestReadTimeUnitConversion(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Time != time.Millisecond {
 		t.Fatalf("converted rows = %v, want [{1ms}]", rows)
+	}
+}
+
+func TestConvertTimeMillisInt32Range(t *testing.T) {
+	to := parquet.Time(parquet.Millisecond).Type()
+
+	// Counts that land on an int32 boundary stay bit-identical, including
+	// the truncated fraction just inside the bound.
+	fits := []struct {
+		name string
+		from parquet.TimeUnit
+		v    int64
+		want int32
+	}{
+		{name: "max int32", from: parquet.Microsecond, v: int64(math.MaxInt32) * 1000, want: math.MaxInt32},
+		{name: "min int32", from: parquet.Microsecond, v: int64(math.MinInt32) * 1000, want: math.MinInt32},
+		{name: "max int32 nanos", from: parquet.Nanosecond, v: int64(math.MaxInt32) * 1_000_000, want: math.MaxInt32},
+		{name: "min int32 nanos", from: parquet.Nanosecond, v: int64(math.MinInt32) * 1_000_000, want: math.MinInt32},
+		{name: "truncated max", from: parquet.Microsecond, v: (int64(math.MaxInt32)+1)*1000 - 1, want: math.MaxInt32},
+		{name: "truncated min", from: parquet.Microsecond, v: (int64(math.MinInt32)-1)*1000 + 1, want: math.MinInt32},
+	}
+	for _, tc := range fits {
+		t.Run(tc.name, func(t *testing.T) {
+			from := parquet.Time(tc.from).Type()
+			got, err := to.ConvertValue(parquet.Int64Value(tc.v).Level(1, 2, 3), from)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := parquet.Int32Value(tc.want).Level(1, 2, 3)
+			if !parquet.DeepEqual(want, got) {
+				t.Fatalf("got %#v, want %#v", got, want)
+			}
+		})
+	}
+
+	overflows := []struct {
+		name string
+		from parquet.TimeUnit
+		v    int64
+	}{
+		{name: "int32 boundary", from: parquet.Nanosecond, v: 3000000000000000},
+		{name: "max int32+1", from: parquet.Microsecond, v: (int64(math.MaxInt32) + 1) * 1000},
+		{name: "negative bound", from: parquet.Microsecond, v: (int64(math.MinInt32) - 1) * 1000},
+	}
+	for _, tc := range overflows {
+		t.Run(tc.name, func(t *testing.T) {
+			from := parquet.Time(tc.from).Type()
+			got, err := to.ConvertValue(parquet.Int64Value(tc.v).Level(1, 2, 3), from)
+			if err == nil {
+				t.Fatalf("got %v (%s), want ErrInvalidConversion", got, got.Kind())
+			}
+			if !errors.Is(err, parquet.ErrInvalidConversion) {
+				t.Fatalf("error = %v, want ErrInvalidConversion", err)
+			}
+			if !strings.HasPrefix(err.Error(), "TIME to TIME:") {
+				t.Fatalf("error = %q, want TIME to TIME", err)
+			}
+		})
+	}
+}
+
+func TestConvertTimeOverflowLabel(t *testing.T) {
+	from := parquet.Time(parquet.Microsecond).Type()
+	to := parquet.Time(parquet.Nanosecond).Type()
+	for _, v := range []int64{math.MaxInt64, math.MinInt64} {
+		t.Run(fmt.Sprintf("%d", v), func(t *testing.T) {
+			_, err := to.ConvertValue(parquet.Int64Value(v), from)
+			if !errors.Is(err, parquet.ErrInvalidConversion) {
+				t.Fatalf("error = %v, want ErrInvalidConversion", err)
+			}
+			if !strings.HasPrefix(err.Error(), "TIME to TIME:") {
+				t.Fatalf("error = %q, want TIME to TIME", err)
+			}
+		})
 	}
 }
 
