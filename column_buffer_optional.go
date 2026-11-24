@@ -338,9 +338,7 @@ func (col *optionalColumnBuffer) ReadValuesAt(values []Value, offset int64) (int
 	if offset >= length {
 		return 0, io.EOF
 	}
-	if length -= offset; length < int64(len(values)) {
-		values = values[:length]
-	}
+	length = min(length-offset, int64(len(values)))
 
 	numNulls1 := int64(countLevelsNotEqual(definitionLevels[:offset], col.maxDefinitionLevel))
 	numNulls2 := int64(countLevelsNotEqual(definitionLevels[offset:offset+length], col.maxDefinitionLevel))
@@ -350,11 +348,14 @@ func (col *optionalColumnBuffer) ReadValuesAt(values []Value, offset int64) (int
 		if err != nil {
 			return n, err
 		}
+		for i := range values[:length-numNulls2] {
+			values[i].definitionLevel = col.maxDefinitionLevel
+		}
 	}
 
 	if numNulls2 > 0 {
 		columnIndex := ^uint16(col.Column())
-		i := numNulls2 - 1
+		i := length - numNulls2 - 1
 		j := length - 1
 		definitionLevelsSlice := definitionLevels[offset : offset+length]
 		maxDefinitionLevel := col.maxDefinitionLevel
