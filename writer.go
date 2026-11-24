@@ -1788,7 +1788,6 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 					return 0, fmt.Errorf("encrypting column metadata: %w", err)
 				}
 				c.columnChunk.EncryptedColumnMetadata = encMeta
-				c.columnChunk.MetaData = format.ColumnMetaData{}
 			}
 		}
 	}
@@ -1860,6 +1859,11 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 	}
 	for i := range columns {
 		c := &columns[i]
+		if w.encryption != nil && !w.encryption.cfg.EncryptedFooter {
+			// Clear only the stored copy; the column writer reuses its metadata.
+			c.MetaData = format.ColumnMetaData{}
+			continue
+		}
 		// Encoding and PathInSchema alias the column writer's encodings and
 		// columnPath; copy them so Reset clearing the stored row group does
 		// not corrupt the metadata of files written after it.
