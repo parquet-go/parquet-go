@@ -6,7 +6,10 @@ import (
 	"io"
 	"reflect"
 	"slices"
+	"sort"
 	"testing"
+
+	"github.com/parquet-go/parquet-go/format"
 
 	geom "github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/wkb"
@@ -1619,5 +1622,141 @@ func TestWriteRowGroupCustomImplementationNotBypassed(t *testing.T) {
 		if r.ID != int64(i*2) {
 			t.Fatalf("row %d has id %d, want %d", i, r.ID, i*2)
 		}
+	}
+}
+
+func TestWriteRowGroupSortingColumns(t *testing.T) {
+	for _, generic := range []bool{false, true} {
+		for _, source := range []string{"buffer", "rowbuffer", "copy", "split", "packed"} {
+			for _, override := range []bool{false, true} {
+				t.Run(fmt.Sprintf("generic=%t/%s/override=%t", generic, source, override), func(t *testing.T) {
+					options := []WriterOption{SchemaOf(copyTestRow{})}
+					maxRows := int64(DefaultMaxRowsPerRowGroup)
+					if source == "split" || source == "rowbuffer" {
+						maxRows = 2
+					} else if source == "packed" {
+						maxRows = 3
+					}
+					options = append(options, MaxRowsPerRowGroup(maxRows))
+					writerSorting := []format.SortingColumn{{ColumnIdx: 1, Descending: true}, {ColumnIdx: 0}}
+					if override {
+						options = append(options, SortingWriterConfig(SortingColumns(Descending("name"), Ascending("id"))))
+					}
+					var writer interface {
+						RowGroupWriter
+						Reset(io.Writer)
+						Close() error
+					}
+					if generic {
+						writer = NewGenericWriter[copyTestRow](nil, options...)
+					} else {
+						writer = NewWriter(nil, options...)
+					}
+
+					for _, test := range []struct {
+						columns []SortingColumn
+						want    []format.SortingColumn
+					}{
+						{[]SortingColumn{Ascending("id")}, []format.SortingColumn{{ColumnIdx: 0}}},
+						{[]SortingColumn{NullsFirst(Descending("val")), Ascending("id")}, []format.SortingColumn{{ColumnIdx: 2, Descending: true, NullsFirst: true}, {ColumnIdx: 0}}},
+						{[]SortingColumn{Ascending("name"), Descending("val"), NullsFirst(Ascending("id"))}, []format.SortingColumn{{ColumnIdx: 1}, {ColumnIdx: 2, Descending: true}, {ColumnIdx: 0, NullsFirst: true}}},
+						{},
+						{[]SortingColumn{Descending("id")}, []format.SortingColumn{{ColumnIdx: 0, Descending: true}}},
+					} {
+						buffer := NewGenericBuffer[copyTestRow](SortingRowGroupConfig(SortingColumns(test.columns...)))
+						if _, err := buffer.Write(makeCopyTestRows(5)); err != nil {
+							t.Fatal(err)
+						}
+						sort.Sort(buffer)
+						rows := make([]copyTestRow, buffer.NumRows())
+						reader := NewGenericRowGroupReader[copyTestRow](buffer)
+						if n, err := reader.Read(rows); n != len(rows) || (err != nil && err != io.EOF) {
+							t.Fatalf("reading source: %d rows, %v", n, err)
+						}
+						if err := reader.Close(); err != nil {
+							t.Fatal(err)
+						}
+						var input RowGroup = buffer
+						if source == "rowbuffer" {
+							rowBuffer := NewRowBuffer[copyTestRow](SortingRowGroupConfig(SortingColumns(test.columns...)))
+							if _, err := rowBuffer.Write(rows); err != nil {
+								t.Fatal(err)
+							}
+							input = rowBuffer
+						} else if source == "copy" || source == "split" {
+							input = writeCopyTestFile(t, rows, SortingWriterConfig(SortingColumns(test.columns...))).RowGroups()[0]
+						} else if source == "packed" {
+							var groups []RowGroup
+							for _, part := range [][]copyTestRow{rows[:1], rows[1:3], rows[3:]} {
+								groups = append(groups, writeCopyTestFile(t, part, SortingWriterConfig(SortingColumns(test.columns...))).RowGroups()...)
+							}
+							var err error
+							input, err = MergeRowGroups(groups, SortingRowGroupConfig(SortingColumns(test.columns...)))
+							if err != nil {
+								t.Fatal(err)
+							}
+						}
+
+						var output bytes.Buffer
+						writer.Reset(&output)
+						if _, err := writer.WriteRowGroup(input); err != nil {
+							t.Fatal(err)
+						}
+						if err := writer.Close(); err != nil {
+							t.Fatal(err)
+						}
+						out, err := OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+						if err != nil {
+							t.Fatal(err)
+						}
+						want := test.want
+						if override {
+							want = writerSorting
+						}
+						for i, group := range out.Metadata().RowGroups {
+							if got := group.SortingColumns; !slices.Equal(got, want) {
+								t.Errorf("source %v: row group %d: sorting columns = %+v, want %+v", test.columns, i, got, want)
+							}
+							if group.NumRows > maxRows {
+								t.Errorf("row group has %d rows, limit %d", group.NumRows, maxRows)
+							}
+						}
+						if got := readCopyTestRows(t, output.Bytes(), len(rows)); !slices.Equal(got, rows) {
+							t.Errorf("rows = %v, want %v", got, rows)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestWriteRowGroupMissingSortingColumn(t *testing.T) {
+	type row struct {
+		Nested struct {
+			Value int `parquet:"value"`
+		} `parquet:"nested"`
+	}
+	buffer := NewGenericBuffer[row](SortingRowGroupConfig(SortingColumns(
+		Ascending("missing"), Ascending("nested"), NullsFirst(Descending("nested", "value")), Ascending(),
+	)))
+	if _, err := buffer.Write([]row{{}}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	writer := NewGenericWriter[row](&output)
+	if _, err := writer.WriteRowGroup(buffer); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []format.SortingColumn{{ColumnIdx: 0, Descending: true, NullsFirst: true}}
+	if got := out.Metadata().RowGroups[0].SortingColumns; !slices.Equal(got, want) {
+		t.Errorf("sorting columns = %+v, want %+v", got, want)
 	}
 }

@@ -639,11 +639,24 @@ func (w *Writer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 	w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks(), rowGroup.NumRows())
 	rows := rowGroup.Rows()
 	defer rows.Close()
-	n, err := CopyRows(w.writer, rows)
+	sortingColumns := rowGroup.SortingColumns()
+	n, err := CopyRows(rowGroupWriter{w.writer, rowGroupSchema, sortingColumns}, rows)
 	if err != nil {
 		return n, err
 	}
-	return w.writer.writeRowGroup(w.writer.currentRowGroup, rowGroup.Schema(), rowGroup.SortingColumns())
+	return w.writer.writeRowGroup(w.writer.currentRowGroup, rowGroupSchema, sortingColumns)
+}
+
+// rowGroupWriter carries source sorting metadata through row-count-triggered
+// flushes without changing the writer's configured sorting columns.
+type rowGroupWriter struct {
+	*writer
+	schema         *Schema
+	sortingColumns []SortingColumn
+}
+
+func (w rowGroupWriter) WriteRows(rows []Row) (int, error) {
+	return w.writer.writeRows(rows, w.schema, w.sortingColumns)
 }
 
 // ReadRowsFrom reads rows from the reader passed as arguments and writes them
@@ -1809,15 +1822,15 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		} else {
 			sortingColumns = reuseRowGroup.SortingColumns
 		}
-		forEachLeafColumnOf(rowGroupSchema, func(leaf leafColumn) {
-			if sortingIndex := searchSortingColumn(rowGroupSortingColumns, leaf.path); sortingIndex < len(sortingColumns) {
-				sortingColumns[sortingIndex] = format.SortingColumn{
-					ColumnIdx:  int32(leaf.columnIndex),
-					Descending: rowGroupSortingColumns[sortingIndex].Descending(),
-					NullsFirst: rowGroupSortingColumns[sortingIndex].NullsFirst(),
-				}
+		for _, sortingColumn := range rowGroupSortingColumns {
+			if leaf, ok := rowGroupSchema.Lookup(sortingColumn.Path()...); ok {
+				sortingColumns = append(sortingColumns, format.SortingColumn{
+					ColumnIdx:  int32(leaf.ColumnIndex),
+					Descending: sortingColumn.Descending(),
+					NullsFirst: sortingColumn.NullsFirst(),
+				})
 			}
-		})
+		}
 	}
 
 	var reuseColumnIndex *[]format.ColumnIndex = nil
@@ -1896,7 +1909,11 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 	return numRows, nil
 }
 
-func (w *writer) WriteRows(rows []Row) (written int, err error) {
+func (w *writer) WriteRows(rows []Row) (int, error) {
+	return w.writeRows(rows, nil, nil)
+}
+
+func (w *writer) writeRows(rows []Row, schema *Schema, sortingColumns []SortingColumn) (written int, err error) {
 	var n int
 	for len(rows) > 0 {
 		n, err = w.currentRowGroup.WriteRows(rows)
@@ -1905,7 +1922,7 @@ func (w *writer) WriteRows(rows []Row) (written int, err error) {
 		if err != ErrTooManyRowGroups {
 			break
 		}
-		if err = w.flush(); err != nil {
+		if _, err = w.writeRowGroup(w.currentRowGroup, schema, sortingColumns); err != nil {
 			break
 		}
 	}
