@@ -11,6 +11,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 type AddressBook1 struct {
@@ -1354,6 +1355,86 @@ func TestConvertValue(t *testing.T) {
 				t.Errorf("converted value mismatch:\nwant = %+v\ngot  = %+v", want, got)
 			}
 		})
+	}
+}
+
+type unsetTimeUnit struct{}
+
+func (unsetTimeUnit) Duration() time.Duration   { return time.Nanosecond }
+func (unsetTimeUnit) TimeUnit() format.TimeUnit { return format.TimeUnit{} }
+
+func TestConvertTimeUnits(t *testing.T) {
+	units := []parquet.TimeUnit{parquet.Millisecond, parquet.Microsecond, parquet.Nanosecond, unsetTimeUnit{}}
+	for _, fromAdjusted := range []bool{false, true} {
+		for _, toAdjusted := range []bool{false, true} {
+			for _, from := range units {
+				for _, to := range units {
+					t.Run(fmt.Sprintf("%T/%T/adjusted=%t/%t", from, to, fromAdjusted, toAdjusted), func(t *testing.T) {
+						fromType := parquet.TimeAdjusted(from, fromAdjusted).Type()
+						toType := parquet.TimeAdjusted(to, toAdjusted).Type()
+						null := parquet.NullValue().Level(1, 0, 3)
+						got, err := toType.ConvertValue(null, fromType)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if !parquet.DeepEqual(got, null) {
+							t.Errorf("converting null: got %v (%s), want null with original levels", got, got.Kind())
+						}
+						for _, duration := range []time.Duration{
+							0, 1, time.Microsecond - 1, time.Microsecond, time.Microsecond + 1,
+							time.Millisecond - 1, time.Millisecond, time.Millisecond + 1,
+							12*time.Hour + 34*time.Minute + 56*time.Second + 789012345,
+							24*time.Hour - 1,
+						} {
+							count := int64(duration / from.Duration())
+							value := parquet.Int64Value(count)
+							if fromType.Kind() == parquet.Int32 {
+								value = parquet.Int32Value(int32(count))
+							}
+							wantCount := int64(duration.Truncate(from.Duration()) / to.Duration())
+							want := parquet.Int64Value(wantCount)
+							if toType.Kind() == parquet.Int32 {
+								want = parquet.Int32Value(int32(wantCount))
+							}
+							got, err := toType.ConvertValue(value.Level(1, 2, 3), fromType)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if !parquet.DeepEqual(got, want.Level(1, 2, 3)) {
+								t.Fatalf("converting %s: got %v (%s), want %v (%s)", duration, got, got.Kind(), want, want.Kind())
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestReadTimeUnitConversion(t *testing.T) {
+	type stored struct {
+		Time int32 `parquet:"time,time(millisecond)"`
+	}
+	type converted struct {
+		Time time.Duration `parquet:"time,time(microsecond)"`
+	}
+	var buf bytes.Buffer
+	if err := parquet.Write(&buf, []stored{{Time: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	original, err := parquet.Read[stored](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(original) != 1 || original[0].Time != 1 {
+		t.Fatalf("stored rows = %v, want [{1}]", original)
+	}
+	rows, err := parquet.Read[converted](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Time != time.Millisecond {
+		t.Fatalf("converted rows = %v, want [{1ms}]", rows)
 	}
 }
 
