@@ -1,4 +1,4 @@
-//go:build !amd64 || !goexperiment.simd || go1.27
+//go:build !amd64 || !goexperiment.simd
 
 package delta
 
