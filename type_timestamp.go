@@ -224,15 +224,7 @@ func (t *timestampType) AssignValue(dst reflect.Value, src Value) error {
 			return nil
 		}
 
-		unit := Nanosecond.TimeUnit()
-		lt := t.LogicalType()
-		if ts, ok := logicalTypeOf[*format.TimestampType](lt); ok {
-			unit = ts.Unit
-		}
-
-		nanos := src.int64() * int64(timeUnitDuration(unit))
-
-		val := time.Unix(0, nanos).UTC()
+		val := t.time(src.int64())
 		dst.Set(reflect.ValueOf(val))
 		return nil
 	case reflect.TypeFor[*time.Time]():
@@ -243,20 +235,23 @@ func (t *timestampType) AssignValue(dst reflect.Value, src Value) error {
 			return nil
 		}
 
-		unit := Nanosecond.TimeUnit()
-		lt := t.LogicalType()
-		if ts, ok := logicalTypeOf[*format.TimestampType](lt); ok {
-			unit = ts.Unit
-		}
-
-		nanos := src.int64() * int64(timeUnitDuration(unit))
-
-		val := time.Unix(0, nanos).UTC()
+		val := t.time(src.int64())
 		ptr := &val
 		dst.Set(reflect.ValueOf(ptr))
 		return nil
 	default:
 		return int64Type{}.AssignValue(dst, src)
+	}
+}
+
+func (t *timestampType) time(v int64) time.Time {
+	switch t.Unit.Value.(type) {
+	case *format.MilliSeconds:
+		return time.UnixMilli(v).UTC()
+	case *format.MicroSeconds:
+		return time.UnixMicro(v).UTC()
+	default:
+		return time.Unix(0, v).UTC()
 	}
 }
 
