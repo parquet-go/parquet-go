@@ -147,8 +147,9 @@ jobs:
       # bitpack and jsonlite still ship Go 1.26 archsimd sources. On Go 1.27
       # those files do not compile, so this module's tests never start.
       # Give them the same !go1.27 split used here, in the module cache,
-      # until those modules release it. On Go 1.26 the rewritten constraint
-      # is equivalent (!go1.27 is true), so the step is limited to 1.27.
+      # until those modules release it. The module index in the build cache
+      # is keyed only by the module directory and treats that directory as
+      # immutable, so it would keep the pre-patch constraints; drop it.
       - name: Retarget dependency simd build tags
         if: steps.cpu.outputs.supported == 'true' && startsWith(matrix.go, '1.27')
         run: |
@@ -171,7 +172,7 @@ jobs:
               root = Path(mod)
               os.chmod(root, 0o755)
               for p in root.rglob("*"):
-                  if p.suffix not in {".go", ".s"}:
+                  if not p.is_file() or p.suffix not in {".go", ".s"}:
                       continue
                   os.chmod(p, 0o644)
                   text = p.read_text()
@@ -185,6 +186,17 @@ jobs:
                       p.write_text(''.join(out))
                       print("retargeted", p)
           PY
+          go clean -cache
+          jsonlite=$(go list -f '{{join .GoFiles " "}}' github.com/parquet-go/jsonlite)
+          bitpack=$(go list -f '{{join .GoFiles " "}}' github.com/parquet-go/bitpack)
+          echo "jsonlite: $jsonlite"
+          echo "bitpack: $bitpack"
+          case "$jsonlite" in
+            *stage1_amd64.go*) echo "jsonlite simd sources still selected"; exit 1 ;;
+          esac
+          case "$bitpack" in
+            *simd_amd64.go*) echo "bitpack simd sources still selected"; exit 1 ;;
+          esac
 
       - name: Run Tests
         if: steps.cpu.outputs.supported == 'true'
