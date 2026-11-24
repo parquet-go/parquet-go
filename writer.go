@@ -1161,6 +1161,11 @@ type deferredBloomFilter struct {
 	column   int
 	buf      io.ReadWriteSeeker
 	reset    func()
+	// columnMeta is a detached copy of the plaintext column metadata for
+	// plaintext-footer files. The footer copy is cleared when the row group
+	// is committed, before the bloom filter offset is known.
+	// writeDeferredBloomFilters encrypts this copy again with that offset.
+	columnMeta *format.ColumnMetaData
 }
 
 func newWriter(output io.Writer, config *WriterConfig) *writer {
@@ -1346,23 +1351,86 @@ func (w *writer) writeFileHeader() error {
 func (w *writer) writeDeferredBloomFilters() error {
 	defer func() {
 		// Reset here to ensure a re-used closed writer doesn't double return buffers.
-		for _, bf := range w.deferredBloomFilters {
-			bf.reset()
+		for i := range w.deferredBloomFilters {
+			w.deferredBloomFilters[i].reset()
+			w.deferredBloomFilters[i].columnMeta = nil
 		}
 		w.deferredBloomFilters = w.deferredBloomFilters[:0]
 		w.deferredBloomFilterSize = 0
 	}()
-	for _, bf := range w.deferredBloomFilters {
+	for i := range w.deferredBloomFilters {
+		bf := &w.deferredBloomFilters[i]
 		c := &w.rowGroups[bf.rowGroup].Columns[bf.column]
 		bloomFilterOffset := w.writer.offset
-		c.MetaData.BloomFilterOffset = bloomFilterOffset
 		if _, err := w.writer.ReadFrom(bf.buf); err != nil {
 			return err
 		}
 		bloomFilterLength := w.writer.offset - bloomFilterOffset
+		if w.encryption != nil && !w.encryption.cfg.EncryptedFooter {
+			// The row group stored an encrypted column metadata blob before this
+			// offset existed, and cleared the plaintext copy. Encrypt the retained
+			// metadata again so the offset is inside EncryptedColumnMetadata, and
+			// leave the plaintext ColumnMetaData empty.
+			if bf.columnMeta == nil {
+				return fmt.Errorf("parquet: deferred bloom filter missing column metadata: row group %d column %d", bf.rowGroup, bf.column)
+			}
+			bf.columnMeta.BloomFilterOffset = bloomFilterOffset
+			bf.columnMeta.BloomFilterLength = int32(bloomFilterLength)
+			encMeta, err := w.encryptColumnMetadata(bf.columnMeta, columnMetadataKey(w.encryption, c), int16(bf.rowGroup), int16(bf.column))
+			if err != nil {
+				return err
+			}
+			c.EncryptedColumnMetadata = encMeta
+			c.MetaData = format.ColumnMetaData{}
+			continue
+		}
+		c.MetaData.BloomFilterOffset = bloomFilterOffset
 		c.MetaData.BloomFilterLength = int32(bloomFilterLength)
 	}
 	return nil
+}
+
+// encryptColumnMetadata seals meta with the column-metadata module AAD for the
+// given row group and column ordinals.
+func (w *writer) encryptColumnMetadata(meta *format.ColumnMetaData, key []byte, rowGroup, column int16) ([]byte, error) {
+	var metaBuf bytes.Buffer
+	protocol := new(thrift.CompactProtocol)
+	encoder := thrift.NewEncoder(protocol.NewWriter(&metaBuf))
+	if err := encoder.Encode(meta); err != nil {
+		return nil, fmt.Errorf("encoding column metadata for encryption: %w", err)
+	}
+	aad := makeAAD(w.encryption.cfg.AadPrefix, w.encryption.fileUnique, columnMetaDataModule, rowGroup, column)
+	encMeta, err := encryptModule(key, aad, metaBuf.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("encrypting column metadata: %w", err)
+	}
+	return encMeta, nil
+}
+
+// columnMetadataKey returns the key that seals a plaintext-footer column chunk.
+// A column key takes precedence; every other column uses the footer key.
+func columnMetadataKey(enc *fileEncryptionState, chunk *format.ColumnChunk) []byte {
+	if crypto, ok := chunk.CryptoMetadata.Value.(*format.EncryptionWithColumnKey); ok {
+		return enc.columnKeyFor(columnPathString(crypto.PathInSchema))
+	}
+	return enc.cfg.FooterKey
+}
+
+// cloneColumnMetaData copies metadata that must outlive the column writer.
+// The writer reuses the slice backing arrays on the next row group.
+func cloneColumnMetaData(m format.ColumnMetaData) format.ColumnMetaData {
+	m.Encoding = slices.Clone(m.Encoding)
+	m.PathInSchema = slices.Clone(m.PathInSchema)
+	m.KeyValueMetadata = slices.Clone(m.KeyValueMetadata)
+	m.Statistics.Max = slices.Clone(m.Statistics.Max)
+	m.Statistics.Min = slices.Clone(m.Statistics.Min)
+	m.Statistics.MaxValue = slices.Clone(m.Statistics.MaxValue)
+	m.Statistics.MinValue = slices.Clone(m.Statistics.MinValue)
+	m.EncodingStats = slices.Clone(m.EncodingStats)
+	m.SizeStatistics.RepetitionLevelHistogram = slices.Clone(m.SizeStatistics.RepetitionLevelHistogram)
+	m.SizeStatistics.DefinitionLevelHistogram = slices.Clone(m.SizeStatistics.DefinitionLevelHistogram)
+	m.GeospatialStatistics.GeoSpatialTypes = slices.Clone(m.GeospatialStatistics.GeoSpatialTypes)
+	return m
 }
 
 func (w *writer) writeFileFooter() error {
@@ -1793,24 +1861,28 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 			}
 
 			// In plaintext-footer mode, encrypt the column metadata and store it
-			// inline in EncryptedColumnMetadata, removing the plaintext MetaData so
-			// that sensitive statistics/offsets are not exposed in the footer.
+			// inline in EncryptedColumnMetadata. The plaintext copy is cleared
+			// below so statistics and offsets are not written to the footer.
+			// Deferred bloom offsets are not known yet; writeDeferredBloomFilters
+			// encrypts those columns again once the offsets are known.
 			if !w.encryption.cfg.EncryptedFooter {
-				enc := w.encryption
-				var metaBuf bytes.Buffer
-				metaProto := new(thrift.CompactProtocol)
-				metaEnc := thrift.NewEncoder(metaProto.NewWriter(&metaBuf))
-				if err := metaEnc.Encode(&c.columnChunk.MetaData); err != nil {
-					return 0, fmt.Errorf("encoding column metadata for encryption: %w", err)
-				}
-				key := enc.columnKeyFor(path)
-				aad := makeAAD(enc.cfg.AadPrefix, enc.fileUnique, columnMetaDataModule, int16(rowGroupIndex), int16(i))
-				encMeta, err := encryptModule(key, aad, metaBuf.Bytes())
+				encMeta, err := w.encryptColumnMetadata(&c.columnChunk.MetaData, w.encryption.columnKeyFor(path), int16(rowGroupIndex), int16(i))
 				if err != nil {
-					return 0, fmt.Errorf("encrypting column metadata: %w", err)
+					return 0, err
 				}
 				c.columnChunk.EncryptedColumnMetadata = encMeta
 			}
+		}
+	}
+
+	if w.encryption != nil && !w.encryption.cfg.EncryptedFooter {
+		for i := range w.deferredBloomFilters {
+			bf := &w.deferredBloomFilters[i]
+			if bf.rowGroup != rowGroupIndex {
+				continue
+			}
+			meta := cloneColumnMetaData(rg.columnChunk[bf.column].MetaData)
+			bf.columnMeta = &meta
 		}
 	}
 
