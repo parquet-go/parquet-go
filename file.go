@@ -280,7 +280,7 @@ func OpenFile(r io.ReaderAt, size int64, options ...FileOption) (*File, error) {
 					// Encrypted columns cannot be decoded here because the bloom
 					// filter bytes on disk are AES-GCM envelopes, not plain
 					// thrift.  Defer loading to the lazy readBloomFilter path.
-					if cc.decryptionKey != nil {
+					if cc.decryptionKey != nil || cc.missingKey {
 						continue
 					}
 
