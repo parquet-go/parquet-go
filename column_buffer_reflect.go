@@ -889,7 +889,7 @@ func writeValueFuncOfLeaf(columnIndex uint16, node Node) (uint16, writeValueFunc
 			case geom.T:
 				writeGeometry(col, levels, msg, node)
 			case *big.Float:
-				writeBigFloat(col, levels, msg, node)
+				writeBigFloat(col, levels, msg, node.Type())
 			default:
 				value = value.Elem()
 				goto writeValue
@@ -1081,6 +1081,8 @@ func decimalValue(col ColumnBuffer, levels columnLevels, typ Type, value reflect
 		col.writeInt64(levels, val)
 	case ByteArray:
 		col.writeByteArray(levels, numberToByteArray(val))
+	case FixedLenByteArray:
+		writeBigFloat(col, levels, new(big.Float).SetFloat64(value.Float()), typ)
 	}
 }
 
@@ -1093,8 +1095,7 @@ func numberToByteArray(data any) []byte {
 	return buf.Bytes()
 }
 
-func writeBigFloat(col ColumnBuffer, levels columnLevels, f *big.Float, node Node) {
-	typ := node.Type()
+func writeBigFloat(col ColumnBuffer, levels columnLevels, f *big.Float, typ Type) {
 	decimal, ok := logicalTypeOf[*format.DecimalType](typ.LogicalType())
 	if !ok {
 		panic("writeBigFloat requires a decimal logical type")
