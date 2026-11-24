@@ -295,6 +295,15 @@ func (t *timeType) ConvertValue(val Value, typ Type) (Value, error) {
 		if val.isNull() || reflect.TypeOf(src.Unit.Value) == reflect.TypeOf(t.Unit.Value) {
 			return val, nil
 		}
+		if val.int64() == 0 {
+			if t.useInt32() {
+				return val.convertToInt32(0), nil
+			}
+			return val.convertToInt64(0), nil
+		}
+		if (src.Unit.Value == nil && isNanos(t.Unit)) || (t.Unit.Value == nil && isNanos(src.Unit)) {
+			return val, nil
+		}
 		v, err := convertTimestampToTimestamp(val, src.Unit, t.Unit)
 		if t.useInt32() {
 			v = v.convertToInt32(int32(v.int64()))
