@@ -1017,7 +1017,12 @@ func reconstructFuncOfMap(columnIndex uint16, node Node) (uint16, reconstructFun
 		if valueIsList || v.Kind() == reflect.Interface {
 			actualVal = keyValueElem.Field(1).Type
 		}
-		elem := reflect.New(makeKeyValueType(keyValueElem, k, actualVal)).Elem()
+		elemType := makeKeyValueType(keyValueElem, k, actualVal)
+		elem := b.mapEntry
+		if !elem.IsValid() || elem.Type() != elemType {
+			elem = reflect.New(elemType).Elem()
+			b.mapEntry = elem
+		}
 		for range n {
 			for j, column := range values {
 				column = column[:cap(column)]
@@ -1031,6 +1036,7 @@ func reconstructFuncOfMap(columnIndex uint16, node Node) (uint16, reconstructFun
 			}
 
 			if err := reconstruct(elem, levels, values); err != nil {
+				elem.SetZero()
 				b.release()
 				return err
 			}
@@ -1039,7 +1045,10 @@ func reconstructFuncOfMap(columnIndex uint16, node Node) (uint16, reconstructFun
 				values[j] = column[len(column):len(column):cap(column)]
 			}
 
-			mapKey := elem.Field(0).Convert(k)
+			mapKey := elem.Field(0)
+			if mapKey.Type() != k {
+				mapKey = mapKey.Convert(k)
+			}
 			mapValue := elem.Field(1)
 
 			// If the value is a LIST type, we need to extract the elements from the
@@ -1047,7 +1056,7 @@ func reconstructFuncOfMap(columnIndex uint16, node Node) (uint16, reconstructFun
 			// []struct { Element T }, and we need to convert it to []T.
 			if valueIsList && v.Kind() == reflect.Slice {
 				mapValue = convertListWrapperToSlice(mapValue, v)
-			} else {
+			} else if mapValue.Type() != v {
 				mapValue = mapValue.Convert(v)
 			}
 
