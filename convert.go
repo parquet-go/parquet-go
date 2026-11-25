@@ -110,6 +110,39 @@ func convertToType(targetType, sourceType Type) conversionFunc {
 	}
 }
 
+// convertToTypeKeepingNulls rewrites column values from sourceType to
+// targetType, leaving nulls null when their mapped definition level still
+// denotes null.
+//
+// ConvertValue reads the zero bits of a null and returns a typed zero, which
+// would clear IsNull while the definition level stayed put. definitionLevels
+// maps a source definition level to the target level. A required column has
+// no null level, so it uses convertToType and a null still becomes the zero
+// of that field.
+//
+// kind is read directly. (*Value).isNull takes a pointer, which forces every
+// value in this loop onto the stack.
+func convertToTypeKeepingNulls(targetType, sourceType Type, maxDefinitionLevel byte, definitionLevels []byte) conversionFunc {
+	return func(column []Value) error {
+		for i, v := range column {
+			if v.kind == 0 {
+				d := v.definitionLevel
+				if int(d) >= len(definitionLevels) || definitionLevels[d] < maxDefinitionLevel {
+					continue
+				}
+			}
+			converted, err := targetType.ConvertValue(v, sourceType)
+			if err != nil {
+				return err
+			}
+			column[i].ptr = converted.ptr
+			column[i].u64 = converted.u64
+			column[i].kind = converted.kind
+		}
+		return nil
+	}
+}
+
 func convertToZero(kind Kind) conversionFunc {
 	switch kind {
 	case Boolean:
@@ -454,9 +487,6 @@ func Convert(to, from Node) (conv Conversion, err error) {
 		if sourceColumn.node != nil {
 			targetType := targetColumn.node.Type()
 			sourceType := sourceColumn.node.Type()
-			if !EqualTypes(targetType, sourceType) {
-				conversions = append(conversions, convertToType(targetType, sourceType))
-			}
 
 			repetitionLevels := make([]byte, len(path)+1)
 			definitionLevels := make([]byte, len(path)+1)
@@ -503,6 +533,18 @@ func Convert(to, from Node) (conv Conversion, err error) {
 				repetitionLevels = repetitionLevels[:sourceRepetitionLevel+1]
 				definitionLevels = definitionLevels[:sourceDefinitionLevel+1]
 
+				if !EqualTypes(targetType, sourceType) {
+					if targetColumn.maxDefinitionLevel == 0 {
+						conversions = append(conversions, convertToType(targetType, sourceType))
+					} else {
+						conversions = append(conversions, convertToTypeKeepingNulls(
+							targetType,
+							sourceType,
+							targetColumn.maxDefinitionLevel,
+							definitionLevels,
+						))
+					}
+				}
 				if !isDirectLevelMapping(repetitionLevels) || !isDirectLevelMapping(definitionLevels) {
 					conversions = append(conversions, convertToLevels(repetitionLevels, definitionLevels))
 				}
