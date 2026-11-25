@@ -173,10 +173,7 @@ func (m *missingField) append(dst []Value, src []Value, columnIndex int) []Value
 		if rep > m.groupSourceRep {
 			continue
 		}
-		def := src[i].definitionLevel
-		if def > m.groupSourceDef {
-			def = m.groupSourceDef
-		}
+		def := min(src[i].definitionLevel, m.groupSourceDef)
 		dst = append(dst, m.value(m.mapLevel(m.repetitionLevels, rep), m.clampDef(m.mapLevel(m.definitionLevels, def)), col))
 	}
 	if len(dst) == start {
@@ -1275,10 +1272,7 @@ func (r *missingPageValues) readSynthesized(values []Value, columnIndex uint16) 
 			if rep > synth.groupSourceRep {
 				continue
 			}
-			def := src.definitionLevel
-			if def > synth.groupSourceDef {
-				def = synth.groupSourceDef
-			}
+			def := min(src.definitionLevel, synth.groupSourceDef)
 			values[total] = synth.value(synth.mapLevel(synth.repetitionLevels, rep), synth.clampDef(synth.mapLevel(synth.definitionLevels, def)), columnIndex)
 			total++
 		}
