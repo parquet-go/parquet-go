@@ -72,3 +72,40 @@ func TestWriteRowsWithALPFileSchema(t *testing.T) {
 		t.Fatalf("rewriting an ALP column: got %v, %v", got, err)
 	}
 }
+
+func TestOptInALPWrite(t *testing.T) {
+	type row struct {
+		F float32
+		D float64
+	}
+	rows := make([]row, 2049)
+	for i := range rows {
+		d := float64(i-1024) / 100
+		rows[i] = row{float32(d), d}
+	}
+	rows[0] = row{math.Float32frombits(0xffc00042), math.Copysign(0, -1)}
+	rows[1024] = row{math.SmallestNonzeroFloat32, math.Float64frombits(0x7ff0000000000042)}
+	rows[2048] = row{float32(math.Inf(1)), math.Inf(-1)}
+	var output bytes.Buffer
+	if err := parquet.Write(&output, rows, parquet.DefaultEncodingFor(parquet.Float, &parquet.ALP), parquet.DefaultEncodingFor(parquet.Double, &parquet.ALP)); err != nil {
+		t.Fatal(err)
+	}
+	f, err := parquet.OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"F", "D"} {
+		if f.Root().Column(name).Encoding().Encoding() != format.ALP {
+			t.Fatalf("expected ALP for %s", name)
+		}
+	}
+	got, err := parquet.Read[row](bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil || len(got) != len(rows) {
+		t.Fatalf("read %d rows: %v", len(got), err)
+	}
+	for i, r := range got {
+		if math.Float32bits(r.F) != math.Float32bits(rows[i].F) || math.Float64bits(r.D) != math.Float64bits(rows[i].D) {
+			t.Fatalf("row %d: bits differ", i)
+		}
+	}
+}

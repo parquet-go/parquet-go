@@ -531,12 +531,12 @@ func mapKeyValueOf(node Node) Node {
 
 func encodingOf(node Node, defaultEncodings map[Kind]encoding.Encoding) encoding.Encoding {
 	encoding := node.Encoding()
-	// ALP is decode-only, so a column that reports it needs a writable
-	// encoding for new pages.
-	if encoding != nil && encoding.Encoding() == format.ALP {
+	kind := node.Type().Kind()
+	// A file-derived ALP column reports the decoder. Writing Preview ALP
+	// requires an explicit writer option.
+	if encoding != nil && encoding.Encoding() == format.ALP && !canEncode(encoding, kind) {
 		encoding = nil
 	}
-	kind := node.Type().Kind()
 	if encoding == nil && defaultEncodings != nil {
 		encoding = defaultEncodings[kind]
 	}

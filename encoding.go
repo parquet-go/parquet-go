@@ -47,6 +47,9 @@ var (
 	// ByteStreamSplit is an encoding for numeric and fixed-length binary data.
 	ByteStreamSplit bytestreamsplit.Encoding
 
+	// ALP enables Preview ALP encoding for FLOAT and DOUBLE writes.
+	ALP alp.Writer
+
 	// Table indexing the encodings supported by this package.
 	encodings = [...]encoding.Encoding{
 		format.Plain:                &Plain,

@@ -9,6 +9,7 @@ import (
 
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/encoding/alp"
+	"github.com/parquet-go/parquet-go/encoding/plain"
 )
 
 func TestDecodeDouble(t *testing.T) {
@@ -131,6 +132,41 @@ func TestPackedWidths(t *testing.T) {
 		got, err := new(alp.Encoding).DecodeDouble(nil, slices.Clip(page))
 		if err != nil || !slices.Equal(got, want) {
 			t.Fatalf("incorrect %d-bit deltas: %v", width, err)
+		}
+	}
+}
+
+func BenchmarkWriteDouble(b *testing.B) {
+	for _, randomBits := range []bool{false, true} {
+		values := make([]float64, 1024)
+		seed := uint64(1)
+		pattern := "hundredths"
+		for i := range values {
+			seed ^= seed << 13
+			seed ^= seed >> 7
+			seed ^= seed << 17
+			values[i] = float64(int64(seed%100001)-50000) / 100
+			if randomBits {
+				values[i] = math.Float64frombits(seed)
+				pattern = "random-bits"
+			}
+		}
+		for _, enc := range []encoding.Encoding{new(alp.Writer), new(plain.Encoding)} {
+			b.Run(pattern+"/"+enc.String(), func(b *testing.B) {
+				dst, err := enc.EncodeDouble(nil, values)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.SetBytes(int64(len(values) * 8))
+				b.ReportAllocs()
+				for b.Loop() {
+					dst, err = enc.EncodeDouble(dst, values)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.ReportMetric(float64(len(dst)), "encoded-B/page")
+			})
 		}
 	}
 }
