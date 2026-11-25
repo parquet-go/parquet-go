@@ -989,6 +989,21 @@ func TestProjectedColumnCountsGroupInstances(t *testing.T) {
 	if n != 1 || buf[0].DefinitionLevel() != 0 {
 		t.Fatalf("nested slice: n=%d def=%d, want one value at def 0", n, buf[0].DefinitionLevel())
 	}
+
+	// A slice must stop at its rows even when NumValues has not been filled in.
+	fresh, err := y.Pages().ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRow := fresh.Slice(0, 1)
+	wide := make([]parquet.Value, 32)
+	n, err = firstRow.Values().ReadValues(wide)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("unread slice returned %d values, want 2", n)
+	}
 }
 
 func TestAddedColumnNullWhenNotPresent(t *testing.T) {

@@ -115,6 +115,39 @@ func convertToType(targetType, sourceType Type) conversionFunc {
 	}
 }
 
+// convertToTypeKeepingNulls rewrites column values from sourceType to
+// targetType, leaving nulls null when their mapped definition level still
+// denotes null.
+//
+// ConvertValue reads the zero bits of a null and returns a typed zero, which
+// would clear IsNull while the definition level stayed put. definitionLevels
+// maps a source definition level to the target level. A required column has
+// no null level, so it uses convertToType and a null still becomes the zero
+// of that field.
+//
+// kind is read directly. (*Value).isNull takes a pointer, which forces every
+// value in this loop onto the stack.
+func convertToTypeKeepingNulls(targetType, sourceType Type, maxDefinitionLevel byte, definitionLevels []byte) conversionFunc {
+	return func(column []Value) error {
+		for i, v := range column {
+			if v.kind == 0 {
+				d := v.definitionLevel
+				if int(d) >= len(definitionLevels) || definitionLevels[d] < maxDefinitionLevel {
+					continue
+				}
+			}
+			converted, err := targetType.ConvertValue(v, sourceType)
+			if err != nil {
+				return err
+			}
+			column[i].ptr = converted.ptr
+			column[i].u64 = converted.u64
+			column[i].kind = converted.kind
+		}
+		return nil
+	}
+}
+
 func convertToLevels(repetitionLevels, definitionLevels []byte) conversionFunc {
 	return func(column []Value) error {
 		for i := range column {
@@ -392,9 +425,6 @@ func Convert(to, from Node) (conv Conversion, err error) {
 		if sourceColumn.node != nil {
 			targetType := targetColumn.node.Type()
 			sourceType := sourceColumn.node.Type()
-			if !EqualTypes(targetType, sourceType) {
-				conversions = append(conversions, convertToType(targetType, sourceType))
-			}
 
 			repetitionLevels := make([]byte, len(path)+1)
 			definitionLevels := make([]byte, len(path)+1)
@@ -441,6 +471,18 @@ func Convert(to, from Node) (conv Conversion, err error) {
 				repetitionLevels = repetitionLevels[:sourceRepetitionLevel+1]
 				definitionLevels = definitionLevels[:sourceDefinitionLevel+1]
 
+				if !EqualTypes(targetType, sourceType) {
+					if targetColumn.maxDefinitionLevel == 0 {
+						conversions = append(conversions, convertToType(targetType, sourceType))
+					} else {
+						conversions = append(conversions, convertToTypeKeepingNulls(
+							targetType,
+							sourceType,
+							targetColumn.maxDefinitionLevel,
+							definitionLevels,
+						))
+					}
+				}
 				if !isDirectLevelMapping(repetitionLevels) || !isDirectLevelMapping(definitionLevels) {
 					conversions = append(conversions, convertToLevels(repetitionLevels, definitionLevels))
 				}
@@ -1207,6 +1249,8 @@ type missingPageValues struct {
 	adjacentBuffer []Value     // Buffer for reading adjacent values
 	siblingBuf     []Value     // Unconsumed values from the last sibling read
 	siblingOff     int
+	rowsSeen       int64
+	rowsDone       bool
 }
 
 func (r *missingPageValues) ReadValues(values []Value) (int, error) {
@@ -1240,6 +1284,9 @@ func (r *missingPageValues) ReadValues(values []Value) (int, error) {
 }
 
 func (r *missingPageValues) readProjected(values []Value, columnIndex uint16) (int, error) {
+	if r.rowsDone {
+		return 0, io.EOF
+	}
 	p := r.page.project
 	if !p.useSource || r.adjacentPages == nil {
 		for i := range values {
@@ -1247,12 +1294,15 @@ func (r *missingPageValues) readProjected(values []Value, columnIndex uint16) (i
 			values[i].columnIndex = columnIndex
 		}
 		r.read += int64(len(values))
-		if r.read >= r.page.numValues {
+		if r.page.numValues >= 0 && r.read >= r.page.numValues {
 			return len(values), io.EOF
 		}
 		return len(values), nil
 	}
 
+	// numValues may still be unknown (-1). Stop after the page's rows so a
+	// slice does not keep emitting the rest of the template column.
+	rowLimit := r.page.numRows
 	total := 0
 	for total < len(values) {
 		v, err := r.nextSibling()
@@ -1262,6 +1312,17 @@ func (r *missingPageValues) readProjected(values []Value, columnIndex uint16) (i
 				return total, nil
 			}
 			return total, err
+		}
+		if v.repetitionLevel == 0 {
+			if r.rowsSeen == rowLimit {
+				r.rowsDone = true
+				r.read += int64(total)
+				if total > 0 {
+					return total, nil
+				}
+				return 0, io.EOF
+			}
+			r.rowsSeen++
 		}
 		if v.repetitionLevel > p.groupSourceRep {
 			continue
