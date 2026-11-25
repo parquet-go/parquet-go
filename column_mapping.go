@@ -54,28 +54,60 @@ func (group columnMappingGroup) lookup(path columnPath) leafColumn {
 	return leafColumn{columnIndex: math.MaxUint16}
 }
 
-func (group columnMappingGroup) lookupClosest(path columnPath) leafColumn {
-	for len(path) > 0 {
-		g, ok := group[path[0]].(columnMappingGroup)
-		if ok {
-			group, path = g, path[1:]
-		} else {
-			firstName := ""
-			firstLeaf := (*columnMappingLeaf)(nil)
-			for name, child := range group {
-				if leaf, ok := child.(*columnMappingLeaf); ok {
-					if firstLeaf == nil || name < firstName {
-						firstName, firstLeaf = name, leaf
-					}
-				}
+// columnTemplate is the leaf used to count instances of one source group.
+// direct is set when that leaf is a child of the group. Otherwise leaf is
+// some leaf under the group, which still carries the group's repetition.
+type columnTemplate struct {
+	leaf   leafColumn
+	direct bool
+	has    bool
+	groups map[string]*columnTemplate
+}
+
+// templates indexes every source group by the leaf Convert should read when a
+// target column added under that group is missing from the source.
+func (group columnMappingGroup) templates() *columnTemplate {
+	t := &columnTemplate{}
+	var directName string
+	var nested leafColumn
+	hasNested := false
+	for name, child := range group {
+		switch c := child.(type) {
+		case *columnMappingLeaf:
+			if !t.direct || name < directName {
+				t.leaf = c.column
+				t.direct = true
+				t.has = true
+				directName = name
 			}
-			if firstLeaf != nil {
-				return firstLeaf.column
+		case columnMappingGroup:
+			childT := c.templates()
+			if t.groups == nil {
+				t.groups = make(map[string]*columnTemplate)
 			}
-			break
+			t.groups[name] = childT
+			if childT.has && (!hasNested || childT.leaf.columnIndex < nested.columnIndex) {
+				nested = childT.leaf
+				hasNested = true
+			}
 		}
 	}
-	return leafColumn{columnIndex: math.MaxUint16}
+	if !t.direct && hasNested {
+		t.leaf = nested
+		t.has = true
+	}
+	return t
+}
+
+func (t *columnTemplate) at(path columnPath) *columnTemplate {
+	cur := t
+	for _, name := range path {
+		if cur == nil || cur.groups == nil {
+			return nil
+		}
+		cur = cur.groups[name]
+	}
+	return cur
 }
 
 type columnMappingLeaf struct {

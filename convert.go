@@ -89,6 +89,9 @@ type conversionColumn struct {
 	// output column.
 	variantIndex  int
 	variantOutput int
+	// missing synthesizes values when the target column is absent from the
+	// source. Nil for columns that exist in both schemas.
+	missing *missingField
 }
 
 type conversionFunc func([]Value) error
@@ -143,89 +146,114 @@ func convertToTypeKeepingNulls(targetType, sourceType Type, maxDefinitionLevel b
 	}
 }
 
-func convertToZero(kind Kind) conversionFunc {
-	switch kind {
-	case Boolean:
-		return convertToZeroBoolean
-	case Int32:
-		return convertToZeroInt32
-	case Int64:
-		return convertToZeroInt64
-	case Int96:
-		return convertToZeroInt96
-	case Float:
-		return convertToZeroFloat
-	case Double:
-		return convertToZeroDouble
-	case ByteArray:
-		return convertToZeroByteArray
-	case FixedLenByteArray:
-		return convertToZeroFixedLenByteArray
-	default:
-		return convertToSelf
+// missingField synthesizes a target column that the source schema does not
+// have. Each value corresponds to one instance of the deepest matching source
+// group. Definition levels are remapped onto the target schema and clamped to
+// that group's definition level, so the new leaf is null (or the zero value,
+// when the leaf is required) for exactly those instances.
+type missingField struct {
+	needsValues      bool
+	groupSourceRep   byte
+	groupSourceDef   byte
+	groupTargetDef   byte
+	repetitionLevels []byte
+	definitionLevels []byte
+	null             bool
+	kind             Kind
+}
+
+func (m *missingField) append(dst []Value, src []Value, columnIndex int) []Value {
+	col := ^uint16(columnIndex)
+	if !m.needsValues {
+		return append(dst, m.value(m.repetitionLevels[0], m.clampDef(m.definitionLevels[0]), col))
 	}
-}
-
-func convertToZeroKind(column []Value, kind int8) error {
-	for i := range column {
-		column[i].ptr = nil
-		column[i].u64 = 0
-		column[i].kind = kind
-	}
-	return nil
-}
-
-func convertToZeroBoolean(column []Value) error {
-	return convertToZeroKind(column, ^int8(Boolean))
-}
-
-func convertToZeroInt32(column []Value) error {
-	return convertToZeroKind(column, ^int8(Int32))
-}
-
-func convertToZeroInt64(column []Value) error {
-	return convertToZeroKind(column, ^int8(Int64))
-}
-
-func convertToZeroInt96(column []Value) error {
-	return convertToZeroKind(column, ^int8(Int96))
-}
-
-func convertToZeroFloat(column []Value) error {
-	return convertToZeroKind(column, ^int8(Float))
-}
-
-func convertToZeroDouble(column []Value) error {
-	return convertToZeroKind(column, ^int8(Double))
-}
-
-func convertToZeroByteArray(column []Value) error {
-	return convertToZeroKind(column, ^int8(ByteArray))
-}
-
-func convertToZeroFixedLenByteArray(column []Value) error {
-	return convertToZeroKind(column, ^int8(FixedLenByteArray))
-}
-
-func convertToNull(column []Value) error {
-	return convertToZeroKind(column, 0) // kind = 0 indicates null
-}
-
-func convertToNullOptional(maxDefinitionLevel byte) conversionFunc {
-	return func(column []Value) error {
-		for i := range column {
-			column[i].ptr = nil
-			column[i].u64 = 0
-			column[i].kind = 0 // kind = 0 indicates null
-			// For optional fields, if the source value is present (defLevel == max),
-			// we need to set defLevel to max-1 to indicate null at the leaf level
-			if column[i].definitionLevel == maxDefinitionLevel {
-				column[i].definitionLevel--
-			}
-			// If source is already null (defLevel < max), keep the same defLevel
+	start := len(dst)
+	for i := range src {
+		rep := src[i].repetitionLevel
+		if rep > m.groupSourceRep {
+			continue
 		}
-		return nil
+		def := src[i].definitionLevel
+		if def > m.groupSourceDef {
+			def = m.groupSourceDef
+		}
+		dst = append(dst, m.value(m.mapLevel(m.repetitionLevels, rep), m.clampDef(m.mapLevel(m.definitionLevels, def)), col))
 	}
+	if len(dst) == start {
+		dst = append(dst, m.value(m.repetitionLevels[0], m.clampDef(m.definitionLevels[0]), col))
+	}
+	return dst
+}
+
+func (m *missingField) mapLevel(levels []byte, level byte) byte {
+	if int(level) >= len(levels) {
+		return 0
+	}
+	return levels[level]
+}
+
+func (m *missingField) clampDef(def byte) byte {
+	if def > m.groupTargetDef {
+		return m.groupTargetDef
+	}
+	return def
+}
+
+func (m *missingField) value(rep, def byte, columnIndex uint16) Value {
+	var v Value
+	if !m.null {
+		v = ZeroValue(m.kind)
+	}
+	v.repetitionLevel = rep
+	v.definitionLevel = def
+	v.columnIndex = columnIndex
+	return v
+}
+
+// enclosingGroupPath is the longest prefix of path that addresses a group in
+// source. The final element of path is the missing leaf, so it is not part of
+// the prefix. Ancestors that the source does not have, or that are leaves,
+// end the walk.
+func enclosingGroupPath(source Node, path columnPath) columnPath {
+	node := source
+	n := 0
+	for n < len(path)-1 {
+		field := fieldByName(node, path[n])
+		if field == nil || field.Leaf() {
+			break
+		}
+		node = field
+		n++
+	}
+	return path[:n]
+}
+
+// groupLevelMapping maps source repetition and definition levels along
+// groupPath onto the target schema. The returned slices are indexed by the
+// source level. groupTargetDef is the target definition level of the group
+// itself, which is the highest definition level a missing leaf inside it can
+// take.
+func groupLevelMapping(target, source Node, groupPath columnPath) (rep, def []byte, groupSourceRep, groupSourceDef, groupTargetDef byte) {
+	rep = make([]byte, len(groupPath)+1)
+	def = make([]byte, len(groupPath)+1)
+	targetNode := target
+	sourceNode := source
+	var targetRep, targetDef byte
+	for _, name := range groupPath {
+		targetField := fieldByName(targetNode, name)
+		sourceField := fieldByName(sourceNode, name)
+		if targetField == nil || sourceField == nil {
+			break
+		}
+		targetNode = targetField
+		sourceNode = sourceField
+		targetRep, targetDef = applyFieldRepetitionType(fieldRepetitionTypeOf(targetNode), targetRep, targetDef)
+		groupSourceRep, groupSourceDef = applyFieldRepetitionType(fieldRepetitionTypeOf(sourceNode), groupSourceRep, groupSourceDef)
+		rep[groupSourceRep] = targetRep
+		def[groupSourceDef] = targetDef
+	}
+	groupTargetDef = targetDef
+	return rep[:groupSourceRep+1], def[:groupSourceDef+1], groupSourceRep, groupSourceDef, groupTargetDef
 }
 
 func convertToLevels(repetitionLevels, definitionLevels []byte) conversionFunc {
@@ -323,6 +351,14 @@ func (c *conversion) Convert(rows []Row) (int, error) {
 				} else {
 					row = append(row, scratch.values...)
 				}
+				continue
+			}
+			if conv.missing != nil {
+				var src []Value
+				if conv.missing.needsValues && conv.sourceIndex >= 0 {
+					src = source.columns[conv.sourceIndex]
+				}
+				row = conv.missing.append(row, src, columnIndex)
 				continue
 			}
 
@@ -441,6 +477,7 @@ func Convert(to, from Node) (conv Conversion, err error) {
 	targetMapping, targetColumns := columnMappingOf(to)
 	sourceMapping, sourceColumns := columnMappingOf(from)
 	columns := make([]conversionColumn, len(targetColumns))
+	var sourceTemplates *columnTemplate
 
 	targetFieldCache := make(map[Node]map[string]Field)
 	sourceFieldCache := make(map[Node]map[string]Field)
@@ -551,36 +588,51 @@ func Convert(to, from Node) (conv Conversion, err error) {
 			}
 		}
 		if isMissingColumn {
-			// Column doesn't exist in source - this is a missing column
-			targetType := targetColumn.node.Type()
-			targetKind := targetType.Kind()
-
-			// Check if the leaf field itself is optional (not just nested in optional/repeated structure)
-			isOptionalField := targetColumn.node.Optional()
-
-			closestColumn := sourceMapping.lookupClosest(path)
-			if closestColumn.node != nil {
-				// There's a sibling column we can use as a template for structure.
-				// The sibling's values provide the repetition count for repeated groups.
-				// The conversion functions transform them to typed zeros or nulls.
-				if isOptionalField {
-					// Optional field: convert to null values while mirroring structure
-					conversions = append(conversions, convertToNullOptional(targetColumn.maxDefinitionLevel))
-				} else {
-					// Required field: convert to typed zero values
-					conversions = append(conversions, convertToZero(targetKind))
-				}
-				// Use the sibling column as the source for structural information
-				sourceColumn = closestColumn
-			} else {
-				// No sibling columns exist
-				if !isOptionalField {
-					// Required field: create typed zero value
-					conversions = append(conversions, convertToZero(targetKind))
-				}
-				// Keep sourceColumn with columnIndex -1
-				// For optional fields without siblings, we'll create a single null value per row
+			// The column is absent from the source. Synthesize one value per
+			// instance of the deepest source group that contains it, instead of
+			// copying a sibling leaf's levels. A sibling nested deeper than that
+			// group repeats more often than the new field, and a sibling that
+			// does not exist at all used to collapse the field to a root null.
+			if sourceTemplates == nil {
+				sourceTemplates = sourceMapping.templates()
 			}
+			groupPath := enclosingGroupPath(from, path)
+			repLevels, defLevels, groupSourceRep, groupSourceDef, groupTargetDef := groupLevelMapping(to, from, groupPath)
+			needsValues := groupSourceRep > 0 || groupSourceDef > 0
+			tmpl := sourceTemplates.at(groupPath)
+			direct := tmpl != nil && tmpl.has && tmpl.direct && tmpl.leaf.node != nil
+			// A required group has no level of its own. Without a direct leaf,
+			// there is nothing to remap, and a single placeholder at level 0
+			// is what readers already observe for a missing nested column
+			// (a nil proto message read back as an optional group, for example).
+			// Remapping would mark that group present.
+			if !needsValues && !direct {
+				repLevels = []byte{0}
+				defLevels = []byte{0}
+				groupSourceRep, groupSourceDef, groupTargetDef = 0, 0, 0
+			}
+			sourceIndex := -1
+			if tmpl != nil && tmpl.has && tmpl.leaf.node != nil && (needsValues || direct) {
+				sourceIndex = int(tmpl.leaf.columnIndex)
+			}
+			columns[i] = conversionColumn{
+				sourceIndex:   sourceIndex,
+				convertValues: convertToSelf,
+				targetKind:    targetColumn.node.Type().Kind(),
+				isOptional:    targetColumn.maxDefinitionLevel > 0,
+				variantIndex:  -1,
+				missing: &missingField{
+					needsValues:      needsValues,
+					groupSourceRep:   groupSourceRep,
+					groupSourceDef:   groupSourceDef,
+					groupTargetDef:   groupTargetDef,
+					repetitionLevels: repLevels,
+					definitionLevels: defLevels,
+					null:             targetColumn.node.Optional() || targetColumn.node.Repeated(),
+					kind:             targetColumn.node.Type().Kind(),
+				},
+			}
+			continue
 		}
 
 		// Store target column type for creating proper null values
