@@ -983,3 +983,27 @@ type logicalType struct {
 func (l logicalType) LogicalType() *format.LogicalType {
 	return &l.lt
 }
+
+func TestReadFloat32Bits(t *testing.T) {
+	type namedFloat float32
+	type row struct {
+		F     float32
+		Named namedFloat
+	}
+	const bits uint32 = 0x7fa9263b // signaling NaN with a payload
+	value := math.Float32frombits(bits)
+	var file bytes.Buffer
+	if err := parquet.Write(&file, []row{{value, namedFloat(value)}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parquet.Read[row](bytes.NewReader(file.Bytes()), int64(file.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1", len(got))
+	}
+	if f, n := math.Float32bits(got[0].F), math.Float32bits(float32(got[0].Named)); f != bits || n != bits {
+		t.Fatalf("read %#08x, %#08x; want %#08x for both fields", f, n, bits)
+	}
+}

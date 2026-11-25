@@ -56,7 +56,10 @@ func (t floatType) EstimateDecodeSize(numValues int, src []byte, enc encoding.En
 func (t floatType) AssignValue(dst reflect.Value, src Value) error {
 	v := src.float()
 	switch dst.Kind() {
-	case reflect.Float32, reflect.Float64:
+	case reflect.Float32:
+		// Widening to float64 and back would quiet a signaling NaN.
+		dst.Set(reflect.ValueOf(v).Convert(dst.Type()))
+	case reflect.Float64:
 		dst.SetFloat(float64(v))
 	default:
 		dst.Set(reflect.ValueOf(v))
