@@ -237,3 +237,83 @@ func benchmarkSearchPrefixLength(b *testing.B, prefixLength func(base, data []by
 		})
 	}
 }
+
+func TestEncodeByteArraySuffixes(t *testing.T) {
+	// Mix short and long suffixes, repeated/empty values, and a nonzero
+	// starting offset. The vector loop must resume scalar copying at the
+	// correct source and destination positions.
+	sizes := [...]int{1, 31, 32, 33, 64, 65, 96, 97, 128, 129}
+	src := []byte("unused")
+	offsets := []uint32{uint32(len(src))}
+	var prefix, suffix []int32
+	var payload, last []byte
+	for i := range 128 {
+		value := append(bytes.Repeat([]byte{'p'}, 31), bytes.Repeat([]byte{byte(i)}, sizes[i%len(sizes)])...)
+		if i%7 == 0 {
+			value = last
+		}
+		if i%11 == 0 {
+			value = nil
+		}
+		p := linearSearchPrefixLength(last, value)
+		prefix = append(prefix, int32(p))
+		suffix = append(suffix, int32(len(value)-p))
+		payload = append(payload, value[p:]...)
+		src = append(src, value...)
+		offsets = append(offsets, uint32(len(src)))
+		last = value
+	}
+	src = append(src, []byte("unused trailing data")...)
+	want := encodeInt32(nil, prefix)
+	want = encodeInt32(want, suffix)
+	want = append(want, payload...)
+	e := new(ByteArrayEncoding)
+	var dst []byte
+	for range 2 {
+		var err error
+		dst, err = e.EncodeByteArray(dst, src, offsets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(dst, want) {
+			t.Fatal("encoded bytes differ from scalar suffix concatenation")
+		}
+	}
+}
+
+func TestEncodeByteArrayOverlappingBuffers(t *testing.T) {
+	const count = 4096
+	prefix := make([]int32, count)
+	suffix := make([]int32, count)
+	for i := range suffix {
+		suffix[i] = 1
+	}
+	header := encodeInt32(nil, prefix)
+	header = encodeInt32(header, suffix)
+	start := len(header) + 1
+	backing := make([]byte, start+count+1024)
+	for i := range backing {
+		backing[i] = byte(i)
+	}
+	offsets := make([]uint32, count+1)
+	for i := range offsets {
+		offsets[i] = uint32(start + i)
+	}
+
+	// Encoding does not promise in-place operation. If the buffers overlap,
+	// preserve the existing header writes, zeroing, and per-value Go copies.
+	scalar := bytes.Clone(backing)
+	want := encodeInt32(scalar[:0], prefix)
+	want = encodeInt32(want, suffix)
+	want = resize(want, len(want)+count)
+	for i := range count {
+		want[len(header)+i] = scalar[start+i]
+	}
+	got, err := new(ByteArrayEncoding).EncodeByteArray(backing[:0], backing[:start+count], offsets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("overlapping buffers differ from scalar suffix copying")
+	}
+}
