@@ -911,7 +911,9 @@ func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], d
 		}
 	}
 
-	if isCompressed(c.compression) && header.IsCompressed() {
+	numValues -= int(header.NumNulls())
+
+	if isCompressed(c.compression) && header.IsCompressed() && (len(pageData) > 0 || numValues != 0) {
 		if page, err = c.decompress(pageData, size); err != nil {
 			return nil, fmt.Errorf("decompressing data page v2: %w", err)
 		}
@@ -919,7 +921,6 @@ func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], d
 		pageData = page.data.Slice()
 	}
 
-	numValues -= int(header.NumNulls())
 	return c.decodeDataPage(header, numValues, repetitionLevels, definitionLevels, page, pageData, dict)
 }
 
