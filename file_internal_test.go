@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"math/bits"
 	"testing"
 
 	"github.com/parquet-go/parquet-go/encoding"
@@ -910,6 +911,15 @@ func TestColumnChunkBufferSize(t *testing.T) {
 		{"chunk larger than buffer size", 4 * mib, 100 * mib, 4 * mib},
 		{"non power of two buffer caps result", 3 * mib, 3*mib - 1, 3 * mib},
 		{"buffer below minimum is respected", 1024, 10, 1024},
+		// Values near math.MaxInt exercise the signed shift overflow on
+		// 64-bit as well as 32-bit. The next power of two does not fit in
+		// a positive int (1<<63, or 1<<31 on 32-bit) and must saturate at
+		// the configured size instead of collapsing to 4 KiB.
+		{"saturates at MaxInt", math.MaxInt, int64(math.MaxInt) - 1, math.MaxInt},
+		{"saturates just above last positive power of two", math.MaxInt, int64(1)<<(bits.UintSize-2) + 1, math.MaxInt},
+		{"saturates when buffer is between chunk and power of two", 1<<(bits.UintSize-2) + 8192, int64(1)<<(bits.UintSize-2) + 1, 1<<(bits.UintSize-2) + 8192},
+		{"last positive power of two", math.MaxInt, int64(1) << (bits.UintSize - 2), 1 << (bits.UintSize - 2)},
+		{"rounds up to last positive power of two", math.MaxInt, int64(1)<<(bits.UintSize-2) - 1, 1 << (bits.UintSize - 2)},
 	}
 
 	for _, test := range tests {
@@ -919,5 +929,184 @@ func TestColumnChunkBufferSize(t *testing.T) {
 					test.bufferSize, test.chunkSize, got, test.want)
 			}
 		})
+	}
+}
+
+// TestFilePagesInitUsesColumnChunkBufferSize guards the call site in
+// FilePages.init. TestColumnChunkBufferSize only calls the helper; this test
+// fails if init stops sizing the bufio.Reader with columnChunkBufferSize.
+func TestFilePagesInitUsesColumnChunkBufferSize(t *testing.T) {
+	const (
+		readBufferSize = 4 << 20 // 4 MiB, larger than either column chunk
+		nrows          = 10000
+	)
+
+	type row struct {
+		N    int64 `parquet:"n"`
+		Flag bool  `parquet:"flag"`
+	}
+	rows := make([]row, nrows)
+	for i := range rows {
+		rows[i] = row{N: int64(i), Flag: i%2 == 0}
+	}
+
+	var buf bytes.Buffer
+	if err := Write(&buf, rows); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()), ReadBufferSize(readBufferSize))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader := NewGenericReader[row](f)
+	gotRows := make([]row, 0, len(rows))
+	scratch := make([]row, 64)
+	for {
+		n, err := reader.Read(scratch)
+		gotRows = append(gotRows, scratch[:n]...)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			t.Fatal("Read returned no rows and no error")
+		}
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotRows) != len(rows) {
+		t.Fatalf("read %d rows, want %d", len(gotRows), len(rows))
+	}
+	for i := range rows {
+		if gotRows[i] != rows[i] {
+			t.Fatalf("row %d = %+v, want %+v", i, gotRows[i], rows[i])
+		}
+	}
+
+	rowGroups := f.RowGroups()
+	if len(rowGroups) != 1 {
+		t.Fatalf("row groups = %d, want 1", len(rowGroups))
+	}
+	chunks := rowGroups[0].ColumnChunks()
+	if len(chunks) != 2 {
+		t.Fatalf("columns = %d, want 2", len(chunks))
+	}
+
+	check := func(t *testing.T, chunk ColumnChunk, kind Kind, accept func(chunkSize int64, want int)) {
+		t.Helper()
+		cc, ok := chunk.(*FileColumnChunk)
+		if !ok {
+			t.Fatalf("column chunk type = %T, want *FileColumnChunk", chunk)
+		}
+		if got := cc.Type().Kind(); got != kind {
+			t.Fatalf("column kind = %s, want %s", got, kind)
+		}
+
+		chunkSize := cc.chunk.MetaData.TotalCompressedSize
+		want := columnChunkBufferSize(readBufferSize, chunkSize)
+		accept(chunkSize, want)
+
+		opened := cc.Pages()
+		defer opened.Close()
+		pages, ok := opened.(*FilePages)
+		if !ok {
+			t.Fatalf("Pages() = %T, want *FilePages", opened)
+		}
+
+		switch kind {
+		case Int64:
+			got := readPageColumn(t, pages, Value.Int64)
+			if len(got) != nrows {
+				t.Fatalf("read %d int64 values, want %d", len(got), nrows)
+			}
+			for i, v := range got {
+				if v != int64(i) {
+					t.Fatalf("value %d = %d, want %d", i, v, i)
+				}
+			}
+		case Boolean:
+			got := readPageColumn(t, pages, Value.Boolean)
+			if len(got) != nrows {
+				t.Fatalf("read %d bool values, want %d", len(got), nrows)
+			}
+			for i, v := range got {
+				if v != (i%2 == 0) {
+					t.Fatalf("value %d = %v, want %v", i, v, i%2 == 0)
+				}
+			}
+		default:
+			t.Fatalf("unexpected kind %s", kind)
+		}
+
+		if pages.rbuf == nil {
+			t.Fatal("FilePages.rbuf is nil after init")
+		}
+		if got := pages.bufferSize; got != want {
+			t.Errorf("FilePages.bufferSize = %d, want %d (ReadBufferSize %d, chunk %d)", got, want, readBufferSize, chunkSize)
+		}
+		if got := pages.rbuf.Size(); got != want {
+			t.Errorf("bufio.Reader size = %d, want %d (ReadBufferSize %d, chunk %d)", got, want, readBufferSize, chunkSize)
+		}
+	}
+
+	t.Run("int64", func(t *testing.T) {
+		check(t, chunks[0], Int64, func(chunkSize int64, want int) {
+			if chunkSize <= defaultReadBufferSize || chunkSize >= readBufferSize {
+				t.Fatalf("chunk size %d is not strictly between %d and %d", chunkSize, defaultReadBufferSize, readBufferSize)
+			}
+			// Distinct from both the 4 KiB floor and the configured size, so
+			// a hardcoded buffer in FilePages.init cannot satisfy the check.
+			if want <= defaultReadBufferSize || want >= readBufferSize {
+				t.Fatalf("columnChunkBufferSize(%d, %d) = %d, want a size strictly between the two", readBufferSize, chunkSize, want)
+			}
+		})
+	})
+	t.Run("bool", func(t *testing.T) {
+		check(t, chunks[1], Boolean, func(chunkSize int64, want int) {
+			if chunkSize <= 0 || chunkSize >= int64(defaultReadBufferSize) {
+				t.Fatalf("chunk size %d is not below %d", chunkSize, defaultReadBufferSize)
+			}
+			if want != defaultReadBufferSize {
+				t.Fatalf("columnChunkBufferSize(%d, %d) = %d, want %d", readBufferSize, chunkSize, want, defaultReadBufferSize)
+			}
+		})
+	})
+}
+
+func readPageColumn[T any](t *testing.T, pages *FilePages, value func(Value) T) []T {
+	t.Helper()
+	var out []T
+	buf := make([]Value, 128)
+	for {
+		page, err := pages.ReadPage()
+		if err == io.EOF {
+			return out
+		}
+		if err != nil {
+			t.Fatalf("ReadPage: %v", err)
+		}
+		values := page.Values()
+		for {
+			n, err := values.ReadValues(buf)
+			for _, v := range buf[:n] {
+				out = append(out, value(v))
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				Release(page)
+				t.Fatalf("ReadValues: %v", err)
+			}
+			if n == 0 {
+				Release(page)
+				t.Fatal("ReadValues returned no values and no error")
+			}
+		}
+		Release(page)
 	}
 }
