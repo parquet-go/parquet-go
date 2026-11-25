@@ -355,3 +355,138 @@ func BenchmarkDecodeFooterReuse(b *testing.B) {
 		})
 	}
 }
+
+// keyValueKeyOnly is a KeyValue with field 2 left out of the encoding, which
+// is how another implementation writes a null value.
+type keyValueKeyOnly struct {
+	Key string `thrift:"1,required"`
+}
+
+// TestKeyValueAbsentValue checks the two sides of the writezero tag on
+// format.KeyValue.Value: a payload that omits field 2 decodes, and an empty
+// string is still written as field 2 so older readers that require it can
+// open the file.
+func TestKeyValueAbsentValue(t *testing.T) {
+	protocol := &thrift.CompactProtocol{}
+	// Compact protocol, delta field ids. Field 1 then field 2 are both
+	// binary, so each header is delta=1, type=BINARY (0x18).
+	withEmpty := []byte{0x18, 0x01, 'k', 0x18, 0x00, 0x00}
+	withoutValue := []byte{0x18, 0x01, 'k', 0x00}
+
+	t.Run("empty value", func(t *testing.T) {
+		b, err := thrift.Marshal(protocol, format.KeyValue{Key: "k", Value: ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(b, withEmpty) {
+			t.Fatalf("empty value encoded as %v, want %v", b, withEmpty)
+		}
+		var kv format.KeyValue
+		if err := thrift.Unmarshal(protocol, b, &kv); err != nil {
+			t.Fatal(err)
+		}
+		if kv != (format.KeyValue{Key: "k"}) {
+			t.Fatalf("decoded %+v", kv)
+		}
+	})
+
+	t.Run("missing field", func(t *testing.T) {
+		var kv format.KeyValue
+		if err := thrift.Unmarshal(protocol, withoutValue, &kv); err != nil {
+			t.Fatal(err)
+		}
+		if kv != (format.KeyValue{Key: "k"}) {
+			t.Fatalf("decoded %+v", kv)
+		}
+		// Rewriting the decoded value must put field 2 back. A file that
+		// omitted the value and a file we write with an empty string are
+		// the same Go value, and the latter has to stay readable by
+		// releases that require the field.
+		b, err := thrift.Marshal(protocol, kv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(b, withEmpty) {
+			t.Fatalf("re-encoded missing value as %v, want %v", b, withEmpty)
+		}
+	})
+
+	t.Run("footer", func(t *testing.T) {
+		const absentKey = "thisiskeywithoutvalue"
+		present, err := thrift.Marshal(protocol, &format.FileMetaData{
+			Version:   1,
+			Schema:    []format.SchemaElement{{Name: "schema"}},
+			RowGroups: []format.RowGroup{},
+			KeyValueMetadata: []format.KeyValue{
+				{Key: "foo", Value: "bar"},
+				{Key: absentKey, Value: ""},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		empty, err := thrift.Marshal(protocol, format.KeyValue{Key: absentKey, Value: ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		missing, err := thrift.Marshal(protocol, keyValueKeyOnly{Key: absentKey})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Count(present, empty) != 1 {
+			t.Fatalf("empty key encoding appears %d times", bytes.Count(present, empty))
+		}
+		absent := bytes.Replace(present, empty, missing, 1)
+
+		var meta format.FileMetaData
+		if err := thrift.Unmarshal(protocol, absent, &meta); err != nil {
+			t.Fatal(err)
+		}
+		if len(meta.KeyValueMetadata) != 2 ||
+			meta.KeyValueMetadata[0] != (format.KeyValue{Key: "foo", Value: "bar"}) ||
+			meta.KeyValueMetadata[1] != (format.KeyValue{Key: absentKey}) {
+			t.Fatalf("metadata %+v", meta.KeyValueMetadata)
+		}
+
+		// FooterDecoder keeps the previous metadata. A non-empty value decoded
+		// into this slot must not survive a later input that omits field 2.
+		valued, err := thrift.Marshal(protocol, &format.FileMetaData{
+			Version:   1,
+			Schema:    []format.SchemaElement{{Name: "schema"}},
+			RowGroups: []format.RowGroup{},
+			KeyValueMetadata: []format.KeyValue{
+				{Key: absentKey, Value: "bar"},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		emptyFooter, err := thrift.Marshal(protocol, &format.FileMetaData{
+			Version:   1,
+			Schema:    []format.SchemaElement{{Name: "schema"}},
+			RowGroups: []format.RowGroup{},
+			KeyValueMetadata: []format.KeyValue{
+				{Key: absentKey, Value: ""},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Count(emptyFooter, empty) != 1 {
+			t.Fatalf("empty key encoding appears %d times", bytes.Count(emptyFooter, empty))
+		}
+		omitted := bytes.Replace(emptyFooter, empty, missing, 1)
+
+		var dec format.FooterDecoder
+		if _, _, err := dec.Decode(valued); err != nil {
+			t.Fatal(err)
+		}
+		got, _, err := dec.Decode(omitted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.KeyValueMetadata) != 1 || got.KeyValueMetadata[0] != (format.KeyValue{Key: absentKey}) {
+			t.Fatalf("reused decoder kept %+v", got.KeyValueMetadata)
+		}
+	})
+}
