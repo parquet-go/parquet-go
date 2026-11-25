@@ -486,6 +486,27 @@ func TestConvert(t *testing.T) {
 	}
 }
 
+func TestConvertTypeKeepsNulls(t *testing.T) {
+	for _, typ := range []parquet.Node{
+		parquet.Leaf(parquet.Int64Type),
+		parquet.Decimal(2, 18, parquet.Int64Type),
+	} {
+		from := parquet.NewSchema("s", parquet.Group{"a": parquet.Optional(parquet.Leaf(parquet.Int32Type))})
+		to := parquet.NewSchema("s", parquet.Group{"a": parquet.Optional(typ)})
+		conv, err := parquet.Convert(to, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows := []parquet.Row{{parquet.NullValue().Level(0, 0, 0)}}
+		if _, err := conv.Convert(rows); err != nil {
+			t.Fatal(err)
+		}
+		if v := rows[0][0]; !v.IsNull() {
+			t.Errorf("%v: null converted to %v", typ.Type(), v)
+		}
+	}
+}
+
 //go:fix inline
 func newInt64(i int64) *int64 { return new(i) }
 

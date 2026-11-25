@@ -98,6 +98,11 @@ func convertToSelf(column []Value) error { return nil }
 func convertToType(targetType, sourceType Type) conversionFunc {
 	return func(column []Value) error {
 		for i, v := range column {
+			if v.IsNull() {
+				// ConvertValue would turn the zeroed fields of a null into a
+				// non-null zero of the target type.
+				continue
+			}
 			v, err := targetType.ConvertValue(v, sourceType)
 			if err != nil {
 				return err
