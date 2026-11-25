@@ -410,7 +410,8 @@ func (s *Schema) Reconstruct(value any, row Row) error {
 }
 
 type valuesSliceBuffer struct {
-	values [][]Value
+	values   [][]Value
+	mapEntry reflect.Value // zeroed key/value scratch for map reconstruction
 }
 
 func (v *valuesSliceBuffer) reserve(n int) [][]Value {
