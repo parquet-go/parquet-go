@@ -1092,13 +1092,16 @@ func (p missingPage) Slice(i, j int64) Page {
 		counted:             true,
 	}
 	adjacentPages := p.adjacentPages
-	// Flat columns mirror per-row levels, so each slice needs its own sibling
-	// reader positioned at the slice start. Seeking the page's reader would
-	// move the original page and any other slice that shares it. The reader
-	// opened here is owned by the slice and closed if the seek fails; a
-	// successful one is closed by the slice value reader. Repeated columns
-	// keep the historical slice, which shares the reader without seeking.
-	if p.mirrorSiblingLevels && p.adjacentChunk != nil {
+	// One synthesized value per row can seek the template by row index.
+	// A repeated group has more values than rows, so the slice counts the
+	// kept template values in the row span instead of using j-i.
+	switch {
+	case p.synth != nil && p.synth.needsValues && p.synth.groupSourceRep > 0 && p.adjacentChunk != nil:
+		adjacentPages = sliceRepeatedTemplate(chunk, p.adjacentChunk, i, j-i, p.synth.groupSourceRep)
+	case p.mirrorSiblingLevels && p.adjacentChunk != nil:
+		// Seeking the page's reader would move the original page and any
+		// other slice that shares it. The reader opened here is owned by
+		// the slice and closed if the seek fails.
 		opened := p.adjacentChunk.Pages()
 		if err := opened.SeekToRow(i); err != nil {
 			opened.Close()
@@ -1110,6 +1113,89 @@ func (p missingPage) Slice(i, j int64) Page {
 	return missingPage{
 		missingColumnChunk: chunk,
 		adjacentPages:      adjacentPages,
+	}
+}
+
+// sliceRepeatedTemplate positions chunk at row i and sets its value count to
+// the kept template values in the next rows rows. The returned pages are
+// seeked to row i. On failure the count stays at the row span so a later
+// read reports the error instead of looking like an empty slice.
+func sliceRepeatedTemplate(chunk *missingColumnChunk, template ColumnChunk, row, rows int64, maxRep byte) Pages {
+	if rows < 0 {
+		rows = 0
+	}
+	opened := template.Pages()
+	if err := opened.SeekToRow(row); err != nil {
+		opened.Close()
+		if rows == 0 {
+			chunk.numValues = 1
+		}
+		return &errorPages{err: err}
+	}
+	n, err := countKeptRows(opened, rows, maxRep)
+	opened.Close()
+	if err != nil {
+		if n == 0 {
+			chunk.numValues = 1
+		}
+		return &errorPages{err: err}
+	}
+	chunk.numValues = n
+	chunk.numNulls = n
+	reopened := template.Pages()
+	if err := reopened.SeekToRow(row); err != nil {
+		reopened.Close()
+		if chunk.numValues == 0 {
+			chunk.numValues = 1
+		}
+		return &errorPages{err: err}
+	}
+	return reopened
+}
+
+// countKeptRows counts template values with repetition level <= maxRep in the
+// next rows rows. A repetition level of zero starts a row. pages is positioned
+// at the first of those rows.
+func countKeptRows(pages Pages, rows int64, maxRep byte) (int64, error) {
+	if rows <= 0 {
+		return 0, nil
+	}
+	buf := make([]Value, 256)
+	var reader ValueReader
+	var kept, seen int64
+	for {
+		if reader == nil {
+			page, err := pages.ReadPage()
+			if err == io.EOF {
+				return kept, nil
+			}
+			if err != nil {
+				return 0, err
+			}
+			reader = page.Values()
+		}
+		n, err := reader.ReadValues(buf)
+		for i := range n {
+			if buf[i].repetitionLevel == 0 {
+				seen++
+				if seen > rows {
+					return kept, nil
+				}
+			}
+			if buf[i].repetitionLevel <= maxRep {
+				kept++
+			}
+		}
+		if err == io.EOF {
+			reader = nil
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if n == 0 {
+			reader = nil
+		}
 	}
 }
 func (p missingPage) Size() int64              { return 0 }

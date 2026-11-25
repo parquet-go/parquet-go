@@ -763,6 +763,145 @@ func TestMissingColumnChunkMatchesRows(t *testing.T) {
 	})
 }
 
+func TestMissingRepeatedColumnSliceAndSeek(t *testing.T) {
+	type Box struct {
+		X int32 `parquet:"x"`
+	}
+	type Item struct {
+		Inner Box `parquet:"inner"`
+	}
+	type Item2 struct {
+		Inner Box    `parquet:"inner"`
+		Y     *int32 `parquet:"y,optional"`
+	}
+	type Src struct {
+		S []Item `parquet:"s"`
+	}
+	type Dst struct {
+		S []Item2 `parquet:"s"`
+	}
+	src := parquet.NewGenericBuffer[Src]()
+	rows := []Src{
+		{},
+		{S: []Item{{Inner: Box{X: 1}}, {Inner: Box{X: 2}}, {Inner: Box{X: 3}}}},
+		{},
+		{S: []Item{{Inner: Box{X: 4}}}},
+	}
+	if _, err := src.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Dst)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(src, conv)
+	gotRows := readConvertedRows(t, converted.Rows())
+	perRow := make([][]parquet.Value, len(gotRows))
+	for i, row := range gotRows {
+		perRow[i] = columnValues(row, 1)
+	}
+	concat := func(from, to int) []parquet.Value {
+		var out []parquet.Value
+		for _, row := range perRow[from:to] {
+			out = append(out, row...)
+		}
+		return out
+	}
+
+	pages := converted.ColumnChunks()[1].Pages()
+	t.Cleanup(func() { pages.Close() })
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Zero rows, one row, and a span that starts on a populated row and
+	// includes an empty one.
+	cases := []struct {
+		name string
+		i, j int
+	}{
+		{name: "zero rows", i: 1, j: 1},
+		{name: "one empty row", i: 0, j: 1},
+		{name: "one populated row", i: 3, j: 4},
+		{name: "empty then populated", i: 2, j: 4},
+		{name: "populated then empty", i: 1, j: 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sliced := page.Slice(int64(tc.i), int64(tc.j))
+			want := concat(tc.i, tc.j)
+			if sliced.NumValues() != int64(len(want)) {
+				t.Fatalf("NumValues = %d, want %d", sliced.NumValues(), len(want))
+			}
+			got := readSynthPageValues(t, sliced)
+			levelsEqual(t, got, want)
+			// Values() consumes the template reader, so the one-value reads
+			// use a second slice.
+			got = readSynthPageValuesOne(t, page.Slice(int64(tc.i), int64(tc.j)))
+			levelsEqual(t, got, want)
+		})
+	}
+
+	seekPages := converted.ColumnChunks()[1].Pages()
+	t.Cleanup(func() { seekPages.Close() })
+	if err := seekPages.SeekToRow(1); err != nil {
+		t.Fatal(err)
+	}
+	var seeked []parquet.Value
+	for {
+		p, err := seekPages.ReadPage()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		seeked = append(seeked, readSynthPageValues(t, p)...)
+	}
+	levelsEqual(t, seeked, concat(1, len(perRow)))
+}
+
+func readSynthPageValues(t *testing.T, page parquet.Page) []parquet.Value {
+	t.Helper()
+	reader := page.Values()
+	var out []parquet.Value
+	buf := make([]parquet.Value, 8)
+	for {
+		n, err := reader.ReadValues(buf)
+		out = append(out, buf[:n]...)
+		if err == io.EOF {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			t.Fatal("ReadValues returned no values and no error")
+		}
+	}
+}
+
+func readSynthPageValuesOne(t *testing.T, page parquet.Page) []parquet.Value {
+	t.Helper()
+	reader := page.Values()
+	var out []parquet.Value
+	buf := make([]parquet.Value, 1)
+	for {
+		n, err := reader.ReadValues(buf)
+		out = append(out, buf[:n]...)
+		if err == io.EOF {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			t.Fatal("ReadValues returned no values and no error")
+		}
+	}
+}
+
 func assertChunkMatchesRows[Dst any](t *testing.T, src parquet.RowGroup, column int) {
 	t.Helper()
 	conv, err := parquet.Convert(parquet.SchemaOf(new(Dst)), src.Schema())
