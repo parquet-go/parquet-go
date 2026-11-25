@@ -1,6 +1,7 @@
 package parquet_test
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"reflect"
@@ -675,5 +676,219 @@ func TestMissingColumnUnderRepeatedGroupReadsSibling(t *testing.T) {
 	}
 	if len(out.Items) != 0 {
 		t.Errorf("row 1: got %+v, want no items", out.Items)
+	}
+}
+
+// TestConvertAddedNestedFieldLevels is the regression test for issue 778.
+// A field added inside a nested group must follow the enclosing group's
+// instances, not a sibling leaf's repetition or definition levels.
+func TestConvertAddedNestedFieldLevels(t *testing.T) {
+	i32 := parquet.Leaf(parquet.Int32Type)
+	opt, rep := parquet.Optional, parquet.Repeated
+
+	// The sibling is repeated: s.b is one value for the group, not one per element of s.a.
+	row := convertAddedField(t,
+		parquet.Group{"s": opt(parquet.Group{"a": rep(i32), "b": opt(i32)})},
+		parquet.Group{"s": opt(parquet.Group{"a": rep(i32)})},
+		parquet.Row{
+			parquet.ValueOf(int32(1)).Level(0, 2, 0),
+			parquet.ValueOf(int32(2)).Level(1, 2, 0),
+			parquet.ValueOf(int32(3)).Level(1, 2, 0),
+		})
+	if got := addedFieldLevels(row, 1); !reflect.DeepEqual(got, [][2]int{{0, 1}}) {
+		t.Errorf("repeated sibling: s.b (rep, def) = %v, want [[0 1]]", got)
+	}
+
+	// A required field added next to an optional sibling stays within its own max definition level.
+	row = convertAddedField(t,
+		parquet.Group{"s": opt(parquet.Group{"a": opt(i32), "b": i32})},
+		parquet.Group{"s": opt(parquet.Group{"a": opt(i32)})},
+		parquet.Row{parquet.ValueOf(int32(5)).Level(0, 2, 0)})
+	if got := addedFieldLevels(row, 1); !reflect.DeepEqual(got, [][2]int{{0, 1}}) {
+		t.Errorf("required added field: s.b (rep, def) = %v, want [[0 1]]", got)
+	}
+	if v := columnValues(row, 1); len(v) != 1 || v[0].IsNull() || v[0].Int32() != 0 {
+		t.Errorf("required added field: got %+v, want a zero int32", v)
+	}
+
+	// The enclosing group has no direct leaf, so the nested leaf supplies the group's presence.
+	row = convertAddedField(t,
+		parquet.Group{"s": opt(parquet.Group{"inner": parquet.Group{"x": i32}, "y": opt(i32)})},
+		parquet.Group{"s": opt(parquet.Group{"inner": parquet.Group{"x": i32}})},
+		parquet.Row{parquet.ValueOf(int32(5)).Level(0, 1, 0)})
+	if got := addedFieldLevels(row, 1); !reflect.DeepEqual(got, [][2]int{{0, 1}}) {
+		t.Errorf("no leaf sibling: s.y (rep, def) = %v, want [[0 1]]", got)
+	}
+
+	// The enclosing group changed from required to optional.
+	row = convertAddedField(t,
+		parquet.Group{"s": opt(parquet.Group{"a": i32, "b": opt(i32)})},
+		parquet.Group{"s": parquet.Group{"a": i32}},
+		parquet.Row{parquet.ValueOf(int32(5)).Level(0, 0, 0)})
+	if got := addedFieldLevels(row, 1); !reflect.DeepEqual(got, [][2]int{{0, 1}}) {
+		t.Errorf("required to optional ancestor: s.b (rep, def) = %v, want [[0 1]]", got)
+	}
+}
+
+func addedFieldLevels(row parquet.Row, column int) [][2]int {
+	var out [][2]int
+	for _, v := range row {
+		if v.Column() == column {
+			out = append(out, [2]int{v.RepetitionLevel(), v.DefinitionLevel()})
+		}
+	}
+	return out
+}
+
+func convertAddedField(t *testing.T, to, from parquet.Node, row parquet.Row) parquet.Row {
+	t.Helper()
+	conv, err := parquet.Convert(parquet.NewSchema("s", to), parquet.NewSchema("s", from))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []parquet.Row{row}
+	if _, err := conv.Convert(rows); err != nil {
+		t.Fatal(err)
+	}
+	return rows[0]
+}
+
+// A repeated sibling must not be copied onto a non-repeated field, including
+// when the column is read from the converted row group rather than from rows.
+func TestConvertAddedFieldDropsRepeatedSiblingValues(t *testing.T) {
+	type Inner struct {
+		A []int32 `parquet:"a"`
+	}
+	type Source struct {
+		S *Inner `parquet:"s,optional"`
+	}
+	type InnerTarget struct {
+		A []int32 `parquet:"a"`
+		B *int32  `parquet:"b,optional"`
+	}
+	type Target struct {
+		S *InnerTarget `parquet:"s,optional"`
+	}
+
+	first := []int32{1, 2, 3}
+	src := parquet.NewGenericBuffer[Source]()
+	if _, err := src.Write([]Source{
+		{S: &Inner{A: first}},
+		{S: nil},
+		{S: &Inner{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Target)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(src, conv)
+	rows := readConvertedRows(t, converted.Rows())
+	schema := parquet.SchemaOf(new(Target))
+	want := []Target{
+		{S: &InnerTarget{A: first}},
+		{},
+		{S: &InnerTarget{A: []int32{}}},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d rows, want %d", len(rows), len(want))
+	}
+	for i, row := range rows {
+		var out Target
+		if err := schema.Reconstruct(&out, row); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(out, want[i]) {
+			t.Errorf("row %d: got %+v, want %+v", i, out, want[i])
+		}
+		b := columnValues(row, 1)
+		wantDef := 1
+		if i == 1 {
+			wantDef = 0
+		}
+		if len(b) != 1 || b[0].RepetitionLevel() != 0 || b[0].DefinitionLevel() != wantDef || !b[0].IsNull() {
+			t.Errorf("row %d b: %+v, want one null at rep=0 def=%d", i, b, wantDef)
+		}
+	}
+	var fromRows []parquet.Value
+	for _, row := range rows {
+		fromRows = append(fromRows, columnValues(row, 1)...)
+	}
+	levelsEqual(t, readColumnValues(t, converted.ColumnChunks()[1]), fromRows)
+}
+
+// An optional field added to a repeated group whose existing children are all groups.
+func TestConvertAddedFieldToRepeatedGroupWithoutLeafSiblings(t *testing.T) {
+	type Inner struct {
+		X int32 `parquet:"x"`
+	}
+	type ItemV1 struct {
+		Inner Inner `parquet:"inner"`
+	}
+	type V1 struct {
+		S []ItemV1 `parquet:"s"`
+	}
+	type ItemV2 struct {
+		Inner Inner  `parquet:"inner"`
+		Y     *int32 `parquet:"y,optional"`
+	}
+	type V2 struct {
+		S []ItemV2 `parquet:"s"`
+	}
+
+	input := []V1{
+		{S: []ItemV1{{Inner: Inner{X: 5}}, {Inner: Inner{X: 6}}}},
+		{S: []ItemV1{{Inner: Inner{X: 7}}}},
+		{S: nil},
+	}
+	buf := new(bytes.Buffer)
+	if err := parquet.Write(buf, input); err != nil {
+		t.Fatal(err)
+	}
+	r := parquet.NewGenericReader[V2](bytes.NewReader(buf.Bytes()))
+	t.Cleanup(func() { r.Close() })
+	out := make([]V2, len(input))
+	n, err := r.Read(out)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != len(input) {
+		t.Fatalf("read %d rows, err: %v", n, err)
+	}
+	want := []V2{
+		{S: []ItemV2{{Inner: Inner{X: 5}}, {Inner: Inner{X: 6}}}},
+		{S: []ItemV2{{Inner: Inner{X: 7}}}},
+		{S: []ItemV2{}},
+	}
+	if !reflect.DeepEqual(out, want) {
+		t.Fatalf("got %+v, want %+v", out, want)
+	}
+
+	// Column chunks of the converted row group follow the same levels as the rows.
+	src := parquet.NewGenericBuffer[V1]()
+	if _, err := src.Write(input); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(V2)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(src, conv)
+	rows := readConvertedRows(t, converted.Rows())
+	var fromRows []parquet.Value
+	for _, row := range rows {
+		fromRows = append(fromRows, columnValues(row, 1)...)
+	}
+	levelsEqual(t, readColumnValues(t, converted.ColumnChunks()[1]), fromRows)
+	if len(fromRows) != 4 {
+		t.Fatalf("got %d y values, want 4", len(fromRows))
+	}
+	wantLevels := [][2]int{{0, 1}, {1, 1}, {0, 1}, {0, 0}}
+	for i, v := range fromRows {
+		if !v.IsNull() || v.RepetitionLevel() != wantLevels[i][0] || v.DefinitionLevel() != wantLevels[i][1] {
+			t.Errorf("y[%d]: rep=%d def=%d null=%v, want rep=%d def=%d null=true",
+				i, v.RepetitionLevel(), v.DefinitionLevel(), v.IsNull(), wantLevels[i][0], wantLevels[i][1])
+		}
 	}
 }

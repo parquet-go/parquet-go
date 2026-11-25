@@ -77,6 +77,8 @@ type conversionBuffer struct {
 	// Per-variant-conversion scratch space, reused across rows (see
 	// convert_variant.go).
 	variants []variantScratch
+	// scratch holds one missing column's projected values for the current row.
+	scratch []Value
 }
 
 type conversionColumn struct {
@@ -89,6 +91,9 @@ type conversionColumn struct {
 	// output column.
 	variantIndex  int
 	variantOutput int
+	// missing projects a target column that is absent from the source.
+	// Nil when the column exists in the source.
+	missing *missingProjection
 }
 
 type conversionFunc func([]Value) error
@@ -105,91 +110,6 @@ func convertToType(targetType, sourceType Type) conversionFunc {
 			column[i].ptr = v.ptr
 			column[i].u64 = v.u64
 			column[i].kind = v.kind
-		}
-		return nil
-	}
-}
-
-func convertToZero(kind Kind) conversionFunc {
-	switch kind {
-	case Boolean:
-		return convertToZeroBoolean
-	case Int32:
-		return convertToZeroInt32
-	case Int64:
-		return convertToZeroInt64
-	case Int96:
-		return convertToZeroInt96
-	case Float:
-		return convertToZeroFloat
-	case Double:
-		return convertToZeroDouble
-	case ByteArray:
-		return convertToZeroByteArray
-	case FixedLenByteArray:
-		return convertToZeroFixedLenByteArray
-	default:
-		return convertToSelf
-	}
-}
-
-func convertToZeroKind(column []Value, kind int8) error {
-	for i := range column {
-		column[i].ptr = nil
-		column[i].u64 = 0
-		column[i].kind = kind
-	}
-	return nil
-}
-
-func convertToZeroBoolean(column []Value) error {
-	return convertToZeroKind(column, ^int8(Boolean))
-}
-
-func convertToZeroInt32(column []Value) error {
-	return convertToZeroKind(column, ^int8(Int32))
-}
-
-func convertToZeroInt64(column []Value) error {
-	return convertToZeroKind(column, ^int8(Int64))
-}
-
-func convertToZeroInt96(column []Value) error {
-	return convertToZeroKind(column, ^int8(Int96))
-}
-
-func convertToZeroFloat(column []Value) error {
-	return convertToZeroKind(column, ^int8(Float))
-}
-
-func convertToZeroDouble(column []Value) error {
-	return convertToZeroKind(column, ^int8(Double))
-}
-
-func convertToZeroByteArray(column []Value) error {
-	return convertToZeroKind(column, ^int8(ByteArray))
-}
-
-func convertToZeroFixedLenByteArray(column []Value) error {
-	return convertToZeroKind(column, ^int8(FixedLenByteArray))
-}
-
-func convertToNull(column []Value) error {
-	return convertToZeroKind(column, 0) // kind = 0 indicates null
-}
-
-func convertToNullOptional(maxDefinitionLevel byte) conversionFunc {
-	return func(column []Value) error {
-		for i := range column {
-			column[i].ptr = nil
-			column[i].u64 = 0
-			column[i].kind = 0 // kind = 0 indicates null
-			// For optional fields, if the source value is present (defLevel == max),
-			// we need to set defLevel to max-1 to indicate null at the leaf level
-			if column[i].definitionLevel == maxDefinitionLevel {
-				column[i].definitionLevel--
-			}
-			// If source is already null (defLevel < max), keep the same defLevel
 		}
 		return nil
 	}
@@ -294,6 +214,24 @@ func (c *conversion) Convert(rows []Row) (int, error) {
 			}
 
 			columnOffset := len(row)
+
+			if conv.missing != nil {
+				if !conv.missing.useSource {
+					row = append(row, conv.missing.value(0, 0))
+					row[len(row)-1].columnIndex = ^uint16(columnIndex)
+					continue
+				}
+				var src []Value
+				if conv.sourceIndex >= 0 && conv.sourceIndex < len(source.columns) {
+					src = source.columns[conv.sourceIndex]
+				}
+				source.scratch = conv.missing.apply(source.scratch, src)
+				row = append(row, source.scratch...)
+				for i := columnOffset; i < len(row); i++ {
+					row[i].columnIndex = ^uint16(columnIndex)
+				}
+				continue
+			}
 
 			// Get source values if available
 			var sourceValues []Value
@@ -508,51 +446,16 @@ func Convert(to, from Node) (conv Conversion, err error) {
 				}
 			}
 		}
+		var missing *missingProjection
+		sourceIndex := -1
 		if isMissingColumn {
-			// Column doesn't exist in source - this is a missing column
-			targetType := targetColumn.node.Type()
-			targetKind := targetType.Kind()
-
-			// Check if the leaf field itself is optional (not just nested in optional/repeated structure)
-			isOptionalField := targetColumn.node.Optional()
-
-			closestColumn := sourceMapping.lookupClosest(path)
-			if closestColumn.node != nil {
-				// There's a sibling column we can use as a template for structure.
-				// The sibling's values provide the repetition count for repeated groups.
-				// The conversion functions transform them to typed zeros or nulls.
-				if isOptionalField {
-					// Optional field: convert to null values while mirroring structure
-					conversions = append(conversions, convertToNullOptional(targetColumn.maxDefinitionLevel))
-				} else {
-					// Required field: convert to typed zero values
-					conversions = append(conversions, convertToZero(targetKind))
-				}
-				// Use the sibling column as the source for structural information
-				sourceColumn = closestColumn
-			} else {
-				// No sibling columns exist
-				if !isOptionalField {
-					// Required field: create typed zero value
-					conversions = append(conversions, convertToZero(targetKind))
-				}
-				// Keep sourceColumn with columnIndex -1
-				// For optional fields without siblings, we'll create a single null value per row
-			}
+			missing, sourceIndex = missingProjectionOf(to, from, path, targetColumn, sourceMapping)
+		} else {
+			sourceIndex = int(sourceColumn.columnIndex)
 		}
 
 		// Store target column type for creating proper null values
 		targetType := targetColumn.node.Type()
-
-		// Determine sourceIndex: use the source column index (which may be a
-		// sibling's index if the column is missing but has a sibling).
-		// For missing columns without siblings, sourceColumn.columnIndex will
-		// be math.MaxUint16 (from the initial lookup returning an empty leafColumn).
-		sourceIndex := int(sourceColumn.columnIndex)
-		// Only set to -1 if truly missing AND no sibling was found
-		if isMissingColumn && sourceColumn.node == nil {
-			sourceIndex = -1
-		}
 
 		// Determine if target column is optional
 		isOptional := targetColumn.maxDefinitionLevel > 0
@@ -563,6 +466,7 @@ func Convert(to, from Node) (conv Conversion, err error) {
 			targetKind:    targetType.Kind(), // Store target kind for null value creation
 			isOptional:    isOptional,
 			variantIndex:  -1,
+			missing:       missing,
 		}
 	}
 
@@ -582,6 +486,145 @@ func isDirectLevelMapping(levels []byte) bool {
 		}
 	}
 	return true
+}
+
+// missingProjection synthesizes values for a target column that the source does
+// not have. Each instance of the deepest source group enclosing the column
+// produces one value. Definition levels are remapped onto the target schema
+// and clamped to that group's definition level, so the added field is null or
+// zero where the group is present and follows ancestor nulls where it is not.
+type missingProjection struct {
+	groupSourceRep byte
+	sourceMaxRep   byte
+	targetRep      byte
+	targetDef      byte
+	repLevels      []byte
+	defLevels      []byte
+	// useSource is set when the enclosing group's presence varies between rows
+	// and a leaf under that group records it. Otherwise every row is one value
+	// at repetition level 0.
+	useSource bool
+	// null selects a null value. Required leaves are typed zeros.
+	null bool
+	kind Kind
+}
+
+func missingProjectionOf(target, source Node, path columnPath, targetColumn leafColumn, sourceMapping columnMappingGroup) (*missingProjection, int) {
+	repLevels := []byte{0}
+	defLevels := []byte{0}
+	var sourceRep, sourceDef, targetRep, targetDef byte
+	targetNode := target
+	sourceNode := source
+	var matched columnPath
+	if len(path) > 0 {
+		for _, name := range path[:len(path)-1] {
+			targetField := fieldByName(targetNode, name)
+			sourceField := fieldByName(sourceNode, name)
+			if targetField == nil || sourceField == nil || sourceField.Leaf() {
+				break
+			}
+			targetNode = targetField
+			sourceNode = sourceField
+			targetRep, targetDef = applyFieldRepetitionType(fieldRepetitionTypeOf(targetNode), targetRep, targetDef)
+			sourceRep, sourceDef = applyFieldRepetitionType(fieldRepetitionTypeOf(sourceNode), sourceRep, sourceDef)
+			repLevels = setLevelMapping(repLevels, sourceRep, targetRep)
+			defLevels = setLevelMapping(defLevels, sourceDef, targetDef)
+			matched = append(matched, name)
+		}
+	}
+
+	sourceIndex := -1
+	// Groups that share a path but no field are different schemas that happen
+	// to use the same names. Their levels do not describe the added field.
+	group := sourceMapping.descend(matched)
+	if len(matched) > 0 && (group == nil || (!group.hasDirectLeaf() && !nodesShareField(sourceNode, targetNode))) {
+		repLevels = []byte{0}
+		defLevels = []byte{0}
+		sourceRep, sourceDef, targetRep, targetDef = 0, 0, 0, 0
+		group = nil
+	}
+
+	proj := &missingProjection{
+		groupSourceRep: sourceRep,
+		targetRep:      targetRep,
+		targetDef:      targetDef,
+		repLevels:      repLevels,
+		defLevels:      defLevels,
+		null:           targetColumn.node.Optional(),
+		kind:           targetColumn.node.Type().Kind(),
+	}
+	// A required path has fixed levels, so the remapped zero level is enough
+	// and no leaf has to be read. Optional or repeated ancestors vary per row.
+	if group != nil && (sourceRep > 0 || sourceDef > 0) {
+		leaf := group.lookupAnyLeaf()
+		if leaf.node != nil {
+			proj.useSource = true
+			proj.sourceMaxRep = leaf.maxRepetitionLevel
+			sourceIndex = int(leaf.columnIndex)
+		}
+	}
+	return proj, sourceIndex
+}
+
+// nodesShareField reports whether two groups have a child with the same name.
+func nodesShareField(a, b Node) bool {
+	if a == nil || b == nil || a.Leaf() || b.Leaf() {
+		return false
+	}
+	names := make(map[string]struct{}, len(a.Fields()))
+	for _, field := range a.Fields() {
+		names[field.Name()] = struct{}{}
+	}
+	for _, field := range b.Fields() {
+		if _, ok := names[field.Name()]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *missingProjection) apply(dst, src []Value) []Value {
+	dst = dst[:0]
+	if p.useSource {
+		for i := range src {
+			if src[i].repetitionLevel > p.groupSourceRep {
+				continue
+			}
+			dst = append(dst, p.value(src[i].repetitionLevel, src[i].definitionLevel))
+		}
+		if len(dst) > 0 {
+			return dst
+		}
+	}
+	return append(dst, p.value(0, 0))
+}
+
+func (p *missingProjection) value(rep, def byte) Value {
+	var v Value
+	if !p.null {
+		v = ZeroValue(p.kind)
+	}
+	v.repetitionLevel = p.mapRep(rep)
+	v.definitionLevel = p.mapDef(def)
+	return v
+}
+
+func (p *missingProjection) mapRep(level byte) byte {
+	if int(level) >= len(p.repLevels) {
+		return p.targetRep
+	}
+	return p.repLevels[level]
+}
+
+func (p *missingProjection) mapDef(level byte) byte {
+	if int(level) >= len(p.defLevels) {
+		return p.targetDef
+	}
+	mapped := p.defLevels[level]
+	if mapped > p.targetDef {
+		return p.targetDef
+	}
+	return mapped
 }
 
 // missingColumnNeedsSibling reports whether a target column that is absent from
@@ -730,10 +773,25 @@ func ConvertRowGroup(rowGroup RowGroup, conv Conversion) RowGroup {
 		if isMissing {
 			var adjacentChunk ColumnChunk
 			mirrorSiblingLevels := false
-			if missingColumnNeedsSibling(sourceSchema, leaf.path, leaf.maxRepetitionLevel) {
+			var project *missingProjection
+			numValues := numRows
+			if c, ok := conv.(*conversion); ok && int(i) < len(c.columns) {
+				project = c.columns[i].missing
+			}
+			if project != nil && project.useSource {
+				src := conv.Column(int(i))
+				if src >= 0 && src < len(rowGroupColumns) {
+					adjacentChunk = rowGroupColumns[src]
+					// One output value per row can be sliced by seeking the leaf.
+					mirrorSiblingLevels = project.groupSourceRep == 0
+					if project.groupSourceRep > 0 {
+						if n := adjacentChunk.NumValues(); project.sourceMaxRep <= project.groupSourceRep || n > numValues {
+							numValues = n
+						}
+					}
+				}
+			} else if project == nil && missingColumnNeedsSibling(sourceSchema, leaf.path, leaf.maxRepetitionLevel) {
 				adjacentChunk = findAdjacentColumnChunk(schema, i, columns, sourceMapping)
-				// Flat columns copy the sibling's levels the same way Convert does.
-				// Columns under a repeated node keep the historical adjustment.
 				mirrorSiblingLevels = leaf.maxRepetitionLevel == 0 && adjacentChunk != nil
 			}
 
@@ -741,13 +799,14 @@ func ConvertRowGroup(rowGroup RowGroup, conv Conversion) RowGroup {
 				typ:                 leaf.node.Type(),
 				column:              i,
 				numRows:             numRows,
-				numValues:           numRows, // May be adjusted when reading
+				numValues:           numValues,
 				numNulls:            numRows, // Depends on required vs optional
 				maxRepetitionLevel:  leaf.maxRepetitionLevel,
 				maxDefinitionLevel:  leaf.maxDefinitionLevel,
 				adjacentChunk:       adjacentChunk,
 				mirrorSiblingLevels: mirrorSiblingLevels,
 				leafOptional:        leaf.node.Optional(),
+				project:             project,
 			}
 		}
 	})
@@ -876,6 +935,7 @@ type missingColumnChunk struct {
 	adjacentChunk       ColumnChunk // Adjacent column chunk to mirror levels from (nil if none)
 	mirrorSiblingLevels bool        // Copy sibling levels the way Convert does (flat columns)
 	leafOptional        bool        // The missing leaf itself is optional
+	project             *missingProjection
 }
 
 func (c *missingColumnChunk) Type() Type  { return c.typ }
@@ -941,6 +1001,7 @@ func (p missingPage) Slice(i, j int64) Page {
 		adjacentChunk:       p.adjacentChunk,
 		mirrorSiblingLevels: p.mirrorSiblingLevels,
 		leafOptional:        p.leafOptional,
+		project:             p.project,
 	}
 	adjacentPages := p.adjacentPages
 	// Flat columns mirror per-row levels, so each slice needs its own sibling
@@ -985,6 +1046,8 @@ type missingPageValues struct {
 	adjacentPages  Pages       // Pages reader for adjacent column (to read multiple pages)
 	adjacentReader ValueReader // Current page's reader for adjacent column to mirror levels
 	adjacentBuffer []Value     // Buffer for reading adjacent values
+	siblingBuf     []Value     // Unconsumed values from the last sibling read
+	siblingOff     int
 }
 
 func (r *missingPageValues) ReadValues(values []Value) (int, error) {
@@ -1001,7 +1064,9 @@ func (r *missingPageValues) ReadValues(values []Value) (int, error) {
 
 	var n int
 	var err error
-	if r.adjacentPages == nil {
+	if r.page.project != nil {
+		n, err = r.readProjected(values, columnIndex)
+	} else if r.adjacentPages == nil {
 		n, err = r.readWithoutAdjacent(values, typ, columnIndex)
 	} else if r.page.mirrorSiblingLevels {
 		n, err = r.readMirroringSibling(values, typ, columnIndex)
@@ -1010,6 +1075,80 @@ func (r *missingPageValues) ReadValues(values []Value) (int, error) {
 	}
 
 	return n, err
+}
+
+func (r *missingPageValues) readProjected(values []Value, columnIndex uint16) (int, error) {
+	p := r.page.project
+	if !p.useSource || r.adjacentPages == nil {
+		for i := range values {
+			values[i] = p.value(0, 0)
+			values[i].columnIndex = columnIndex
+		}
+		r.read += int64(len(values))
+		if r.read >= r.page.numValues {
+			return len(values), io.EOF
+		}
+		return len(values), nil
+	}
+
+	total := 0
+	for total < len(values) {
+		v, err := r.nextSibling()
+		if err != nil {
+			r.read += int64(total)
+			if err == io.EOF && total > 0 {
+				return total, nil
+			}
+			return total, err
+		}
+		if v.repetitionLevel > p.groupSourceRep {
+			continue
+		}
+		out := p.value(v.repetitionLevel, v.definitionLevel)
+		out.columnIndex = columnIndex
+		values[total] = out
+		total++
+	}
+	r.read += int64(total)
+	return total, nil
+}
+
+func (r *missingPageValues) nextSibling() (Value, error) {
+	for {
+		if r.siblingOff < len(r.siblingBuf) {
+			v := r.siblingBuf[r.siblingOff]
+			r.siblingOff++
+			return v, nil
+		}
+		if r.adjacentReader == nil {
+			page, err := r.adjacentPages.ReadPage()
+			if err != nil {
+				return Value{}, err
+			}
+			r.adjacentReader = page.Values()
+		}
+		buf := r.adjacentBuffer
+		if cap(buf) < 64 {
+			buf = make([]Value, 1024)
+			r.adjacentBuffer = buf
+		}
+		buf = buf[:cap(buf)]
+		n, err := r.adjacentReader.ReadValues(buf)
+		if n > 0 {
+			r.siblingBuf = buf[:n]
+			r.siblingOff = 0
+		}
+		if err == io.EOF {
+			r.adjacentReader = nil
+			continue
+		}
+		if err != nil {
+			return Value{}, err
+		}
+		if n == 0 {
+			return Value{}, io.ErrUnexpectedEOF
+		}
+	}
 }
 
 func (r *missingPageValues) readWithoutAdjacent(values []Value, typ Type, columnIndex uint16) (int, error) {

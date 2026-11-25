@@ -54,28 +54,48 @@ func (group columnMappingGroup) lookup(path columnPath) leafColumn {
 	return leafColumn{columnIndex: math.MaxUint16}
 }
 
-func (group columnMappingGroup) lookupClosest(path columnPath) leafColumn {
-	for len(path) > 0 {
-		g, ok := group[path[0]].(columnMappingGroup)
-		if ok {
-			group, path = g, path[1:]
-		} else {
-			firstName := ""
-			firstLeaf := (*columnMappingLeaf)(nil)
-			for name, child := range group {
-				if leaf, ok := child.(*columnMappingLeaf); ok {
-					if firstLeaf == nil || name < firstName {
-						firstName, firstLeaf = name, leaf
-					}
-				}
-			}
-			if firstLeaf != nil {
-				return firstLeaf.column
-			}
-			break
+// descend returns the group at path, or nil if a component is missing or is a leaf.
+func (group columnMappingGroup) descend(path columnPath) columnMappingGroup {
+	for _, name := range path {
+		next, ok := group[name].(columnMappingGroup)
+		if !ok {
+			return nil
+		}
+		group = next
+	}
+	return group
+}
+
+// hasDirectLeaf reports whether this group has a leaf child.
+func (group columnMappingGroup) hasDirectLeaf() bool {
+	for _, child := range group {
+		if _, ok := child.(*columnMappingLeaf); ok {
+			return true
 		}
 	}
-	return leafColumn{columnIndex: math.MaxUint16}
+	return false
+}
+
+// lookupAnyLeaf returns the lowest-index leaf in this group, including leaves
+// nested under child groups. A leaf with a nil node is returned when the group
+// has no leaves.
+func (group columnMappingGroup) lookupAnyLeaf() leafColumn {
+	best := leafColumn{columnIndex: math.MaxUint16}
+	var walk func(columnMapping)
+	walk = func(node columnMapping) {
+		switch node := node.(type) {
+		case *columnMappingLeaf:
+			if node.column.columnIndex < best.columnIndex {
+				best = node.column
+			}
+		case columnMappingGroup:
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(group)
+	return best
 }
 
 type columnMappingLeaf struct {
