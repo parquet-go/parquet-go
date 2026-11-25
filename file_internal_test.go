@@ -889,3 +889,35 @@ func TestFileSortingColumnsWithUnsupportedAnnotation(t *testing.T) {
 		})
 	}
 }
+
+func TestColumnChunkBufferSize(t *testing.T) {
+	const mib = 1 << 20
+
+	tests := []struct {
+		name       string
+		bufferSize int
+		chunkSize  int64
+		want       int
+	}{
+		{"unknown chunk size", 4 * mib, 0, 4 * mib},
+		{"negative chunk size", 4 * mib, -1, 4 * mib},
+		{"tiny chunk uses minimum", 4 * mib, 1, defaultReadBufferSize},
+		{"chunk below minimum", 4 * mib, defaultReadBufferSize - 1, defaultReadBufferSize},
+		{"exact power of two", 4 * mib, 64 << 10, 64 << 10},
+		{"rounds up to power of two", 4 * mib, 64<<10 + 1, 128 << 10},
+		{"chunk just below buffer size", 4 * mib, 4*mib - 1, 4 * mib},
+		{"chunk equal to buffer size", 4 * mib, 4 * mib, 4 * mib},
+		{"chunk larger than buffer size", 4 * mib, 100 * mib, 4 * mib},
+		{"non power of two buffer caps result", 3 * mib, 3*mib - 1, 3 * mib},
+		{"buffer below minimum is respected", 1024, 10, 1024},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := columnChunkBufferSize(test.bufferSize, test.chunkSize); got != test.want {
+				t.Errorf("columnChunkBufferSize(%d, %d) = %d, want %d",
+					test.bufferSize, test.chunkSize, got, test.want)
+			}
+		})
+	}
+}
