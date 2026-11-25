@@ -3,6 +3,7 @@ package parquet
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"math"
@@ -695,5 +696,287 @@ func TestFixedLenDecimalWriteFloat(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func convertDecimal(t *testing.T, from, to Node, v Value) (string, error) {
+	t.Helper()
+	conv, err := Convert(
+		NewSchema("s", Group{"a": to}),
+		NewSchema("s", Group{"a": from}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []Row{{v.Level(1, 2, 3)}}
+	_, err = conv.Convert(rows)
+	if err != nil {
+		return "", err
+	}
+	got := rows[0][0]
+	// Convert rewrites the column index to the target column. Repetition and
+	// definition levels stay on the value.
+	if got.RepetitionLevel() != 1 || got.DefinitionLevel() != 2 || got.Column() != 0 {
+		t.Errorf("levels = (%d,%d,%d), want (1,2,0)", got.RepetitionLevel(), got.DefinitionLevel(), got.Column())
+	}
+	return hex.EncodeToString(got.ByteArray()), nil
+}
+
+func TestDecimalToBinary(t *testing.T) {
+	flba := FixedLenByteArrayType
+	cases := []struct {
+		name     string
+		from, to Node
+		in       Value
+		want     string
+	}{
+		{"INT32 -12345 -> FLBA(16)", Decimal(2, 9, Int32Type), Decimal(2, 30, flba(16)),
+			ValueOf(int32(-12345)), "ffffffffffffffffffffffffffffcfc7"},
+		{"INT64 12345 -> BYTE_ARRAY", Decimal(2, 18, Int64Type), Decimal(2, 30, ByteArrayType),
+			ValueOf(int64(12345)), "3039"},
+		{"FLBA(4) -12345 -> FLBA(8)", Decimal(2, 9, flba(4)), Decimal(2, 18, flba(8)),
+			FixedLenByteArrayValue([]byte{0xff, 0xff, 0xcf, 0xc7}), "ffffffffffffcfc7"},
+		{"FLBA(8) 12345 -> FLBA(4)", Decimal(2, 18, flba(8)), Decimal(2, 9, flba(4)),
+			FixedLenByteArrayValue([]byte{0, 0, 0, 0, 0, 0, 0x30, 0x39}), "00003039"},
+		{"INT32 -12345 -> BYTE_ARRAY", Decimal(2, 9, Int32Type), Decimal(2, 30, ByteArrayType),
+			ValueOf(int32(-12345)), "cfc7"},
+		{"INT32 128 -> BYTE_ARRAY", Decimal(0, 9, Int32Type), Decimal(0, 30, ByteArrayType),
+			ValueOf(int32(128)), "0080"},
+		{"INT32 -128 -> FLBA(1)", Decimal(0, 9, Int32Type), Decimal(0, 2, flba(1)),
+			ValueOf(int32(-128)), "80"},
+		{"INT64 0 -> BYTE_ARRAY", Decimal(0, 18, Int64Type), Decimal(0, 10, ByteArrayType),
+			ValueOf(int64(0)), "00"},
+		{"INT64 min -> FLBA(16)", Decimal(0, 18, Int64Type), Decimal(0, 38, flba(16)),
+			ValueOf(int64(math.MinInt64)), "ffffffffffffffff8000000000000000"},
+		{"BYTE_ARRAY -255 -> FLBA(4)", Decimal(0, 10, ByteArrayType), Decimal(0, 9, flba(4)),
+			ByteArrayValue([]byte{0xff, 0x01}), "ffffff01"},
+		{"FLBA(4) 128 -> BYTE_ARRAY", Decimal(0, 9, flba(4)), Decimal(0, 18, ByteArrayType),
+			FixedLenByteArrayValue([]byte{0x00, 0x00, 0x00, 0x80}), "0080"},
+		{"FLBA(4) same width", Decimal(0, 9, flba(4)), Decimal(2, 9, flba(4)),
+			FixedLenByteArrayValue([]byte{0xff, 0xff, 0xcf, 0xc7}), "ffffcfc7"},
+		{"empty BYTE_ARRAY -> FLBA(4)", Decimal(0, 10, ByteArrayType), Decimal(0, 9, flba(4)),
+			ByteArrayValue(nil), "00000000"},
+		{"empty BYTE_ARRAY -> BYTE_ARRAY", Decimal(0, 10, ByteArrayType), Decimal(0, 18, ByteArrayType),
+			ByteArrayValue(nil), ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := convertDecimal(t, c.from, c.to, c.in)
+			if err != nil || got != c.want {
+				t.Errorf("got %s (err %v), want %s", got, err, c.want)
+			}
+		})
+	}
+
+	overflows := []struct {
+		name     string
+		from, to Node
+		in       Value
+	}{
+		{"FLBA(8) overflow -> FLBA(4)", Decimal(2, 18, flba(8)), Decimal(2, 9, flba(4)),
+			FixedLenByteArrayValue([]byte{0x01, 0, 0, 0, 0, 0, 0x30, 0x39})},
+		{"INT32 128 -> FLBA(1)", Decimal(0, 9, Int32Type), Decimal(0, 2, flba(1)),
+			ValueOf(int32(128))},
+		{"INT32 min -> FLBA(3)", Decimal(0, 9, Int32Type), Decimal(0, 9, flba(3)),
+			ValueOf(int32(math.MinInt32))},
+		{"BYTE_ARRAY -129 -> FLBA(1)", Decimal(0, 10, ByteArrayType), Decimal(0, 2, flba(1)),
+			ByteArrayValue([]byte{0xff, 0x7f})},
+	}
+	for _, c := range overflows {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := convertDecimal(t, c.from, c.to, c.in)
+			if err == nil {
+				t.Fatalf("no error, got %s", got)
+			}
+			if !strings.Contains(err.Error(), "does not fit") {
+				t.Fatalf("error %v, want a fit error", err)
+			}
+		})
+	}
+}
+
+func TestDecimalIntMatchesFixedWidthEncoding(t *testing.T) {
+	values := []int64{
+		0, 1, -1, 127, 128, -128, -129,
+		12345, -12345,
+		math.MaxInt32, math.MinInt32,
+		math.MaxInt64, math.MinInt64,
+		1 << 40, -1 << 40,
+	}
+	asInt64 := Decimal(0, 18, Int64Type).Type()
+	asInt32 := Decimal(0, 9, Int32Type).Type()
+	flba16 := Decimal(0, 38, FixedLenByteArrayType(16)).Type()
+	flba8 := Decimal(0, 18, FixedLenByteArrayType(8)).Type()
+	flba4 := Decimal(0, 9, FixedLenByteArrayType(4)).Type()
+	asBytes := Decimal(0, 38, ByteArrayType).Type()
+	for _, v := range values {
+		var want [16]byte
+		putBigEndianInt64(want[:], v)
+		got, err := flba16.ConvertValue(Int64Value(v), asInt64)
+		if err != nil {
+			t.Fatalf("%d: %v", v, err)
+		}
+		if !bytes.Equal(got.ByteArray(), want[:]) {
+			t.Fatalf("%d FLBA(16): got %x want %x", v, got.ByteArray(), want)
+		}
+		got, err = flba8.ConvertValue(Int64Value(v), asInt64)
+		if err != nil {
+			t.Fatalf("%d FLBA(8): %v", v, err)
+		}
+		if !bytes.Equal(got.ByteArray(), want[8:]) {
+			t.Fatalf("%d FLBA(8): got %x want %x", v, got.ByteArray(), want[8:])
+		}
+		wide := FixedLenByteArrayValue(append([]byte(nil), want[:]...))
+		narrow, err := flba8.ConvertValue(wide, flba16)
+		if err != nil {
+			t.Fatalf("%d narrow wide: %v", v, err)
+		}
+		if !bytes.Equal(narrow.ByteArray(), want[8:]) {
+			t.Fatalf("%d narrow: got %x want %x", v, narrow.ByteArray(), want[8:])
+		}
+		minimal := want[decimalTrimStart(want[:]):]
+		got, err = asBytes.ConvertValue(Int64Value(v), asInt64)
+		if err != nil {
+			t.Fatalf("%d BYTE_ARRAY: %v", v, err)
+		}
+		if !bytes.Equal(got.ByteArray(), minimal) {
+			t.Fatalf("%d BYTE_ARRAY: got %x want %x", v, got.ByteArray(), minimal)
+		}
+		back, err := asInt64.ConvertValue(got, asBytes)
+		if err != nil {
+			t.Fatalf("%d round trip: %v", v, err)
+		}
+		if back.Int64() != v {
+			t.Fatalf("%d round trip got %d", v, back.Int64())
+		}
+		if v < math.MinInt32 || v > math.MaxInt32 {
+			if _, err := flba4.ConvertValue(Int64Value(v), asInt64); err == nil {
+				t.Fatalf("%d fits in FLBA(4)", v)
+			}
+			continue
+		}
+		got, err = flba4.ConvertValue(Int32Value(int32(v)), asInt32)
+		if err != nil {
+			t.Fatalf("%d FLBA(4): %v", v, err)
+		}
+		if !bytes.Equal(got.ByteArray(), want[12:]) {
+			t.Fatalf("%d FLBA(4): got %x want %x", v, got.ByteArray(), want[12:])
+		}
+		got, err = flba16.ConvertValue(Int32Value(int32(v)), asInt32)
+		if err != nil {
+			t.Fatalf("%d int32 FLBA(16): %v", v, err)
+		}
+		if !bytes.Equal(got.ByteArray(), want[:]) {
+			t.Fatalf("%d int32 FLBA(16): got %x want %x", v, got.ByteArray(), want)
+		}
+	}
+}
+
+func TestDecimalConvertValuePreservesLevels(t *testing.T) {
+	from := Decimal(2, 9, Int32Type).Type()
+	to := Decimal(2, 30, FixedLenByteArrayType(16)).Type()
+	got, err := to.ConvertValue(Int32Value(-12345).Level(1, 2, 3), from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RepetitionLevel() != 1 || got.DefinitionLevel() != 2 || got.Column() != 3 {
+		t.Fatalf("levels = (%d,%d,%d), want (1,2,3)", got.RepetitionLevel(), got.DefinitionLevel(), got.Column())
+	}
+	if hex.EncodeToString(got.ByteArray()) != "ffffffffffffffffffffffffffffcfc7" {
+		t.Fatalf("got %x", got.ByteArray())
+	}
+	if got.Kind() != FixedLenByteArray {
+		t.Fatalf("kind = %s", got.Kind())
+	}
+}
+
+func TestDecimalFixedLenToInteger(t *testing.T) {
+	src := FixedLenByteArrayValue([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xcf, 0xc7}).Level(1, 2, 3)
+	from := Decimal(2, 18, FixedLenByteArrayType(8)).Type()
+	got, err := Decimal(2, 18, Int64Type).Type().ConvertValue(src, from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Int64() != -12345 || got.Kind() != Int64 {
+		t.Fatalf("int64 = %d kind %s", got.Int64(), got.Kind())
+	}
+	if got.RepetitionLevel() != 1 || got.DefinitionLevel() != 2 || got.Column() != 3 {
+		t.Fatalf("levels = (%d,%d,%d), want (1,2,3)", got.RepetitionLevel(), got.DefinitionLevel(), got.Column())
+	}
+	got, err = Decimal(2, 9, Int32Type).Type().ConvertValue(src, from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Int32() != -12345 || got.Kind() != Int32 {
+		t.Fatalf("int32 = %d kind %s", got.Int32(), got.Kind())
+	}
+	wide := Decimal(0, 38, FixedLenByteArrayType(16)).Type()
+	_, err = Decimal(0, 18, Int64Type).Type().ConvertValue(
+		FixedLenByteArrayValue(bytes.Repeat([]byte{0x01}, 16)), wide)
+	if err == nil {
+		t.Fatal("expected a value wider than int64 to be rejected")
+	}
+}
+
+func TestReadDecimalAsFixedLenByteArray(t *testing.T) {
+	type written struct {
+		A int32 `parquet:"a,decimal(2:9)"`
+	}
+	buf := new(bytes.Buffer)
+	if err := Write(buf, []written{{A: -12345}}); err != nil {
+		t.Fatal(err)
+	}
+	to := NewSchema("s", Group{"a": Decimal(2, 30, FixedLenByteArrayType(16))})
+	r := NewReader(bytes.NewReader(buf.Bytes()), to)
+	rows := make([]Row, 1)
+	n, err := r.ReadRows(rows)
+	if n != 1 {
+		t.Fatalf("read rows: n=%d err=%v", n, err)
+	}
+	if got := hex.EncodeToString(rows[0][0].ByteArray()); got != "ffffffffffffffffffffffffffffcfc7" {
+		t.Errorf("read -123.45 as decimal(2,30) FLBA(16): got %s", got)
+	}
+}
+
+// A source that is not a decimal keeps the physical byte conversion. Decimal
+// encoding applies only when the source type is a decimal.
+func TestNonDecimalSourceKeepsPhysicalConversion(t *testing.T) {
+	cases := []struct {
+		name string
+		src  Type
+		val  Value
+		dst  Type
+	}{
+		{
+			name: "INT32 to FLBA",
+			src:  Int32Type,
+			val:  Int32Value(-12345).Level(1, 2, 3),
+			dst:  FixedLenByteArrayType(8),
+		},
+		{
+			name: "BYTE_ARRAY to FLBA",
+			src:  ByteArrayType,
+			val:  ByteArrayValue([]byte{0xff, 0x01}).Level(1, 2, 3),
+			dst:  FixedLenByteArrayType(4),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			decimal := Decimal(0, 18, c.dst).Type()
+			want, err := c.dst.ConvertValue(c.val, c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := decimal.ConvertValue(c.val, c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Kind() != want.Kind() || !bytes.Equal(got.ByteArray(), want.ByteArray()) {
+				t.Fatalf("got %s %x, physical %s %x", got.Kind(), got.ByteArray(), want.Kind(), want.ByteArray())
+			}
+			if got.RepetitionLevel() != 1 || got.DefinitionLevel() != 2 || got.Column() != 3 {
+				t.Fatalf("levels = (%d,%d,%d), want (1,2,3)", got.RepetitionLevel(), got.DefinitionLevel(), got.Column())
+			}
+		})
 	}
 }
