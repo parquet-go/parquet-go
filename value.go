@@ -388,6 +388,21 @@ func makeValueInt32(value int32) Value {
 	}
 }
 
+// storeValue writes a non-repeated Value in three stores. definitionLevel is
+// packed into the same word as kind and columnIndex so optional reads do not
+// walk the values again to stamp it. The repetition level is zero.
+func storeValue(dst *Value, ptr *byte, bits uint64, kind int8, definitionLevel byte, columnIndex uint16) {
+	base := unsafe.Pointer(dst)
+	*(*unsafe.Pointer)(base) = unsafe.Pointer(ptr)
+	*(*uint64)(unsafe.Add(base, unsafe.Offsetof(Value{}.u64))) = bits
+	*(*uint64)(unsafe.Add(base, unsafe.Offsetof(Value{}.kind))) = valueWords(kind, definitionLevel, 0, columnIndex)
+}
+
+// storeBytesValue writes a byte-array value. Empty slices store a nil pointer.
+func storeBytesValue(dst *Value, value []byte, kind int8, definitionLevel byte, columnIndex uint16) {
+	storeValue(dst, unsafe.SliceData(value), uint64(len(value)), kind, definitionLevel, columnIndex)
+}
+
 func makeValueInt64(value int64) Value {
 	return Value{
 		kind: ^int8(Int64),

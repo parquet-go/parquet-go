@@ -234,3 +234,28 @@ func (col *booleanColumnBuffer) ReadValuesAt(values []Value, offset int64) (n in
 		return n, err
 	}
 }
+
+func (col *booleanColumnBuffer) readValuesAtLevel(values []Value, offset int64, definitionLevel byte) (n int, err error) {
+	i := int(offset)
+	switch {
+	case i < 0:
+		return 0, errRowIndexOutOfBounds(offset, int64(col.numValues))
+	case i >= int(col.numValues):
+		return 0, io.EOF
+	default:
+		columnIndex := col.columnIndex
+		for n < len(values) && i < int(col.numValues) {
+			var bits uint64
+			if col.valueAt(i) {
+				bits = 1
+			}
+			storeValue(&values[n], nil, bits, ^int8(Boolean), definitionLevel, columnIndex)
+			n++
+			i++
+		}
+		if n < len(values) {
+			err = io.EOF
+		}
+		return n, err
+	}
+}

@@ -344,12 +344,9 @@ func (col *optionalColumnBuffer) ReadValuesAt(values []Value, offset int64) (int
 	numNulls2 := int64(countLevelsNotEqual(definitionLevels[offset:offset+length], col.maxDefinitionLevel))
 
 	if numNulls2 < length {
-		n, err := col.base.ReadValuesAt(values[:length-numNulls2], offset-numNulls1)
+		n, err := col.readBaseValues(values[:length-numNulls2], offset-numNulls1)
 		if err != nil {
 			return n, err
-		}
-		for i := range values[:length-numNulls2] {
-			values[i].definitionLevel = col.maxDefinitionLevel
 		}
 	}
 
@@ -372,4 +369,21 @@ func (col *optionalColumnBuffer) ReadValuesAt(values []Value, offset int64) (int
 	}
 
 	return int(length), nil
+}
+
+// readBaseValues reads the non-null values and stamps maxDefinitionLevel on
+// each one. Physical buffers do that while they build the Value; other
+// buffers keep the previous pass over the returned values.
+func (col *optionalColumnBuffer) readBaseValues(values []Value, offset int64) (int, error) {
+	if reader, ok := col.base.(levelValueReader); ok {
+		return reader.readValuesAtLevel(values, offset, col.maxDefinitionLevel)
+	}
+	n, err := col.base.ReadValuesAt(values, offset)
+	if err != nil {
+		return n, err
+	}
+	for i := range values {
+		values[i].definitionLevel = col.maxDefinitionLevel
+	}
+	return n, nil
 }

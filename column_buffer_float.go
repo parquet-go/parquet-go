@@ -3,6 +3,7 @@ package parquet
 import (
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 
 	"github.com/parquet-go/bitpack/unsafecast"
@@ -134,6 +135,28 @@ func (col *floatColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int,
 	default:
 		for n < len(values) && i < len(colValues) {
 			values[n] = col.makeValue(colValues[i])
+			n++
+			i++
+		}
+		if n < len(values) {
+			err = io.EOF
+		}
+		return n, err
+	}
+}
+
+func (col *floatColumnBuffer) readValuesAtLevel(values []Value, offset int64, definitionLevel byte) (n int, err error) {
+	i := int(offset)
+	colValues := col.values.Slice()
+	switch {
+	case i < 0:
+		return 0, errRowIndexOutOfBounds(offset, int64(len(colValues)))
+	case i >= len(colValues):
+		return 0, io.EOF
+	default:
+		columnIndex := col.columnIndex
+		for n < len(values) && i < len(colValues) {
+			storeValue(&values[n], nil, uint64(math.Float32bits(colValues[i])), ^int8(Float), definitionLevel, columnIndex)
 			n++
 			i++
 		}
