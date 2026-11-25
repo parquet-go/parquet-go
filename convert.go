@@ -822,27 +822,33 @@ func ConvertRowGroup(rowGroup RowGroup, conv Conversion) RowGroup {
 		isMissing := sourceColumn.node == nil
 
 		if isMissing {
-			var adjacentChunk ColumnChunk
-			mirrorSiblingLevels := false
-			if missingColumnNeedsSibling(sourceSchema, leaf.path, leaf.maxRepetitionLevel) {
-				adjacentChunk = findAdjacentColumnChunk(schema, i, columns, sourceMapping)
-				// Flat columns copy the sibling's levels the same way Convert does.
-				// Columns under a repeated node keep the historical adjustment.
-				mirrorSiblingLevels = leaf.maxRepetitionLevel == 0 && adjacentChunk != nil
+			chunk := &missingColumnChunk{
+				typ:                leaf.node.Type(),
+				column:             i,
+				numRows:            numRows,
+				numValues:          numRows, // May be adjusted when reading
+				numNulls:           numRows, // Depends on required vs optional
+				maxRepetitionLevel: leaf.maxRepetitionLevel,
+				maxDefinitionLevel: leaf.maxDefinitionLevel,
+				leafOptional:       leaf.node.Optional(),
 			}
-
-			columns[i] = &missingColumnChunk{
-				typ:                 leaf.node.Type(),
-				column:              i,
-				numRows:             numRows,
-				numValues:           numRows, // May be adjusted when reading
-				numNulls:            numRows, // Depends on required vs optional
-				maxRepetitionLevel:  leaf.maxRepetitionLevel,
-				maxDefinitionLevel:  leaf.maxDefinitionLevel,
-				adjacentChunk:       adjacentChunk,
-				mirrorSiblingLevels: mirrorSiblingLevels,
-				leafOptional:        leaf.node.Optional(),
+			// Use the same synthesis as Convert. The template is a source
+			// column, read from the original row group so its levels have
+			// not already been remapped.
+			if c, ok := conv.(*conversion); ok && int(i) < len(c.columns) {
+				col := &c.columns[i]
+				chunk.synth = col.missing
+				if col.missing != nil && col.missing.needsValues && col.sourceIndex >= 0 && col.sourceIndex < len(rowGroupColumns) {
+					chunk.adjacentChunk = rowGroupColumns[col.sourceIndex]
+					// One synthesized value per row, so a slice can seek by row.
+					chunk.mirrorSiblingLevels = col.missing.groupSourceRep == 0
+				}
 			}
+			if chunk.synth == nil && missingColumnNeedsSibling(sourceSchema, leaf.path, leaf.maxRepetitionLevel) {
+				chunk.adjacentChunk = findAdjacentColumnChunk(schema, i, columns, sourceMapping)
+				chunk.mirrorSiblingLevels = leaf.maxRepetitionLevel == 0 && chunk.adjacentChunk != nil
+			}
+			columns[i] = chunk
 		}
 	})
 
@@ -970,11 +976,58 @@ type missingColumnChunk struct {
 	adjacentChunk       ColumnChunk // Adjacent column chunk to mirror levels from (nil if none)
 	mirrorSiblingLevels bool        // Copy sibling levels the way Convert does (flat columns)
 	leafOptional        bool        // The missing leaf itself is optional
+	synth               *missingField
+	counted             bool
+}
+
+func (c *missingColumnChunk) ensureCount() {
+	if c.counted || c.synth == nil || !c.synth.needsValues || c.synth.groupSourceRep == 0 || c.adjacentChunk == nil {
+		c.counted = true
+		return
+	}
+	c.counted = true
+	if n := countKeptValues(c.adjacentChunk, c.synth.groupSourceRep); n > 0 {
+		c.numValues = n
+		c.numNulls = n
+	}
+}
+
+// countKeptValues counts template values whose repetition level is at most
+// maxRep. That is the number of enclosing-group instances.
+func countKeptValues(chunk ColumnChunk, maxRep byte) int64 {
+	pages := chunk.Pages()
+	defer pages.Close()
+	buf := make([]Value, 1024)
+	var n int64
+	var reader ValueReader
+	for {
+		if reader == nil {
+			page, err := pages.ReadPage()
+			if err != nil {
+				return n
+			}
+			reader = page.Values()
+		}
+		k, err := reader.ReadValues(buf)
+		for i := range k {
+			if buf[i].repetitionLevel <= maxRep {
+				n++
+			}
+		}
+		if err == io.EOF {
+			reader = nil
+			continue
+		}
+		if err != nil {
+			return n
+		}
+	}
 }
 
 func (c *missingColumnChunk) Type() Type  { return c.typ }
 func (c *missingColumnChunk) Column() int { return int(c.column) }
 func (c *missingColumnChunk) Pages() Pages {
+	c.ensureCount()
 	var adjacentPages Pages
 	if c.adjacentChunk != nil {
 		adjacentPages = c.adjacentChunk.Pages()
@@ -987,7 +1040,10 @@ func (c *missingColumnChunk) Pages() Pages {
 func (c *missingColumnChunk) ColumnIndex() (ColumnIndex, error) { return missingColumnIndex{c}, nil }
 func (c *missingColumnChunk) OffsetIndex() (OffsetIndex, error) { return missingOffsetIndex{}, nil }
 func (c *missingColumnChunk) BloomFilter() BloomFilter          { return missingBloomFilter{} }
-func (c *missingColumnChunk) NumValues() int64                  { return c.numValues }
+func (c *missingColumnChunk) NumValues() int64 {
+	c.ensureCount()
+	return c.numValues
+}
 
 type missingColumnIndex struct{ *missingColumnChunk }
 
@@ -1035,6 +1091,8 @@ func (p missingPage) Slice(i, j int64) Page {
 		adjacentChunk:       p.adjacentChunk,
 		mirrorSiblingLevels: p.mirrorSiblingLevels,
 		leafOptional:        p.leafOptional,
+		synth:               p.synth,
+		counted:             true,
 	}
 	adjacentPages := p.adjacentPages
 	// Flat columns mirror per-row levels, so each slice needs its own sibling
@@ -1079,6 +1137,7 @@ type missingPageValues struct {
 	adjacentPages  Pages       // Pages reader for adjacent column (to read multiple pages)
 	adjacentReader ValueReader // Current page's reader for adjacent column to mirror levels
 	adjacentBuffer []Value     // Buffer for reading adjacent values
+	pending        []Value     // Template values read but not yet synthesized
 }
 
 func (r *missingPageValues) ReadValues(values []Value) (int, error) {
@@ -1095,7 +1154,9 @@ func (r *missingPageValues) ReadValues(values []Value) (int, error) {
 
 	var n int
 	var err error
-	if r.adjacentPages == nil {
+	if r.page.synth != nil {
+		n, err = r.readSynthesized(values, columnIndex)
+	} else if r.adjacentPages == nil {
 		n, err = r.readWithoutAdjacent(values, typ, columnIndex)
 	} else if r.page.mirrorSiblingLevels {
 		n, err = r.readMirroringSibling(values, typ, columnIndex)
@@ -1155,6 +1216,75 @@ func (r *missingPageValues) adjacentReadBuf(remaining []Value) []Value {
 		return buf[:len(remaining)]
 	}
 	return buf
+}
+
+// readSynthesized emits the same values Convert does for a missing column.
+// A fixed group is one placeholder per row. Otherwise each template value at
+// or below the enclosing group's repetition level becomes one output value.
+func (r *missingPageValues) readSynthesized(values []Value, columnIndex uint16) (int, error) {
+	synth := r.page.synth
+	if !synth.needsValues || r.adjacentPages == nil {
+		v := synth.value(synth.repetitionLevels[0], synth.clampDef(synth.definitionLevels[0]), columnIndex)
+		for i := range values {
+			values[i] = v
+		}
+		r.read += int64(len(values))
+		if r.read == r.page.numValues {
+			return len(values), io.EOF
+		}
+		return len(values), nil
+	}
+
+	total := 0
+	for total < len(values) {
+		if len(r.pending) == 0 {
+			if r.adjacentReader == nil {
+				adjacentPage, err := r.adjacentPages.ReadPage()
+				if err == io.EOF {
+					r.read += int64(total)
+					if total > 0 {
+						return total, nil
+					}
+					return total, io.EOF
+				}
+				if err != nil {
+					r.read += int64(total)
+					return total, err
+				}
+				r.adjacentReader = adjacentPage.Values()
+			}
+			buf := r.adjacentReadBuf(values)
+			n, err := r.adjacentReader.ReadValues(buf)
+			if n > 0 {
+				r.pending = append(r.pending[:0], buf[:n]...)
+			}
+			if err == io.EOF {
+				r.adjacentReader = nil
+			} else if err != nil {
+				r.read += int64(total)
+				return total, err
+			} else if n == 0 {
+				r.adjacentReader = nil
+				continue
+			}
+		}
+		for len(r.pending) > 0 && total < len(values) {
+			src := r.pending[0]
+			r.pending = r.pending[1:]
+			rep := src.repetitionLevel
+			if rep > synth.groupSourceRep {
+				continue
+			}
+			def := src.definitionLevel
+			if def > synth.groupSourceDef {
+				def = synth.groupSourceDef
+			}
+			values[total] = synth.value(synth.mapLevel(synth.repetitionLevels, rep), synth.clampDef(synth.mapLevel(synth.definitionLevels, def)), columnIndex)
+			total++
+		}
+	}
+	r.read += int64(total)
+	return total, nil
 }
 
 // readMirroringSibling copies repetition and definition levels from the sibling

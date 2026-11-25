@@ -663,6 +663,152 @@ func TestAddedListAndMapFieldsMatchWriter(t *testing.T) {
 	})
 }
 
+func TestMissingColumnChunkMatchesRows(t *testing.T) {
+	t.Run("zero rows", func(t *testing.T) {
+		type Item struct {
+			X int32 `parquet:"x"`
+		}
+		type Item2 struct {
+			X int32  `parquet:"x"`
+			Y *int32 `parquet:"y,optional"`
+		}
+		type Src struct {
+			S []Item `parquet:"s"`
+		}
+		type Dst struct {
+			S []Item2 `parquet:"s"`
+		}
+		src := parquet.NewGenericBuffer[Src]()
+		assertChunkMatchesRows[Dst](t, src, 1)
+	})
+
+	t.Run("repeated sibling", func(t *testing.T) {
+		type Inner struct {
+			A []int32 `parquet:"a"`
+		}
+		type Inner2 struct {
+			A []int32 `parquet:"a"`
+			B *int32  `parquet:"b,optional"`
+		}
+		type Src struct {
+			S *Inner `parquet:"s,optional"`
+		}
+		type Dst struct {
+			S *Inner2 `parquet:"s,optional"`
+		}
+		one := int32(1)
+		src := parquet.NewGenericBuffer[Src]()
+		if _, err := src.Write([]Src{
+			{},
+			{S: &Inner{}},
+			{S: &Inner{A: []int32{one, 2, 3}}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertChunkMatchesRows[Dst](t, src, 1)
+	})
+
+	t.Run("no direct leaf", func(t *testing.T) {
+		type Box struct {
+			X int32 `parquet:"x"`
+		}
+		type Item struct {
+			Inner Box `parquet:"inner"`
+		}
+		type Item2 struct {
+			Inner Box    `parquet:"inner"`
+			Y     *int32 `parquet:"y,optional"`
+		}
+		type Src struct {
+			S []Item `parquet:"s"`
+		}
+		type Dst struct {
+			S []Item2 `parquet:"s"`
+		}
+		src := parquet.NewGenericBuffer[Src]()
+		if _, err := src.Write([]Src{
+			{},
+			{S: []Item{{Inner: Box{X: 1}}}},
+			{S: []Item{{Inner: Box{X: 2}}, {Inner: Box{X: 3}}, {Inner: Box{X: 4}}}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertChunkMatchesRows[Dst](t, src, 1)
+	})
+
+	t.Run("required beside optional sibling", func(t *testing.T) {
+		type Inner struct {
+			A *int32 `parquet:"a,optional"`
+		}
+		type Inner2 struct {
+			A *int32 `parquet:"a,optional"`
+			B int32  `parquet:"b"`
+		}
+		type Src struct {
+			S *Inner `parquet:"s,optional"`
+		}
+		type Dst struct {
+			S *Inner2 `parquet:"s,optional"`
+		}
+		v := int32(5)
+		src := parquet.NewGenericBuffer[Src]()
+		if _, err := src.Write([]Src{
+			{},
+			{S: &Inner{}},
+			{S: &Inner{A: &v}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertChunkMatchesRows[Dst](t, src, 1)
+	})
+}
+
+func assertChunkMatchesRows[Dst any](t *testing.T, src parquet.RowGroup, column int) {
+	t.Helper()
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Dst)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(src, conv)
+	rows := readConvertedRows(t, converted.Rows())
+	var fromRows []parquet.Value
+	for _, row := range rows {
+		fromRows = append(fromRows, columnValues(row, column)...)
+	}
+	got := readColumnValues(t, converted.ColumnChunks()[column])
+	levelsEqual(t, got, fromRows)
+
+	// One value at a time, so a template batch is not consumed in one read.
+	pages := converted.ColumnChunks()[column].Pages()
+	t.Cleanup(func() { pages.Close() })
+	var single []parquet.Value
+	buf := make([]parquet.Value, 1)
+	for {
+		page, err := pages.ReadPage()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader := page.Values()
+		for {
+			n, err := reader.ReadValues(buf)
+			single = append(single, buf[:n]...)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n == 0 {
+				t.Fatal("ReadValues returned no values and no error")
+			}
+		}
+	}
+	levelsEqual(t, single, fromRows)
+}
+
 func assertAddedFieldRead[Src, Dst any](t *testing.T, in []Src, want []Dst) {
 	t.Helper()
 	buf := new(bytes.Buffer)
