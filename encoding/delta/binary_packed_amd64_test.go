@@ -90,6 +90,17 @@ func TestBlockSubInt64AVX2(t *testing.T) {
 func TestBlockBitWidthsInt64AVX2(t *testing.T) {
 	requireAVX2(t)
 	testBlockBitWidthsInt64(t, blockBitWidthsInt64AVX2)
+
+	for i := range miniBlockSize {
+		var block [blockSize]int64
+		block[i] = 1
+		var got [numMiniBlocks]byte
+		want := [numMiniBlocks]byte{1, 0, 0, 0}
+		blockBitWidthsInt64AVX2(&got, &block)
+		if got != want {
+			t.Fatalf("lane %d: got %v, want %v", i, got, want)
+		}
+	}
 }
 
 func TestEncodeMiniBlockInt64AVX2(t *testing.T) {
