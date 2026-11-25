@@ -623,64 +623,28 @@ TEXT ·blockSubInt64AVX2(SB), NOSPLIT, $0-16
     VZEROUPPER
     RET
 
-// vpmaxsq is an emulation of the AVX-512 VPMAXSQ instruction with AVX2.
-#define vpmaxsq(tmp, arg2, arg1, ret) \
-    VPCMPGTQ arg2, arg1, tmp \
-    VPBLENDVB tmp, arg1, arg2, ret
-
 // func blockBitWidthsInt64AVX2(bitWidths *[numMiniBlocks]byte, block *[blockSize]int64)
 TEXT ·blockBitWidthsInt64AVX2(SB), NOSPLIT, $0-16
     MOVQ bitWidths+0(FP), AX
     MOVQ block+8(FP), BX
 
-    // AVX2 only has signed comparisons (and min/max), we emulate working on
-    // unsigned values by adding -2^64 to the values. Y9 is a vector of -2^64
-    // used to offset 4 packed 64 bits integers in other YMM registers where
-    // the block data are loaded.
-    VPCMPEQQ Y9, Y9, Y9
-    VPSLLQ $63, Y9, Y9
-
     XORQ DI, DI
 loop:
-    VPBROADCASTQ (BX), Y0 // max
-    VPADDQ Y9, Y0, Y0
+    // OR preserves the highest set bit of the unsigned maximum.
+    VMOVDQU (BX), Y0
+    VPOR 32(BX), Y0, Y0
+    VPOR 64(BX), Y0, Y0
+    VPOR 96(BX), Y0, Y0
+    VPOR 128(BX), Y0, Y0
+    VPOR 160(BX), Y0, Y0
+    VPOR 192(BX), Y0, Y0
+    VPOR 224(BX), Y0, Y0
 
-    VMOVDQU (BX), Y1
-    VMOVDQU 32(BX), Y2
-    VMOVDQU 64(BX), Y3
-    VMOVDQU 96(BX), Y4
-    VMOVDQU 128(BX), Y5
-    VMOVDQU 160(BX), Y6
-    VMOVDQU 192(BX), Y7
-    VMOVDQU 224(BX), Y8
-
-    VPADDQ Y9, Y1, Y1
-    VPADDQ Y9, Y2, Y2
-    VPADDQ Y9, Y3, Y3
-    VPADDQ Y9, Y4, Y4
-    VPADDQ Y9, Y5, Y5
-    VPADDQ Y9, Y6, Y6
-    VPADDQ Y9, Y7, Y7
-    VPADDQ Y9, Y8, Y8
-
-    vpmaxsq(Y10, Y2, Y1, Y1)
-    vpmaxsq(Y11, Y4, Y3, Y3)
-    vpmaxsq(Y12, Y6, Y5, Y5)
-    vpmaxsq(Y13, Y8, Y7, Y7)
-
-    vpmaxsq(Y10, Y3, Y1, Y1)
-    vpmaxsq(Y11, Y7, Y5, Y5)
-    vpmaxsq(Y12, Y5, Y1, Y1)
-    vpmaxsq(Y13, Y1, Y0, Y0)
-
-    VPERM2I128 $1, Y0, Y0, Y1
-    vpmaxsq(Y10, Y1, Y0, Y0)
-    VPSUBQ Y9, Y0, Y0
-
+    VEXTRACTI128 $1, Y0, X1
+    VPOR X1, X0, X0
     MOVQ X0, CX
     VPEXTRQ $1, X0, DX
-    CMPQ CX, DX
-    CMOVQHI CX, DX
+    ORQ CX, DX
 
     LZCNTQ DX, DX
     NEGQ DX
