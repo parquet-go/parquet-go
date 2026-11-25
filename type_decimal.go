@@ -391,13 +391,24 @@ func (t *decimalType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Decimal]
 }
 
-// ConvertValue decodes a BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY decimal into an
-// integer decimal. Those physical types store a big-endian two's-complement
-// value. The generic byte-array conversion reads little-endian, which turns
-// the unscaled integer 100000 into a different int64.
+// ConvertValue converts a decimal of type typ into t.
+//
+// BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY decimals store a big-endian
+// two's-complement unscaled integer. The physical conversions encode
+// integers little-endian and copy byte arrays from the first byte, so a
+// binary decimal re-encodes that integer: sign-extend when the destination
+// is wider, drop a redundant sign prefix when it is narrower, and return an
+// error when the value does not fit. A BYTE_ARRAY result is the shortest
+// two's-complement form. Scale is not applied; the unscaled integer is what
+// moves, as it does for INT32 and INT64 decimals.
+//
+// A source that is not a decimal keeps the physical conversion. Nulls do too.
 func (t *decimalType) ConvertValue(val Value, typ Type) (Value, error) {
-	if val.IsNull() || t.isBinary() {
+	if val.IsNull() {
 		return t.Type.ConvertValue(val, typ)
+	}
+	if t.isBinary() {
+		return convertToDecimalBinary(t, val, typ)
 	}
 	if typ.Kind() != ByteArray && typ.Kind() != FixedLenByteArray {
 		return t.Type.ConvertValue(val, typ)
@@ -417,6 +428,111 @@ func (t *decimalType) ConvertValue(val Value, typ Type) (Value, error) {
 	default:
 		return t.Type.ConvertValue(val, typ)
 	}
+}
+
+func convertToDecimalBinary(dst *decimalType, val Value, typ Type) (Value, error) {
+	src, ok := typ.(*decimalType)
+	if !ok {
+		return dst.Type.ConvertValue(val, typ)
+	}
+	switch src.Kind() {
+	case Int32:
+		return convertDecimalInt(val, int64(val.int32()), 4, dst)
+	case Int64:
+		return convertDecimalInt(val, val.int64(), 8, dst)
+	case ByteArray, FixedLenByteArray:
+		return convertDecimalByteArray(val, val.byteArray(), dst)
+	default:
+		return dst.Type.ConvertValue(val, typ)
+	}
+}
+
+// convertDecimalInt writes signed as a big-endian two's-complement integer of
+// width bytes, then fits that encoding into dst. width is 4 or 8.
+//
+// The sign trim is inline so the stack buffer is not passed to another
+// function and does not escape.
+func convertDecimalInt(val Value, signed int64, width int, dst *decimalType) (Value, error) {
+	var raw [8]byte
+	if width == 4 {
+		binary.BigEndian.PutUint32(raw[:4], uint32(int32(signed)))
+	} else {
+		binary.BigEndian.PutUint64(raw[:], uint64(signed))
+	}
+	if dst.Kind() == ByteArray {
+		i := 0
+		for i+1 < width && decimalSignExtended(raw[i], raw[i+1]) {
+			i++
+		}
+		out := make([]byte, width-i)
+		copy(out, raw[i:width])
+		return val.convertToByteArray(out), nil
+	}
+	n := dst.Length()
+	i := 0
+	for width-i > n {
+		if i+1 < width && decimalSignExtended(raw[i], raw[i+1]) {
+			i++
+			continue
+		}
+		return val, decimalFitError(n)
+	}
+	out := make([]byte, n)
+	kept := width - i
+	if raw[i]&0x80 != 0 {
+		for j := range n - kept {
+			out[j] = 0xFF
+		}
+	}
+	copy(out[n-kept:], raw[i:width])
+	return val.convertToFixedLenByteArray(out), nil
+}
+
+func convertDecimalByteArray(val Value, src []byte, dst *decimalType) (Value, error) {
+	if dst.Kind() == ByteArray {
+		return val.convertToByteArray(src[decimalTrimStart(src):]), nil
+	}
+	n := dst.Length()
+	start := 0
+	for len(src)-start > n {
+		if start+1 < len(src) && decimalSignExtended(src[start], src[start+1]) {
+			start++
+			continue
+		}
+		return val, decimalFitError(n)
+	}
+	if len(src)-start == n {
+		return val.convertToFixedLenByteArray(src[start:]), nil
+	}
+	out := make([]byte, n)
+	kept := src[start:]
+	if len(kept) > 0 && kept[0]&0x80 != 0 {
+		for i := range n - len(kept) {
+			out[i] = 0xFF
+		}
+	}
+	copy(out[n-len(kept):], kept)
+	return val.convertToFixedLenByteArray(out), nil
+}
+
+// decimalSignExtended reports whether leading is a redundant sign byte of the
+// two's-complement value that continues at next.
+func decimalSignExtended(leading, next byte) bool {
+	return (leading == 0x00 && next&0x80 == 0) || (leading == 0xFF && next&0x80 != 0)
+}
+
+// decimalTrimStart returns the index of the first byte of src that is not a
+// redundant sign byte. An empty src is unchanged.
+func decimalTrimStart(src []byte) int {
+	i := 0
+	for i+1 < len(src) && decimalSignExtended(src[i], src[i+1]) {
+		i++
+	}
+	return i
+}
+
+func decimalFitError(n int) error {
+	return fmt.Errorf("decimal value does not fit in %d bytes", n)
 }
 
 // int64FromDecimalBytes reads a big-endian two's-complement decimal. A value
