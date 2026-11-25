@@ -61,7 +61,7 @@ func (e *LengthByteArrayEncoding) DecodeByteArray(dst []byte, src []byte, offset
 		return dst, offsets, e.wrap(errValueLengthOutOfBounds(int(lastOffset), len(payload)))
 	}
 
-	if lastOffset > 0 && cap(dst) > 0 && unsafe.SliceData(dst) == unsafe.SliceData(src) {
+	if lastOffset > 0 && cap(dst) >= len(src)-len(payload)+int(lastOffset) && unsafe.SliceData(dst) == unsafe.SliceData(src) {
 		return payload[:lastOffset:lastOffset], offsets, nil
 	}
 	return append(dst, payload[:lastOffset]...), offsets, nil

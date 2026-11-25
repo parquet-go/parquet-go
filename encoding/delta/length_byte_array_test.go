@@ -111,7 +111,7 @@ func BenchmarkDecodeByteArrayLengths(b *testing.B) {
 }
 
 func TestLengthByteArrayDecodeBuffers(t *testing.T) {
-	for _, mode := range []string{"in-place", "out-of-place", "zero-capacity"} {
+	for _, mode := range []string{"in-place", "out-of-place", "zero-capacity", "small-capacity", "short-capacity", "exact-capacity"} {
 		t.Run(mode, func(t *testing.T) {
 			e := &LengthByteArrayEncoding{}
 			want := []byte("abc")
@@ -130,6 +130,12 @@ func TestLengthByteArrayDecodeBuffers(t *testing.T) {
 				dst = make([]byte, 10)
 			case "zero-capacity":
 				dst = src[:0:0]
+			case "small-capacity":
+				dst = src[:0:1]
+			case "short-capacity":
+				dst = src[: 0 : end-1]
+			case "exact-capacity":
+				dst = src[:0:end]
 			}
 			got, offsets, err := e.DecodeByteArray(dst, src, nil)
 			if err != nil {
@@ -139,13 +145,21 @@ func TestLengthByteArrayDecodeBuffers(t *testing.T) {
 				t.Fatalf("got %q, %v; want %q, %v", got, offsets, want, wantOffsets)
 			}
 			switch mode {
-			case "in-place":
+			case "in-place", "exact-capacity":
+				if &got[0] != &src[end-len(want)] {
+					t.Fatal("decoded payload was copied")
+				}
 				if cap(got) != len(got) {
 					t.Fatalf("decoded capacity = %d, want %d", cap(got), len(got))
 				}
 				_ = append(got, '!')
 				if string(src[end:]) != "tail" {
 					t.Fatalf("append overwrote trailing bytes: %q", src[end:])
+				}
+			case "small-capacity", "short-capacity":
+				clear(src[cap(dst):])
+				if !bytes.Equal(got, want) {
+					t.Fatalf("mutation beyond destination capacity changed decoded bytes: %q", got)
 				}
 			case "out-of-place", "zero-capacity":
 				clear(src)
