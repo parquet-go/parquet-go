@@ -408,7 +408,7 @@ func assertOptionalGroupSibling(t *testing.T, src parquet.RowGroup, target *parq
 		if len(vals) != 1 {
 			t.Fatalf("row %d: got %d values", i, len(vals))
 		}
-		if vals[0].RepetitionLevel() != 0 || vals[0].DefinitionLevel() != wantDef[i] || vals[0].IsNull() != wantNull {
+		if vals[0].RepetitionLevel() != 0 || vals[0].DefinitionLevel() != wantDef[i] || vals[0].IsNull() != (wantNull || wantDef[i] == 0) {
 			t.Errorf("row %d: rep=%d def=%d null=%v, want rep=0 def=%d null=%v",
 				i, vals[0].RepetitionLevel(), vals[0].DefinitionLevel(), vals[0].IsNull(), wantDef[i], wantNull)
 		}
@@ -433,7 +433,7 @@ func assertOptionalGroupSibling(t *testing.T, src parquet.RowGroup, target *parq
 		t.Fatalf("sliced values: got %d, want 2", n)
 	}
 	for i, def := range wantDef[1:3] {
-		if buf[i].RepetitionLevel() != 0 || buf[i].DefinitionLevel() != def || buf[i].IsNull() != wantNull {
+		if buf[i].RepetitionLevel() != 0 || buf[i].DefinitionLevel() != def || buf[i].IsNull() != (wantNull || def == 0) {
 			t.Errorf("slice %d: rep=%d def=%d null=%v, want rep=0 def=%d null=%v",
 				i, buf[i].RepetitionLevel(), buf[i].DefinitionLevel(), buf[i].IsNull(), def, wantNull)
 		}
@@ -489,9 +489,10 @@ func TestMissingColumnUnderOptionalGroupLargeRead(t *testing.T) {
 		if i%2 == 0 {
 			wantDef = 1
 		}
-		if buf[i].RepetitionLevel() != 0 || buf[i].DefinitionLevel() != wantDef || buf[i].IsNull() {
-			t.Errorf("value %d: rep=%d def=%d null=%v, want rep=0 def=%d null=false",
-				i, buf[i].RepetitionLevel(), buf[i].DefinitionLevel(), buf[i].IsNull(), wantDef)
+		wantNull := wantDef == 0
+		if buf[i].RepetitionLevel() != 0 || buf[i].DefinitionLevel() != wantDef || buf[i].IsNull() != wantNull {
+			t.Errorf("value %d: rep=%d def=%d null=%v, want rep=0 def=%d null=%v",
+				i, buf[i].RepetitionLevel(), buf[i].DefinitionLevel(), buf[i].IsNull(), wantDef, wantNull)
 		}
 	}
 }
@@ -987,5 +988,209 @@ func TestProjectedColumnCountsGroupInstances(t *testing.T) {
 	}
 	if n != 1 || buf[0].DefinitionLevel() != 0 {
 		t.Fatalf("nested slice: n=%d def=%d, want one value at def 0", n, buf[0].DefinitionLevel())
+	}
+}
+
+func TestAddedColumnNullWhenNotPresent(t *testing.T) {
+	i32 := parquet.Leaf(parquet.Int32Type)
+	opt, rep := parquet.Optional, parquet.Repeated
+
+	// An added repeated field is an empty list: a null, not a non-null zero.
+	row := convertAddedField(t,
+		parquet.Group{"a": i32, "b": rep(i32)},
+		parquet.Group{"a": i32},
+		parquet.Row{parquet.ValueOf(int32(1)).Level(0, 0, 0)},
+	)
+	got := columnValues(row, 1)
+	if len(got) != 1 || !got[0].IsNull() || got[0].DefinitionLevel() != 0 {
+		t.Fatalf("repeated field: %+v, want one null at def 0", got)
+	}
+
+	// A required field inside a null optional parent stays null.
+	row = convertAddedField(t,
+		parquet.Group{"s": opt(parquet.Group{"a": opt(i32), "b": i32})},
+		parquet.Group{"s": opt(parquet.Group{"a": opt(i32)})},
+		parquet.Row{parquet.NullValue().Level(0, 0, 0)},
+	)
+	got = columnValues(row, 1)
+	if len(got) != 1 || !got[0].IsNull() || got[0].DefinitionLevel() != 0 {
+		t.Fatalf("null parent: %+v, want one null at def 0", got)
+	}
+
+	// The same field is a zero when the parent is present.
+	row = convertAddedField(t,
+		parquet.Group{"s": opt(parquet.Group{"a": opt(i32), "b": i32})},
+		parquet.Group{"s": opt(parquet.Group{"a": opt(i32)})},
+		parquet.Row{parquet.ValueOf(int32(5)).Level(0, 1, 0)},
+	)
+	got = columnValues(row, 1)
+	if len(got) != 1 || got[0].IsNull() || got[0].DefinitionLevel() != 1 || got[0].Int32() != 0 {
+		t.Fatalf("present parent: %+v, want a zero at def 1", got)
+	}
+
+	// A required leaf inside a group the source does not have is null.
+	row = convertAddedField(t,
+		parquet.Group{"a": i32, "g": opt(parquet.Group{"x": i32})},
+		parquet.Group{"a": i32},
+		parquet.Row{parquet.ValueOf(int32(1)).Level(0, 0, 0)},
+	)
+	got = columnValues(row, 1)
+	if len(got) != 1 || !got[0].IsNull() || got[0].DefinitionLevel() != 0 {
+		t.Fatalf("new group: %+v, want one null at def 0", got)
+	}
+
+	// A present fixed-length byte array zero has the type's length.
+	flba := parquet.FixedLenByteArrayType(4)
+	row = convertAddedField(t,
+		parquet.Group{"b": parquet.Leaf(flba)},
+		parquet.Group{},
+		parquet.Row{},
+	)
+	got = columnValues(row, 0)
+	if len(got) != 1 || got[0].IsNull() || len(got[0].Bytes()) != 4 {
+		t.Fatalf("fixed-length zero: %+v len=%d", got, len(got[0].Bytes()))
+	}
+}
+
+func TestReplacingNestedGroupKeepsParentPresence(t *testing.T) {
+	type Inner struct {
+		X int32 `parquet:"x"`
+	}
+	type SourceGroup struct {
+		Inner Inner `parquet:"inner"`
+	}
+	type Source struct {
+		S *SourceGroup `parquet:"s,optional"`
+	}
+	type Target struct {
+		S *struct {
+			Y int32 `parquet:"y"`
+		} `parquet:"s,optional"`
+	}
+	present := Source{S: &SourceGroup{Inner: Inner{X: 3}}}
+	src := parquet.NewGenericBuffer[Source]()
+	if _, err := src.Write([]Source{present, {}}); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Target)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readConvertedRows(t, parquet.ConvertRowGroup(src, conv).Rows())
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows", len(rows))
+	}
+	y0 := columnValues(rows[0], 0)
+	if len(y0) != 1 || y0[0].IsNull() || y0[0].DefinitionLevel() != 1 || y0[0].Int32() != 0 {
+		t.Fatalf("present parent: %+v", y0)
+	}
+	y1 := columnValues(rows[1], 0)
+	if len(y1) != 1 || !y1[0].IsNull() || y1[0].DefinitionLevel() != 0 {
+		t.Fatalf("absent parent: %+v", y1)
+	}
+}
+
+func TestProjectedCountIsLazyAndSliceDoesNotOpen(t *testing.T) {
+	type Inner struct {
+		X []int32 `parquet:"x"`
+	}
+	type Item struct {
+		Inner Inner `parquet:"inner"`
+	}
+	type Source struct {
+		S []Item `parquet:"s"`
+	}
+	type ItemTarget struct {
+		Inner Inner  `parquet:"inner"`
+		Y     *int32 `parquet:"y,optional"`
+	}
+	type Target struct {
+		S []ItemTarget `parquet:"s"`
+	}
+	srcRows := []Source{
+		{S: []Item{{Inner: Inner{X: []int32{1, 2}}}, {Inner: Inner{X: []int32{3}}}}},
+		{S: []Item{{Inner: Inner{X: []int32{4, 5}}}}},
+	}
+	buf := parquet.NewGenericBuffer[Source]()
+	if _, err := buf.Write(srcRows); err != nil {
+		t.Fatal(err)
+	}
+	chunks, rg := wrapAccess(buf, nil)
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Target)), buf.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(rg, conv)
+	if chunks[0].reads != 0 {
+		t.Fatalf("ConvertRowGroup opened the template %d times", chunks[0].reads)
+	}
+	_ = readConvertedRows(t, converted.Rows())
+	if chunks[0].reads != 1 {
+		t.Fatalf("reading rows opened the template %d times, want 1", chunks[0].reads)
+	}
+
+	y := converted.ColumnChunks()[1]
+	if y.NumValues() != 3 {
+		t.Fatalf("NumValues = %d, want 3", y.NumValues())
+	}
+	if chunks[0].reads == 0 {
+		t.Fatal("NumValues did not read the template")
+	}
+	index, err := y.ColumnIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index.NullCount(0) != y.NumValues() {
+		t.Fatalf("NullCount = %d, want %d", index.NullCount(0), y.NumValues())
+	}
+
+	pages := y.Pages()
+	defer pages.Close()
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := chunks[0].reads
+	_ = page.Slice(0, 1).Slice(0, 1)
+	if chunks[0].reads != before {
+		t.Fatalf("chained slice opened the template %d times", chunks[0].reads-before)
+	}
+}
+
+func TestMissingRequiredRootColumnHasNoNulls(t *testing.T) {
+	type Source struct {
+		ID int64 `parquet:"id"`
+	}
+	type Target struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"`
+	}
+	src := parquet.NewGenericBuffer[Source]()
+	if _, err := src.Write([]Source{{ID: 1}, {ID: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Target)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := parquet.ConvertRowGroup(src, conv).ColumnChunks()[1]
+	if chunk.NumValues() != 2 {
+		t.Fatalf("NumValues = %d, want 2", chunk.NumValues())
+	}
+	index, err := chunk.ColumnIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index.NullCount(0) != 0 {
+		t.Fatalf("NullCount = %d, want 0", index.NullCount(0))
+	}
+	pages := chunk.Pages()
+	defer pages.Close()
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.NumNulls() != 0 {
+		t.Fatalf("page NumNulls = %d, want 0", page.NumNulls())
 	}
 }
