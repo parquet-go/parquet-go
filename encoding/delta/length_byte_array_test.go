@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"slices"
 	"testing"
+	"unsafe"
 )
 
 func TestDecodeByteArrayLengths(t *testing.T) {
@@ -145,23 +146,36 @@ func TestLengthByteArrayDecodeBuffers(t *testing.T) {
 				t.Fatalf("got %q, %v; want %q, %v", got, offsets, want, wantOffsets)
 			}
 			switch mode {
-			case "in-place", "exact-capacity":
-				if &got[0] != &src[end-len(want)] {
-					t.Fatal("decoded payload was copied")
+			case "in-place", "exact-capacity", "short-capacity":
+				// short-capacity still holds the payload; only bytes past that
+				// cap are outside the destination.
+				if len(got) == 0 || unsafe.SliceData(got) != unsafe.SliceData(dst) {
+					t.Fatal("decoded payload does not start at dst")
 				}
-				if cap(got) != len(got) {
-					t.Fatalf("decoded capacity = %d, want %d", cap(got), len(got))
+				if cap(got) != cap(dst) {
+					t.Fatalf("decoded capacity = %d, want %d", cap(got), cap(dst))
 				}
-				_ = append(got, '!')
 				if string(src[end:]) != "tail" {
-					t.Fatalf("append overwrote trailing bytes: %q", src[end:])
+					t.Fatalf("decode overwrote trailing bytes: %q", src[end:])
 				}
-			case "small-capacity", "short-capacity":
-				clear(src[cap(dst):])
+				if mode == "short-capacity" {
+					clear(src[cap(dst):])
+					if !bytes.Equal(got, want) {
+						t.Fatalf("mutation beyond destination capacity changed decoded bytes: %q", got)
+					}
+				}
+			case "small-capacity", "zero-capacity":
+				clear(src)
 				if !bytes.Equal(got, want) {
-					t.Fatalf("mutation beyond destination capacity changed decoded bytes: %q", got)
+					t.Fatalf("source mutation changed decoded bytes: %q", got)
 				}
-			case "out-of-place", "zero-capacity":
+				if cap(dst) > 0 && unsafe.SliceData(got) == unsafe.SliceData(dst) {
+					t.Fatal("payload does not fit, but the result reused dst")
+				}
+			case "out-of-place":
+				if len(got) == 0 || unsafe.SliceData(got) != unsafe.SliceData(dst) {
+					t.Fatal("decoded payload does not start at dst")
+				}
 				clear(src)
 				if !bytes.Equal(got, want) {
 					t.Fatalf("source mutation changed decoded bytes: %q", got)

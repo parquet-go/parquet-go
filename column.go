@@ -12,6 +12,7 @@ import (
 	"github.com/parquet-go/parquet-go/deprecated"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
+	"github.com/parquet-go/parquet-go/internal/deltalength"
 	"github.com/parquet-go/parquet-go/internal/memory"
 )
 
@@ -941,10 +942,12 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 	var vbuf *buffer[byte]
 	var pageOffsets []uint32
 	var pageValues []byte
+	inPlace := false
 	switch {
 	case pageEncoding.CanDecodeInPlace():
 		vbuf = page
 		pageValues = data
+		inPlace = true
 	default:
 		vbuf = buffers.get(pageType.EstimateDecodeSize(numValues, data, pageEncoding))
 		defer vbuf.unref()
@@ -958,10 +961,24 @@ func (c *Column) decodeDataPage(header DataPageHeader, numValues int, repetition
 		pageOffsets = obuf.data.Slice()
 	}
 
-	values := pageType.NewValues(pageValues, pageOffsets)
-	values, err := pageType.Decode(values, data, pageEncoding)
-	if err != nil {
-		return nil, err
+	var values encoding.Values
+	var err error
+	// The length header sits in front of one contiguous payload. The page
+	// buffer owns the allocation and the decoded page only borrows the values,
+	// so keep that payload in place. DecodeByteArray cannot return the view:
+	// its result has to start at dst[0] so callers can pass it back as dst.
+	if inPlace && pageKind == ByteArray && pageEncoding == &DeltaLengthByteArray {
+		var payload []byte
+		payload, pageOffsets, err = deltalength.PayloadView(data, pageOffsets)
+		if err != nil {
+			return nil, encoding.Error(&DeltaLengthByteArray, err)
+		}
+		values = encoding.ByteArrayValues(payload, pageOffsets)
+	} else {
+		values, err = pageType.Decode(pageType.NewValues(pageValues, pageOffsets), data, pageEncoding)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if isDictionaryEncoding(pageEncoding) {
