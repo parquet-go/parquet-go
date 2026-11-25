@@ -391,13 +391,17 @@ func (t *decimalType) ConvertedType() *deprecated.ConvertedType {
 	return &convertedTypes[deprecated.Decimal]
 }
 
-// ConvertValue decodes a BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY decimal into an
-// integer decimal. Those physical types store a big-endian two's-complement
-// value. The generic byte-array conversion reads little-endian, which turns
-// the unscaled integer 100000 into a different int64.
+// ConvertValue converts between the physical types of decimals. BYTE_ARRAY
+// and FIXED_LEN_BYTE_ARRAY decimals store a big-endian two's-complement
+// value. The generic conversions between integers and byte arrays use
+// little-endian, which turns the unscaled integer 100000 into a different
+// value.
 func (t *decimalType) ConvertValue(val Value, typ Type) (Value, error) {
-	if val.IsNull() || t.isBinary() {
+	if val.IsNull() {
 		return t.Type.ConvertValue(val, typ)
+	}
+	if t.isBinary() {
+		return t.convertToDecimalBytes(val, typ)
 	}
 	if typ.Kind() != ByteArray && typ.Kind() != FixedLenByteArray {
 		return t.Type.ConvertValue(val, typ)
@@ -417,6 +421,43 @@ func (t *decimalType) ConvertValue(val Value, typ Type) (Value, error) {
 	default:
 		return t.Type.ConvertValue(val, typ)
 	}
+}
+
+// convertToDecimalBytes converts a value to the big-endian two's-complement
+// encoding of t, which is BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY. Values are
+// sign-extended to a wider FIXED_LEN_BYTE_ARRAY; narrowing drops leading sign
+// bytes and fails when the value does not fit.
+func (t *decimalType) convertToDecimalBytes(val Value, typ Type) (Value, error) {
+	var data []byte
+	switch typ.Kind() {
+	case Int32:
+		data = binary.BigEndian.AppendUint32(nil, uint32(val.int32()))
+	case Int64:
+		data = binary.BigEndian.AppendUint64(nil, uint64(val.int64()))
+	case ByteArray, FixedLenByteArray:
+		data = val.byteArray()
+	default:
+		return t.Type.ConvertValue(val, typ)
+	}
+	if t.Kind() == ByteArray {
+		return val.convertToByteArray(slices.Clone(data)), nil
+	}
+
+	sign := byte(0)
+	if len(data) > 0 && data[0]&0x80 != 0 {
+		sign = 0xFF
+	}
+	size := t.Length()
+	if n := len(data) - size; n > 0 {
+		// The dropped bytes must be sign bytes, and the kept bytes must keep the sign.
+		if bytes.Count(data[:n], []byte{sign}) != n || (data[n]^sign)&0x80 != 0 {
+			return val, fmt.Errorf("decimal value of %d bytes does not fit in %s", len(data), t.Type)
+		}
+		data = data[n:]
+	}
+	b := bytes.Repeat([]byte{sign}, size)
+	copy(b[size-len(data):], data)
+	return val.convertToFixedLenByteArray(b), nil
 }
 
 // int64FromDecimalBytes reads a big-endian two's-complement decimal. A value

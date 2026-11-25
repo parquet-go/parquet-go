@@ -349,6 +349,47 @@ func TestInt64FromDecimalBytes(t *testing.T) {
 	}
 }
 
+func TestConvertDecimalToBinary(t *testing.T) {
+	flba := FixedLenByteArrayType
+	cases := []struct {
+		scenario string
+		from, to Node
+		in       Value
+		want     string // hex, empty when the conversion must fail
+	}{
+		{"negative int32 to flba(16)", Decimal(2, 9, Int32Type), Decimal(2, 30, flba(16)), ValueOf(int32(-12345)), "ffffffffffffffffffffffffffffcfc7"},
+		{"int64 to byte array", Decimal(2, 18, Int64Type), Decimal(2, 30, ByteArrayType), ValueOf(int64(12345)), "0000000000003039"},
+		{"negative flba(4) to flba(8)", Decimal(2, 9, flba(4)), Decimal(2, 18, flba(8)), FixedLenByteArrayValue([]byte{0xff, 0xff, 0xcf, 0xc7}), "ffffffffffffcfc7"},
+		{"negative flba(8) to flba(4)", Decimal(2, 18, flba(8)), Decimal(2, 9, flba(4)), FixedLenByteArrayValue([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xcf, 0xc7}), "ffffcfc7"},
+		{"flba(8) overflowing flba(4)", Decimal(2, 18, flba(8)), Decimal(2, 9, flba(4)), FixedLenByteArrayValue([]byte{0x01, 0, 0, 0, 0, 0, 0x30, 0x39}), ""},
+		{"flba(8) changing sign in flba(4)", Decimal(2, 18, flba(8)), Decimal(2, 9, flba(4)), FixedLenByteArrayValue([]byte{0, 0, 0, 0, 0x80, 0, 0, 0}), ""},
+	}
+	for _, c := range cases {
+		t.Run(c.scenario, func(t *testing.T) {
+			conv, err := Convert(
+				NewSchema("s", Group{"a": c.to}),
+				NewSchema("s", Group{"a": c.from}),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows := []Row{{c.in.Level(0, 0, 0)}}
+			if _, err := conv.Convert(rows); err != nil {
+				if c.want != "" {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			got := fmt.Sprintf("%x", rows[0][0].byteArray())
+			if c.want == "" {
+				t.Errorf("expected an error, got %s", got)
+			} else if got != c.want {
+				t.Errorf("got %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
 func TestDecimalInt64PanicMessage(t *testing.T) {
 	for _, precision := range []int{0, 19} {
 		t.Run(fmt.Sprintf("precision=%d", precision), func(t *testing.T) {
