@@ -959,8 +959,14 @@ type PageHeader struct {
 
 // Wrapper struct to store key values.
 type KeyValue struct {
-	Key   string `thrift:"1,required"`
-	Value string `thrift:"2,required"`
+	Key string `thrift:"1,required"`
+	// value is optional in the format. The writezero tag keeps field 2 in
+	// files we write when the string is empty: readers that require the
+	// field (parquet-go before this change) reject a missing one. An omitted
+	// value decodes as the empty string because this field is a string. The
+	// key is still present.
+	// https://github.com/apache/parquet-format/blob/5cc18cae643835b19f869d3cffb085cd3c04eb15/src/main/thrift/parquet.thrift#L883-L886
+	Value string `thrift:"2,writezero"`
 }
 
 // Wrapper struct to specify sort order.
