@@ -1,4 +1,4 @@
-//go:build !purego && (!goexperiment.simd || go1.27)
+//go:build !purego && !goexperiment.simd
 
 package rle
 
@@ -34,9 +34,6 @@ func init() {
 }
 
 //go:noescape
-func encodeBytesBitpackBMI2(dst []byte, src []uint64, bitWidth uint) int
-
-//go:noescape
 func encodeInt32IndexEqual8ContiguousAVX2(words [][8]int32) int
 
 //go:noescape
@@ -55,6 +52,3 @@ func encodeInt32BitpackAVX2(dst []byte, src [][8]int32, bitWidth uint) int {
 		return encodeInt32BitpackDefault(dst, src, bitWidth)
 	}
 }
-
-//go:noescape
-func decodeBytesBitpackBMI2(dst, src []byte, count, bitWidth uint)

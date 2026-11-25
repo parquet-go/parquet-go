@@ -1,0 +1,63 @@
+//go:build !purego && (!goexperiment.simd || go1.27)
+
+#include "textflag.h"
+
+// PDEP/PEXT byte bit packing. The Go 1.27 simd build uses these when
+// AVX-512 VBMI is absent. archsimd does not expose PDEP or PEXT.
+
+GLOBL bitMasks<>(SB), RODATA|NOPTR, $64
+DATA bitMasks<>+0(SB)/8,  $0b0000000100000001000000010000000100000001000000010000000100000001
+DATA bitMasks<>+8(SB)/8,  $0b0000001100000011000000110000001100000011000000110000001100000011
+DATA bitMasks<>+16(SB)/8, $0b0000011100000111000001110000011100000111000001110000011100000111
+DATA bitMasks<>+24(SB)/8, $0b0000111100001111000011110000111100001111000011110000111100001111
+DATA bitMasks<>+32(SB)/8, $0b0001111100011111000111110001111100011111000111110001111100011111
+DATA bitMasks<>+40(SB)/8, $0b0011111100111111001111110011111100111111001111110011111100111111
+DATA bitMasks<>+48(SB)/8, $0b0111111101111111011111110111111101111111011111110111111101111111
+DATA bitMasks<>+56(SB)/8, $0b1111111111111111111111111111111111111111111111111111111111111111
+
+// func decodeBytesBitpackBMI2(dst, src []byte, count, bitWidth uint)
+TEXT ·decodeBytesBitpackBMI2(SB), NOSPLIT, $0-64
+    MOVQ dst_base+0(FP), AX
+    MOVQ src_base+24(FP), BX
+    MOVQ count+48(FP), CX
+    MOVQ bitWidth+56(FP), DX
+    LEAQ bitMasks<>(SB), DI
+    MOVQ -8(DI)(DX*8), DI
+    XORQ SI, SI
+    SHRQ $3, CX
+    JMP test
+loop:
+    MOVQ (BX), R8
+    PDEPQ DI, R8, R8
+    MOVQ R8, (AX)(SI*8)
+    ADDQ DX, BX
+    INCQ SI
+test:
+    CMPQ SI, CX
+    JNE loop
+    RET
+
+// func encodeBytesBitpackBMI2(dst []byte, src []uint64, bitWidth uint) int
+TEXT ·encodeBytesBitpackBMI2(SB), NOSPLIT, $0-64
+    MOVQ dst_base+0(FP), AX
+    MOVQ src_base+24(FP), BX
+    MOVQ src_len+32(FP), CX
+    MOVQ bitWidth+48(FP), DX
+    LEAQ bitMasks<>(SB), DI
+    MOVQ -8(DI)(DX*8), DI
+    XORQ SI, SI
+    JMP test
+loop:
+    MOVQ (BX)(SI*8), R8
+    PEXTQ DI, R8, R8
+    MOVQ R8, (AX)
+    ADDQ DX, AX
+    INCQ SI
+test:
+    CMPQ SI, CX
+    JNE loop
+done:
+    SUBQ dst+0(FP), AX
+    MOVQ AX, ret+56(FP)
+    RET
+

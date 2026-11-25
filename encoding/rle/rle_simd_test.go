@@ -1,4 +1,4 @@
-//go:build goexperiment.simd && !go1.27
+//go:build goexperiment.simd
 
 package rle
 
@@ -30,7 +30,7 @@ func TestEncodeInt32IndexEqual8ContiguousSIMD(t *testing.T) {
 				words[uniform] = [8]int32{42, 42, 42, 42, 42, 42, 42, 42}
 			}
 			want := reference(words)
-			if got := encodeInt32IndexEqual8ContiguousSIMD(words); got != want {
+			if got := encodeInt32IndexEqual8Contiguous(words); got != want {
 				t.Fatalf("size=%d uniform=%d: got %d, want %d", size, uniform, got, want)
 			}
 		}

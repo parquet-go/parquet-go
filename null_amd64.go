@@ -60,19 +60,6 @@ func nullIndexFloat64(bits []uint64, rows sparse.Array) {
 	nullIndex64(&bits[0], rows)
 }
 
-func nullIndexString(bits []uint64, rows sparse.Array) {
-	// We offset by an extra 8 bytes to test the lengths of string values where
-	// the first field is the pointer and the second is the length which we want
-	// to test.
-	nullIndex64(&bits[0], rows.Offset(8))
-}
-
-func nullIndexSlice(bits []uint64, rows sparse.Array) {
-	// Slice values are null if their pointer is nil, which is held in the first
-	// 8 bytes of the object so we can simply test 64 bits words.
-	nullIndex64(&bits[0], rows)
-}
-
 func nullIndexPointer(bits []uint64, rows sparse.Array) {
 	nullIndex64(&bits[0], rows)
 }

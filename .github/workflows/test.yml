@@ -98,10 +98,9 @@ jobs:
         run: go test -trimpath -tags=${{ matrix.tags }} -run '^$' -bench . -benchtime 1x ./...
 
   # Test GOEXPERIMENT=simd on linux/amd64 at the GOAMD64 levels the
-  # archsimd kernels are written for. Go 1.26 compiles those kernels.
-  # Go 1.27 keeps the experiment set (callers turn it on for other
-  # modules) and builds the assembly kernels instead; see the SIMD
-  # section of the README.
+  # archsimd kernels are written for. Go 1.26 compiles the original API.
+  # Go 1.27 compiles the renamed API for the kernels that are not slower
+  # than the assembly; see the SIMD section of the README.
   simd:
     strategy:
       matrix:
@@ -146,10 +145,10 @@ jobs:
 
       # bitpack and jsonlite still ship Go 1.26 archsimd sources. On Go 1.27
       # those files do not compile, so this module's tests never start.
-      # Give them the same !go1.27 split used here, in the module cache,
-      # until those modules release it. The module index in the build cache
-      # is keyed only by the module directory and treats that directory as
-      # immutable, so it would keep the pre-patch constraints; drop it.
+      # Retarget their build tags to !go1.27 in the module cache until those
+      # modules release a fix. The module index in the build cache is keyed
+      # only by the module directory and treats that directory as immutable,
+      # so it would keep the pre-patch constraints; drop it.
       - name: Retarget dependency simd build tags
         if: steps.cpu.outputs.supported == 'true' && startsWith(matrix.go, '1.27')
         run: |
@@ -206,8 +205,8 @@ jobs:
         if: steps.cpu.outputs.supported == 'true'
         run: go test -trimpath -run '^$' -bench . -benchtime 1x ./...
 
-      # purego combined with the experiment: archsimd kernels on Go 1.26,
-      # the purego sources on Go 1.27. Vet compiles the test files too.
+      # purego combined with the experiment selects the archsimd kernels
+      # on both Go 1.26 and Go 1.27. Vet compiles the test files too.
       # The purego fallbacks are also covered by the main job.
       - name: Build with purego
         if: steps.cpu.outputs.supported == 'true' && matrix.goamd64 == 'v3'

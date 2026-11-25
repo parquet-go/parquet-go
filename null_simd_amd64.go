@@ -198,3 +198,13 @@ func nullIndex64(bits *uint64, rows sparse.Array) {
 		i += k
 	}
 }
+
+func nullIndexString(bits []uint64, rows sparse.Array) {
+	// Offset past the data pointer so the length field is what gets tested.
+	nullIndex64(&bits[0], rows.Offset(8))
+}
+
+func nullIndexSlice(bits []uint64, rows sparse.Array) {
+	// A slice is null when its data pointer, the first word, is nil.
+	nullIndex64(&bits[0], rows)
+}
