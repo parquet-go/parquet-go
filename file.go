@@ -1339,13 +1339,23 @@ func (f *FilePages) init(c *FileColumnChunk, reader io.ReaderAt) {
 // for small chunks. The result is never larger than bufferSize, and never
 // smaller than defaultReadBufferSize unless bufferSize itself is smaller.
 // When chunkSize is unknown (<= 0), bufferSize is returned unchanged.
+//
+// The power-of-two step saturates at bufferSize when the rounded size does
+// not fit in a positive int. A signed shift overflows in that case (above
+// 1 GiB on 32-bit, and near math.MaxInt on 64-bit) and would otherwise
+// collapse the result to defaultReadBufferSize.
 func columnChunkBufferSize(bufferSize int, chunkSize int64) int {
 	if chunkSize <= 0 || chunkSize >= int64(bufferSize) {
 		return bufferSize
 	}
 	// Round up to a power of two so that buffer pools, which are keyed by
-	// size, stay few in number.
-	size := 1 << bits.Len64(uint64(chunkSize-1))
+	// size, stay few in number. Stop before a signed shift would land on the
+	// sign bit: that power of two is larger than every positive bufferSize.
+	shift := bits.Len64(uint64(chunkSize - 1))
+	if shift >= bits.UintSize-1 {
+		return bufferSize
+	}
+	size := 1 << shift
 	return min(bufferSize, max(size, defaultReadBufferSize))
 }
 
