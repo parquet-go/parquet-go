@@ -843,6 +843,24 @@ func TestMissingRepeatedColumnSliceAndSeek(t *testing.T) {
 		})
 	}
 
+	// A slice of a slice must keep the outer slice's row origin. rangePages
+	// trims a page with Slice(0, n) after the stream has already been seeked.
+	t.Run("nested slice", func(t *testing.T) {
+		outer := page.Slice(1, 4)
+		inner := outer.Slice(0, 2)
+		want := concat(1, 3)
+		if inner.NumValues() != int64(len(want)) {
+			t.Fatalf("NumValues = %d, want %d", inner.NumValues(), len(want))
+		}
+		levelsEqual(t, readSynthPageValues(t, inner), want)
+		shifted := outer.Slice(1, 3)
+		want = concat(2, 4)
+		if shifted.NumValues() != int64(len(want)) {
+			t.Fatalf("NumValues = %d, want %d", shifted.NumValues(), len(want))
+		}
+		levelsEqual(t, readSynthPageValues(t, shifted), want)
+	})
+
 	seekPages := converted.ColumnChunks()[1].Pages()
 	t.Cleanup(func() { seekPages.Close() })
 	if err := seekPages.SeekToRow(1); err != nil {
@@ -860,6 +878,57 @@ func TestMissingRepeatedColumnSliceAndSeek(t *testing.T) {
 		seeked = append(seeked, readSynthPageValues(t, p)...)
 	}
 	levelsEqual(t, seeked, concat(1, len(perRow)))
+}
+
+func TestMissingFlatColumnNestedSlice(t *testing.T) {
+	type Inner struct {
+		A int64 `parquet:"a"`
+	}
+	type Inner2 struct {
+		A int64 `parquet:"a"`
+		B int64 `parquet:"b"`
+	}
+	type Src struct {
+		G *Inner `parquet:"g,optional"`
+	}
+	type Dst struct {
+		G *Inner2 `parquet:"g,optional"`
+	}
+	src := parquet.NewGenericBuffer[Src]()
+	if _, err := src.Write([]Src{
+		{G: &Inner{A: 1}},
+		{},
+		{G: &Inner{A: 3}},
+		{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Dst)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(src, conv)
+	rows := readConvertedRows(t, converted.Rows())
+	var perRow [][]parquet.Value
+	for _, row := range rows {
+		perRow = append(perRow, columnValues(row, 1))
+	}
+	pages := converted.ColumnChunks()[1].Pages()
+	t.Cleanup(func() { pages.Close() })
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rows 1 and 2, taken as the start of a slice that began at row 1.
+	inner := page.Slice(1, 4).Slice(0, 2)
+	var want []parquet.Value
+	for _, row := range perRow[1:3] {
+		want = append(want, row...)
+	}
+	if inner.NumValues() != int64(len(want)) {
+		t.Fatalf("NumValues = %d, want %d", inner.NumValues(), len(want))
+	}
+	levelsEqual(t, readSynthPageValues(t, inner), want)
 }
 
 func readSynthPageValues(t *testing.T, page parquet.Page) []parquet.Value {

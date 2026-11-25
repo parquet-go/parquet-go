@@ -975,6 +975,10 @@ type missingColumnChunk struct {
 	leafOptional        bool        // The missing leaf itself is optional
 	synth               *missingField
 	counted             bool
+	// rowBase is the absolute row index of this chunk's first row. Slice
+	// offsets are relative to the receiver, so a slice of a slice must add
+	// this base before seeking the template column.
+	rowBase int64
 }
 
 func (c *missingColumnChunk) ensureCount() {
@@ -1090,20 +1094,23 @@ func (p missingPage) Slice(i, j int64) Page {
 		leafOptional:        p.leafOptional,
 		synth:               p.synth,
 		counted:             true,
+		rowBase:             p.rowBase + i,
 	}
 	adjacentPages := p.adjacentPages
 	// One synthesized value per row can seek the template by row index.
 	// A repeated group has more values than rows, so the slice counts the
 	// kept template values in the row span instead of using j-i.
+	// The row index is absolute: i is relative to this page.
+	row := p.rowBase + i
 	switch {
 	case p.synth != nil && p.synth.needsValues && p.synth.groupSourceRep > 0 && p.adjacentChunk != nil:
-		adjacentPages = sliceRepeatedTemplate(chunk, p.adjacentChunk, i, j-i, p.synth.groupSourceRep)
+		adjacentPages = sliceRepeatedTemplate(chunk, p.adjacentChunk, row, j-i, p.synth.groupSourceRep)
 	case p.mirrorSiblingLevels && p.adjacentChunk != nil:
 		// Seeking the page's reader would move the original page and any
 		// other slice that shares it. The reader opened here is owned by
 		// the slice and closed if the seek fails.
 		opened := p.adjacentChunk.Pages()
-		if err := opened.SeekToRow(i); err != nil {
+		if err := opened.SeekToRow(row); err != nil {
 			opened.Close()
 			adjacentPages = &errorPages{err: err}
 		} else {
