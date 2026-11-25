@@ -892,3 +892,78 @@ func TestConvertAddedFieldToRepeatedGroupWithoutLeafSiblings(t *testing.T) {
 		}
 	}
 }
+
+// A field added beside a nested repeated leaf must count group instances, and
+// seeking must start at that row rather than replaying the column.
+func TestProjectedColumnCountsGroupInstances(t *testing.T) {
+	type Inner struct {
+		X []int32 `parquet:"x"`
+	}
+	type Item struct {
+		Inner Inner `parquet:"inner"`
+	}
+	type Source struct {
+		S []Item `parquet:"s"`
+	}
+	type ItemTarget struct {
+		Inner Inner  `parquet:"inner"`
+		Y     *int32 `parquet:"y,optional"`
+	}
+	type Target struct {
+		S []ItemTarget `parquet:"s"`
+	}
+
+	src := parquet.NewGenericBuffer[Source]()
+	if _, err := src.Write([]Source{
+		{S: []Item{{Inner: Inner{X: []int32{1, 2}}}, {Inner: Inner{X: []int32{3}}}}},
+		{S: []Item{{Inner: Inner{X: []int32{4, 5}}}}},
+		{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Target)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := parquet.ConvertRowGroup(src, conv)
+	y := converted.ColumnChunks()[1]
+	template := src.ColumnChunks()[0]
+	if template.NumValues() <= y.NumValues() {
+		t.Fatalf("template values %d, projected values %d", template.NumValues(), y.NumValues())
+	}
+	if y.NumValues() != 4 {
+		t.Fatalf("NumValues = %d, want 4", y.NumValues())
+	}
+	got := readColumnValues(t, y)
+	if int64(len(got)) != y.NumValues() {
+		t.Fatalf("read %d values, NumValues = %d", len(got), y.NumValues())
+	}
+	want := [][2]int{{0, 1}, {1, 1}, {0, 1}, {0, 0}}
+	for i, v := range got {
+		if !v.IsNull() || v.RepetitionLevel() != want[i][0] || v.DefinitionLevel() != want[i][1] {
+			t.Errorf("value %d: rep=%d def=%d null=%v, want rep=%d def=%d",
+				i, v.RepetitionLevel(), v.DefinitionLevel(), v.IsNull(), want[i][0], want[i][1])
+		}
+	}
+
+	pages := y.Pages()
+	defer pages.Close()
+	if err := pages.SeekToRow(1); err != nil {
+		t.Fatal(err)
+	}
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.NumRows() != 2 || page.NumValues() != 2 {
+		t.Fatalf("seek page rows=%d values=%d, want 2 and 2", page.NumRows(), page.NumValues())
+	}
+	buf := make([]parquet.Value, 8)
+	n, err := page.Values().ReadValues(buf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 2 || buf[0].RepetitionLevel() != 0 || buf[0].DefinitionLevel() != 1 || buf[1].DefinitionLevel() != 0 {
+		t.Fatalf("seek values n=%d rep0=%d def0=%d def1=%d", n, buf[0].RepetitionLevel(), buf[0].DefinitionLevel(), buf[1].DefinitionLevel())
+	}
+}

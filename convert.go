@@ -778,14 +778,24 @@ func ConvertRowGroup(rowGroup RowGroup, conv Conversion) RowGroup {
 			if c, ok := conv.(*conversion); ok && int(i) < len(c.columns) {
 				project = c.columns[i].missing
 			}
+			var projectErr error
 			if project != nil && project.useSource {
 				src := conv.Column(int(i))
 				if src >= 0 && src < len(rowGroupColumns) {
 					adjacentChunk = rowGroupColumns[src]
 					// One output value per row can be sliced by seeking the leaf.
 					mirrorSiblingLevels = project.groupSourceRep == 0
-					if project.groupSourceRep > 0 {
-						if n := adjacentChunk.NumValues(); project.sourceMaxRep <= project.groupSourceRep || n > numValues {
+					if project.groupSourceRep > 0 && project.sourceMaxRep <= project.groupSourceRep {
+						// Every template value is kept, so its count is exact.
+						numValues = adjacentChunk.NumValues()
+					} else if project.groupSourceRep > 0 {
+						// The template is nested deeper than the group. Only
+						// values at or above the group are emitted.
+						n, err := countProjected(adjacentChunk, project.groupSourceRep, 0, numRows)
+						if err != nil {
+							projectErr = err
+							numValues = 0
+						} else {
 							numValues = n
 						}
 					}
@@ -807,6 +817,7 @@ func ConvertRowGroup(rowGroup RowGroup, conv Conversion) RowGroup {
 				mirrorSiblingLevels: mirrorSiblingLevels,
 				leafOptional:        leaf.node.Optional(),
 				project:             project,
+				projectErr:          projectErr,
 			}
 		}
 	})
@@ -936,11 +947,15 @@ type missingColumnChunk struct {
 	mirrorSiblingLevels bool        // Copy sibling levels the way Convert does (flat columns)
 	leafOptional        bool        // The missing leaf itself is optional
 	project             *missingProjection
+	projectErr          error // counting projected values failed
 }
 
 func (c *missingColumnChunk) Type() Type  { return c.typ }
 func (c *missingColumnChunk) Column() int { return int(c.column) }
 func (c *missingColumnChunk) Pages() Pages {
+	if c.projectErr != nil {
+		return &errorPages{err: c.projectErr}
+	}
 	var adjacentPages Pages
 	if c.adjacentChunk != nil {
 		adjacentPages = c.adjacentChunk.Pages()
@@ -990,27 +1005,32 @@ func (p missingPage) NumValues() int64                  { return p.numValues }
 func (p missingPage) NumNulls() int64                   { return p.numNulls }
 func (p missingPage) Bounds() (min, max Value, ok bool) { return }
 func (p missingPage) Slice(i, j int64) Page {
-	chunk := &missingColumnChunk{
-		typ:                 p.typ,
-		column:              p.column,
-		numRows:             j - i,
-		numValues:           j - i,
-		numNulls:            j - i,
-		maxRepetitionLevel:  p.maxRepetitionLevel,
-		maxDefinitionLevel:  p.maxDefinitionLevel,
-		adjacentChunk:       p.adjacentChunk,
-		mirrorSiblingLevels: p.mirrorSiblingLevels,
-		leafOptional:        p.leafOptional,
-		project:             p.project,
+	nrows := j - i
+	if nrows < 0 {
+		nrows = 0
 	}
+	numValues := nrows
 	adjacentPages := p.adjacentPages
 	// Flat columns mirror per-row levels, so each slice needs its own sibling
 	// reader positioned at the slice start. Seeking the page's reader would
 	// move the original page and any other slice that shares it. The reader
 	// opened here is owned by the slice and closed if the seek fails; a
-	// successful one is closed by the slice value reader. Repeated columns
-	// keep the historical slice, which shares the reader without seeking.
-	if p.mirrorSiblingLevels && p.adjacentChunk != nil {
+	// successful one is closed by the slice value reader.
+	//
+	// A repeated projected column has more than one value per row. The slice
+	// count is the number of projected values in rows [i, j), and the template
+	// reader starts at row i. onePage.SeekToRow uses this slice.
+	repeated := p.project != nil && p.project.useSource && p.project.groupSourceRep > 0 && p.adjacentChunk != nil
+	switch {
+	case repeated:
+		n, opened, err := p.openProjected(i, nrows)
+		if err != nil {
+			adjacentPages = &errorPages{err: err}
+		} else {
+			numValues = n
+			adjacentPages = opened
+		}
+	case p.mirrorSiblingLevels && p.adjacentChunk != nil:
 		opened := p.adjacentChunk.Pages()
 		if err := opened.SeekToRow(i); err != nil {
 			opened.Close()
@@ -1019,9 +1039,73 @@ func (p missingPage) Slice(i, j int64) Page {
 			adjacentPages = opened
 		}
 	}
+	chunk := &missingColumnChunk{
+		typ:                 p.typ,
+		column:              p.column,
+		numRows:             nrows,
+		numValues:           numValues,
+		numNulls:            nrows,
+		maxRepetitionLevel:  p.maxRepetitionLevel,
+		maxDefinitionLevel:  p.maxDefinitionLevel,
+		adjacentChunk:       p.adjacentChunk,
+		mirrorSiblingLevels: p.mirrorSiblingLevels,
+		leafOptional:        p.leafOptional,
+		project:             p.project,
+	}
 	return missingPage{
 		missingColumnChunk: chunk,
 		adjacentPages:      adjacentPages,
+	}
+}
+
+// openProjected seeks the template column to row and counts projected values
+// across nrows rows. The returned pages are positioned at row for reading.
+func (p missingPage) openProjected(row, nrows int64) (int64, Pages, error) {
+	n, err := countProjected(p.adjacentChunk, p.project.groupSourceRep, row, nrows)
+	if err != nil {
+		return 0, nil, err
+	}
+	opened := p.adjacentChunk.Pages()
+	if err := opened.SeekToRow(row); err != nil {
+		opened.Close()
+		return 0, nil, err
+	}
+	return n, opened, nil
+}
+
+// countProjected counts template values with repetition level <= maxRep in
+// nrows rows beginning at row.
+func countProjected(chunk ColumnChunk, maxRep byte, row, nrows int64) (int64, error) {
+	if nrows <= 0 {
+		return 0, nil
+	}
+	pages := chunk.Pages()
+	defer pages.Close()
+	if err := pages.SeekToRow(row); err != nil {
+		return 0, err
+	}
+	reader := &missingPageValues{
+		adjacentPages:  pages,
+		adjacentBuffer: make([]Value, 1024),
+	}
+	var n, rows int64
+	for {
+		v, err := reader.nextSibling()
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if v.repetitionLevel == 0 {
+			if rows == nrows {
+				return n, nil
+			}
+			rows++
+		}
+		if rows > 0 && v.repetitionLevel <= maxRep {
+			n++
+		}
 	}
 }
 func (p missingPage) Size() int64              { return 0 }
