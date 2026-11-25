@@ -251,18 +251,27 @@ func TestDeltaLengthPageOptionalRepeatedPlain(t *testing.T) {
 }
 
 func TestDeltaLengthPageReadAlloc(t *testing.T) {
-	smallPayload, smallAllocs := pageReadCost(t, 8, 4)
-	largePayload, largeAllocs := pageReadCost(t, 2000, 200)
-	if largeAllocs > smallAllocs+15 {
-		t.Fatalf("large page allocs = %v, small = %v", largeAllocs, smallAllocs)
+	const n, width = 2000, 200
+	payload := n * width
+	f := writeStringFile(t, wideRows(n, width))
+	// The values have to be the payload inside the page buffer. A move onto
+	// the front of that buffer, or a copy into a new one, fails this.
+	scanColumnView(t, f)
+	// Warm the buffer pool, then count bytes for later reads. A fresh copy of
+	// the payload on every read is at least `payload` bytes. Page headers are
+	// not. Do not GC here: that drops the pool and the next read allocates it
+	// again, which is unrelated to copying the values.
+	scanColumn(t, f)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	const reads = 8
+	for range reads {
+		scanColumn(t, f)
 	}
-	if largePayload <= smallPayload {
-		t.Fatalf("payload did not grow: small %d large %d", smallPayload, largePayload)
-	}
-	// Copying the payload would allocate on the order of the page. Header and
-	// page objects stay far below that.
-	if cost := largePageReadBytes(t, 2000, 200); cost > uint64(largePayload)/2 {
-		t.Fatalf("page read allocated %d bytes, payload is %d", cost, largePayload)
+	runtime.ReadMemStats(&after)
+	cost := (after.TotalAlloc - before.TotalAlloc) / reads
+	if cost >= uint64(payload) {
+		t.Fatalf("page read allocated %d bytes, payload is %d", cost, payload)
 	}
 }
 
@@ -508,37 +517,12 @@ func assertRoundTrip[T any](t *testing.T, rows []T, opts ...WriterOption) {
 	}
 }
 
-func pageReadCost(t *testing.T, n, width int) (payload int, allocs float64) {
-	t.Helper()
-	rows := make([]pageStringRow, n)
-	for i := range rows {
-		rows[i].V = string(bytes.Repeat([]byte{'m'}, width))
-		payload += width
-	}
-	f := writeStringFile(t, rows)
-	allocs = testing.AllocsPerRun(10, func() {
-		scanColumn(t, f)
-	})
-	return payload, allocs
-}
-
-func largePageReadBytes(t *testing.T, n, width int) uint64 {
-	t.Helper()
+func wideRows(n, width int) []pageStringRow {
 	rows := make([]pageStringRow, n)
 	for i := range rows {
 		rows[i].V = string(bytes.Repeat([]byte{'m'}, width))
 	}
-	f := writeStringFile(t, rows)
-	scanColumn(t, f)
-	runtime.GC()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	const reads = 8
-	for range reads {
-		scanColumn(t, f)
-	}
-	runtime.ReadMemStats(&after)
-	return (after.TotalAlloc - before.TotalAlloc) / reads
+	return rows
 }
 
 func writeStringFile(t *testing.T, rows []pageStringRow) *File {
@@ -560,6 +544,37 @@ func writeStringFile(t *testing.T, rows []pageStringRow) *File {
 
 func scanColumn(t *testing.T, f *File) {
 	t.Helper()
+	scanColumnFunc(t, f, nil)
+}
+
+func scanColumnView(t *testing.T, f *File) {
+	t.Helper()
+	var saw bool
+	scanColumnFunc(t, f, func(page Page) {
+		bp := page.(*bufferedPage)
+		full := bp.values.data.Slice()
+		values, _ := byteArrayData(page)
+		if len(values) == 0 {
+			return
+		}
+		saw = true
+		if unsafe.SliceData(values) == unsafe.SliceData(full) {
+			t.Fatal("page values were moved to the start of the buffer")
+		}
+		if !bytesInside(values, full) {
+			t.Fatal("page values are outside the page buffer")
+		}
+		if cap(full) <= len(values) {
+			t.Fatalf("page buffer cap = %d, payload = %d", cap(full), len(values))
+		}
+	})
+	if !saw {
+		t.Fatal("large page had no payload")
+	}
+}
+
+func scanColumnFunc(t *testing.T, f *File, each func(Page)) {
+	t.Helper()
 	pages := f.RowGroups()[0].ColumnChunks()[0].Pages()
 	defer pages.Close()
 	for {
@@ -569,6 +584,9 @@ func scanColumn(t *testing.T, f *File) {
 		}
 		if err != nil {
 			t.Fatal(err)
+		}
+		if each != nil {
+			each(page)
 		}
 		Release(page)
 	}
