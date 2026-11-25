@@ -491,6 +491,10 @@ func (buf *Buffer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 		buf.order.clear()
 		return buf.NumRows() - n, err
 	}
+	// An empty source writes nothing. Leave an established order in place.
+	if buf.NumRows() == n {
+		return 0, nil
+	}
 	// Rows copied into an empty buffer stay in the source order.
 	if wasEmpty && len(configured) > 0 && sortingColumnsHavePrefix(rowGroup.SortingColumns(), configured) {
 		buf.order.inOrder = true
