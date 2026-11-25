@@ -621,6 +621,10 @@ func TestMissingColumnSliceDoesNotMoveOriginal(t *testing.T) {
 	if defs := readDef(page.Slice(1, 3), 2); !reflect.DeepEqual(defs, []int{0, 1}) {
 		t.Fatalf("first slice defs = %v, want [0 1]", defs)
 	}
+	// A second slice is relative to the first, so its tail is the last row.
+	if defs := readDef(page.Slice(1, 3).Slice(1, 2), 1); !reflect.DeepEqual(defs, []int{1}) {
+		t.Fatalf("nested slice defs = %v, want [1]", defs)
+	}
 	if defs := readDef(page.Slice(0, 1), 1); !reflect.DeepEqual(defs, []int{1}) {
 		t.Fatalf("second slice defs = %v, want [1]", defs)
 	}
@@ -965,5 +969,23 @@ func TestProjectedColumnCountsGroupInstances(t *testing.T) {
 	}
 	if n != 2 || buf[0].RepetitionLevel() != 0 || buf[0].DefinitionLevel() != 1 || buf[1].DefinitionLevel() != 0 {
 		t.Fatalf("seek values n=%d rep0=%d def0=%d def1=%d", n, buf[0].RepetitionLevel(), buf[0].DefinitionLevel(), buf[1].DefinitionLevel())
+	}
+
+	// Slice indexes are relative to the receiver. The tail of a page that
+	// already starts at row 1 is the empty row, not the first row of the column.
+	base, err := y.Pages().ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail := base.Slice(1, 3).Slice(1, 2)
+	if tail.NumRows() != 1 || tail.NumValues() != 1 {
+		t.Fatalf("nested slice rows=%d values=%d, want 1 and 1", tail.NumRows(), tail.NumValues())
+	}
+	n, err = tail.Values().ReadValues(buf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 1 || buf[0].DefinitionLevel() != 0 {
+		t.Fatalf("nested slice: n=%d def=%d, want one value at def 0", n, buf[0].DefinitionLevel())
 	}
 }

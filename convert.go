@@ -996,6 +996,10 @@ func (missingBloomFilter) Check(Value) (bool, error)         { return false, nil
 type missingPage struct {
 	*missingColumnChunk
 	adjacentPages Pages // Pages from adjacent column for level mirroring
+	// rowOff is the row index of this page within the original column.
+	// Slice indexes are relative to the page, so a further slice adds them
+	// to rowOff before seeking the template column.
+	rowOff int64
 }
 
 func (p missingPage) Column() int                       { return int(p.column) }
@@ -1020,10 +1024,13 @@ func (p missingPage) Slice(i, j int64) Page {
 	// A repeated projected column has more than one value per row. The slice
 	// count is the number of projected values in rows [i, j), and the template
 	// reader starts at row i. onePage.SeekToRow uses this slice.
+	// i is relative to this page. The template column is addressed in
+	// original-column row indexes.
+	row := p.rowOff + i
 	repeated := p.project != nil && p.project.useSource && p.project.groupSourceRep > 0 && p.adjacentChunk != nil
 	switch {
 	case repeated:
-		n, opened, err := p.openProjected(i, nrows)
+		n, opened, err := p.openProjected(row, nrows)
 		if err != nil {
 			adjacentPages = &errorPages{err: err}
 		} else {
@@ -1032,7 +1039,7 @@ func (p missingPage) Slice(i, j int64) Page {
 		}
 	case p.mirrorSiblingLevels && p.adjacentChunk != nil:
 		opened := p.adjacentChunk.Pages()
-		if err := opened.SeekToRow(i); err != nil {
+		if err := opened.SeekToRow(row); err != nil {
 			opened.Close()
 			adjacentPages = &errorPages{err: err}
 		} else {
@@ -1055,6 +1062,7 @@ func (p missingPage) Slice(i, j int64) Page {
 	return missingPage{
 		missingColumnChunk: chunk,
 		adjacentPages:      adjacentPages,
+		rowOff:             row,
 	}
 }
 
