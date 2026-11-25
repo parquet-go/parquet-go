@@ -1006,6 +1006,96 @@ func TestProjectedColumnCountsGroupInstances(t *testing.T) {
 	}
 }
 
+func TestAddedFieldWhenAncestorBecomesRepeated(t *testing.T) {
+	type Item struct {
+		A int32 `parquet:"a"`
+	}
+	type Source struct {
+		S Item `parquet:"s"`
+	}
+	type ItemTarget struct {
+		A int32  `parquet:"a"`
+		B *int32 `parquet:"b,optional"`
+	}
+	type Target struct {
+		S []ItemTarget `parquet:"s"`
+	}
+
+	buf := new(bytes.Buffer)
+	if err := parquet.Write(buf, []Source{{S: Item{A: 5}}}); err != nil {
+		t.Fatal(err)
+	}
+	r := parquet.NewGenericReader[Target](bytes.NewReader(buf.Bytes()))
+	t.Cleanup(func() { r.Close() })
+	out := make([]Target, 1)
+	n, err := r.Read(out)
+	if n != 1 || (err != nil && err != io.EOF) {
+		t.Fatalf("read %d rows, err %v", n, err)
+	}
+	if len(out[0].S) != 1 || out[0].S[0].A != 5 || out[0].S[0].B != nil {
+		t.Fatalf("got %+v", out[0].S)
+	}
+}
+
+type failAfterChunk struct {
+	parquet.ColumnChunk
+	calls  int
+	failAt int
+}
+
+func (c *failAfterChunk) Pages() parquet.Pages {
+	c.calls++
+	if c.calls >= c.failAt {
+		return failingPages{}
+	}
+	return c.ColumnChunk.Pages()
+}
+
+func TestProjectedCountErrorSurfacesOnRead(t *testing.T) {
+	type Inner struct {
+		X []int32 `parquet:"x"`
+	}
+	type Item struct {
+		Inner Inner `parquet:"inner"`
+	}
+	type Source struct {
+		S []Item `parquet:"s"`
+	}
+	type ItemTarget struct {
+		Inner Inner  `parquet:"inner"`
+		Y     *int32 `parquet:"y,optional"`
+	}
+	type Target struct {
+		S []ItemTarget `parquet:"s"`
+	}
+	src := parquet.NewGenericBuffer[Source]()
+	if _, err := src.Write([]Source{{S: []Item{{Inner: Inner{X: []int32{1, 2}}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	orig := src.ColumnChunks()
+	wrapped := &failAfterChunk{ColumnChunk: orig[0], failAt: 2}
+	rg := accessRowGroup{RowGroup: src, columns: []parquet.ColumnChunk{wrapped}}
+	conv, err := parquet.Convert(parquet.SchemaOf(new(Target)), src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	y := parquet.ConvertRowGroup(rg, conv).ColumnChunks()[1]
+	pages := y.Pages()
+	defer pages.Close()
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if y.NumValues() != 0 {
+		t.Fatalf("NumValues = %d after a failed count, want 0", y.NumValues())
+	}
+	buf := make([]parquet.Value, 4)
+	n, err := page.Values().ReadValues(buf)
+	if !errors.Is(err, errSiblingRead) {
+		t.Fatalf("ReadValues n=%d err=%v, want %v", n, err, errSiblingRead)
+	}
+}
+
 func TestAddedColumnNullWhenNotPresent(t *testing.T) {
 	i32 := parquet.Leaf(parquet.Int32Type)
 	opt, rep := parquet.Optional, parquet.Repeated

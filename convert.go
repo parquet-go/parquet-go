@@ -458,6 +458,11 @@ func Convert(to, from Node) (conv Conversion, err error) {
 				)
 
 				repetitionLevels[sourceRepetitionLevel] = targetRepetitionLevel
+				if sourceRepetitionLevel == 0 {
+					// Level 0 starts a row. A target ancestor that is repeated
+					// must not move that start off zero.
+					repetitionLevels[0] = 0
+				}
 				definitionLevels[sourceDefinitionLevel] = targetDefinitionLevel
 			}
 
@@ -574,7 +579,11 @@ func missingProjectionOf(target, source Node, path columnPath, targetColumn leaf
 			sourceNode = sourceField
 			targetRep, targetDef = applyFieldRepetitionType(fieldRepetitionTypeOf(targetNode), targetRep, targetDef)
 			sourceRep, sourceDef = applyFieldRepetitionType(fieldRepetitionTypeOf(sourceNode), sourceRep, sourceDef)
-			repLevels = setLevelMapping(repLevels, sourceRep, targetRep)
+			if sourceRep == 0 {
+				repLevels = setLevelMapping(repLevels, 0, 0)
+			} else {
+				repLevels = setLevelMapping(repLevels, sourceRep, targetRep)
+			}
 			defLevels = setLevelMapping(defLevels, sourceDef, targetDef)
 			matched = append(matched, name)
 		}
@@ -669,6 +678,11 @@ func (p *missingProjection) value(rep, def byte) Value {
 }
 
 func (p *missingProjection) mapRep(level byte) byte {
+	// Repetition level 0 starts a row. It stays 0 even when a target ancestor
+	// is repeated and the source ancestor was not.
+	if level == 0 {
+		return 0
+	}
 	if int(level) >= len(p.repLevels) {
 		return p.targetRep
 	}
@@ -1254,6 +1268,9 @@ type missingPageValues struct {
 }
 
 func (r *missingPageValues) ReadValues(values []Value) (int, error) {
+	if err := r.page.projectErr; err != nil {
+		return 0, err
+	}
 	remain := int64(len(values))
 	if r.page.numValues >= 0 {
 		remain = r.page.numValues - r.read
