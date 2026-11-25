@@ -54,28 +54,22 @@ func (group columnMappingGroup) lookup(path columnPath) leafColumn {
 	return leafColumn{columnIndex: math.MaxUint16}
 }
 
-func (group columnMappingGroup) lookupClosest(path columnPath) leafColumn {
-	for len(path) > 0 {
-		g, ok := group[path[0]].(columnMappingGroup)
-		if ok {
-			group, path = g, path[1:]
-		} else {
-			firstName := ""
-			firstLeaf := (*columnMappingLeaf)(nil)
-			for name, child := range group {
-				if leaf, ok := child.(*columnMappingLeaf); ok {
-					if firstLeaf == nil || name < firstName {
-						firstName, firstLeaf = name, leaf
-					}
-				}
-			}
-			if firstLeaf != nil {
-				return firstLeaf.column
-			}
-			break
+// firstLeaf returns the leaf under group with the lowest column index.
+func (group columnMappingGroup) firstLeaf() leafColumn {
+	first := leafColumn{columnIndex: math.MaxUint16}
+	for _, child := range group {
+		leaf := leafColumn{columnIndex: math.MaxUint16}
+		switch c := child.(type) {
+		case *columnMappingLeaf:
+			leaf = c.column
+		case columnMappingGroup:
+			leaf = c.firstLeaf()
+		}
+		if leaf.columnIndex < first.columnIndex {
+			first = leaf
 		}
 	}
-	return leafColumn{columnIndex: math.MaxUint16}
+	return first
 }
 
 type columnMappingLeaf struct {

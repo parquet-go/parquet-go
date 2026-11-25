@@ -1,6 +1,7 @@
 package parquet_test
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"reflect"
@@ -675,5 +676,153 @@ func TestMissingColumnUnderRepeatedGroupReadsSibling(t *testing.T) {
 	}
 	if len(out.Items) != 0 {
 		t.Errorf("row 1: got %+v, want no items", out.Items)
+	}
+}
+
+// An optional field added to a repeated group whose existing children are all
+// groups has no sibling leaf; its values follow the instances of the group.
+func TestReadAddedFieldInRepeatedGroupWithoutLeafSiblings(t *testing.T) {
+	type Inner struct {
+		X int32 `parquet:"x"`
+	}
+	type ItemV1 struct {
+		Inner Inner `parquet:"inner"`
+	}
+	type V1 struct {
+		S []ItemV1 `parquet:"s"`
+	}
+	type ItemV2 struct {
+		Inner Inner  `parquet:"inner"`
+		Y     *int32 `parquet:"y,optional"`
+	}
+	type V2 struct {
+		S []ItemV2 `parquet:"s"`
+	}
+
+	buf := new(bytes.Buffer)
+	if err := parquet.Write(buf, []V1{
+		{S: []ItemV1{{Inner{5}}, {Inner{6}}}},
+		{},
+		{S: []ItemV1{{Inner{7}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parquet.Read[V2](bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []V2{
+		{S: []ItemV2{{Inner: Inner{5}}, {Inner: Inner{6}}}},
+		{S: []ItemV2{}},
+		{S: []ItemV2{{Inner: Inner{7}}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestConvertAddedNestedFieldLevels(t *testing.T) {
+	i32 := parquet.Leaf(parquet.Int32Type)
+	opt, rep := parquet.Optional, parquet.Repeated
+	type level struct{ rep, def int }
+	type row struct {
+		in   []level // levels of the only source column
+		want []level // levels of the added column
+	}
+	tests := []struct {
+		scenario string
+		from, to parquet.Group
+		added    []string
+		rows     []row
+	}{
+		{
+			scenario: "repeated sibling",
+			from:     parquet.Group{"s": opt(parquet.Group{"a": rep(i32)})},
+			to:       parquet.Group{"s": opt(parquet.Group{"a": rep(i32), "b": opt(i32)})},
+			added:    []string{"s", "b"},
+			rows: []row{
+				{in: []level{{0, 2}, {1, 2}, {1, 2}}, want: []level{{0, 1}}},
+				{in: []level{{0, 1}}, want: []level{{0, 1}}}, // empty list
+				{in: []level{{0, 0}}, want: []level{{0, 0}}}, // null s
+			},
+		},
+		{
+			scenario: "required field next to an optional sibling",
+			from:     parquet.Group{"s": opt(parquet.Group{"a": opt(i32)})},
+			to:       parquet.Group{"s": opt(parquet.Group{"a": opt(i32), "b": i32})},
+			added:    []string{"s", "b"},
+			rows: []row{
+				{in: []level{{0, 2}}, want: []level{{0, 1}}},
+				{in: []level{{0, 1}}, want: []level{{0, 1}}}, // null a
+				{in: []level{{0, 0}}, want: []level{{0, 0}}}, // null s
+			},
+		},
+		{
+			scenario: "no leaf sibling in a repeated group",
+			from:     parquet.Group{"s": rep(parquet.Group{"inner": parquet.Group{"x": i32}})},
+			to:       parquet.Group{"s": rep(parquet.Group{"inner": parquet.Group{"x": i32}, "y": opt(i32)})},
+			added:    []string{"s", "y"},
+			rows: []row{
+				{in: []level{{0, 1}, {1, 1}}, want: []level{{0, 1}, {1, 1}}},
+				{in: []level{{0, 0}}, want: []level{{0, 0}}},
+			},
+		},
+		{
+			scenario: "only sibling is in a nested repeated group",
+			from:     parquet.Group{"s": opt(parquet.Group{"items": rep(parquet.Group{"x": i32})})},
+			to:       parquet.Group{"s": opt(parquet.Group{"items": rep(parquet.Group{"x": i32}), "y": opt(i32)})},
+			added:    []string{"s", "y"},
+			rows: []row{
+				{in: []level{{0, 2}, {1, 2}}, want: []level{{0, 1}}},
+				{in: []level{{0, 1}}, want: []level{{0, 1}}}, // no items
+				{in: []level{{0, 0}}, want: []level{{0, 0}}}, // null s
+			},
+		},
+		{
+			scenario: "required ancestor became optional",
+			from:     parquet.Group{"s": parquet.Group{"a": i32}},
+			to:       parquet.Group{"s": opt(parquet.Group{"a": i32, "b": opt(i32)})},
+			added:    []string{"s", "b"},
+			rows: []row{
+				{in: []level{{0, 0}}, want: []level{{0, 1}}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.scenario, func(t *testing.T) {
+			from := parquet.NewSchema("s", test.from)
+			to := parquet.NewSchema("s", test.to)
+			conv, err := parquet.Convert(to, from)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source, _ := from.Lookup(from.Columns()[0]...)
+			added, ok := to.Lookup(test.added...)
+			if !ok {
+				t.Fatalf("no column %v", test.added)
+			}
+			rows := make([]parquet.Row, len(test.rows))
+			for i, r := range test.rows {
+				for _, l := range r.in {
+					v := parquet.Value{}
+					if l.def == source.MaxDefinitionLevel {
+						v = parquet.ValueOf(int32(1))
+					}
+					rows[i] = append(rows[i], v.Level(l.rep, l.def, 0))
+				}
+			}
+			if _, err := conv.Convert(rows); err != nil {
+				t.Fatal(err)
+			}
+			for i, r := range test.rows {
+				var got []level
+				for _, v := range columnValues(rows[i], added.ColumnIndex) {
+					got = append(got, level{v.RepetitionLevel(), v.DefinitionLevel()})
+				}
+				if !reflect.DeepEqual(got, r.want) {
+					t.Errorf("row %d: added column levels %v, want %v", i, got, r.want)
+				}
+			}
+		})
 	}
 }

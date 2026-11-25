@@ -1723,9 +1723,11 @@ func TestProtoAnyNil(t *testing.T) {
 		t.Fatalf("failed to read records: %v", err)
 	}
 
-	// Verify payload is nil
-	if readRecords[0].Payload != nil {
-		t.Errorf("expected nil payload, got: %+v", readRecords[0].Payload)
+	// The payload group is required in the written schema, so a nil message
+	// is stored as a present group of zero values. The optional payload of the
+	// read schema is present with zero values as well.
+	if p := readRecords[0].Payload; p == nil || *p != (ReadPayload{}) {
+		t.Errorf("expected a zero payload, got: %+v", p)
 	}
 }
 
