@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"math/bits"
 	"slices"
 	"sort"
 	"strings"
@@ -1296,7 +1297,7 @@ func (f *FilePages) init(c *FileColumnChunk, reader io.ReaderAt) {
 	f.chunk = c
 	f.baseOffset = c.chunk.MetaData.DataPageOffset
 	f.dataOffset = f.baseOffset
-	f.bufferSize = c.file.config.ReadBufferSize
+	f.bufferSize = columnChunkBufferSize(c.file.config.ReadBufferSize, c.chunk.MetaData.TotalCompressedSize)
 
 	if c.chunk.MetaData.DictionaryPageOffset != 0 {
 		f.baseOffset = c.chunk.MetaData.DictionaryPageOffset
@@ -1328,6 +1329,24 @@ func (f *FilePages) init(c *FileColumnChunk, reader io.ReaderAt) {
 	} else {
 		f.dec = nil
 	}
+}
+
+// columnChunkBufferSize returns the size of the read buffer used for a column
+// chunk of chunkSize bytes, given the configured bufferSize.
+//
+// Column chunks smaller than bufferSize get a buffer sized to the chunk,
+// rounded up to the next power of two, which avoids allocating a large buffer
+// for small chunks. The result is never larger than bufferSize, and never
+// smaller than defaultReadBufferSize unless bufferSize itself is smaller.
+// When chunkSize is unknown (<= 0), bufferSize is returned unchanged.
+func columnChunkBufferSize(bufferSize int, chunkSize int64) int {
+	if chunkSize <= 0 || chunkSize >= int64(bufferSize) {
+		return bufferSize
+	}
+	// Round up to a power of two so that buffer pools, which are keyed by
+	// size, stay few in number.
+	size := 1 << bits.Len64(uint64(chunkSize-1))
+	return min(bufferSize, max(size, defaultReadBufferSize))
 }
 
 // ReadDictionary returns the dictionary of the column chunk, or nil if the
