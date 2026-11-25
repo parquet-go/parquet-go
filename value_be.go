@@ -17,3 +17,13 @@ const (
 	firstByteOffsetOfBooleanValue = 7
 	firstByteOffsetOf32BitsValue  = 4
 )
+
+// valueWords packs the level word of a Value (kind, definition level,
+// repetition level, column index) for a single store.
+func valueWords(kind int8, definitionLevel, repetitionLevel byte, columnIndex uint16) uint64 {
+	return uint64(uint8(kind))<<56 |
+		uint64(definitionLevel)<<48 |
+		uint64(repetitionLevel)<<40 |
+		uint64(columnIndex>>8)<<24 |
+		uint64(columnIndex&0xff)<<16
+}

@@ -182,6 +182,20 @@ func (col *decimalColumnBuffer) ColumnIndex() (ColumnIndex, error) {
 	return decimalColumnIndex{page: col.Page().(*decimalPage)}, nil
 }
 
+func (col *decimalColumnBuffer) readValuesAtLevel(values []Value, offset int64, definitionLevel byte) (int, error) {
+	if reader, ok := col.ColumnBuffer.(levelValueReader); ok {
+		return reader.readValuesAtLevel(values, offset, definitionLevel)
+	}
+	n, err := col.ColumnBuffer.ReadValuesAt(values, offset)
+	if err != nil {
+		return n, err
+	}
+	for i := range values {
+		values[i].definitionLevel = definitionLevel
+	}
+	return n, nil
+}
+
 func (col *decimalColumnBuffer) Less(i, j int) bool {
 	u := [1]Value{}
 	v := [1]Value{}

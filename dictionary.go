@@ -406,6 +406,28 @@ func (col *indexedColumnBuffer) ReadValuesAt(values []Value, offset int64) (n in
 	}
 }
 
+func (col *indexedColumnBuffer) readValuesAtLevel(values []Value, offset int64, definitionLevel byte) (n int, err error) {
+	i := int(offset)
+	switch {
+	case i < 0:
+		return 0, errRowIndexOutOfBounds(offset, int64(len(col.values)))
+	case i >= len(col.values):
+		return 0, io.EOF
+	default:
+		columnIndex := col.columnIndex
+		for n < len(values) && i < len(col.values) {
+			v := col.typ.dict.Index(col.values[i])
+			storeValue(&values[n], v.ptr, v.u64, v.kind, definitionLevel, columnIndex)
+			n++
+			i++
+		}
+		if n < len(values) {
+			err = io.EOF
+		}
+		return n, err
+	}
+}
+
 func (col *indexedColumnBuffer) ReadRowAt(row Row, index int64) (Row, error) {
 	switch {
 	case index < 0:

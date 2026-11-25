@@ -216,3 +216,25 @@ func (col *fixedLenByteArrayColumnBuffer) ReadValuesAt(values []Value, offset in
 		return n, err
 	}
 }
+
+func (col *fixedLenByteArrayColumnBuffer) readValuesAtLevel(values []Value, offset int64, definitionLevel byte) (n int, err error) {
+	data := col.data.Slice()
+	i := int(offset) * col.size
+	switch {
+	case i < 0:
+		return 0, errRowIndexOutOfBounds(offset, int64(len(data)/col.size))
+	case i >= len(data):
+		return 0, io.EOF
+	default:
+		columnIndex := col.columnIndex
+		for n < len(values) && i < len(data) {
+			storeBytesValue(&values[n], data[i:i+col.size], ^int8(FixedLenByteArray), definitionLevel, columnIndex)
+			n++
+			i += col.size
+		}
+		if n < len(values) {
+			err = io.EOF
+		}
+		return n, err
+	}
+}

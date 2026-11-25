@@ -303,6 +303,28 @@ func (col *byteArrayColumnBuffer) ReadValuesAt(values []Value, offset int64) (n 
 	}
 }
 
+func (col *byteArrayColumnBuffer) readValuesAtLevel(values []Value, offset int64, definitionLevel byte) (n int, err error) {
+	i := int(offset)
+	numLengths := col.lengths.Len()
+	switch {
+	case i < 0:
+		return 0, errRowIndexOutOfBounds(offset, int64(numLengths))
+	case i >= numLengths:
+		return 0, io.EOF
+	default:
+		columnIndex := col.columnIndex
+		for n < len(values) && i < numLengths {
+			storeBytesValue(&values[n], col.index(i), ^int8(ByteArray), definitionLevel, columnIndex)
+			n++
+			i++
+		}
+		if n < len(values) {
+			err = io.EOF
+		}
+		return n, err
+	}
+}
+
 func (col *byteArrayColumnBuffer) index(i int) []byte {
 	offsets := col.offsets.Slice()
 	lengths := col.lengths.Slice()

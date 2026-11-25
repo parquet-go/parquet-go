@@ -112,3 +112,24 @@ func (col *nullColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, 
 		return n, err
 	}
 }
+
+func (col *nullColumnBuffer) readValuesAtLevel(values []Value, offset int64, definitionLevel byte) (n int, err error) {
+	i := int(offset)
+	switch {
+	case i < 0:
+		return 0, errRowIndexOutOfBounds(offset, int64(col.nullPage.count))
+	case i >= int(col.nullPage.count):
+		return 0, io.EOF
+	default:
+		columnIndex := ^uint16(col.nullPage.column)
+		for n < len(values) && i < int(col.nullPage.count) {
+			storeValue(&values[n], nil, 0, 0, definitionLevel, columnIndex)
+			n++
+			i++
+		}
+		if n < len(values) {
+			err = io.EOF
+		}
+		return n, err
+	}
+}

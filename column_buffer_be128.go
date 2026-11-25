@@ -155,3 +155,24 @@ func (col *be128ColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int,
 		return n, err
 	}
 }
+
+func (col *be128ColumnBuffer) readValuesAtLevel(values []Value, offset int64, definitionLevel byte) (n int, err error) {
+	i := int(offset)
+	switch {
+	case i < 0:
+		return 0, errRowIndexOutOfBounds(offset, int64(len(col.values)))
+	case i >= len(col.values):
+		return 0, io.EOF
+	default:
+		columnIndex := col.columnIndex
+		for n < len(values) && i < len(col.values) {
+			storeBytesValue(&values[n], col.values[i][:], ^int8(FixedLenByteArray), definitionLevel, columnIndex)
+			n++
+			i++
+		}
+		if n < len(values) {
+			err = io.EOF
+		}
+		return n, err
+	}
+}

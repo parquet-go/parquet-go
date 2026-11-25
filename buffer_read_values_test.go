@@ -1,6 +1,7 @@
 package parquet_test
 
 import (
+	"bytes"
 	"reflect"
 	"testing"
 
@@ -85,6 +86,92 @@ func TestBufferReadValuesAt(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestOptionalReadValuesAtShapes(t *testing.T) {
+	type inner struct {
+		Name *string
+	}
+	type row struct {
+		Nested *inner
+		Flag   *bool
+		Name   *string `parquet:"name,dict,optional"`
+		Fixed  *[8]byte
+	}
+	present := "here"
+	empty := ""
+	fixed := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	flag := true
+	rows := []row{
+		{Nested: &inner{Name: &present}, Flag: &flag, Name: &present, Fixed: &fixed},
+		{},
+		{Nested: &inner{}, Name: &empty},
+		{Nested: &inner{Name: &present}, Flag: &flag, Name: &present, Fixed: &fixed},
+	}
+	schema := parquet.SchemaOf(new(row))
+	buf := parquet.NewGenericBuffer[row]()
+	if _, err := buf.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	columns := buf.ColumnBuffers()
+	for column := range columns {
+		var want []parquet.Value
+		for i := range rows {
+			for _, v := range schema.Deconstruct(nil, &rows[i]) {
+				if v.Column() == column {
+					want = append(want, v)
+				}
+			}
+		}
+		got := make([]parquet.Value, len(want))
+		n, err := columns[column].ReadValuesAt(got, 0)
+		if err != nil || n != len(want) {
+			t.Fatalf("column %d: read (%d,%v), want %d", column, n, err, len(want))
+		}
+		for i := range got {
+			if !sameReadValue(got[i], want[i]) {
+				t.Fatalf("column %d value %d\ngot  %#v\nwant %#v", column, i, got[i], want[i])
+			}
+		}
+		if len(want) < 2 {
+			continue
+		}
+		tail := make([]parquet.Value, len(want)-1)
+		n, err = columns[column].ReadValuesAt(tail, 1)
+		if err != nil || n != len(tail) {
+			t.Fatalf("column %d tail: n=%d err=%v", column, n, err)
+		}
+		for i := range tail {
+			if !sameReadValue(tail[i], want[1+i]) {
+				t.Fatalf("column %d tail value %d\ngot  %#v\nwant %#v", column, i, tail[i], want[1+i])
+			}
+		}
+	}
+}
+
+func sameReadValue(a, b parquet.Value) bool {
+	if a.Kind() != b.Kind() || a.DefinitionLevel() != b.DefinitionLevel() || a.RepetitionLevel() != b.RepetitionLevel() || a.Column() != b.Column() || a.IsNull() != b.IsNull() {
+		return false
+	}
+	if a.IsNull() {
+		return true
+	}
+	switch a.Kind() {
+	case parquet.Boolean:
+		return a.Boolean() == b.Boolean()
+	case parquet.Int32:
+		return a.Int32() == b.Int32()
+	case parquet.Int64:
+		return a.Int64() == b.Int64()
+	case parquet.Float:
+		return a.Float() == b.Float()
+	case parquet.Double:
+		return a.Double() == b.Double()
+	case parquet.ByteArray, parquet.FixedLenByteArray:
+		return bytes.Equal(a.ByteArray(), b.ByteArray())
+	default:
+		return reflect.DeepEqual(a, b)
 	}
 }
 

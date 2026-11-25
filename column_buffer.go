@@ -84,6 +84,15 @@ type ColumnBuffer interface {
 	writeNull(levels columnLevels)
 }
 
+// levelValueReader is implemented by physical column buffers. readValuesAtLevel
+// reads like ReadValuesAt and sets definitionLevel on each value while the
+// value is built. Optional reads use it so present values do not need a
+// second pass. ReadValuesAt stays the zero-level path used by required
+// columns, sorting, and repeated reordering.
+type levelValueReader interface {
+	readValuesAtLevel(values []Value, offset int64, definitionLevel byte) (int, error)
+}
+
 func columnIndexOfNullable(base ColumnBuffer, maxDefinitionLevel byte, definitionLevels []byte) (ColumnIndex, error) {
 	index, err := base.ColumnIndex()
 	if err != nil {
@@ -148,4 +157,20 @@ var (
 	_ ColumnBuffer = (*uint32ColumnBuffer)(nil)
 	_ ColumnBuffer = (*uint64ColumnBuffer)(nil)
 	_ ColumnBuffer = (*be128ColumnBuffer)(nil)
+
+	_ levelValueReader = (*booleanColumnBuffer)(nil)
+	_ levelValueReader = (*int32ColumnBuffer)(nil)
+	_ levelValueReader = (*int64ColumnBuffer)(nil)
+	_ levelValueReader = (*int96ColumnBuffer)(nil)
+	_ levelValueReader = (*floatColumnBuffer)(nil)
+	_ levelValueReader = (*doubleColumnBuffer)(nil)
+	_ levelValueReader = (*byteArrayColumnBuffer)(nil)
+	_ levelValueReader = (*fixedLenByteArrayColumnBuffer)(nil)
+	_ levelValueReader = (*uint32ColumnBuffer)(nil)
+	_ levelValueReader = (*uint64ColumnBuffer)(nil)
+	_ levelValueReader = (*be128ColumnBuffer)(nil)
+	_ levelValueReader = (*nullColumnBuffer)(nil)
+	_ levelValueReader = (*indexedColumnBuffer)(nil)
+	_ levelValueReader = (*decimalColumnBuffer)(nil)
+	_ levelValueReader = (*float16ColumnBuffer)(nil)
 )
