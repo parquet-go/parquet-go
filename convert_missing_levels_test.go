@@ -407,9 +407,11 @@ func assertOptionalGroupSibling(t *testing.T, src parquet.RowGroup, target *parq
 		if len(vals) != 1 {
 			t.Fatalf("row %d: got %d values", i, len(vals))
 		}
-		if vals[0].RepetitionLevel() != 0 || vals[0].DefinitionLevel() != wantDef[i] || vals[0].IsNull() != wantNull {
+		// A required leaf is null where the optional group is null (definition level 0).
+		wantNullValue := wantNull || wantDef[i] == 0
+		if vals[0].RepetitionLevel() != 0 || vals[0].DefinitionLevel() != wantDef[i] || vals[0].IsNull() != wantNullValue {
 			t.Errorf("row %d: rep=%d def=%d null=%v, want rep=0 def=%d null=%v",
-				i, vals[0].RepetitionLevel(), vals[0].DefinitionLevel(), vals[0].IsNull(), wantDef[i], wantNull)
+				i, vals[0].RepetitionLevel(), vals[0].DefinitionLevel(), vals[0].IsNull(), wantDef[i], wantNullValue)
 		}
 		fromRows = append(fromRows, vals...)
 	}
@@ -432,9 +434,10 @@ func assertOptionalGroupSibling(t *testing.T, src parquet.RowGroup, target *parq
 		t.Fatalf("sliced values: got %d, want 2", n)
 	}
 	for i, def := range wantDef[1:3] {
-		if buf[i].RepetitionLevel() != 0 || buf[i].DefinitionLevel() != def || buf[i].IsNull() != wantNull {
+		wantNullValue := wantNull || def == 0
+		if buf[i].RepetitionLevel() != 0 || buf[i].DefinitionLevel() != def || buf[i].IsNull() != wantNullValue {
 			t.Errorf("slice %d: rep=%d def=%d null=%v, want rep=0 def=%d null=%v",
-				i, buf[i].RepetitionLevel(), buf[i].DefinitionLevel(), buf[i].IsNull(), def, wantNull)
+				i, buf[i].RepetitionLevel(), buf[i].DefinitionLevel(), buf[i].IsNull(), def, wantNullValue)
 		}
 	}
 }
@@ -488,9 +491,9 @@ func TestMissingColumnUnderOptionalGroupLargeRead(t *testing.T) {
 		if i%2 == 0 {
 			wantDef = 1
 		}
-		if buf[i].RepetitionLevel() != 0 || buf[i].DefinitionLevel() != wantDef || buf[i].IsNull() {
-			t.Errorf("value %d: rep=%d def=%d null=%v, want rep=0 def=%d null=false",
-				i, buf[i].RepetitionLevel(), buf[i].DefinitionLevel(), buf[i].IsNull(), wantDef)
+		if buf[i].RepetitionLevel() != 0 || buf[i].DefinitionLevel() != wantDef || buf[i].IsNull() != (wantDef == 0) {
+			t.Errorf("value %d: rep=%d def=%d null=%v, want rep=0 def=%d null=%v",
+				i, buf[i].RepetitionLevel(), buf[i].DefinitionLevel(), buf[i].IsNull(), wantDef, wantDef == 0)
 		}
 	}
 }

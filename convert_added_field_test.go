@@ -160,6 +160,97 @@ func TestAddedFieldLevels(t *testing.T) {
 	}
 }
 
+func TestRequiredFieldUnderNullParentIsNull(t *testing.T) {
+	i32 := parquet.Leaf(parquet.Int32Type)
+	// s is null, so the added required s.b is null at definition level 0.
+	col, vals := addedColumn(t,
+		parquet.Group{"s": parquet.Optional(parquet.Group{"a": parquet.Optional(i32)})},
+		parquet.Group{"s": parquet.Optional(parquet.Group{"a": parquet.Optional(i32), "b": i32})},
+		[]string{"s", "b"},
+		parquet.Row{parquet.NullValue().Level(0, 0, 0)},
+	)
+	for _, v := range vals {
+		if v.DefinitionLevel() < col.MaxDefinitionLevel && !v.IsNull() {
+			t.Errorf("s.b = %v at def %d (max %d), want null", v, v.DefinitionLevel(), col.MaxDefinitionLevel)
+		}
+	}
+}
+
+func TestRequiredFieldInNewOptionalGroupIsNull(t *testing.T) {
+	i32 := parquet.Leaf(parquet.Int32Type)
+	// g does not exist in the source, so g.x is null at definition level 0.
+	col, vals := addedColumn(t,
+		parquet.Group{"a": i32},
+		parquet.Group{"a": i32, "g": parquet.Optional(parquet.Group{"x": i32})},
+		[]string{"g", "x"},
+		parquet.Row{parquet.ValueOf(int32(1)).Level(0, 0, 0)},
+	)
+	for _, v := range vals {
+		if v.DefinitionLevel() < col.MaxDefinitionLevel && !v.IsNull() {
+			t.Errorf("g.x = %v at def %d (max %d), want null", v, v.DefinitionLevel(), col.MaxDefinitionLevel)
+		}
+	}
+}
+
+func TestRequiredFixedLenByteArrayFieldWrites(t *testing.T) {
+	i32 := parquet.Leaf(parquet.Int32Type)
+	from := parquet.Group{"s": parquet.Optional(parquet.Group{"a": i32})}
+	to := parquet.Group{"s": parquet.Optional(parquet.Group{"a": i32, "b": parquet.Leaf(parquet.FixedLenByteArrayType(4))})}
+	ts := parquet.NewSchema("s", to)
+	conv, err := parquet.Convert(ts, parquet.NewSchema("s", from))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []parquet.Row{{parquet.ValueOf(int32(1)).Level(0, 1, 0)}}
+	if _, err := conv.Convert(rows); err != nil {
+		t.Fatal(err)
+	}
+	col, ok := ts.Lookup("s", "b")
+	if !ok {
+		t.Fatal("missing s.b")
+	}
+	var got []parquet.Value
+	for _, v := range rows[0] {
+		if v.Column() == col.ColumnIndex {
+			got = append(got, v)
+		}
+	}
+	if len(got) != 1 || got[0].IsNull() || len(got[0].ByteArray()) != 4 {
+		t.Fatalf("s.b = %+v, want a 4-byte zero", got)
+	}
+	w := parquet.NewWriter(new(bytes.Buffer), ts)
+	if _, err := w.WriteRows(rows); err != nil {
+		t.Errorf("write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func addedColumn(t *testing.T, from, to parquet.Group, path []string, row parquet.Row) (parquet.LeafColumn, []parquet.Value) {
+	t.Helper()
+	ts := parquet.NewSchema("s", to)
+	conv, err := parquet.Convert(ts, parquet.NewSchema("s", from))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []parquet.Row{append(parquet.Row(nil), row...)}
+	if _, err := conv.Convert(rows); err != nil {
+		t.Fatal(err)
+	}
+	col, ok := ts.Lookup(path...)
+	if !ok {
+		t.Fatalf("lookup %v", path)
+	}
+	var vals []parquet.Value
+	for _, v := range rows[0] {
+		if v.Column() == col.ColumnIndex {
+			vals = append(vals, v)
+		}
+	}
+	return col, vals
+}
+
 // synthesizedCase is one shape of a missing target column. Rows are the source
 // column only; the added column is what Convert must synthesize.
 type synthesizedCase struct {
@@ -304,7 +395,8 @@ func TestSynthesizedAddedFieldMatrix(t *testing.T) {
 			leaf:   []string{"s", "b"},
 			rows:   []parquet.Row{{parquet.ValueOf(nil).Level(0, 0, 0)}},
 			want:   [][][2]int{{{0, 0}}},
-			null:   false,
+			// The parent is null, so the required leaf is null too.
+			null: true,
 		},
 		{
 			name:   "required ancestor becomes optional",

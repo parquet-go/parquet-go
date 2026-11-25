@@ -149,17 +149,22 @@ func convertToTypeKeepingNulls(targetType, sourceType Type, maxDefinitionLevel b
 // missingField synthesizes a target column that the source schema does not
 // have. Each value corresponds to one instance of the deepest matching source
 // group. Definition levels are remapped onto the target schema and clamped to
-// that group's definition level, so the new leaf is null (or the zero value,
-// when the leaf is required) for exactly those instances.
+// that group's definition level. The value is null when that level is below
+// the leaf's maximum, which is an ancestor null. A required leaf that is
+// present is the zero value of its type.
 type missingField struct {
-	needsValues      bool
-	groupSourceRep   byte
-	groupSourceDef   byte
-	groupTargetDef   byte
-	repetitionLevels []byte
-	definitionLevels []byte
-	null             bool
-	kind             Kind
+	needsValues        bool
+	groupSourceRep     byte
+	groupSourceDef     byte
+	groupTargetDef     byte
+	maxDefinitionLevel byte
+	repetitionLevels   []byte
+	definitionLevels   []byte
+	null               bool
+	kind               Kind
+	// zeroBytes is the shared zero for a fixed-length byte array. A plain
+	// ZeroValue has length 0, which the writer rejects.
+	zeroBytes []byte
 }
 
 func (m *missingField) append(dst []Value, src []Value, columnIndex int) []Value {
@@ -182,6 +187,13 @@ func (m *missingField) append(dst []Value, src []Value, columnIndex int) []Value
 	return dst
 }
 
+func fixedLenZero(typ Type) []byte {
+	if typ == nil || typ.Kind() != FixedLenByteArray || typ.Length() <= 0 {
+		return nil
+	}
+	return make([]byte, typ.Length())
+}
+
 func (m *missingField) mapLevel(levels []byte, level byte) byte {
 	if int(level) >= len(levels) {
 		return 0
@@ -198,8 +210,16 @@ func (m *missingField) clampDef(def byte) byte {
 
 func (m *missingField) value(rep, def byte, columnIndex uint16) Value {
 	var v Value
-	if !m.null {
-		v = ZeroValue(m.kind)
+	// A definition level below the leaf's maximum means an ancestor is null.
+	// The value is null there even when the leaf itself is required. A present
+	// required leaf is the zero of its type, including a fixed-length byte array
+	// of that type's length.
+	if !m.null && def >= m.maxDefinitionLevel {
+		if len(m.zeroBytes) > 0 {
+			v = makeValueBytes(FixedLenByteArray, m.zeroBytes)
+		} else {
+			v = ZeroValue(m.kind)
+		}
 	}
 	v.repetitionLevel = rep
 	v.definitionLevel = def
@@ -619,14 +639,16 @@ func Convert(to, from Node) (conv Conversion, err error) {
 				isOptional:    targetColumn.maxDefinitionLevel > 0,
 				variantIndex:  -1,
 				missing: &missingField{
-					needsValues:      needsValues,
-					groupSourceRep:   groupSourceRep,
-					groupSourceDef:   groupSourceDef,
-					groupTargetDef:   groupTargetDef,
-					repetitionLevels: repLevels,
-					definitionLevels: defLevels,
-					null:             targetColumn.node.Optional() || targetColumn.node.Repeated(),
-					kind:             targetColumn.node.Type().Kind(),
+					needsValues:        needsValues,
+					groupSourceRep:     groupSourceRep,
+					groupSourceDef:     groupSourceDef,
+					groupTargetDef:     groupTargetDef,
+					maxDefinitionLevel: targetColumn.maxDefinitionLevel,
+					repetitionLevels:   repLevels,
+					definitionLevels:   defLevels,
+					null:               targetColumn.node.Optional() || targetColumn.node.Repeated(),
+					kind:               targetColumn.node.Type().Kind(),
+					zeroBytes:          fixedLenZero(targetColumn.node.Type()),
 				},
 			}
 			continue
