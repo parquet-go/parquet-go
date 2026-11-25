@@ -241,3 +241,68 @@ test:
     MOVQ AX, ret+96(FP)
     VZEROUPPER
     RET
+
+// func encodeByteArraySuffixesAVX2(dst, src []byte, prefix, suffix []int32) (i, j, k int)
+// Prefix/suffix lengths come from the encoder's validated input slices. The
+// remaining source contains at least as many bytes as the remaining suffix
+// output. Leave the final short suffixes to the bounds-checked Go loop.
+TEXT ·encodeByteArraySuffixesAVX2(SB), NOSPLIT, $0-120
+    MOVQ dst_base+0(FP), AX
+    MOVQ src_base+24(FP), BX
+    MOVQ prefix_base+48(FP), CX
+    MOVQ suffix_base+72(FP), DX
+    MOVQ suffix_len+80(FP), DI
+    MOVQ dst_len+8(FP), R11
+    LEAQ -32(AX)(R11*1), R11
+    XORQ SI, SI
+    // Over-copying must not overwrite suffixes that have yet to be read.
+    MOVQ src_len+32(FP), R12
+    ADDQ BX, R12
+    CMPQ AX, R12
+    JAE test
+    LEAQ 32(R11), R12
+    CMPQ BX, R12
+    JB done
+    JMP test
+loop:
+    CMPQ AX, R11
+    JA done
+    MOVLQZX (CX)(SI*4), R8
+    MOVLQZX (DX)(SI*4), R9
+    // Large suffixes are better left to runtime.memmove.
+    CMPQ R9, $128
+    JA done
+    ADDQ R8, BX
+    VMOVDQU (BX), Y0
+    VMOVDQU Y0, (AX)
+    CMPQ R9, $32
+    JA copySuffix
+next:
+    ADDQ R9, BX
+    ADDQ R9, AX
+    INCQ SI
+test:
+    CMPQ SI, DI
+    JNE loop
+done:
+    SUBQ src_base+24(FP), BX
+    SUBQ dst_base+0(FP), AX
+    MOVQ BX, i+96(FP)
+    MOVQ AX, j+104(FP)
+    MOVQ SI, k+112(FP)
+    VZEROUPPER
+    RET
+copySuffix:
+    LEAQ -32(R9), R12
+    MOVQ $32, R10
+    JMP copySuffixTest
+copySuffixLoop:
+    VMOVDQU (BX)(R10*1), Y0
+    VMOVDQU Y0, (AX)(R10*1)
+    ADDQ $32, R10
+copySuffixTest:
+    CMPQ R10, R12
+    JB copySuffixLoop
+    VMOVDQU (BX)(R12*1), Y0
+    VMOVDQU Y0, (AX)(R12*1)
+    JMP next

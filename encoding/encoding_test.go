@@ -175,6 +175,7 @@ var doubleTests = [...][]float64{
 var byteArrayTests = [...][][]byte{
 	{},
 	{[]byte("")},
+	{[]byte("A")},
 	{[]byte("A"), []byte("B"), []byte("C")},
 	{[]byte("hello world!"), bytes.Repeat([]byte("1234567890"), 100)},
 }

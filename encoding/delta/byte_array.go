@@ -55,7 +55,7 @@ func (e *ByteArrayEncoding) EncodeByteArray(dst []byte, src []byte, offsets []ui
 	dst = encodeInt32(dst, length.values)
 	dst = resize(dst, len(dst)+totalSize)
 
-	if len(offsets) > 0 {
+	if len(offsets) > 1 {
 		b := dst[len(dst)-totalSize:]
 		i := int(offsets[0])
 		j := 0
@@ -63,14 +63,30 @@ func (e *ByteArrayEncoding) EncodeByteArray(dst []byte, src []byte, offsets []ui
 		prefixValues := prefix.values
 		lengthValues := length.values[:len(prefixValues)]
 
-		for k, p := range prefixValues {
-			n := p + lengthValues[k]
-			j += copy(b[j:], src[i+int(p):i+int(n)])
-			i += int(n)
+		// Amortize the assembly call over a batch of short suffixes.
+		if len(prefixValues) >= 32 && cpu.X86.HasAVX2 && totalSize > 128 && lengthValues[0] <= 128 {
+			copyByteArraySuffixes(b, src, prefixValues, lengthValues, i)
+		} else {
+			for k, p := range prefixValues {
+				n := p + lengthValues[k]
+				j += copy(b[j:], src[i+int(p):i+int(n)])
+				i += int(n)
+			}
 		}
 	}
 
 	return dst, nil
+}
+
+func copyByteArraySuffixes(dst, src []byte, prefix, suffix []int32, start int) {
+	i, j, k := encodeByteArraySuffixes(dst, src, prefix, suffix, start)
+	prefix = prefix[k:]
+	suffix = suffix[k:][:len(prefix)]
+	for k, p := range prefix {
+		n := p + suffix[k]
+		j += copy(dst[j:], src[i+int(p):i+int(n)])
+		i += int(n)
+	}
 }
 
 func (e *ByteArrayEncoding) EncodeFixedLenByteArray(dst []byte, src []byte, size int) ([]byte, error) {

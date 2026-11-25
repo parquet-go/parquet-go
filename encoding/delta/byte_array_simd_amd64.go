@@ -355,3 +355,7 @@ func decodeFixedLenByteArray(dst, src []byte, size int, prefix, suffix []int32) 
 
 	return dst[:totalLength], nil
 }
+
+func encodeByteArraySuffixes(dst, src []byte, prefix, suffix []int32, start int) (i, j, k int) {
+	return start, 0, 0
+}

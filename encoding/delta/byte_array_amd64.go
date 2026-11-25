@@ -3,8 +3,21 @@
 package delta
 
 import (
+	"math"
+
 	"golang.org/x/sys/cpu"
 )
+
+//go:noescape
+func encodeByteArraySuffixesAVX2(dst, src []byte, prefix, suffix []int32) (i, j, k int)
+
+func encodeByteArraySuffixes(dst, src []byte, prefix, suffix []int32, start int) (i, j, k int) {
+	if len(src) <= math.MaxInt32 {
+		i, j, k = encodeByteArraySuffixesAVX2(dst, src[start:], prefix, suffix)
+		return i + start, j, k
+	}
+	return start, 0, 0
+}
 
 //go:noescape
 func validatePrefixAndSuffixLengthValuesAVX2(prefix, suffix []int32, maxLength int) (totalPrefixLength, totalSuffixLength int, ok bool)
