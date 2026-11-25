@@ -1299,3 +1299,223 @@ func TestMissingRequiredRootColumnHasNoNulls(t *testing.T) {
 		t.Fatalf("page NumNulls = %d, want 0", page.NumNulls())
 	}
 }
+
+func TestProjectedSliceStopsAtOwnRows(t *testing.T) {
+	// List lengths 2, 1, 3, 0. Reads do not call NumValues first, so a slice
+	// whose count is still unknown must still stop at its own rows.
+	type item struct {
+		X int32 `parquet:"x"`
+	}
+	type source struct {
+		S []item `parquet:"s"`
+	}
+	type itemTarget struct {
+		X int32  `parquet:"x"`
+		Y *int32 `parquet:"y,optional"`
+	}
+	type target struct {
+		S []itemTarget `parquet:"s"`
+	}
+	src := parquet.NewGenericBuffer[source]()
+	if _, err := src.Write([]source{
+		{S: []item{{X: 1}, {X: 2}}},
+		{S: []item{{X: 3}}},
+		{S: []item{{X: 4}, {X: 5}, {X: 6}}},
+		{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := projectedPage(t, src, parquet.SchemaOf(new(target)), 1)
+	rows := [][][2]int{
+		{{0, 1}, {1, 1}},
+		{{0, 1}},
+		{{0, 1}, {1, 1}, {1, 1}},
+		{{0, 0}},
+	}
+	checkProjectedSlices(t, page, rows)
+
+	direct := parquet.NewGenericBuffer[target]()
+	if _, err := direct.Write([]target{
+		{S: []itemTarget{{X: 1}, {X: 2}}},
+		{S: []itemTarget{{X: 3}}},
+		{S: []itemTarget{{X: 4}, {X: 5}, {X: 6}}},
+		{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := readPageLevels(t, projectedPage(t, src, parquet.SchemaOf(new(target)), 1)), readChunkLevels(t, direct.ColumnChunks()[1]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("converted levels %v, file written as target %v", got, want)
+	}
+}
+
+func TestProjectedSliceRepeatedInsideRepeated(t *testing.T) {
+	type inner struct {
+		X []int32 `parquet:"x"`
+	}
+	type item struct {
+		Inner inner `parquet:"inner"`
+	}
+	type source struct {
+		S []item `parquet:"s"`
+	}
+	type itemTarget struct {
+		Inner inner  `parquet:"inner"`
+		Y     *int32 `parquet:"y,optional"`
+	}
+	type target struct {
+		S []itemTarget `parquet:"s"`
+	}
+	src := parquet.NewGenericBuffer[source]()
+	if _, err := src.Write([]source{
+		{S: []item{{Inner: inner{X: []int32{1, 2}}}, {Inner: inner{X: []int32{3}}}}},
+		{S: []item{{Inner: inner{X: []int32{4, 5, 6}}}}},
+		{},
+		{S: []item{{Inner: inner{}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := projectedPage(t, src, parquet.SchemaOf(new(target)), 1)
+	checkProjectedSlices(t, page, [][][2]int{
+		{{0, 1}, {1, 1}},
+		{{0, 1}},
+		{{0, 0}},
+		{{0, 1}},
+	})
+}
+
+func TestProjectedSliceChildrenAreGroups(t *testing.T) {
+	type inner struct {
+		X int32 `parquet:"x"`
+	}
+	type item struct {
+		Inner inner `parquet:"inner"`
+	}
+	type source struct {
+		S []item `parquet:"s"`
+	}
+	type itemTarget struct {
+		Inner inner  `parquet:"inner"`
+		Y     *int32 `parquet:"y,optional"`
+	}
+	type target struct {
+		S []itemTarget `parquet:"s"`
+	}
+	src := parquet.NewGenericBuffer[source]()
+	if _, err := src.Write([]source{
+		{S: []item{{Inner: inner{X: 1}}, {Inner: inner{X: 2}}}},
+		{S: []item{{Inner: inner{X: 3}}}},
+		{S: []item{{Inner: inner{X: 4}}, {Inner: inner{X: 5}}, {Inner: inner{X: 6}}}},
+		{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := projectedPage(t, src, parquet.SchemaOf(new(target)), 1)
+	checkProjectedSlices(t, page, [][][2]int{
+		{{0, 1}, {1, 1}},
+		{{0, 1}},
+		{{0, 1}, {1, 1}, {1, 1}},
+		{{0, 0}},
+	})
+}
+
+func checkProjectedSlices(t *testing.T, page parquet.Page, rows [][][2]int) {
+	t.Helper()
+	var all [][2]int
+	for _, row := range rows {
+		all = append(all, row...)
+	}
+	if got := readPageLevels(t, page); !reflect.DeepEqual(got, all) {
+		t.Fatalf("full page %v, want %v", got, all)
+	}
+	cases := []struct {
+		name string
+		i, j int64
+		nest bool
+		want [][2]int
+	}{
+		{name: "empty", i: 1, j: 1},
+		{name: "one element", i: 1, j: 2, want: rows[1]},
+		{name: "many elements", i: 2, j: 3, want: rows[2]},
+		{name: "empty list", i: int64(len(rows) - 1), j: int64(len(rows)), want: rows[len(rows)-1]},
+		{name: "nested", i: 1, j: 3, nest: true, want: rows[2]},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sliced := page.Slice(tc.i, tc.j)
+			if tc.nest {
+				sliced = sliced.Slice(1, 2)
+			}
+			if got := readPageLevels(t, sliced); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("levels %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func projectedPage(t *testing.T, src parquet.RowGroup, target *parquet.Schema, column int) parquet.Page {
+	t.Helper()
+	conv, err := parquet.Convert(target, src.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages := parquet.ConvertRowGroup(src, conv).ColumnChunks()[column].Pages()
+	t.Cleanup(func() { pages.Close() })
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page
+}
+
+func readPageLevels(t *testing.T, page parquet.Page) [][2]int {
+	t.Helper()
+	reader := page.Values()
+	buf := make([]parquet.Value, 4)
+	var out [][2]int
+	for {
+		n, err := reader.ReadValues(buf)
+		for i := range n {
+			if !buf[i].IsNull() {
+				t.Fatalf("synthesized value is not null: %+v", buf[i])
+			}
+			out = append(out, [2]int{buf[i].RepetitionLevel(), buf[i].DefinitionLevel()})
+		}
+		if err == io.EOF {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			t.Fatal("ReadValues made no progress")
+		}
+	}
+}
+
+func readChunkLevels(t *testing.T, chunk parquet.ColumnChunk) [][2]int {
+	t.Helper()
+	pages := chunk.Pages()
+	t.Cleanup(func() { pages.Close() })
+	page, err := pages.ReadPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := page.Values()
+	buf := make([]parquet.Value, 4)
+	var out [][2]int
+	for {
+		n, err := reader.ReadValues(buf)
+		for i := range n {
+			out = append(out, [2]int{buf[i].RepetitionLevel(), buf[i].DefinitionLevel()})
+		}
+		if err == io.EOF {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			t.Fatal("ReadValues made no progress")
+		}
+	}
+}
