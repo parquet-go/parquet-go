@@ -14,7 +14,7 @@ import (
 // metadata and value byte slices.
 func Marshal(v any) (metadata, value []byte, err error) {
 	rv := reflect.ValueOf(v)
-	for rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
 		if rv.IsNil() {
 			rv = reflect.Value{}
 			break
@@ -102,7 +102,7 @@ func goToVariantReflect(rv reflect.Value) (Value, error) {
 		return Null(), nil
 	}
 
-	for rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
 		if rv.IsNil() {
 			return Null(), nil
 		}

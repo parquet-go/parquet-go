@@ -19,13 +19,13 @@ func variantMarshalOrNull(value reflect.Value) (metadata, val []byte) {
 	var goVal any
 	if value.IsValid() && !isNullValue(value) {
 		v := value
-		for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+		for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 			if v.IsNil() {
 				break
 			}
 			v = v.Elem()
 		}
-		if v.IsValid() && v.Kind() != reflect.Ptr && v.Kind() != reflect.Interface {
+		if v.IsValid() && v.Kind() != reflect.Pointer && v.Kind() != reflect.Interface {
 			goVal = v.Interface()
 		}
 	}
@@ -45,7 +45,7 @@ func extractRawVariantStruct(value reflect.Value) (metadata, val []byte, ok bool
 		return nil, nil, false
 	}
 	v := value
-	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			return nil, nil, false
 		}
@@ -199,7 +199,7 @@ func extractGoValue(value reflect.Value) any {
 		return nil
 	}
 	v := value
-	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			return nil
 		}
@@ -342,7 +342,7 @@ func reconstructFuncOfShreddedVariant(columnIndex uint16, node Node) (uint16, re
 // Value []byte fields. If so, it copies the raw bytes directly and returns true.
 func setRawVariantStruct(value reflect.Value, metadata, val []byte) bool {
 	v := value
-	for v.Kind() == reflect.Ptr {
+	for v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			v.Set(reflect.New(v.Type().Elem()))
 		}
@@ -389,7 +389,7 @@ func setVariantGoValue(value reflect.Value, goVal any) error {
 // struct with Metadata and Value []byte fields (raw variant passthrough).
 func isRawVariantStructTarget(value reflect.Value) bool {
 	t := value.Type()
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {

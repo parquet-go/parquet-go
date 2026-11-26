@@ -174,7 +174,7 @@ func MakeValueFuncOf(t reflect.Type) MakeValueFunc {
 			}
 		}
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		t = t.Elem()
 		makeValue := MakeValueFuncOf(t)
 		return func(v reflect.Value, r *rand.Rand) {

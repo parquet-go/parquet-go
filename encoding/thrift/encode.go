@@ -116,7 +116,7 @@ func EncodeFuncOf(t reflect.Type, seen EncodeFuncCache) EncodeFunc {
 		f = encodeFuncMapOf(t, seen)
 	case reflect.Struct:
 		f = encodeFuncStructOf(t, seen)
-	case reflect.Ptr:
+	case reflect.Pointer:
 		f = encodeFuncPtrOf(t, seen)
 	default:
 		panic("type cannot be encoded in thrift: " + t.String())
@@ -265,7 +265,7 @@ type structEncoder struct {
 }
 
 func dereference(v reflect.Value) reflect.Value {
-	for v.Kind() == reflect.Ptr {
+	for v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			return v
 		}
@@ -296,10 +296,10 @@ encodeFields:
 	for _, f := range enc.fields {
 		x := v
 		for _, i := range f.index {
-			if x.Kind() == reflect.Ptr {
+			if x.Kind() == reflect.Pointer {
 				x = x.Elem()
 			}
-			if x = x.Field(i); x.Kind() == reflect.Ptr {
+			if x = x.Field(i); x.Kind() == reflect.Pointer {
 				if x.IsNil() {
 					continue encodeFields
 				}

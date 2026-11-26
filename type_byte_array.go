@@ -61,7 +61,7 @@ func (t byteArrayType) AssignValue(dst reflect.Value, src Value) error {
 		dst.SetString(string(v))
 	case reflect.Slice:
 		dst.SetBytes(copyBytes(v))
-	case reflect.Ptr:
+	case reflect.Pointer:
 		// Handle pointer types like *string
 		if src.IsNull() {
 			dst.Set(reflect.Zero(dst.Type()))
