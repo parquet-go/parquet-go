@@ -56,12 +56,6 @@ func (c *Codec) Encode(dst, src []byte) ([]byte, error) {
 }
 
 func (c *Codec) Decode(dst, src []byte) ([]byte, error) {
-	// A zero-length buffer is not an LZ4 block. The empty block is one
-	// 0x00 token. pierrec/lz4 reports success for a zero-length source,
-	// which would never reach the bound below.
-	if len(src) == 0 {
-		return nil, lz4.ErrInvalidSourceShortBuffer
-	}
 	// Use the capacity of dst if any, otherwise guess a 3x compression ratio.
 	if cap(dst) == 0 {
 		dst = make([]byte, 3*len(src))
