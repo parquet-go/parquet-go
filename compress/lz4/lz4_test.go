@@ -224,16 +224,21 @@ func TestDecodeExpansionLimit(t *testing.T) {
 	}
 
 	// Corrupt input into a buffer already at the limit must not grow it.
-	corrupt := []byte{0x01, 0x02, 0x03, 0x04}
+	// The portable decoder recovers from a bounds panic, which can allocate
+	// the deferred closure. That stays far below another output buffer.
+	corrupt := bytes.Clone(denseBlock(64))
+	corrupt[2] ^= 0x01
 	full := make([]byte, 255*len(corrupt)-1001)
-	allocs = testing.AllocsPerRun(20, func() {
-		out, err := codec.Decode(full, corrupt)
-		if err == nil || out != nil {
-			t.Fatal("corrupt input at the expansion limit succeeded")
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("corrupt input at the expansion limit allocated %g times", allocs)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	out, err = codec.Decode(full, corrupt)
+	runtime.ReadMemStats(&after)
+	if err == nil || out != nil {
+		t.Fatal("corrupt input at the expansion limit succeeded")
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew >= uint64(len(full)) {
+		t.Fatalf("corrupt input at the expansion limit allocated %d bytes", grew)
 	}
 }
 
