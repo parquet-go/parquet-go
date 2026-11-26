@@ -1,8 +1,6 @@
 package delta
 
 import (
-	"unsafe"
-
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
 )
@@ -42,7 +40,7 @@ func (e *LengthByteArrayEncoding) DecodeByteArray(dst []byte, src []byte, offset
 	length := getInt32Buffer()
 	defer putInt32Buffer(length)
 
-	payload, err := length.decode(src)
+	src, err := length.decode(src)
 	if err != nil {
 		return dst, offsets, e.wrap(err)
 	}
@@ -57,14 +55,11 @@ func (e *LengthByteArrayEncoding) DecodeByteArray(dst []byte, src []byte, offset
 	if invalidLength != 0 {
 		return dst, offsets, e.wrap(errInvalidNegativeValueLength(int(invalidLength)))
 	}
-	if int(lastOffset) > len(payload) {
-		return dst, offsets, e.wrap(errValueLengthOutOfBounds(int(lastOffset), len(payload)))
+	if int(lastOffset) > len(src) {
+		return dst, offsets, e.wrap(errValueLengthOutOfBounds(int(lastOffset), len(src)))
 	}
 
-	if lastOffset > 0 && cap(dst) >= len(src)-len(payload)+int(lastOffset) && unsafe.SliceData(dst) == unsafe.SliceData(src) {
-		return payload[:lastOffset:lastOffset], offsets, nil
-	}
-	return append(dst, payload[:lastOffset]...), offsets, nil
+	return append(dst, src[:lastOffset]...), offsets, nil
 }
 
 func (e *LengthByteArrayEncoding) EstimateDecodeByteArraySize(src []byte) int {
