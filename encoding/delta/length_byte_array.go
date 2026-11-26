@@ -1,21 +1,12 @@
 package delta
 
 import (
-	"unsafe"
-
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
-	"github.com/parquet-go/parquet-go/internal/deltalength"
 )
 
 type LengthByteArrayEncoding struct {
 	encoding.NotSupported
-}
-
-func init() {
-	// Page decoding borrows this view. DecodeByteArray itself always returns a
-	// slice that starts at the caller's destination.
-	deltalength.PayloadView = lengthByteArrayPayload
 }
 
 func (e *LengthByteArrayEncoding) String() string {
@@ -44,26 +35,14 @@ func (e *LengthByteArrayEncoding) EncodeByteArray(dst []byte, src []byte, offset
 }
 
 func (e *LengthByteArrayEncoding) DecodeByteArray(dst []byte, src []byte, offsets []uint32) ([]byte, []uint32, error) {
-	dst = dst[:0]
-	payload, offsets, err := lengthByteArrayPayload(src, offsets)
-	if err != nil {
-		return dst, offsets, e.wrap(err)
-	}
-	return placeByteArrayPayload(dst, src, payload), offsets, nil
-}
-
-// lengthByteArrayPayload decodes the length header of a DELTA_LENGTH_BYTE_ARRAY
-// page. payload is a subslice of src with no spare capacity, or nil when the
-// page has no value bytes. offsets are indexes into payload.
-func lengthByteArrayPayload(src []byte, offsets []uint32) ([]byte, []uint32, error) {
-	offsets = offsets[:0]
+	dst, offsets = dst[:0], offsets[:0]
 
 	length := getInt32Buffer()
 	defer putInt32Buffer(length)
 
-	payload, err := length.decode(src)
+	src, err := length.decode(src)
 	if err != nil {
-		return nil, offsets, err
+		return dst, offsets, e.wrap(err)
 	}
 
 	if size := len(length.values) + 1; cap(offsets) < size {
@@ -74,33 +53,13 @@ func lengthByteArrayPayload(src []byte, offsets []uint32) ([]byte, []uint32, err
 
 	lastOffset, invalidLength := decodeByteArrayLengths(offsets, length.values)
 	if invalidLength != 0 {
-		return nil, offsets, errInvalidNegativeValueLength(int(invalidLength))
+		return dst, offsets, e.wrap(errInvalidNegativeValueLength(int(invalidLength)))
 	}
-	if int(lastOffset) > len(payload) {
-		return nil, offsets, errValueLengthOutOfBounds(int(lastOffset), len(payload))
+	if int(lastOffset) > len(src) {
+		return dst, offsets, e.wrap(errValueLengthOutOfBounds(int(lastOffset), len(src)))
 	}
-	if lastOffset == 0 {
-		return nil, offsets, nil
-	}
-	return payload[:lastOffset:lastOffset], offsets, nil
-}
 
-// placeByteArrayPayload copies payload onto dst. The result starts at dst[0]
-// when cap(dst) holds the payload. An aliased dst overlaps payload, so the
-// bytes are moved with copy.
-func placeByteArrayPayload(dst, src, payload []byte) []byte {
-	if len(payload) == 0 {
-		return dst
-	}
-	if cap(dst) >= len(payload) && sliceAlias(dst, src) {
-		copy(dst[:len(payload)], payload)
-		return dst[:len(payload)]
-	}
-	return append(dst, payload...)
-}
-
-func sliceAlias(dst, src []byte) bool {
-	return cap(dst) > 0 && cap(src) > 0 && unsafe.SliceData(dst) == unsafe.SliceData(src)
+	return append(dst, src[:lastOffset]...), offsets, nil
 }
 
 func (e *LengthByteArrayEncoding) EstimateDecodeByteArraySize(src []byte) int {
