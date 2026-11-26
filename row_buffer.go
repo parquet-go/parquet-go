@@ -65,7 +65,7 @@ func (buf *RowBuffer[T]) Reset() {
 	buf.rows = buf.rows[:0]
 	buf.values = buf.values[:0]
 	buf.alloc.reset()
-	buf.order.clear()
+	buf.order.invalidate()
 }
 
 // NumRows returns the number of rows currently written to the buffer.
@@ -108,11 +108,12 @@ func (buf *RowBuffer[T]) ColumnChunks() []ColumnChunk {
 // SortingColumns returns the sorting columns that the rows in the buffer are
 // ordered by.
 //
-// The columns are configured when the buffer is created and are what sort.Sort
-// and sort.Stable order the rows by. They are reported when the buffer is
-// empty, holds a single row, or the rows were ordered by one of those sorts
-// and have not been modified since. Appending rows drops the reported order.
-// More than one unsorted row returns nil.
+// The columns are configured when the buffer is created. They are reported
+// when the buffer is empty, holds a single row, or its rows are in that
+// order, including when they were written that way and when sort.Sort or
+// sort.Stable ordered them. The check runs on the first call after a
+// mutation and is remembered until the buffer changes. More than one row
+// that is not in that order returns nil.
 func (buf *RowBuffer[T]) SortingColumns() []SortingColumn {
 	if len(buf.sorting) == 0 {
 		return nil
@@ -120,8 +121,7 @@ func (buf *RowBuffer[T]) SortingColumns() []SortingColumn {
 	if len(buf.rows) <= 1 {
 		return buf.sorting
 	}
-	buf.order.observe(buf)
-	if !buf.order.inOrder {
+	if !buf.order.observe(buf) {
 		return nil
 	}
 	return buf.sorting
@@ -133,14 +133,7 @@ func (buf *RowBuffer[T]) Schema() *Schema { return buf.schema }
 // Len returns the number of rows in the buffer.
 //
 // The method contributes to satisfying sort.Interface.
-func (buf *RowBuffer[T]) Len() int {
-	n := len(buf.rows)
-	// No configured order to record. Skip the sort.Sort frame check.
-	if len(buf.sorting) > 0 {
-		buf.order.noteLen(n)
-	}
-	return n
-}
+func (buf *RowBuffer[T]) Len() int { return len(buf.rows) }
 
 // Less compares the rows at index i and j according to the sorting columns
 // configured on the buffer.
@@ -154,7 +147,9 @@ func (buf *RowBuffer[T]) Less(i, j int) bool {
 //
 // The method contributes to satisfying sort.Interface.
 func (buf *RowBuffer[T]) Swap(i, j int) {
-	buf.order.noteSwap()
+	if i != j && buf.order.checked {
+		buf.order.invalidate()
+	}
 	buf.rows[i], buf.rows[j] = buf.rows[j], buf.rows[i]
 }
 
@@ -177,8 +172,8 @@ func (buf *RowBuffer[T]) Write(rows []T) (int, error) {
 		buf.alloc.capture(row)
 		buf.rows = append(buf.rows, row)
 	}
-	if len(rows) > 0 && (buf.order.inOrder || buf.order.sortStarted) {
-		buf.order.breakOnAppend(len(rows), len(buf.rows))
+	if len(rows) > 0 && buf.order.checked {
+		buf.order.invalidate()
 	}
 	return len(rows), nil
 }
@@ -194,8 +189,8 @@ func (buf *RowBuffer[T]) WriteRows(rows []Row) (int, error) {
 		buf.alloc.capture(row)
 		buf.rows = append(buf.rows, row)
 	}
-	if len(rows) > 0 && (buf.order.inOrder || buf.order.sortStarted) {
-		buf.order.breakOnAppend(len(rows), len(buf.rows))
+	if len(rows) > 0 && buf.order.checked {
+		buf.order.invalidate()
 	}
 	return len(rows), nil
 }

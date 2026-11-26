@@ -51,7 +51,7 @@ func TestSortingColumnsFollowEstablishedOrder(t *testing.T) {
 			t.Fatalf("sorted buffer sorting columns after read = %v, want %v", got, configured)
 		}
 
-		if _, err := buf.Write([]orderRow{{ID: 9}}); err != nil {
+		if _, err := buf.Write([]orderRow{{ID: -1}}); err != nil {
 			t.Fatal(err)
 		}
 		if got := buf.SortingColumns(); len(got) != 0 {
@@ -85,6 +85,10 @@ func TestSortingColumnsFollowEstablishedOrder(t *testing.T) {
 		if got := buf.SortingColumns(); !EqualSortingColumns(got, configured) {
 			t.Fatalf("stable-sorted buffer sorting columns = %v, want %v", got, configured)
 		}
+		buf.Swap(0, 0)
+		if got := buf.SortingColumns(); !EqualSortingColumns(got, configured) {
+			t.Fatalf("Swap of a row with itself dropped sorting columns: %v", got)
+		}
 		buf.Swap(0, 1)
 		if got := buf.SortingColumns(); len(got) != 0 {
 			t.Fatalf("sorting columns after Swap = %v, want none", got)
@@ -109,7 +113,7 @@ func TestSortingColumnsFollowEstablishedOrder(t *testing.T) {
 		if got := writeOrderRowGroup(t, buf); !slices.Equal(got, []format.SortingColumn{{ColumnIdx: 0}}) {
 			t.Fatalf("sorted row buffer WriteRowGroup sorting columns = %+v", got)
 		}
-		if _, err := buf.Write([]orderRow{{ID: 3}}); err != nil {
+		if _, err := buf.Write([]orderRow{{ID: 1}}); err != nil {
 			t.Fatal(err)
 		}
 		if got := buf.SortingColumns(); len(got) != 0 {
@@ -320,6 +324,206 @@ func TestBufferWriteRowGroupEmptySourceKeepsOrder(t *testing.T) {
 		t.Fatalf("footer sorting columns = %+v, want ascending id", got)
 	}
 }
+
+func TestSortingColumnsInOrderWrites(t *testing.T) {
+	configured := []SortingColumn{Ascending("id")}
+	option := SortingRowGroupConfig(SortingColumns(configured...))
+	wantFooter := []format.SortingColumn{{ColumnIdx: 0}}
+	rows := []orderRow{{ID: 1}, {ID: 2}, {ID: 3}}
+
+	check := func(t *testing.T, buf interface {
+		RowGroup
+		sort.Interface
+	}) {
+		t.Helper()
+		if !sort.IsSorted(buf) {
+			t.Fatal("rows are not in order")
+		}
+		if got := buf.SortingColumns(); !EqualSortingColumns(got, configured) {
+			t.Fatalf("sorting columns = %v, want ascending id", got)
+		}
+		if got := buf.SortingColumns(); !EqualSortingColumns(got, configured) {
+			t.Fatalf("cached sorting columns = %v, want ascending id", got)
+		}
+		if got := writeOrderRowGroup(t, buf); !slices.Equal(got, wantFooter) {
+			t.Fatalf("footer sorting columns = %+v, want %+v", got, wantFooter)
+		}
+	}
+
+	t.Run("generic", func(t *testing.T) {
+		buf := NewGenericBuffer[orderRow](option)
+		if _, err := buf.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		check(t, buf)
+	})
+
+	t.Run("buffer", func(t *testing.T) {
+		buf := NewBuffer(SchemaOf(orderRow{}), option)
+		for i := range rows {
+			if err := buf.Write(&rows[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		check(t, buf)
+	})
+
+	t.Run("buffer rows", func(t *testing.T) {
+		schema := SchemaOf(orderRow{})
+		buf := NewBuffer(schema, option)
+		written := make([]Row, len(rows))
+		for i := range rows {
+			written[i] = schema.Deconstruct(nil, &rows[i])
+		}
+		if _, err := buf.WriteRows(written); err != nil {
+			t.Fatal(err)
+		}
+		check(t, buf)
+	})
+
+	t.Run("rowbuffer", func(t *testing.T) {
+		buf := NewRowBuffer[orderRow](option)
+		if _, err := buf.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		check(t, buf)
+	})
+
+	t.Run("rowbuffer rows", func(t *testing.T) {
+		schema := SchemaOf(orderRow{})
+		buf := NewRowBuffer[orderRow](option)
+		written := make([]Row, len(rows))
+		for i := range rows {
+			written[i] = schema.Deconstruct(nil, &rows[i])
+		}
+		if _, err := buf.WriteRows(written); err != nil {
+			t.Fatal(err)
+		}
+		check(t, buf)
+	})
+}
+
+func TestMergeInOrderBuffers(t *testing.T) {
+	option := SortingRowGroupConfig(SortingColumns(Ascending("id")))
+	newBuf := func(ids ...int64) *GenericBuffer[orderRow] {
+		t.Helper()
+		buf := NewGenericBuffer[orderRow](option)
+		rows := make([]orderRow, len(ids))
+		for i, id := range ids {
+			rows[i].ID = id
+		}
+		if _, err := buf.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		return buf
+	}
+	merged, err := MergeRowGroups([]RowGroup{newBuf(1, 3, 5), newBuf(2, 4, 6)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := merged.SortingColumns(); !EqualSortingColumns(got, []SortingColumn{Ascending("id")}) {
+		t.Fatalf("merged sorting columns = %v, want ascending id", got)
+	}
+	if got := readOrderIDs(t, merged); !slices.Equal(got, []int64{1, 2, 3, 4, 5, 6}) {
+		t.Fatalf("merged ids = %v, want [1 2 3 4 5 6]", got)
+	}
+}
+
+func TestWriteRowGroupAppendInOrder(t *testing.T) {
+	option := SortingRowGroupConfig(SortingColumns(Ascending("id")))
+	newBuf := func(ids ...int64) *GenericBuffer[orderRow] {
+		t.Helper()
+		buf := NewGenericBuffer[orderRow](option)
+		rows := make([]orderRow, len(ids))
+		for i, id := range ids {
+			rows[i].ID = id
+		}
+		if _, err := buf.Write(rows); err != nil {
+			t.Fatal(err)
+		}
+		return buf
+	}
+	dst := newBuf(1, 2)
+	if _, err := dst.WriteRowGroup(newBuf(3, 4)); err != nil {
+		t.Fatal(err)
+	}
+	if got := dst.SortingColumns(); !EqualSortingColumns(got, []SortingColumn{Ascending("id")}) {
+		t.Fatalf("sorting columns after append = %v, want ascending id", got)
+	}
+	if got := readOrderIDs(t, dst); !slices.Equal(got, []int64{1, 2, 3, 4}) {
+		t.Fatalf("ids = %v, want [1 2 3 4]", got)
+	}
+	if got := writeOrderRowGroup(t, dst); !slices.Equal(got, []format.SortingColumn{{ColumnIdx: 0}}) {
+		t.Fatalf("footer sorting columns = %+v, want ascending id", got)
+	}
+}
+
+func TestWriteRowGroupEmptyBufferDoesNotTrustSourceClaim(t *testing.T) {
+	option := SortingRowGroupConfig(SortingColumns(Ascending("id")))
+	src := NewGenericBuffer[orderRow](option)
+	if _, err := src.Write([]orderRow{{ID: 2}, {ID: 0}}); err != nil {
+		t.Fatal(err)
+	}
+	dst := NewGenericBuffer[orderRow](option)
+	claimed := claimedSortingGroup{RowGroup: src, sorting: []SortingColumn{Ascending("id")}}
+	if _, err := dst.WriteRowGroup(claimed); err != nil {
+		t.Fatal(err)
+	}
+	if sort.IsSorted(dst) {
+		t.Fatal("rows copied from a descending pair were treated as ascending")
+	}
+	if got := dst.SortingColumns(); len(got) != 0 {
+		t.Fatalf("sorting columns = %v, want none", got)
+	}
+	if got := writeOrderRowGroup(t, dst); len(got) != 0 {
+		t.Fatalf("footer sorting columns = %+v, want none", got)
+	}
+}
+
+func TestWriteRowGroupErrorWithoutRowsKeepsOrder(t *testing.T) {
+	option := SortingRowGroupConfig(SortingColumns(Ascending("id")))
+	dst := NewGenericBuffer[orderRow](option)
+	if _, err := dst.Write([]orderRow{{ID: 0}, {ID: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := dst.SortingColumns(); !EqualSortingColumns(got, []SortingColumn{Ascending("id")}) {
+		t.Fatalf("sorting columns = %v, want ascending id", got)
+	}
+	empty := NewGenericBuffer[orderRow](option)
+	n, err := dst.WriteRowGroup(orderFailGroup{RowGroup: empty})
+	if n != 0 || err == nil {
+		t.Fatalf("WriteRowGroup(error) = (%d, %v), want (0, error)", n, err)
+	}
+	if !sort.IsSorted(dst) {
+		t.Fatal("rows no longer sorted")
+	}
+	if got := dst.SortingColumns(); !EqualSortingColumns(got, []SortingColumn{Ascending("id")}) {
+		t.Fatalf("sorting columns after failed copy = %v, want ascending id", got)
+	}
+	if got := readOrderIDs(t, dst); !slices.Equal(got, []int64{0, 2}) {
+		t.Fatalf("ids = %v, want [0 2]", got)
+	}
+}
+
+type claimedSortingGroup struct {
+	RowGroup
+	sorting []SortingColumn
+}
+
+func (g claimedSortingGroup) SortingColumns() []SortingColumn { return g.sorting }
+
+type orderFailGroup struct{ RowGroup }
+
+func (g orderFailGroup) Rows() Rows {
+	return orderFailRows{schema: g.Schema()}
+}
+
+type orderFailRows struct{ schema *Schema }
+
+func (r orderFailRows) ReadRows([]Row) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (r orderFailRows) SeekToRow(int64) error       { return nil }
+func (r orderFailRows) Close() error                { return nil }
+func (r orderFailRows) Schema() *Schema             { return r.schema }
 
 func writeOrderRowGroup(t *testing.T, rowGroup RowGroup) []format.SortingColumn {
 	t.Helper()
