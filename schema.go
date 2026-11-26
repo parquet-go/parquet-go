@@ -234,7 +234,7 @@ func NewSchema(name string, root Node) *Schema {
 }
 
 func dereference(t reflect.Type) reflect.Type {
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t
@@ -354,7 +354,7 @@ func (s *Schema) Deconstruct(row Row, value any) Row {
 	}
 
 	v := reflect.ValueOf(value)
-	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			v = reflect.Value{}
 			break
@@ -377,13 +377,13 @@ func (s *Schema) Reconstruct(value any, row Row) error {
 	if !v.IsValid() {
 		panic("cannot reconstruct row into go value of type <nil>")
 	}
-	if v.Kind() != reflect.Ptr {
+	if v.Kind() != reflect.Pointer {
 		panic("cannot reconstruct row into go value of non-pointer type " + v.Type().String())
 	}
 	if v.IsNil() {
 		panic("cannot reconstruct row into nil pointer of type " + v.Type().String())
 	}
-	for v.Kind() == reflect.Ptr {
+	for v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			v.Set(reflect.New(v.Type().Elem()))
 		}
@@ -600,7 +600,7 @@ func (s *structNode) Fields() []Field {
 // distinction between nil (NULL) and a pointer to a zero value.
 func fieldByIndex(v reflect.Value, index []int) reflect.Value {
 	for _, i := range index[:len(index)-1] {
-		if v = v.Field(i); v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+		if v = v.Field(i); v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 			if v.IsNil() {
 				v.Set(reflect.New(v.Type().Elem()))
 			}
@@ -622,7 +622,7 @@ func (f *structField) Value(base reflect.Value) reflect.Value {
 	switch base.Kind() {
 	case reflect.Map:
 		return base.MapIndex(reflect.ValueOf(&f.name).Elem())
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if base.IsNil() {
 			base.Set(reflect.New(base.Type().Elem()))
 		}
@@ -680,7 +680,7 @@ func forEachStructTagOption(sf reflect.StructField, do func(t reflect.Type, opti
 			option, tag = split(tag)
 			option, args = splitOptionArgs(option)
 			ft := sf.Type
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			do(ft, option, args)
@@ -728,7 +728,7 @@ func nodeOf(path []string, t reflect.Type, tags parquetTags, tagReplacements []S
 	case reflect.String:
 		n = String()
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		n = Optional(nodeOf(path, t.Elem(), noTags, tagReplacements))
 
 	case reflect.Slice:
@@ -1074,7 +1074,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 			case "split":
 				kind := t.Kind()
 				baseType := t
-				if kind == reflect.Ptr {
+				if kind == reflect.Pointer {
 					kind = t.Elem().Kind()
 					baseType = t.Elem()
 				}
@@ -1149,7 +1149,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					}
 					return nil
 				}
-				if t.Kind() == reflect.Ptr {
+				if t.Kind() == reflect.Pointer {
 					baseType := decimalBaseType(t.Elem())
 					if baseType == nil {
 						throwInvalidTag(t, name, option)
@@ -1185,7 +1185,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 				switch t.Kind() {
 				case reflect.Int32:
 					setNode(Date())
-				case reflect.Ptr:
+				case reflect.Pointer:
 					elem := t.Elem()
 					switch {
 					case elem == reflect.TypeFor[time.Time]():
@@ -1233,7 +1233,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 							throwInvalidTag(t, name, option+args)
 						}
 						setNode(TimeAdjusted(timeUnit, adjusted))
-					case reflect.Ptr:
+					case reflect.Pointer:
 						// Support *time.Duration with time tag
 						if t.Elem() == reflect.TypeFor[time.Duration]() {
 							timeUnit, adjusted, err := parseTimestampArgs(args)
@@ -1261,7 +1261,7 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 						throwInvalidTag(t, name, option+args)
 					}
 					setNode(TimestampAdjusted(timeUnit, adjusted))
-				case reflect.Ptr:
+				case reflect.Pointer:
 					elem := t.Elem()
 					switch {
 					case elem == reflect.TypeFor[time.Time]():
@@ -1308,13 +1308,13 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					throwInvalidTag(t, name, option+args)
 				}
 				kind := t.Kind()
-				if kind == reflect.Ptr {
+				if kind == reflect.Pointer {
 					kind = t.Elem().Kind()
 				}
 				switch kind {
 				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 					reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-					if t.Kind() == reflect.Ptr {
+					if t.Kind() == reflect.Pointer {
 						setNode(Optional(Int(bitWidth)))
 					} else {
 						setNode(Int(bitWidth))
@@ -1329,13 +1329,13 @@ func makeNodeOf(path []string, t reflect.Type, name string, tags parquetTags, ta
 					throwInvalidTag(t, name, option+args)
 				}
 				kind := t.Kind()
-				if kind == reflect.Ptr {
+				if kind == reflect.Pointer {
 					kind = t.Elem().Kind()
 				}
 				switch kind {
 				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 					reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-					if t.Kind() == reflect.Ptr {
+					if t.Kind() == reflect.Pointer {
 						setNode(Optional(Uint(bitWidth)))
 					} else {
 						setNode(Uint(bitWidth))

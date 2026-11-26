@@ -49,7 +49,7 @@ func (d *Decoder) Decode(v any) error {
 	t := reflect.TypeOf(v)
 	p := reflect.ValueOf(v)
 
-	if t.Kind() != reflect.Ptr {
+	if t.Kind() != reflect.Pointer {
 		panic("thrift.(*Decoder).Decode: expected pointer type but got " + t.String())
 	}
 
@@ -147,7 +147,7 @@ func DecodeFuncOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 		f = decodeFuncMapOf(t, seen)
 	case reflect.Struct:
 		f = decodeFuncStructOf(t, seen)
-	case reflect.Ptr:
+	case reflect.Pointer:
 		f = decodeFuncPtrOf(t, seen)
 	default:
 		panic("type cannot be decoded in thrift: " + t.String())
@@ -497,10 +497,10 @@ decodeFields:
 
 		x := v
 		for _, i := range field.index {
-			if x.Kind() == reflect.Ptr {
+			if x.Kind() == reflect.Pointer {
 				x = x.Elem()
 			}
-			if x = x.Field(i); x.Kind() == reflect.Ptr {
+			if x = x.Field(i); x.Kind() == reflect.Pointer {
 				if x.IsNil() {
 					x.Set(reflect.New(x.Type().Elem()))
 				}
@@ -508,7 +508,7 @@ decodeFields:
 		}
 
 		if coalesceBool && (f.Type == TRUE || f.Type == FALSE) {
-			for x.Kind() == reflect.Ptr {
+			for x.Kind() == reflect.Pointer {
 				if x.IsNil() {
 					x.Set(reflect.New(x.Type().Elem()))
 				}
@@ -554,7 +554,7 @@ clearUnseen:
 		}
 		x := v
 		for _, j := range dec.fields[i].index {
-			if x.Kind() == reflect.Ptr {
+			if x.Kind() == reflect.Pointer {
 				if x.IsNil() {
 					continue clearUnseen
 				}
@@ -564,7 +564,7 @@ clearUnseen:
 		}
 		// x is either a pointer field or a union struct; zeroing a union
 		// nils its member interface, marking the union unset.
-		if x.Kind() != reflect.Ptr || !x.IsNil() {
+		if x.Kind() != reflect.Pointer || !x.IsNil() {
 			x.SetZero()
 		}
 	}
@@ -593,7 +593,7 @@ func decodeFuncStructOf(t reflect.Type, seen DecodeFuncCache) DecodeFunc {
 			id:     f.id,
 			flags:  f.flags,
 			typ:    TypeOf(f.typ),
-			isPtr:  f.typ.Kind() == reflect.Ptr,
+			isPtr:  f.typ.Kind() == reflect.Pointer,
 			decode: decodeFuncStructFieldOf(f, seen),
 		})
 	})

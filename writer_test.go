@@ -4053,7 +4053,7 @@ func TestIssue508OptionalNilByteSliceWritesNull(t *testing.T) {
 
 // TestIssue508PointerArrayDecimalSupported covers the third issue from the
 // #508 thread: *[N]byte with a decimal(...) tag used to panic during schema
-// derivation because the decimal tag handler did not unwrap reflect.Ptr. A
+// derivation because the decimal tag handler did not unwrap reflect.Pointer. A
 // pointer to a fixed-length byte array is the natural way to express a
 // nullable fixed-length decimal column.
 func TestIssue508PointerArrayDecimalSupported(t *testing.T) {

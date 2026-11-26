@@ -419,7 +419,7 @@ func (e *encoder) encodeReflect(rv reflect.Value) (start, end int, err error) {
 	}
 
 	// Dereference pointers/interfaces
-	for rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
 		if rv.IsNil() {
 			start, end = e.encodeValuePrimitive(Null())
 			return start, end, nil

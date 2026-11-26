@@ -71,7 +71,7 @@ func forEachStructField(t reflect.Type, index []int, do func(structField)) {
 		if f.Anonymous {
 			fieldType := f.Type
 
-			for fieldType.Kind() == reflect.Ptr {
+			for fieldType.Kind() == reflect.Pointer {
 				fieldType = fieldType.Elem()
 			}
 

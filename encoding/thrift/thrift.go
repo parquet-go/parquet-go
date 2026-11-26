@@ -169,7 +169,7 @@ func TypeOf(t reflect.Type) Type {
 		}
 	case reflect.Struct:
 		return STRUCT
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return TypeOf(t.Elem())
 	default:
 		panic("type cannot be represented in thrift: " + t.String())

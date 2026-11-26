@@ -566,7 +566,7 @@ func writeRowsFuncOfSlice(t reflect.Type, schema *Schema, path columnPath, tagRe
 	// takes care of optionality via writeRowsFuncOfPointer.
 	// JSON string and byte elements do the same in writeRowsFuncOfJSON;
 	// wrapping them again writes past the column's max definition level.
-	if elemType.Kind() != reflect.Ptr {
+	if elemType.Kind() != reflect.Pointer {
 		if node := findByPath(schema, path); node != nil && node.Optional() && !isJSONStringOrBytes(elemType, node) {
 			writeRows = writeRowsFuncOfOptional(elemType, schema, path, writeRows)
 		}

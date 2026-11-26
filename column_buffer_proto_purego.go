@@ -40,7 +40,7 @@ func writeProtoAnyToGroup(msg *anypb.Any, columns []ColumnBuffer, levels columnL
 
 func writeProtoMessageToGroup(msg proto.Message, columns []ColumnBuffer, levels columnLevels, writers []fieldWriter) {
 	msgValue := reflect.ValueOf(msg)
-	if msgValue.Kind() == reflect.Ptr {
+	if msgValue.Kind() == reflect.Pointer {
 		msgValue = msgValue.Elem()
 	}
 	for i := range writers {

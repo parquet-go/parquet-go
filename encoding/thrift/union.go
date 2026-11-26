@@ -103,7 +103,7 @@ func unionLayoutOf(t reflect.Type) *unionLayout {
 			panic(fmt.Errorf("thrift union %s declares a nil member", t))
 		}
 		mt := reflect.TypeOf(m)
-		if mt.Kind() != reflect.Ptr || mt.Elem().Kind() != reflect.Struct {
+		if mt.Kind() != reflect.Pointer || mt.Elem().Kind() != reflect.Struct {
 			panic(fmt.Errorf("thrift union %s member %s must be a pointer to a struct", t, mt))
 		}
 		if !mt.AssignableTo(field.Type) {

@@ -164,7 +164,7 @@ type optionalNode struct{ Node }
 func (opt *optionalNode) Optional() bool       { return true }
 func (opt *optionalNode) Repeated() bool       { return false }
 func (opt *optionalNode) Required() bool       { return false }
-func (opt *optionalNode) GoType() reflect.Type { return reflect.PtrTo(opt.Node.GoType()) }
+func (opt *optionalNode) GoType() reflect.Type { return reflect.PointerTo(opt.Node.GoType()) }
 
 // FieldID wraps a node to provide node field id
 func FieldID(node Node, id int) Node { return &fieldIDNode{Node: node, id: id} }
@@ -321,7 +321,7 @@ func (f *groupField) Value(base reflect.Value) reflect.Value {
 	switch base.Kind() {
 	case reflect.Struct:
 		return groupFieldByName(base, f.name)
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if base.IsNil() {
 			base.Set(reflect.New(base.Type().Elem()))
 		}
@@ -362,7 +362,7 @@ func goTypeOf(node Node) reflect.Type {
 }
 
 func goTypeOfOptional(node Node) reflect.Type {
-	return reflect.PtrTo(goTypeOfRequired(node))
+	return reflect.PointerTo(goTypeOfRequired(node))
 }
 
 func goTypeOfRepeated(node Node) reflect.Type {
