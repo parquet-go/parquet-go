@@ -459,14 +459,13 @@ TEXT ·decodeBlockInt32AVX2(SB), NOSPLIT, $0-36
     SHRQ $3, DI
     SHLQ $3, DI
 
-    VPXOR X1, X1, X1
     MOVQ CX, X0
     MOVQ DX, X1
     VPBROADCASTD X0, Y0
+    VPSHUFD $0, X1, X1 // broadcast lastValue
 loopAVX2:
     VMOVDQU (AX)(SI*4), Y2
     VPADDD Y0, Y2, Y2 // Y2[:] += minDelta
-    VPADDD Y1, Y2, Y2 // Y2[0] += lastValue
 
     VPSLLDQ $4, Y2, Y3
     VPADDD Y3, Y2, Y2
@@ -474,13 +473,17 @@ loopAVX2:
     VPSLLDQ $8, Y2, Y3
     VPADDD Y3, Y2, Y2
 
-    VPSHUFD $0xFF, X2, X1
+    VPSHUFD $0xFF, X2, X4
     VPERM2I128 $1, Y2, Y2, Y3
+    VPADDD X4, X3, X3
+
+    // Add the carry after the local scan, keeping it off the scan dependency.
+    VPADDD X1, X2, X2
     VPADDD X1, X3, X3
 
     VMOVDQU X2, (AX)(SI*4)
     VMOVDQU X3, 16(AX)(SI*4)
-    VPSRLDQ $12, X3, X1 // lastValue
+    VPSHUFD $0xFF, X3, X1 // broadcast lastValue
 
     ADDQ $8, SI
     CMPQ SI, DI
@@ -488,6 +491,7 @@ loopAVX2:
     VZEROUPPER
     MOVQ X1, DX
     JMP test
+    PCALIGN $32
 loop:
     MOVL (AX)(SI*4), DI
     ADDL CX, DI

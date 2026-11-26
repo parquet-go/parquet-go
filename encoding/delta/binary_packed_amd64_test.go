@@ -3,6 +3,8 @@
 package delta
 
 import (
+	"math"
+	"slices"
 	"testing"
 
 	"golang.org/x/sys/cpu"
@@ -139,4 +141,26 @@ func BenchmarkEncodeMiniBlockInt64AVX2(b *testing.B) {
 			encodeMiniBlockInt64AVX2(&dst[0], src, bitWidth)
 		},
 	)
+}
+
+// Each vector must carry into both 128-bit halves and into the scalar tail.
+func TestDecodeBlockInt32AVX2(t *testing.T) {
+	requireAVX2(t)
+	edges := []int32{0, 1, -1, math.MinInt32, math.MaxInt32}
+	for n := 0; n <= 1025; n++ {
+		for _, minDelta := range edges {
+			for _, lastValue := range edges {
+				want := make([]int32, n+2)
+				for i := range want {
+					want[i] = int32(uint32(i) * 0x9e3779b9)
+				}
+				got := slices.Clone(want)
+				wantLast := decodeBlockInt32Default(want[1:n+1:n+1], minDelta, lastValue)
+				gotLast := decodeBlockInt32AVX2(got[1:n+1:n+1], minDelta, lastValue)
+				if gotLast != wantLast || !slices.Equal(got, want) {
+					t.Fatalf("length=%d minDelta=%d lastValue=%d: got last=%d, want %d; values equal=%t", n, minDelta, lastValue, gotLast, wantLast, slices.Equal(got, want))
+				}
+			}
+		}
+	}
 }
