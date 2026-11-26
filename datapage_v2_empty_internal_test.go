@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 
@@ -226,10 +227,11 @@ func TestDataPageV2EmptyDataSection(t *testing.T) {
 		})
 	}
 
-	// Codecs that reject a 0-byte compressed stream must still reject an empty
-	// data section when the header claims non-null values exist, notably for
-	// RLE_DICTIONARY where an empty decoded index slice would zero-fill dict[0].
-	for _, codec := range []compress.Codec{&Snappy, &Brotli} {
+	// An empty data section that claims non-null values must be rejected before
+	// invoking any codec, covering codecs that fail on 0-byte input (Snappy,
+	// Brotli), return an empty slice (Zstd, Lz4Raw), panic on EOF (Gzip), or
+	// skip decompression (Uncompressed).
+	for _, codec := range append([]compress.Codec{&Uncompressed}, codecs...) {
 		t.Run(codec.String()+"/truncated non-null dictionary page", func(t *testing.T) {
 			col := &Column{
 				typ:         ByteArrayType,
@@ -242,15 +244,38 @@ func TestDataPageV2EmptyDataSection(t *testing.T) {
 				NumNulls:     0,
 				NumRows:      3,
 				Encoding:     format.RLEDictionary,
-				IsCompressed: thrift.New(true),
+				IsCompressed: thrift.New(codec != &Uncompressed),
 			}}
 			page, err := col.decodeDataPageV2(hdr, newBuffer[byte](nil), dict, 3)
 			if page != nil {
 				Release(page)
 			}
-			if err == nil {
-				t.Fatal("expected decompression error on truncated non-null page, got nil")
+			if !errors.Is(err, ErrCorrupted) {
+				t.Fatalf("got %v, want error wrapping ErrCorrupted", err)
 			}
 		})
 	}
+
+	t.Run("num_nulls exceeds num_values", func(t *testing.T) {
+		col := &Column{
+			typ:         ByteArrayType,
+			schema:      &format.SchemaElement{Name: "s"},
+			compression: &Zstd,
+		}
+		dict := newTestByteArrayDictionary("a", "b")
+		hdr := DataPageHeaderV2{header: &format.DataPageHeaderV2{
+			NumValues:    1,
+			NumNulls:     2,
+			NumRows:      1,
+			Encoding:     format.RLEDictionary,
+			IsCompressed: thrift.New(true),
+		}}
+		page, err := col.decodeDataPageV2(hdr, newBuffer[byte](nil), dict, 3)
+		if page != nil {
+			Release(page)
+		}
+		if !errors.Is(err, ErrCorrupted) {
+			t.Fatalf("got %v, want error wrapping ErrCorrupted", err)
+		}
+	})
 }

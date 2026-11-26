@@ -912,8 +912,14 @@ func (c *Column) decodeDataPageV2(header DataPageHeaderV2, page *buffer[byte], d
 	}
 
 	numValues -= int(header.NumNulls())
+	if numValues < 0 {
+		return nil, fmt.Errorf("decoding data page v2: num_nulls (%d) exceeds num_values (%d): %w", header.NumNulls(), header.NumValues(), ErrCorrupted)
+	}
+	if len(pageData) == 0 && numValues > 0 {
+		return nil, fmt.Errorf("decoding data page v2: empty data section with %d non-null values: %w", numValues, ErrCorrupted)
+	}
 
-	if isCompressed(c.compression) && header.IsCompressed() && (len(pageData) > 0 || numValues != 0) {
+	if isCompressed(c.compression) && header.IsCompressed() && len(pageData) > 0 {
 		if page, err = c.decompress(pageData, size); err != nil {
 			return nil, fmt.Errorf("decompressing data page v2: %w", err)
 		}
