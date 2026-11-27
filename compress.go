@@ -3,6 +3,7 @@ package parquet
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/parquet-go/parquet-go/compress"
@@ -13,6 +14,7 @@ import (
 	"github.com/parquet-go/parquet-go/compress/uncompressed"
 	"github.com/parquet-go/parquet-go/compress/zstd"
 	"github.com/parquet-go/parquet-go/format"
+	pierrec "github.com/pierrec/lz4/v4"
 )
 
 var (
@@ -155,41 +157,112 @@ func (lz4ReadCodec) Decode(dst, src []byte) ([]byte, error) {
 
 // decodeHadoopLz4 decodes src as a stream of the Hadoop compression library:
 // a sequence of LZ4 blocks, each prefixed with its uncompressed and compressed
-// lengths as big-endian 32 bit integers, and optionally ended by an entry
-// where both lengths are zero. The ok result is false when src does not parse
-// as such a stream, in which case the caller falls back to decoding a raw
-// LZ4 block.
+// lengths as big-endian uint32 values. A prefix whose two lengths are both
+// zero is an empty frame, including the terminator some writers append.
+//
+// ok is false when src does not parse as such a stream. The caller then falls
+// back to a raw LZ4 block. Raw blocks can carry a prefix that looks like a
+// frame with a multi-gigabyte uncompressed length, so a frame is accepted
+// only when both lengths are inside the bytes still available:
+//
+//   - the compressed length fits in the unread input
+//   - the uncompressed length fits in the space still free in dst
+//
+// The page reader passes a dst whose length is the page's uncompressed size,
+// which is the same bound Arrow applies to the output buffer. A length that
+// does not fit is not a Hadoop frame: this returns false without allocating
+// it. When dst has no buffer, the uncompressed length still has to be
+// producible by an LZ4 block of the claimed compressed length, and the block
+// is decoded with LZ4_RAW, whose growth stops at maxDecodedLen.
 func decodeHadoopLz4(dst, src []byte) (out []byte, ok bool) {
-	out = dst[:0]
-	for pos := 0; pos < len(src); {
-		if len(src)-pos < 8 {
+	if len(src) == 0 {
+		return dst[:0], true
+	}
+
+	// len(dst) is the page size when the page reader calls Decode. cap(dst)
+	// may be larger because the buffer pool rounds up, and that slack is not
+	// part of the page. A caller that passes dst[:0] is offering cap(dst).
+	budget := len(dst)
+	if budget == 0 {
+		budget = cap(dst)
+	}
+	if budget > 0 {
+		out = dst[:budget:budget]
+		out = out[:0]
+	}
+
+	rest := src
+	for len(rest) > 0 {
+		if len(rest) < 8 {
 			return nil, false
 		}
-		uncompressed := int(binary.BigEndian.Uint32(src[pos:]))
-		compressed := int(binary.BigEndian.Uint32(src[pos+4:]))
-		if uncompressed == 0 && compressed == 0 {
-			pos += 8
-			if pos != len(src) {
+		uncompressed64 := uint64(binary.BigEndian.Uint32(rest[:4]))
+		compressed64 := uint64(binary.BigEndian.Uint32(rest[4:8]))
+		body := rest[8:]
+		if compressed64 > uint64(len(body)) || uncompressed64 > uint64(math.MaxInt) {
+			return nil, false
+		}
+		compressed := int(compressed64)
+		uncompressed := int(uncompressed64)
+		remaining := -1
+		if budget > 0 {
+			remaining = budget - len(out)
+			if uncompressed > remaining {
 				return nil, false
 			}
-			break // end of stream
 		}
-		if uncompressed <= 0 || compressed <= 0 || compressed > len(src)-pos-8 {
+		if !hadoopDecompressedFitsBlock(compressed, uncompressed) {
 			return nil, false
 		}
-		if cap(out)-len(out) < uncompressed {
-			grown := make([]byte, len(out), 2*(len(out)+uncompressed))
-			copy(grown, out)
-			out = grown
+		if uncompressed == 0 {
+			// Both lengths zero is an empty frame. A positive compressed
+			// length still has to decode to zero bytes; otherwise the prefix
+			// is not a Hadoop frame.
+			if compressed != 0 {
+				n, err := pierrec.UncompressBlock(body[:compressed], nil)
+				if err != nil || n != 0 {
+					return nil, false
+				}
+			}
+			rest = body[compressed:]
+			continue
 		}
-		block, err := Lz4Raw.Decode(out[len(out):cap(out)], src[pos+8:pos+8+compressed])
-		if err != nil || len(block) != uncompressed {
-			return nil, false
+		if budget > 0 {
+			// Pin the capacity so a short block cannot write past this frame
+			// into the rest of the page buffer.
+			tail := out[len(out) : len(out)+uncompressed : len(out)+uncompressed]
+			n, err := pierrec.UncompressBlock(body[:compressed], tail)
+			if err != nil || n != uncompressed {
+				return nil, false
+			}
+			out = out[:len(out)+uncompressed]
+		} else {
+			// No page buffer. LZ4_RAW refuses to grow past the most output
+			// the block can produce, so a hostile uncompressed length is
+			// never allocated.
+			block, err := Lz4Raw.Decode(nil, body[:compressed])
+			if err != nil || len(block) != uncompressed {
+				return nil, false
+			}
+			out = append(out, block...)
 		}
-		out = out[:len(out)+uncompressed]
-		pos += 8 + compressed
+		rest = body[compressed:]
 	}
 	return out, true
+}
+
+// hadoopDecompressedFitsBlock reports whether an LZ4 block of compressed
+// bytes can produce uncompressed bytes. One input byte adds at most 255
+// output bytes, which is the expansion compress/lz4.maxDecodedLen saturates
+// toward. A claimed size above that cannot be a Hadoop frame.
+func hadoopDecompressedFitsBlock(compressed, uncompressed int) bool {
+	if compressed < 0 || uncompressed < 0 {
+		return false
+	}
+	if compressed > math.MaxInt/255 {
+		return true
+	}
+	return uncompressed <= 255*compressed
 }
 
 func isCompressed(c compress.Codec) bool {
