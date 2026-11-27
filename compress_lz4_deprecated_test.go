@@ -297,10 +297,8 @@ func TestDeprecatedLZ4HostileClaimDoesNotAllocate(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			payload := test.compLen
-			if payload > 64 {
-				payload = 64 // truncated: the claimed compressed size does not fit
-			}
+			// Keep the payload shorter than the claimed compressed length so the frame is truncated.
+			payload := min(test.compLen, 64)
 			src := make([]byte, 8+payload)
 			binary.BigEndian.PutUint32(src[0:4], test.claim)
 			binary.BigEndian.PutUint32(src[4:8], uint32(test.compLen))
@@ -364,9 +362,7 @@ func TestDeprecatedLZ4ConcurrentDecode(t *testing.T) {
 	var wg sync.WaitGroup
 	errc := make(chan error, 8)
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			out, err := codec.Decode(make([]byte, len(plain)), src)
 			if err != nil {
 				errc <- err
@@ -375,7 +371,7 @@ func TestDeprecatedLZ4ConcurrentDecode(t *testing.T) {
 			if !bytes.Equal(out, plain) {
 				errc <- fmt.Errorf("decoded %d bytes, want %d", len(out), len(plain))
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errc)
