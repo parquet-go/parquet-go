@@ -1007,3 +1007,26 @@ func TestReadFloat32Bits(t *testing.T) {
 		t.Fatalf("read %#08x, %#08x; want %#08x for both fields", f, n, bits)
 	}
 }
+
+func BenchmarkAssignFloat32(b *testing.B) {
+	type namedFloat float32
+	var f float32
+	var named namedFloat
+	for _, tc := range []struct {
+		name string
+		dst  reflect.Value
+	}{
+		{"float32", reflect.ValueOf(&f).Elem()},
+		{"named", reflect.ValueOf(&named).Elem()},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			src := parquet.FloatValue(1.25)
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := parquet.FloatType.AssignValue(tc.dst, src); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
