@@ -2202,6 +2202,9 @@ func (c *ColumnWriter) reset() {
 	if c.columnBuffer != nil {
 		c.columnBuffer.Reset()
 	}
+	if c.plainColumnBuffer != nil {
+		c.plainColumnBuffer.Reset()
+	}
 	if c.columnIndex != nil {
 		c.columnIndex.Reset()
 	}
