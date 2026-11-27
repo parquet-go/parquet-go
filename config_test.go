@@ -44,3 +44,15 @@ func TestConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestFileConfigPreservesOptimisticRead(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		cfg, err := NewFileConfig(OptimisticRead(!enabled), &FileConfig{OptimisticRead: enabled})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.OptimisticRead != enabled {
+			t.Fatalf("OptimisticRead = %v, want %v", cfg.OptimisticRead, enabled)
+		}
+	}
+}
