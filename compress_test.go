@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -312,6 +313,39 @@ func TestFileCompressionCodecsBloomFilter(t *testing.T) {
 			t.Fatalf("Check: %v, want the file's gzip codec error", err)
 		}
 	})
+}
+
+// https://github.com/apache/parquet-testing/blob/master/data/hadoop_lz4_compressed.parquet
+// https://github.com/apache/parquet-testing/blob/master/data/non_hadoop_lz4_compressed.parquet
+// The two files hold the same values as lz4_raw_compressed.parquet, which the
+// package has always been able to read: their pages use the deprecated LZ4
+// compression codec (5), framed by the Hadoop compression library in the
+// first file, and as raw LZ4 blocks in the second one.
+func TestReadDeprecatedLZ4Files(t *testing.T) {
+	type row struct {
+		C0  int64   `parquet:"c0"`
+		C1  string  `parquet:"c1"`
+		V11 float64 `parquet:"v11"`
+	}
+	want, err := parquet.ReadFile[row]("testdata/lz4_raw_compressed.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(want) == 0 {
+		t.Fatal("no rows read from the LZ4_RAW reference file")
+	}
+	for _, name := range []string{
+		"testdata/hadoop_lz4_compressed.parquet",
+		"testdata/non_hadoop_lz4_compressed.parquet",
+	} {
+		rows, err := parquet.ReadFile[row](name)
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		if !slices.Equal(rows, want) {
+			t.Errorf("rows read from %s differ from the LZ4_RAW reference file:\n%v\n%v", name, rows, want)
+		}
+	}
 }
 
 func TestFileCompressionCodecsEncryptedBloomFilter(t *testing.T) {
