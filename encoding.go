@@ -48,7 +48,7 @@ var (
 	ByteStreamSplit bytestreamsplit.Encoding
 
 	// ALP enables Preview ALP encoding for FLOAT and DOUBLE writes.
-	ALP alp.Writer
+	ALP alp.Encoding
 
 	// Table indexing the encodings supported by this package.
 	encodings = [...]encoding.Encoding{
@@ -61,7 +61,7 @@ var (
 		format.DeltaLengthByteArray: &DeltaLengthByteArray,
 		format.DeltaByteArray:       &DeltaByteArray,
 		format.ByteStreamSplit:      &ByteStreamSplit,
-		format.ALP:                  &alp.Encoding{},
+		format.ALP:                  &ALP,
 	}
 
 	// Table indexing RLE encodings for repetition and definition levels of

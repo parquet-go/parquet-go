@@ -13,7 +13,7 @@ import (
 	"github.com/parquet-go/parquet-go/format"
 )
 
-// Encoding decodes ALP values as specified in apache/parquet-format's AlpEncoding.md.
+// Encoding encodes and decodes ALP values as specified in apache/parquet-format's AlpEncoding.md.
 type Encoding struct{ encoding.NotSupported }
 
 func (*Encoding) String() string            { return "ALP" }

@@ -70,8 +70,8 @@ func TestALPPageLayout(t *testing.T) {
 			}
 		})
 	}
-	if encoding.CanEncodeFloat(e) || encoding.CanEncodeDouble(e) {
-		t.Fatal("ALP must be decode-only")
+	if !encoding.CanEncodeFloat(e) || !encoding.CanEncodeDouble(e) {
+		t.Fatal("ALP must support FLOAT and DOUBLE")
 	}
 }
 
@@ -151,7 +151,7 @@ func BenchmarkWriteDouble(b *testing.B) {
 				pattern = "random-bits"
 			}
 		}
-		for _, enc := range []encoding.Encoding{new(alp.Writer), new(plain.Encoding)} {
+		for _, enc := range []encoding.Encoding{new(alp.Encoding), new(plain.Encoding)} {
 			b.Run(pattern+"/"+enc.String(), func(b *testing.B) {
 				dst, err := enc.EncodeDouble(nil, values)
 				if err != nil {

@@ -532,8 +532,7 @@ func mapKeyValueOf(node Node) Node {
 func encodingOf(node Node, defaultEncodings map[Kind]encoding.Encoding) encoding.Encoding {
 	encoding := node.Encoding()
 	kind := node.Type().Kind()
-	// A file-derived ALP column reports the decoder. Writing Preview ALP
-	// requires an explicit writer option.
+	// A custom ALP decoder may not implement the write side.
 	if encoding != nil && encoding.Encoding() == format.ALP && !canEncode(encoding, kind) {
 		encoding = nil
 	}

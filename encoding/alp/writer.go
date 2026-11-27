@@ -9,16 +9,11 @@ import (
 	"github.com/parquet-go/bitpack/unsafecast"
 )
 
-// Writer adds opt-in FLOAT and DOUBLE encoding to the ALP decoder.
-type Writer struct{ decoder }
-
-type decoder = Encoding
-
-func (*Writer) EncodeFloat(dst []byte, src []float32) ([]byte, error) {
+func (*Encoding) EncodeFloat(dst []byte, src []float32) ([]byte, error) {
 	return encode[float32, int32](dst, src, 4, 10)
 }
 
-func (*Writer) EncodeDouble(dst []byte, src []float64) ([]byte, error) {
+func (*Encoding) EncodeDouble(dst []byte, src []float64) ([]byte, error) {
 	return encode[float64, int64](dst, src, 8, 18)
 }
 

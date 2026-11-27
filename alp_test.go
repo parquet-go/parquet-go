@@ -67,6 +67,13 @@ func TestWriteRowsWithALPFileSchema(t *testing.T) {
 	if err := parquet.Write(&output, want, schema); err != nil {
 		t.Fatal(err)
 	}
+	rewritten, err := parquet.OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enc := rewritten.Root().Column("value").Encoding(); enc != &parquet.ALP {
+		t.Fatalf("rewritten column uses %v, want ALP", enc)
+	}
 	got, err := parquet.Read[row](bytes.NewReader(output.Bytes()), int64(output.Len()))
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("rewriting an ALP column: got %v, %v", got, err)
