@@ -13,8 +13,8 @@ import (
 
 // validDictionaryFile is a tiny valid Parquet file (pyarrow 25.0.1: one string
 // column "s", rows "a" and "b", PLAIN_DICTIONARY, no compression, data page
-// v1). TestDictionaryEncodedDataPageRejectsOutOfRangeIndex flips its data-page
-// bit-width byte so the same bytes decode to indexes outside the dictionary.
+// v1). TestDictionaryEncodedDataPageRejectsOutOfRangeIndex replaces its
+// packed run with an RLE run containing an index outside the dictionary.
 const validDictionaryFileBase64 = "UEFSMRUEFRQVFEwVBBUAEgAAAQAAAGEBAAAAYhUAFRIVEiwVBBUQFQYVBhwAAAACAAAABAEBAwIVBBksNQAYBnNjaGVtYRUCABUM" +
 	"JQIYAXMlAEwcAAAAFgQZHBkcJgAcFQwZNQAGEBkYAXMVABYEFmgWaCY4JggpLBUEFQAVAgAVABUQFQIAPBYEGQYZJgAEAAAAFmgW" +
 	"BCYIFmgAGRwYDEFSUk9XOnNjaGVtYRigAS8vLy8vM0FBQUFBUUFBQUFBQUFLQUF3QUJnQUZBQWdBQ2dBQUFBQUJCQUFNQUFBQUNB" +
@@ -52,11 +52,9 @@ func readAllDictionaryRows(f *parquet.File) error {
 
 // TestDictionaryEncodedDataPageRejectsOutOfRangeIndex is the regression from
 // issue #613 (credit @cms103). Dictionary.Lookup panics when an index is
-// negative or past the dictionary. The RLE/bit-packing hybrid stream of
-// dictionary indexes starts with a one-byte bit width; this file's two-entry
-// dictionary uses a width of 1. Flipping that byte to 2 decodes the same
-// trailing bytes as indexes that no longer fit, which used to panic in
-// byteArrayDictionary.Lookup and now returns an error wrapping ErrCorrupted.
+// negative or past the dictionary. The run below is structurally valid but
+// repeats index 2 into a two-entry dictionary. It must return ErrCorrupted,
+// not reach byteArrayDictionary.Lookup.
 func TestDictionaryEncodedDataPageRejectsOutOfRangeIndex(t *testing.T) {
 	seed := mustDecodeDictionaryFile(t, validDictionaryFileBase64)
 
@@ -68,14 +66,15 @@ func TestDictionaryEncodedDataPageRejectsOutOfRangeIndex(t *testing.T) {
 		t.Fatalf("seed file should read cleanly: %v", err)
 	}
 
-	// Offset 53 is the data page bit-width byte. Values other than 2 (up to
-	// 32) also decode out of range; 2 is the smallest width that does.
-	corrupt := append([]byte(nil), seed...)
-	const bitWidthOffset = 53
-	if corrupt[bitWidthOffset] != 1 {
-		t.Fatalf("seed file layout changed: byte at offset %d is %#x, want 0x01", bitWidthOffset, corrupt[bitWidthOffset])
+	corrupt := bytes.Clone(seed)
+	const indexStreamOffset = 53
+	indexes := corrupt[indexStreamOffset : indexStreamOffset+3]
+	if !bytes.Equal(indexes, []byte{1, 3, 2}) {
+		t.Fatalf("seed file layout changed: got index stream %x", indexes)
 	}
-	corrupt[bitWidthOffset] = 2
+	// Two repeats of index 2, with the same encoded length as the seed.
+	// The RLE value occupies a whole byte even when the width is one bit.
+	indexes[1] = 4
 
 	f, err = parquet.OpenFile(bytes.NewReader(corrupt), int64(len(corrupt)))
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
 	"github.com/parquet-go/parquet-go/internal/bytealg"
+	hybrid "github.com/parquet-go/parquet-go/internal/rle"
 )
 
 const (
@@ -422,72 +423,31 @@ func decodeBytes(dst, src []byte, bitWidth uint) ([]byte, error) {
 }
 
 func decodeInt32(dst, src []byte, bitWidth uint) ([]byte, error) {
-	if bitWidth > 32 {
-		return dst, errDecodeInvalidBitWidth("INT32", bitWidth)
+	runs, err := hybrid.NewInt32Runs(src, bitWidth)
+	if err != nil {
+		return dst, err
 	}
-
-	buf := make([]byte, 2*bitpack.PaddingInt32)
-
-	for i := 0; i < len(src); {
-		u, n := binary.Uvarint(src[i:])
-		if n == 0 {
-			return dst, fmt.Errorf("decoding run-length block header: %w", io.ErrUnexpectedEOF)
-		}
-		if n < 0 {
-			return dst, fmt.Errorf("overflow after decoding %d/%d bytes of run-length block header", -n+i, len(src))
-		}
-		i += n
-
-		count, bitpacked := uint(u>>1), (u&1) != 0
-		if count == 0 {
-			continue
-		}
-		if count > maxSupportedValueCount {
-			return dst, fmt.Errorf("decoded run-length block cannot have more than %d values", maxSupportedValueCount)
-		}
-		if bitpacked {
-			offset := len(dst)
-			length := int(count * bitWidth)
-			dst = resize(dst, offset+4*8*int(count))
-
-			// The bitpack.UnpackInt32 function requires the input to be padded
-			// or the function panics. If there is enough room in the input
-			// buffer we can use it, otherwise we have to copy it to a larger
-			// location (which should rarely happen).
-			in := src[i : i+length]
-			if (cap(in) - len(in)) >= bitpack.PaddingInt32 {
-				in = in[:cap(in)]
-			} else {
-				buf = resize(buf, len(in)+bitpack.PaddingInt32)
-				copy(buf, in)
-				in = buf
+	for {
+		if err := runs.Next(); err != nil {
+			if err == io.EOF {
+				return dst, nil
 			}
-
-			out := unsafecast.Slice[int32](dst[offset:])
-			bitpack.Unpack(out, in, bitWidth)
-			i += length
+			return dst, err
+		}
+		count := runs.Remaining()
+		if count > int64((math.MaxInt-len(dst))/4) {
+			return dst, fmt.Errorf("decoded INT32 run does not fit in output buffer: %d values", count)
+		}
+		if word, ok := runs.Repeated(); ok {
+			var pattern [4]byte
+			binary.NativeEndian.PutUint32(pattern[:], uint32(word))
+			dst = appendRepeat(dst, pattern[:], uint(count))
 		} else {
-			j := i + bitpack.ByteCount(bitWidth)
-
-			if j > len(src) {
-				return dst, fmt.Errorf("decoding run-length block of %d values: %w", count, io.ErrUnexpectedEOF)
-			}
-
-			bits := [4]byte{}
-			copy(bits[:], src[i:j])
-
-			//swap the bytes in the "bits" array to take care of big endian arch
-			if cpu.IsBigEndian {
-				for m, n := 0, 3; m < n; m, n = m+1, n-1 {
-					bits[m], bits[n] = bits[n], bits[m]
-				}
-			}
-			dst = appendRepeat(dst, bits[:], count)
-			i = j
+			offset := len(dst)
+			dst = resize(dst, offset+4*int(count))
+			runs.Unpack(unsafecast.Slice[int32](dst[offset:]))
 		}
 	}
-
-	return dst, nil
 }
 
 func errEncodeInvalidBitWidth(typ string, bitWidth uint) error {

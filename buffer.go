@@ -694,6 +694,11 @@ func (p *bufferedPage) Release() {
 // allows row and values read from the buffer to continue to be valid, instead relying
 // on the garbage collector after it is no longer needed.
 func (p *bufferedPage) ReleaseAndDetachValues() {
+	if _, ok := p.Page.(*windowedIndexedPage); ok {
+		// Returned values borrow the dictionary, not the encoded indexes.
+		p.Release()
+		return
+	}
 	// We don't return the values buffer to the pool and allow
 	// standard GC to track it.  Remove debug finalizer.
 	if debug.TRACEBUF > 0 {
