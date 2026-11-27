@@ -1,4 +1,4 @@
-// Package alp implements reading Adaptive Lossless floating-Point pages.
+// Package alp implements Adaptive Lossless floating-Point pages.
 package alp
 
 import (
@@ -13,7 +13,7 @@ import (
 	"github.com/parquet-go/parquet-go/format"
 )
 
-// Encoding decodes ALP values as specified in apache/parquet-format's AlpEncoding.md.
+// Encoding encodes and decodes ALP values as specified in apache/parquet-format's AlpEncoding.md.
 type Encoding struct{ encoding.NotSupported }
 
 func (*Encoding) String() string            { return "ALP" }
@@ -120,9 +120,7 @@ func decodeVector[F float32 | float64, I int32 | int64](dst []F, src []byte, cou
 	values := dst[len(dst) : len(dst)+count]
 	words := unsafecast.Slice[I](values)
 	// Use separate multiplications in the destination precision, as required by ALP.
-	powers := [...]F{1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18}
-	inverses := [...]F{1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16, 1e-17, 1e-18}
-	mul, inv := powers[factor], inverses[exponent]
+	mul, inv := F(decimalPowers[factor]), F(decimalInverses[exponent])
 	if width == 0 {
 		value := F(F(frame)*mul) * inv
 		for i := range values {
