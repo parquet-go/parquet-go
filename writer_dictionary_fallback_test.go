@@ -289,3 +289,111 @@ func TestDictionaryFallbackBloomFilter(t *testing.T) {
 		})
 	}
 }
+
+func TestWriterResetAfterDictionaryFallback(t *testing.T) {
+	t.Run("required", func(t *testing.T) {
+		type row struct {
+			Value string `parquet:"value,dict"`
+		}
+		testWriterResetAfterDictionaryFallback(t, func(s string) row { return row{s} })
+	})
+	t.Run("optional", func(t *testing.T) {
+		type row struct {
+			Value *string `parquet:"value,dict"`
+		}
+		testWriterResetAfterDictionaryFallback(t, func(s string) row {
+			if s == "" {
+				return row{}
+			}
+			return row{&s}
+		})
+	})
+	t.Run("repeated", func(t *testing.T) {
+		type row struct {
+			Value []string `parquet:"value,dict"`
+		}
+		testWriterResetAfterDictionaryFallback(t, func(s string) row {
+			if s == "" {
+				return row{}
+			}
+			return row{[]string{s, s + "-extra"}}
+		})
+	})
+}
+
+func testWriterResetAfterDictionaryFallback[T any](t *testing.T, makeRow func(string) T) {
+	t.Helper()
+	options := []parquet.WriterOption{
+		parquet.DictionaryMaxBytes(64),
+		parquet.PageBufferSize(128),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "value")),
+		parquet.DataPageStatistics(true),
+	}
+	w := parquet.NewGenericWriter[T](nil, options...)
+	write := func(t *testing.T, w *parquet.GenericWriter[T], rows []T) {
+		t.Helper()
+		for i := range rows {
+			if _, err := w.Write(rows[i : i+1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, fallback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("plain=%t", fallback), func(t *testing.T) {
+			var abandoned bytes.Buffer
+			w.Reset(&abandoned)
+			if fallback {
+				for i := range 60 {
+					write(t, w, []T{makeRow(fmt.Sprintf("old-%032d", i))})
+				}
+				// Leave a fresh PLAIN page with room for one unflushed row.
+				for _, c := range w.ColumnWriters() {
+					if err := c.Flush(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			write(t, w, []T{makeRow("stale")})
+
+			var output bytes.Buffer
+			w.Reset(&output)
+			want := make([]T, 60)
+			for i := range want {
+				value := ""
+				if i%3 != 0 {
+					value = fmt.Sprintf("new-%032d", i)
+				}
+				want[i] = makeRow(value)
+			}
+			write(t, w, want)
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			got, err := parquet.Read[T](bytes.NewReader(output.Bytes()), int64(output.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(want) {
+				t.Errorf("read %d rows after Reset, want %d", len(got), len(want))
+			}
+			for i := range min(len(got), len(want)) {
+				if !w.Schema().Deconstruct(nil, got[i]).Equal(w.Schema().Deconstruct(nil, want[i])) {
+					t.Errorf("row %d after Reset = %v, want %v", i, got[i], want[i])
+					break
+				}
+			}
+
+			// Comparing the complete file also checks dictionary and data pages,
+			// bloom filters, page indexes, and statistics against a fresh writer.
+			var fresh bytes.Buffer
+			other := parquet.NewGenericWriter[T](&fresh, options...)
+			write(t, other, want)
+			if err := other.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(output.Bytes(), fresh.Bytes()) {
+				t.Error("file after Reset differs from a fresh writer")
+			}
+		})
+	}
+}
