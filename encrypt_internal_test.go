@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"slices"
 	"strings"
@@ -161,4 +162,58 @@ func withFooterKeyMetadata(t *testing.T, data, key, metadata []byte) []byte {
 	out := append(bytes.Clone(data[:footerStart]), updated...)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(updated)))
 	return append(out, data[len(data)-4:]...)
+}
+
+func TestEncryptionConcurrentPageChecksums(t *testing.T) {
+	footerKey := bytes.Repeat([]byte{0x31}, 16)
+	rows := []schemeRow{{Name: "alpha", Value: 1}}
+	var out bytes.Buffer
+	w := NewGenericWriter[schemeRow](&out, WithEncryption(&EncryptionConfig{
+		FooterKey:       footerKey,
+		EncryptedFooter: true,
+	}))
+	rg := w.BeginGenericRowGroup()
+	if _, err := rg.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := rg.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// Pending parent rows move the buffered pages from ordinal 0 to 1.
+	if _, err := w.Write(rows); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rg.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f := openSchemeBytes(t, out.Bytes(), schemeKeys{footer: footerKey})
+	for column, chunk := range f.RowGroups()[1].ColumnChunks() {
+		index, err := chunk.OffsetIndex()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for page := range index.NumPages() {
+			raw := readFileRange(t, f, index.Offset(page), index.CompressedPageSize(page))
+			r := bytes.NewReader(raw)
+			aad := makeAAD(f.aadPrefix, f.fileUnique, dataPageHeaderModule, 1, int16(column), int16(page))
+			plain, err := readDecryptedEnvelopeFrom(r, footerKey, aad)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var header format.PageHeader
+			if err := thrift.NewDecoder((&thrift.CompactProtocol{}).NewReaderFromBytes(plain)).Decode(&header); err != nil {
+				t.Fatal(err)
+			}
+			body, err := readEnvelope(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := uint32(header.CRC), crc32.ChecksumIEEE(body); got != want {
+				t.Errorf("column %d page %d ciphertext checksum = %08x, want %08x", column, page, got, want)
+			}
+		}
+	}
 }

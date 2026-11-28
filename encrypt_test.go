@@ -2,14 +2,18 @@ package parquet_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1255,4 +1259,493 @@ func readEncryptionResetRows(t *testing.T, data []byte, keys parquet.KeyRetrieve
 		}
 	}
 	return out
+}
+
+func TestEncryptionConcurrentRowGroups(t *testing.T) {
+	type row struct {
+		Name   string  `parquet:"name"`
+		Dict   string  `parquet:"dict,dict"`
+		Values []int64 `parquet:"values,list"`
+		Note   *string `parquet:"note,optional"`
+	}
+	const secret = "concurrent-secret-payload"
+	note := secret + "-optional"
+	makeRows := func(group int) []row {
+		return []row{
+			{Name: fmt.Sprintf("%s-%d-first", secret, group), Dict: secret, Values: []int64{int64(group), 42}, Note: &note},
+			{Name: fmt.Sprintf("%s-%d-second", secret, group), Dict: secret, Values: []int64{}},
+			{Name: fmt.Sprintf("%s-%d-third", secret, group), Dict: secret, Values: []int64{99}},
+		}
+	}
+	for _, api := range []string{"BeginRowGroup", "BeginGenericRowGroup", "Writer.BeginRowGroup"} {
+		for _, encryptedFooter := range []bool{true, false} {
+			for _, version := range []int{1, 2} {
+				for _, order := range [][]int{{0, 1, 2}, {2, 0, 1}} {
+					for _, columnKeys := range []bool{false, true} {
+						t.Run(fmt.Sprintf("%s/footer=%t/v%d/order=%v/columnKeys=%t", api, encryptedFooter, version, order, columnKeys), func(t *testing.T) {
+							key, dictKey := aes128Key(0xA1), aes128Key(0xB2)
+							cfg := &parquet.EncryptionConfig{
+								FooterKey:       key,
+								EncryptedFooter: encryptedFooter, AadPrefix: []byte("concurrent-test"),
+							}
+							if columnKeys {
+								cfg.ColumnKeys = map[string][]byte{"dict": dictKey}
+							} else {
+								dictKey = key
+							}
+							dir := t.TempDir()
+							opts := []parquet.WriterOption{
+								parquet.WithEncryption(cfg), parquet.DataPageVersion(version),
+								parquet.ColumnPageBuffers(parquet.NewFileBufferPool(dir, "pages-*")),
+								parquet.BloomFilters(parquet.SplitBlockFilter(10, "name"), parquet.SplitBlockFilter(10, "dict")),
+							}
+							if version == 2 {
+								opts = append(opts,
+									parquet.Compression(&parquet.Snappy),
+									parquet.DictionaryMaxBytes(1),
+									parquet.BloomFilterCompression(&parquet.Gzip),
+									parquet.DeferBloomFiltersWithBuffers(parquet.NewFileBufferPool(dir, "bloom-*")),
+								)
+							}
+							var buf bytes.Buffer
+							w := parquet.NewGenericWriter[row](&buf, opts...)
+							schema := w.Schema()
+							writeRows := func(rg *parquet.ConcurrentRowGroupWriter, rows []row) (int, error) {
+								values := make([]parquet.Row, len(rows))
+								for i := range rows {
+									values[i] = schema.Deconstruct(nil, &rows[i])
+								}
+								return rg.WriteRows(values)
+							}
+							begin := func() (*parquet.ConcurrentRowGroupWriter, func([]row) (int, error)) {
+								if api == "BeginGenericRowGroup" {
+									rg := w.BeginGenericRowGroup()
+									return rg.ConcurrentRowGroupWriter, rg.Write
+								}
+								rg := w.BeginRowGroup()
+								return rg, func(rows []row) (int, error) { return writeRows(rg, rows) }
+							}
+							closeWriter := w.Close
+							writeParent := w.Write
+							if api == "Writer.BeginRowGroup" {
+								legacy := parquet.NewWriter(&buf, append(opts, schema)...)
+								begin = func() (*parquet.ConcurrentRowGroupWriter, func([]row) (int, error)) {
+									rg := legacy.BeginRowGroup()
+									return rg, func(rows []row) (int, error) { return writeRows(rg, rows) }
+								}
+								closeWriter = legacy.Close
+								writeParent = func(rows []row) (int, error) {
+									for i := range rows {
+										if err := legacy.Write(&rows[i]); err != nil {
+											return i, err
+										}
+									}
+									return len(rows), nil
+								}
+							}
+							const groups = 3
+							rgs := make([]*parquet.ConcurrentRowGroupWriter, groups)
+							writes := make([]func([]row) (int, error), groups)
+							for i := range rgs {
+								rgs[i], writes[i] = begin()
+							}
+							var wg sync.WaitGroup
+							for i, rg := range rgs {
+								wg.Go(func() {
+									for _, r := range makeRows(i) {
+										if _, err := writes[i]([]row{r}); err != nil {
+											t.Errorf("write rows: %v", err)
+											return
+										}
+										if err := rg.Flush(); err != nil {
+											t.Errorf("flush rows: %v", err)
+											return
+										}
+									}
+								})
+							}
+							wg.Wait()
+							// Page buffers can be on disk even before a row group is committed.
+							paths, err := filepath.Glob(filepath.Join(dir, "pages-*"))
+							if err != nil {
+								t.Fatal(err)
+							}
+							if len(paths) == 0 {
+								t.Fatal("no page buffers created")
+							}
+							for _, path := range paths {
+								data, err := os.ReadFile(path)
+								if err != nil {
+									t.Fatal(err)
+								}
+								if bytes.Contains(data, []byte(secret)) {
+									t.Error("plaintext payload in page buffer")
+								}
+							}
+							var want []row
+							// Commit order, not creation order, defines the row-group AAD.
+							for _, i := range order {
+								if n, err := rgs[i].Commit(); err != nil || n != int64(len(makeRows(i))) {
+									t.Fatalf("commit rows: %d, %v", n, err)
+								}
+								want = append(want, makeRows(i)...)
+							}
+							// Pending parent rows are committed first, changing the reused group's ordinal again.
+							parentRows := makeRows(3)[:1]
+							if _, err := writeParent(parentRows); err != nil {
+								t.Fatalf("write parent rows: %v", err)
+							}
+							want = append(want, parentRows...)
+							// Plaintext-footer metadata reuse is covered separately; use a fresh
+							// group there until that independent repair lands.
+							if !encryptedFooter {
+								rgs[2], writes[2] = begin()
+							}
+							extra := makeRows(4)[:1]
+							if _, err := writes[2](extra); err != nil {
+								t.Fatalf("write rows: %v", err)
+							}
+							if _, err := rgs[2].Commit(); err != nil {
+								t.Fatalf("commit rows: %v", err)
+							}
+							want = append(want, extra...)
+							if err := closeWriter(); err != nil {
+								t.Fatalf("close writer: %v", err)
+							}
+							if bytes.Contains(buf.Bytes(), []byte(secret)) {
+								t.Error("plaintext payload in output file")
+							}
+							f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()), parquet.WithDecryption(&staticKeyRetriever{footerKey: key, columnKeys: map[string][]byte{"dict": dictKey}}))
+							if err != nil {
+								t.Fatalf("open encrypted file: %v", err)
+							}
+							for i, group := range f.RowGroups() {
+								for j, chunk := range group.ColumnChunks() {
+									meta := f.Metadata().RowGroups[i].Columns[j].MetaData
+									if bf := chunk.BloomFilter(); bf != nil {
+										present, err := bf.Check(parquet.ByteArrayValue(meta.Statistics.MinValue))
+										if err != nil || !present {
+											t.Errorf("bloom filter lost a value: group %d column %d: %v", i, j, err)
+										}
+									}
+									oi, err := chunk.OffsetIndex()
+									if err != nil {
+										t.Fatal(err)
+									}
+									end := meta.DataPageOffset
+									if meta.DictionaryPageOffset != 0 {
+										end = meta.DictionaryPageOffset
+									}
+									end += meta.TotalCompressedSize
+									for k := oi.NumPages() - 1; k >= 0; k-- {
+										if oi.Offset(k)+oi.CompressedPageSize(k) != end {
+											t.Errorf("page size mismatch: group %d column %d page %d", i, j, k)
+										}
+										end = oi.Offset(k)
+									}
+								}
+							}
+
+							r := parquet.NewGenericReader[row](f)
+							defer r.Close()
+							got := make([]row, len(want)+1)
+							n, err := r.Read(got)
+							if err != io.EOF {
+								t.Errorf("read rows: got %v, want EOF", err)
+							}
+							if !reflect.DeepEqual(got[:n], want) {
+								t.Errorf("read rows: got %+v, want %+v", got[:n], want)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestEncryptionConcurrentColumnFlush(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		for _, column := range []int{0, 1} {
+			t.Run(fmt.Sprintf("v%d/column=%d", version, column), func(t *testing.T) {
+				key := aes128Key(0xA1)
+				var buf bytes.Buffer
+				w := parquet.NewGenericWriter[encryptionTestRow](&buf,
+					parquet.DataPageVersion(version),
+					parquet.WithEncryption(&parquet.EncryptionConfig{FooterKey: key, EncryptedFooter: true}),
+				)
+				first, second := w.BeginGenericRowGroup(), w.BeginGenericRowGroup()
+				if _, err := first.Write(testRows); err != nil {
+					t.Fatal(err)
+				}
+				// The other column flushes at Commit and can use its final ordinal
+				// directly. Only this column's buffered pages need remapping.
+				if err := first.ColumnWriters()[column].Flush(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := second.Write(testRows); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := second.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := first.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				got := readDecrypted(t, buf.Bytes(), &staticKeyRetriever{footerKey: key})
+				want := append(slices.Clone(testRows), testRows...)
+				assertRowsEqual(t, want, got)
+			})
+		}
+	}
+}
+
+func TestEncryptionConcurrentParentClose(t *testing.T) {
+	for _, api := range []string{"BeginRowGroup", "BeginGenericRowGroup", "Writer.BeginRowGroup"} {
+		for _, footer := range []bool{true, false} {
+			for _, version := range []int{1, 2} {
+				for _, flush := range []string{"none", "first", "second", "all", "automatic"} {
+					t.Run(fmt.Sprintf("%s/footer=%t/v%d/flush=%s", api, footer, version, flush), func(t *testing.T) {
+						var buf bytes.Buffer
+						key := aes128Key(0xA1)
+						opts := []parquet.WriterOption{
+							parquet.WithEncryption(&parquet.EncryptionConfig{FooterKey: key, EncryptedFooter: footer}),
+							parquet.DataPageVersion(version),
+						}
+						if flush == "automatic" {
+							opts = append(opts, parquet.PageBufferSize(1))
+						}
+						w := parquet.NewGenericWriter[encryptionTestRow](&buf, opts...)
+						schema := w.Schema()
+						rows := make([]parquet.Row, len(testRows))
+						for i := range testRows {
+							rows[i] = schema.Deconstruct(nil, &testRows[i])
+						}
+						closeWriter, writeParent, columns := w.Close, w.Write, w.ColumnWriters
+						var commit func() (int64, error)
+						switch api {
+						case "BeginGenericRowGroup":
+							rg := w.BeginGenericRowGroup()
+							if _, err := rg.Write(testRows); err != nil {
+								t.Fatal(err)
+							}
+							commit = rg.Commit
+						case "BeginRowGroup":
+							rg := w.BeginRowGroup()
+							if _, err := rg.WriteRows(rows); err != nil {
+								t.Fatal(err)
+							}
+							commit = rg.Commit
+						case "Writer.BeginRowGroup":
+							legacy := parquet.NewWriter(&buf, append(opts, schema)...)
+							closeWriter, columns = legacy.Close, legacy.ColumnWriters
+							writeParent = func(rows []encryptionTestRow) (int, error) {
+								for i := range rows {
+									if err := legacy.Write(&rows[i]); err != nil {
+										return i, err
+									}
+								}
+								return len(rows), nil
+							}
+							rg := legacy.BeginRowGroup()
+							if _, err := rg.WriteRows(rows); err != nil {
+								t.Fatal(err)
+							}
+							commit = rg.Commit
+						}
+						if _, err := commit(); err != nil {
+							t.Fatal(err)
+						}
+						if _, err := writeParent(testRows); err != nil {
+							t.Fatal(err)
+						}
+						for i, c := range columns() {
+							if flush == "all" || flush == "first" && i == 0 || flush == "second" && i == 1 {
+								if err := c.Flush(); err != nil {
+									t.Fatal(err)
+								}
+							}
+						}
+						// Close must keep the old ordinal for sealed pages, including
+						// those followed by values still in the column buffer.
+						if _, err := writeParent(testRows[:1]); err != nil {
+							t.Fatal(err)
+						}
+						if err := closeWriter(); err != nil {
+							t.Fatal(err)
+						}
+						want := append(slices.Clone(testRows), testRows...)
+						want = append(want, testRows[0])
+						got := readDecrypted(t, buf.Bytes(), &staticKeyRetriever{footerKey: key})
+						assertRowsEqual(t, want, got)
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestEncryptionConcurrentRowGroupBloomFilter(t *testing.T) {
+	type row struct {
+		Plain int64 `parquet:"plain"`
+		Dict  int64 `parquet:"dict,dict"`
+	}
+	key := aes128Key(0xA1)
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[row](&buf,
+		parquet.WithEncryption(&parquet.EncryptionConfig{FooterKey: key, EncryptedFooter: true}),
+		parquet.BloomFilters(parquet.SplitBlockFilter(10, "plain"), parquet.SplitBlockFilter(10, "dict")),
+		parquet.DictionaryMaxBytes(1),
+	)
+	rg := w.BeginGenericRowGroup()
+	// Cross the signed 16-bit page ordinal boundary, including a PLAIN page
+	// after dictionary fallback whose value appears only on the last page.
+	const pages = 1<<15 + 1
+	for i := range pages {
+		value := int64(1)
+		if i == pages-1 {
+			value = 7
+		}
+		if _, err := rg.Write([]row{{Plain: value, Dict: value}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rg.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := rg.Commit(); err != nil || n != pages {
+		t.Fatalf("commit rows: %d, %v", n, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()), parquet.WithDecryption(&staticKeyRetriever{footerKey: key}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, chunk := range f.RowGroups()[0].ColumnChunks() {
+		for _, value := range []int64{1, 7} {
+			present, err := chunk.BloomFilter().Check(parquet.Int64Value(value))
+			if err != nil || !present {
+				t.Errorf("bloom filter lost a value: %d: %v", value, err)
+			}
+		}
+	}
+	r := parquet.NewGenericReader[row](f)
+	defer r.Close()
+	got := make([]row, pages+1)
+	if n, err := r.Read(got); n != pages || err != io.EOF {
+		t.Fatalf("read rows: %d, %v", n, err)
+	}
+	if got[0] != (row{Plain: 1, Dict: 1}) || got[pages-1] != (row{Plain: 7, Dict: 7}) {
+		t.Fatal("read rows: first or last page value changed")
+	}
+}
+
+type encryptionErrorWriter struct {
+	bytes.Buffer
+	err   error
+	short bool
+}
+
+func (w *encryptionErrorWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	if w.short {
+		return 0, nil
+	}
+	return w.Buffer.Write(p)
+}
+
+type encryptionErrorBufferPool struct {
+	parquet.BufferPool
+	err  error
+	body bool
+}
+
+func (p *encryptionErrorBufferPool) GetBuffer() io.ReadWriteSeeker {
+	return &encryptionErrorBuffer{ReadWriteSeeker: p.BufferPool.GetBuffer(), pool: p}
+}
+
+func (p *encryptionErrorBufferPool) PutBuffer(b io.ReadWriteSeeker) {
+	p.BufferPool.PutBuffer(b.(*encryptionErrorBuffer).ReadWriteSeeker)
+}
+
+type encryptionErrorBuffer struct {
+	io.ReadWriteSeeker
+	pool       *encryptionErrorBufferPool
+	bodyOffset int64
+}
+
+func (b *encryptionErrorBuffer) Read(p []byte) (int, error) {
+	if b.pool.err != nil {
+		if !b.pool.body {
+			return 0, b.pool.err
+		}
+		offset, err := b.ReadWriteSeeker.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, err
+		}
+		if offset == 0 {
+			// Permit the length-prefixed encrypted header, then fail on the body.
+			var size [4]byte
+			if _, err := io.ReadFull(b.ReadWriteSeeker, size[:]); err != nil {
+				return 0, err
+			}
+			if _, err := b.ReadWriteSeeker.Seek(0, io.SeekStart); err != nil {
+				return 0, err
+			}
+			b.bodyOffset = 4 + int64(binary.LittleEndian.Uint32(size[:]))
+		}
+		if offset >= b.bodyOffset {
+			return 0, b.pool.err
+		}
+	}
+	return b.ReadWriteSeeker.Read(p)
+}
+
+func TestEncryptionConcurrentRowGroupWriteError(t *testing.T) {
+	for _, failure := range []string{"write", "short write", "read header", "read body"} {
+		t.Run(failure, func(t *testing.T) {
+			var out encryptionErrorWriter
+			pool := &encryptionErrorBufferPool{BufferPool: parquet.NewBufferPool(), body: failure == "read body"}
+			opts := []parquet.WriterOption{
+				parquet.WriteBufferSize(0),
+				parquet.WithEncryption(&parquet.EncryptionConfig{FooterKey: aes128Key(0xA1), EncryptedFooter: true}),
+			}
+			if failure == "read header" || failure == "read body" {
+				opts = append(opts, parquet.ColumnPageBuffers(pool))
+			}
+			w := parquet.NewGenericWriter[encryptionTestRow](&out, opts...)
+			first, second := w.BeginGenericRowGroup(), w.BeginGenericRowGroup()
+			for _, rg := range []*parquet.GenericConcurrentRowGroupWriter[encryptionTestRow]{first, second} {
+				if _, err := rg.Write(testRows); err != nil {
+					t.Fatal(err)
+				}
+				if err := rg.Flush(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := second.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			want := errors.New(failure + " failed")
+			switch failure {
+			case "short write":
+				out.short = true
+				want = io.ErrShortWrite
+			case "write":
+				out.err = want
+			default:
+				pool.err = want
+			}
+			if _, err := first.Commit(); !errors.Is(err, want) {
+				t.Fatalf("Commit error = %v, want %v", err, want)
+			}
+		})
+	}
 }

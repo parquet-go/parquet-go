@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/parquet-go/parquet-go/compress"
 	"github.com/parquet-go/parquet-go/encoding"
@@ -521,12 +522,14 @@ func (w *Writer) configure(schema *Schema) {
 // flush all buffers and write the parquet footer.
 func (w *Writer) Close() error {
 	// ColumnWriter.Close encrypts buffered data pages before writeRowGroup
-	// records this row group's ordinal. Assign it first so the AAD matches
-	// the footer.
+	// records this row group's ordinal. Assign it first for columns without
+	// sealed pages; otherwise preserve their AAD until writeRowGroup remaps it.
 	if w.writer != nil && w.writer.encryption != nil {
 		ordinal := int16(len(w.writer.rowGroups))
 		for _, c := range w.writer.currentRowGroup.columns {
-			c.rowGroupOrdinal = ordinal
+			if c.numPages == 0 {
+				c.rowGroupOrdinal = ordinal
+			}
 		}
 	}
 	for _, c := range w.ColumnWriters() {
@@ -813,6 +816,11 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 		maxRows: config.MaxRowsPerRowGroup,
 	}
 
+	var ordinal int16
+	if w.encryption != nil && w.currentRowGroup != nil {
+		ordinal = int16(w.nextRowGroupOrdinal.Add(1) - 1)
+	}
+
 	dataPageType := format.DataPage
 	if config.DataPageVersion == 2 {
 		dataPageType = format.DataPageV2
@@ -875,6 +883,14 @@ func newConcurrentRowGroupWriter(w *writer, config *WriterConfig) *ConcurrentRow
 			encodings:                 make([]format.Encoding, 0, 3),
 			isCompressed:              isCompressed(compression),
 			dictionaryMaxBytes:        config.DictionaryMaxBytes,
+		}
+
+		if enc := w.encryption; enc != nil {
+			c.encKey = enc.columnKeyFor(columnPathString(c.columnPath))
+			c.columnOrdinal = int16(columnIndex)
+			c.rowGroupOrdinal = ordinal
+			c.fileUnique = enc.fileUnique
+			c.aadPrefix = enc.cfg.AadPrefix
 		}
 
 		if lt := leaf.node.Type().LogicalType(); logicalTypeIs[*format.GeometryType](lt) || logicalTypeIs[*format.GeographyType](lt) {
@@ -1153,7 +1169,8 @@ type writer struct {
 	fileMetaData format.FileMetaData
 	footer       [8]byte
 
-	encryption *fileEncryptionState // nil when encryption is disabled
+	encryption          *fileEncryptionState // nil when encryption is disabled
+	nextRowGroupOrdinal atomic.Uint32
 }
 
 type deferredBloomFilter struct {
@@ -1228,6 +1245,22 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 		w.schemaElements = append(w.schemaElements, elem)
 	})
 
+	if config.Encryption != nil {
+		enc, err := newFileEncryptionState(config.Encryption)
+		if err != nil {
+			// newWriter has no error return; panic here mirrors any other init failure in this function.
+			panic("parquet: " + err.Error())
+		}
+		w.encryption = enc
+		if config.Encryption.EncryptedFooter {
+			copy(w.footer[4:], "PARE")
+		} else {
+			copy(w.footer[4:], "PAR1")
+		}
+	} else {
+		copy(w.footer[4:], "PAR1")
+	}
+
 	w.currentRowGroup = newConcurrentRowGroupWriter(w, config)
 
 	if len(config.Sorting.SortingColumns) > 0 {
@@ -1247,35 +1280,11 @@ func newWriter(output io.Writer, config *WriterConfig) *writer {
 		w.columnOrders[i] = *c.columnType.ColumnOrder()
 	}
 
-	if config.Encryption != nil {
-		enc, err := newFileEncryptionState(config.Encryption)
-		if err != nil {
-			// newWriter has no error return; panic here mirrors any other init failure in this function.
-			panic("parquet: " + err.Error())
-		}
-		w.encryption = enc
-		// Configure each column with its encryption key and state.
-		// Row group ordinal starts at 0; it is updated after each row group is committed.
-		for i, c := range w.currentRowGroup.columns {
-			path := columnPathString(c.columnPath)
-			c.encKey = enc.columnKeyFor(path)
-			c.columnOrdinal = int16(i)
-			c.rowGroupOrdinal = 0
-			c.fileUnique = enc.fileUnique
-			c.aadPrefix = enc.cfg.AadPrefix
-		}
-		if config.Encryption.EncryptedFooter {
-			copy(w.footer[4:], "PARE")
-		} else {
-			copy(w.footer[4:], "PAR1")
-		}
-	} else {
-		copy(w.footer[4:], "PAR1")
-	}
 	return w
 }
 
 func (w *writer) reset(writer io.Writer) {
+	w.nextRowGroupOrdinal.Store(0)
 	for _, bf := range w.deferredBloomFilters {
 		bf.reset()
 	}
@@ -1658,14 +1667,13 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 		}
 	}()
 
-	// Ensure all columns use the correct row group ordinal before flushing final pages.
-	if w.encryption != nil {
-		for _, c := range rg.columns {
+	for _, c := range rg.columns {
+		// With no pages buffered yet, encryption can use the final ordinal
+		// directly. Otherwise all buffered pages must keep the same AAD until
+		// they are written below.
+		if c.encKey != nil && c.numPages == 0 {
 			c.rowGroupOrdinal = int16(rowGroupIndex)
 		}
-	}
-
-	for _, c := range rg.columns {
 		if err := c.Flush(); err != nil {
 			return 0, err
 		}
@@ -1728,6 +1736,12 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 			DefinitionLevelHistogram:    slices.Clone(c.definitionLevelHistogram),
 		}
 
+		// Buffered pages keep the ordinal they were encrypted with until commit
+		// fixes their position in the file. Dictionary and bloom filter pages
+		// are written only at commit and can use the final ordinal directly.
+		bufferedOrdinal := c.rowGroupOrdinal
+		c.rowGroupOrdinal = int16(rowGroupIndex)
+
 		if c.dictionary != nil {
 			c.columnChunk.MetaData.DictionaryPageOffset = w.writer.offset
 			if err := c.writeDictionaryPage(&w.writer, c.dictionary); err != nil {
@@ -1742,17 +1756,20 @@ func (w *writer) writeRowGroup(rg *ConcurrentRowGroupWriter, rowGroupSchema *Sch
 
 		dataPageOffset := w.writer.offset
 		c.columnChunk.MetaData.DataPageOffset = dataPageOffset
-		for j := range c.offsetIndex.PageLocations {
-			c.offsetIndex.PageLocations[j].Offset += dataPageOffset
-		}
-
 		if offset, err := c.pageBuffer.Seek(0, io.SeekStart); err != nil {
 			return 0, err
 		} else if offset != 0 {
 			return 0, fmt.Errorf("resetting parquet page buffer to the start expected offset zero but got %d", offset)
 		}
-		if _, err := io.Copy(&w.writer, c.pageBuffer); err != nil {
+		if c.encKey != nil && bufferedOrdinal != c.rowGroupOrdinal {
+			if err := c.writeEncryptedPages(&w.writer, bufferedOrdinal); err != nil {
+				return 0, fmt.Errorf("writing encrypted pages of row group column %d: %w", i, err)
+			}
+		} else if _, err := io.Copy(&w.writer, c.pageBuffer); err != nil {
 			return 0, fmt.Errorf("writing buffered pages of row group column %d: %w", i, err)
+		}
+		for j := range c.offsetIndex.PageLocations {
+			c.offsetIndex.PageLocations[j].Offset += dataPageOffset
 		}
 	}
 
@@ -2380,7 +2397,8 @@ func (c *ColumnWriter) flushFilterPages() (err error) {
 	// For encrypted columns the page buffer contains AES-GCM envelopes, not
 	// plain thrift.  Decrypt each page before decoding it.
 	if c.encKey != nil {
-		for pageOrd := range int16(c.numPages) {
+		for i := range c.numPages {
+			pageOrd := int16(i)
 			hdrAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrd)
 			hdrPlain, err := readDecryptedEnvelopeFrom(pageReader, c.encKey, hdrAAD)
 			if err != nil {
@@ -2747,6 +2765,7 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 		c.header.page.CompressedPageSize = plainBodyLen
 		c.recordPageStats(plainHeaderLen, &c.header.page, page, minValue, maxValue, pageHasBounds)
 		c.patchEncryptedCompressedSize(encSize, plainHeaderLen, plainBodyLen)
+		c.offsetIndex.PageLocations[len(c.offsetIndex.PageLocations)-1].CompressedPageSize = int32(encSize)
 		return numValues, nil
 	}
 
@@ -2776,6 +2795,59 @@ func (c *ColumnWriter) writeDataPage(page Page) (int64, error) {
 
 	c.recordPageStats(plainHeaderLen, &c.header.page, page, minValue, maxValue, pageHasBounds)
 	return numValues, nil
+}
+
+// writeEncryptedPages streams buffered data pages with the committed row group
+// ordinal in their AAD. Page buffers stay encrypted, including file-backed ones.
+func (c *ColumnWriter) writeEncryptedPages(output io.Writer, bufferedOrdinal int16) error {
+	offset := int64(0)
+	for i := range c.numPages {
+		pageOrdinal := int16(i)
+		headerAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageHeaderModule, bufferedOrdinal, c.columnOrdinal, pageOrdinal)
+		headerBytes, err := readDecryptedEnvelopeFrom(c.pageBuffer, c.encKey, headerAAD)
+		if err != nil {
+			return err
+		}
+		var header format.PageHeader
+		if err := thrift.NewDecoder(c.header.protocol.NewReaderFromBytes(headerBytes)).Decode(&header); err != nil {
+			return err
+		}
+		bodyAAD := makeAAD(c.aadPrefix, c.fileUnique, dataPageBodyModule, bufferedOrdinal, c.columnOrdinal, pageOrdinal)
+		body, err := readDecryptedEnvelopeFrom(c.pageBuffer, c.encKey, bodyAAD)
+		if err != nil {
+			return err
+		}
+		bodyAAD = makeAAD(c.aadPrefix, c.fileUnique, dataPageBodyModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrdinal)
+		body, err = encryptModule(c.encKey, bodyAAD, body)
+		if err != nil {
+			return err
+		}
+		// A fresh nonce changes the ciphertext CRC and potentially the encoded
+		// header length, so update page locations and the column's byte size.
+		header.CRC = int32(crc32.ChecksumIEEE(body))
+		c.header.buffer.Reset()
+		if err := c.header.encoder.Encode(&header); err != nil {
+			return err
+		}
+		headerAAD = makeAAD(c.aadPrefix, c.fileUnique, dataPageHeaderModule, c.rowGroupOrdinal, c.columnOrdinal, pageOrdinal)
+		encryptedHeader, err := encryptModule(c.encKey, headerAAD, c.header.buffer.Bytes())
+		if err != nil {
+			return err
+		}
+		for _, data := range [...][]byte{encryptedHeader, body} {
+			if n, err := output.Write(data); err != nil {
+				return err
+			} else if n != len(data) {
+				return io.ErrShortWrite
+			}
+		}
+		size := int32(len(encryptedHeader) + len(body))
+		c.columnChunk.MetaData.TotalCompressedSize += int64(c.header.buffer.Len() - len(headerBytes))
+		c.offsetIndex.PageLocations[i].Offset = offset
+		c.offsetIndex.PageLocations[i].CompressedPageSize = size
+		offset += int64(size)
+	}
+	return nil
 }
 
 func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (err error) {
@@ -2854,15 +2926,12 @@ func (c *ColumnWriter) writeDictionaryPage(output io.Writer, dict Dictionary) (e
 	return nil
 }
 
-// patchEncryptedCompressedSize adjusts the last PageLocation and TotalCompressedSize after
-// recordPageStats to reflect the actual encrypted size on disk instead of the plaintext size.
+// patchEncryptedCompressedSize adjusts TotalCompressedSize after recordPageStats
+// to reflect the actual encrypted size on disk instead of the plaintext size.
 func (c *ColumnWriter) patchEncryptedCompressedSize(encSize int64, plainHeaderLen, plainBodyLen int32) {
 	plainTotal := int64(plainHeaderLen) + int64(plainBodyLen)
 	delta := encSize - plainTotal
 	c.columnChunk.MetaData.TotalCompressedSize += delta
-	if n := len(c.offsetIndex.PageLocations); n > 0 {
-		c.offsetIndex.PageLocations[n-1].CompressedPageSize = int32(encSize)
-	}
 }
 
 func (c *ColumnWriter) writePageToFilter(page Page) (err error) {
